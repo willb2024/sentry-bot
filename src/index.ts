@@ -3,7 +3,7 @@ import { Telegraf, Markup, Context } from 'telegraf';
 import { PrismaClient } from '@prisma/client';
 import { startCopyTradeWatcher, syncCopyTradeListeners } from './services/copytrade.service.js';
 import { startDcaEngine } from './services/dca.service.js';
-import { getBondingCurveAddress, decodePumpCurvePrice, checkRecentMevActivity } from './services/price.service.js';
+import { getBondingCurveAddress, decodePumpCurvePrice, checkTokenRugRisk } from './services/price.service.js';
 import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
@@ -2974,8 +2974,9 @@ if (airdropGuildId) {
         const twitterLink = pair?.info?.socials?.find((s: any) => s.type === 'twitter')?.url || null;
 
         // MEV check
-        const mevDetected = await checkRecentMevActivity(possibleCA);
-        const mevWarning = mevDetected ? `\n\n⚠️ <b>MEV Activity Detected in last 10 txs!</b>` : '';
+        // RugCheck scan (Zero RPC credit usage)
+        const rugDetected = await checkTokenRugRisk(possibleCA);
+        const mevWarning = rugDetected ? `\n\n🚨 <b>WARNING: Critical Rug/Honeypot risk detected on RugCheck!</b>` : '';
         const socialsLine = [tgLink, twitterLink].filter(Boolean).join(' | ') || 'None found';
 
         await redis.del(spamLockKey);

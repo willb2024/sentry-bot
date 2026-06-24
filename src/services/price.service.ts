@@ -1,6 +1,7 @@
 // src/services/price.service.ts
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
+import axios from 'axios';
 
 const PUMP_FUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 
@@ -34,37 +35,19 @@ export function decodePumpCurvePrice(base64Data: string, tokenDecimals: number =
     }
 }
 
-export async function checkRecentMevActivity(tokenMint: string): Promise<boolean> {
+// 🟢 NEW ZERO-RPC REPLACEMENT: Queries RugCheck's free API instead of heavy on-chain logs.
+// This completely stops Helius getParsedTransactions rate-limit blocks (429/413) permanently.
+export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
     try {
-        const pubkey = new PublicKey(tokenMint);
-        const sigs = await connection.getSignaturesForAddress(pubkey, { limit: 10 });
-        const txs = await connection.getParsedTransactions(
-            sigs.map((s: any) => s.signature),
-            { maxSupportedTransactionVersion: 0 }
-        );
-
-        const buyerMap: Record<string, number[]> = {};
-
-        txs.forEach((tx: any, blockIdx: number) => {
-            if (!tx || tx.meta?.err) return;
-            const buyer = tx.transaction.message.accountKeys[0]?.pubkey.toBase58();
-            if (!buyer) return;
-            if (!buyerMap[buyer]) buyerMap[buyer] = [];
-            buyerMap[buyer].push(blockIdx);
-        });
-
-        for (const slots of Object.values(buyerMap)) {
-            if (slots.length >= 2 && slots[slots.length - 1] - slots[0] <= 2) {
-                return true;
-            }
+        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 2000 });
+        const data = res.data;
+        // Scores above 1000 or active freeze authorities are flagged as high risk
+        if (data && (data.score > 1000 || (data.risks && data.risks.some((r: any) => r.name === 'Freeze Authority still enabled')))) {
+            return true; // Rug / High Risk detected
         }
         return false;
     } catch (e: any) {
-        // 🟢 SILENCED ERROR: We no longer spam the console if the RPC node throws a 429 rate limit during an MEV check.
-        // It simply assumes 'false' and moves on without crashing your terminal logs.
-        if (!e.message.includes('429')) {
-            console.warn(`⚠️ [PRICE SERVICE] MEV check failed for ${tokenMint.substring(0,6)}... (${e.message})`);
-        }
+        // Fail open if RugCheck API is down so it doesn't freeze the scraper
         return false; 
     }
 }

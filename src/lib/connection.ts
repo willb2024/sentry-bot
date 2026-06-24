@@ -60,8 +60,6 @@ function recordPrimaryFailure() {
     }
 }
 
-// 🟢 GLOBAL CONCURRENCY LIMITER (Token Bucket)
-// Caps all inflight RPC calls to 8 across the entire bot to prevent 429 / 413 bans.
 const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 8);
 let activeCount = 0;
 const waitQueue: Array<() => void> = [];

@@ -1,6 +1,6 @@
 // src/services/caller.service.ts
 import axios from 'axios';
-import { checkRecentMevActivity, getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
+import { checkTokenRugRisk, getBondingCurveAddress } from './price.service.js';
 import { redis } from '../lib/redis.js';
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
@@ -169,28 +169,29 @@ export async function scoreTokens(): Promise<TokenScore[]> {
             const prelimScore = volumeSpike + buySellRatio + liquidityDepth + ageScore + curveProgress;
             let mevRisk = 0;
 
+            // Only run the safety check if the token is of high interest
             if (prelimScore >= 35) { 
-                const cacheKey = `mev_status:${pair.baseToken.address}`;
-                const cachedMev = await redis.get(cacheKey);
-                let hasMev = false;
+                const cacheKey = `rug_status:${pair.baseToken.address}`;
+                const cachedRug = await redis.get(cacheKey);
+                let isRug = false;
 
-                if (cachedMev !== null) {
-                    hasMev = cachedMev === 'true'; 
+                if (cachedRug !== null) {
+                    isRug = cachedRug === 'true'; 
                 } else {
-                    await new Promise(r => setTimeout(r, 100)); 
-                    hasMev = await checkRecentMevActivity(pair.baseToken.address);
-                    await redis.set(cacheKey, hasMev ? 'true' : 'false', 'EX', 600); 
+                    // 🟢 Runs RugCheck API (Free, zero-RPC usage)
+                    isRug = await checkTokenRugRisk(pair.baseToken.address);
+                    await redis.set(cacheKey, isRug ? 'true' : 'false', 'EX', 600); 
                 }
 
-                if (hasMev) {
-                    mevRisk = -20;
-                    warnings.push(`❌ MEV Sandwiching detected recently`);
+                if (isRug) {
+                    mevRisk = -25;
+                    warnings.push(`❌ RugCheck flagged: HIGH RISK (LP unlocked or Freeze enabled)`);
                 } else {
                     mevRisk = 10;
-                    reasons.push(`🛡️ Clean orderbook (No recent MEV)`);
+                    reasons.push(`🛡️ RugCheck passed: Low Risk (Safe contract)`);
                 }
             } else {
-                warnings.push(`⚠️ Skipped MEV scan (Low score token)`);
+                warnings.push(`⚠️ Skipped safety scan (Low score token)`);
             }
 
             totalScore = prelimScore + mevRisk;
