@@ -23,7 +23,7 @@ import { runLeadScraper, startLeadGenScheduler } from './services/leadgen.servic
 import { runGuildLeadScraper, startGuildLeadScheduler } from './services/leadgen_guild.service.js';
 import { startDepositWatcher } from './services/deposit.service.js';
 import { syncGuardsFromDb } from './services/order.service.js';
-import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './services/caller.service.js';
+import { startTrenchRadar, getUserCallerFilters, setUserCallerFilters } from './services/caller.service.js';
 import { connection } from './lib/connection.js';
 
 import { 
@@ -747,7 +747,7 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     const mevText = filters.blockMev ? "🟢 Yes (Protected)" : "🔴 No (Risky)";
 
     const text = `🎯 <b>AI COIN CALLER ENGINE</b>\n\n` +
-        `Sentry scans DexScreener every 5 minutes and DMs you the highest-scoring tokens before they pump.\n\n` +
+        `Sentry scans DexScreener every 60 second and DMs you the highest-scoring tokens before they pump.\n\n` +
         `<b>Engine Status:</b> ${statusText}\n\n` +
         `⚙️ <b>CURRENT FILTERS:</b>\n` +
         `• <b>Minimum Score:</b> ${filters.minScore} / 100\n` +
@@ -3232,7 +3232,7 @@ async function bootEcosystem() {
         console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
 
         
-        igniteYellowstoneStream(bot).catch(err => console.error("🟡 [Background] gRPC Delayed:", err.message));
+        igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err.message));
         startDcaEngine(bot);
         startCopyTradeWatcher(bot); 
         startDepositWatcher(bot); 
@@ -3241,7 +3241,7 @@ async function bootEcosystem() {
         startLeadGenScheduler(bot, adminId);       // 🟢 Starts the Token Leadgen
         startGuildLeadScheduler(bot, adminId);     // 🏰 Starts the new Guild KOL Leadgen
         
-        startCoinCaller(bot); // 🟢 ADD THIS LINE HERE
+        startTrenchRadar(bot); // 🟢 ADDED CALLER ENGINE STARTUP
         
         
     } catch (err: any) {
