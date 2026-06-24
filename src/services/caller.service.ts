@@ -52,12 +52,6 @@ export async function setUserCallerFilters(telegramId: string, filters: Partial<
     return updated;
 }
 
-// 🟢 FIX (429 root cause #1): Bonding curve reads were happening unconditionally,
-// once per pump-style token, every single 60s scan cycle, with zero caching.
-// A batch of 30 tokens could mean 30 uncached getAccountInfo calls back-to-back.
-// Curve progress doesn't meaningfully change within a short window, so this is
-// cached the same way MEV status already was, just with a shorter TTL since
-// curve progress is more time-sensitive than "was there MEV recently".
 const CURVE_PROGRESS_CACHE_TTL_SECONDS = 30;
 
 async function getCachedCurveProgress(mint: string): Promise<{ progress: number; curveScore: number; reason: string | null } | null> {
@@ -66,9 +60,7 @@ async function getCachedCurveProgress(mint: string): Promise<{ progress: number;
     if (cached !== null) {
         try {
             return JSON.parse(cached);
-        } catch (_) {
-            // fall through to a fresh fetch if the cached payload is malformed
-        }
+        } catch (_) {}
     }
 
     try {
@@ -97,17 +89,10 @@ async function getCachedCurveProgress(mint: string): Promise<{ progress: number;
         await redis.set(cacheKey, JSON.stringify(result), 'EX', CURVE_PROGRESS_CACHE_TTL_SECONDS);
         return result;
     } catch (_) {
-        // Don't cache failures — a transient RPC error shouldn't lock a token
-        // out of curve scoring for the full TTL window.
         return null;
     }
 }
 
-// 🟢 FIX (429 root cause #2): scoreTokens() previously fired curve + MEV RPC
-// calls for every qualifying token with only a 100ms delay applied to the
-// MEV branch alone. A fresh batch of 30 tokens with cache misses could still
-// burst dozens of RPC calls within a second or two. This caps how many
-// tokens are processed concurrently regardless of which branch they hit.
 const TOKEN_PROCESSING_CONCURRENCY = 4;
 
 async function mapWithConcurrency<T, R>(
@@ -181,21 +166,18 @@ export async function scoreTokens(): Promise<TokenScore[]> {
                 }
             }
 
-            // 🟢 PRE-SCORING GATE: Compute easy off-chain scores first
             const prelimScore = volumeSpike + buySellRatio + liquidityDepth + ageScore + curveProgress;
             let mevRisk = 0;
 
-            // Only run the expensive on-chain MEV parser if the token is already of high interest.
-            // If it's a low-quality coin, we skip it entirely to save your RPC Compute Units.
             if (prelimScore >= 35) { 
                 const cacheKey = `mev_status:${pair.baseToken.address}`;
                 const cachedMev = await redis.get(cacheKey);
                 let hasMev = false;
 
                 if (cachedMev !== null) {
-                    hasMev = cachedMev === 'true'; // 🟢 10-Minute Redis Cache hit!
+                    hasMev = cachedMev === 'true'; 
                 } else {
-                    await new Promise(r => setTimeout(r, 100)); // 🟢 100ms pacing delay to prevent spikes
+                    await new Promise(r => setTimeout(r, 100)); 
                     hasMev = await checkRecentMevActivity(pair.baseToken.address);
                     await redis.set(cacheKey, hasMev ? 'true' : 'false', 'EX', 600); 
                 }

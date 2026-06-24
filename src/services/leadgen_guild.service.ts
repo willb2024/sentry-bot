@@ -1,32 +1,13 @@
 // src/services/leadgen_guild.service.ts
-//
-// 🏰 SENTRY GUILDS LEAD-GEN ENGINE v3 — QUALIFIED TELEGRAM-ONLY
-//
-// CHANGES IN THIS VERSION:
-//   - TELEGRAM ONLY: Discord (Disboard) and Twitter/Nitter sources removed
-//     entirely. Every other source's Discord/Twitter branches stripped too.
-//   - MIN_MEMBERS_FOR_GUILD: 0 → 300 (HARD FLOOR, actually enforced post-
-//     enrichment — previously this constant existed but was never checked)
-//   - MIN_GUILD_FIT_SCORE: 35 → 45 (tighter — quality over raw volume)
-//   - Leads with memberCount unknown (0) are now enriched BEFORE the
-//     qualification decision, and dropped if they can't confirm 300+
-//   - Scheduler unchanged: every 45 minutes
-//
-// PHILOSOPHY: You asked for "qualified members to my platform" — that
-// means real, checkable Telegram communities of meaningful size, not a
-// firehose of unknown-size Discord servers and tweet mentions.
-
 import dotenv from 'dotenv';
 import axios from 'axios';
 import { redis } from '../lib/redis.js';
 
 dotenv.config();
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-
-const MAX_GUILD_LEADS_PER_SCAN  = 9999;  // Effectively unlimited — quality gate does the real filtering
-const MIN_GUILD_FIT_SCORE       = 45;    // Tighter net — fewer, better leads
-const MIN_MEMBERS_FOR_GUILD     = 300;   // HARD FLOOR — enforced after enrichment, see qualifyLead()
+const MAX_GUILD_LEADS_PER_SCAN  = 9999;  
+const MIN_GUILD_FIT_SCORE       = 45;    
+const MIN_MEMBERS_FOR_GUILD     = 300;   
 const DEDUP_TTL_SECONDS         = 7 * 24 * 60 * 60;
 const DEEP_PARALLEL             = 20;
 const SLEEP                     = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -39,13 +20,11 @@ const USER_AGENTS = [
 ];
 const randomUA = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 type PitchType = 'LAUNCH_KOL' | 'PROJECT_OWNER' | 'ALPHA_GROUP';
 
 interface GuildLead {
     url: string;
-    platform: 'telegram';   // 🟢 TELEGRAM ONLY — Discord/Twitter removed
+    platform: 'telegram';   
     memberCount: number;
     title: string;
     description: string;
@@ -56,8 +35,6 @@ interface GuildLead {
     keywords: string[];
 }
 
-// ─── Redis dedup ──────────────────────────────────────────────────────────────
-
 async function isAlreadyContacted(url: string): Promise<boolean> {
     const key = `guild_leadgen:contacted:${Buffer.from(url).toString('base64').substring(0, 60)}`;
     return (await redis.exists(key)) === 1;
@@ -67,9 +44,6 @@ async function markContacted(url: string): Promise<void> {
     const key = `guild_leadgen:contacted:${Buffer.from(url).toString('base64').substring(0, 60)}`;
     await redis.set(key, '1', 'EX', DEDUP_TTL_SECONDS);
 }
-
-// ─── SCORING ENGINE ───────────────────────────────────────────────────────────
-// Recalibrated: small KOLs with strong keywords score higher than big dead channels
 
 const LAUNCH_KEYWORDS    = ['presale', 'whitelist', 'wl', 'launch', 'mint', 'airdrop', 'allocation', 'ido', 'ico', 'fundraise', 'raise', 'sale'];
 const ALPHA_KEYWORDS     = ['alpha', 'gem', 'calls', 'sniper', 'ape', 'degen', 'ct', '100x', 'moonshot', 'early', 'signal'];
@@ -85,42 +59,32 @@ function scoreGuildFit(
     let score = 0;
     const foundKeywords: string[] = [];
 
-    // Community size (max 30 pts) — recalibrated around the 300-member hard floor.
-    // Anything under 300 scores 0 here and will be rejected later by qualifyLead()
-    // regardless of keyword score, so we don't bother giving it points.
     if (memberCount >= 50000)      score += 30;
     else if (memberCount >= 10000) score += 26;
     else if (memberCount >= 2000)  score += 20;
     else if (memberCount >= 1000)  score += 15;
     else if (memberCount >= 300)   score += 10;
-    // < 300 members = 0 pts, and will be hard-rejected after enrichment
 
-    // Solana relevance (max 15 pts — must be Solana ecosystem)
     for (const kw of SOLANA_KEYWORDS) {
         if (text.includes(kw)) { score += 4; foundKeywords.push(kw); break; }
     }
 
-    // Launch/presale keywords (max 35 pts — HIGHEST signal for Guild pitch)
     for (const kw of LAUNCH_KEYWORDS) {
         if (text.includes(kw)) { score += 5; foundKeywords.push(kw); }
     }
 
-    // Alpha/calls keywords (max 25 pts)
     for (const kw of ALPHA_KEYWORDS) {
         if (text.includes(kw)) { score += 3; foundKeywords.push(kw); }
     }
 
-    // Community engagement keywords (max 15 pts)
     for (const kw of COMMUNITY_KEYWORDS) {
         if (text.includes(kw)) { score += 3; foundKeywords.push(kw); }
     }
 
-    // Bonus: has a token (already launching things)
     if (hasToken) score += 15;
 
     score = Math.min(100, score);
 
-    // Pitch type assignment
     const launchSignals = LAUNCH_KEYWORDS.filter(k => text.includes(k)).length;
     const alphaSignals  = ALPHA_KEYWORDS.filter(k => text.includes(k)).length;
 
@@ -132,12 +96,9 @@ function scoreGuildFit(
     return { score, pitchType, keywords: [...new Set(foundKeywords)] };
 }
 
-// ─── SOURCE 1: tgstat.com — EXPANDED to 12 KOL search queries ────────────────
-
 async function fetchKolChannelsFromDirectory(): Promise<GuildLead[]> {
     const leads: GuildLead[] = [];
 
-    // 12 targeted searches — covers every KOL persona type
     const searches = [
         { url: 'https://tgstat.com/en/search?q=solana+alpha+calls',        label: 'tgstat-alpha-calls'   },
         { url: 'https://tgstat.com/en/search?q=solana+gem+presale',        label: 'tgstat-gem-presale'   },
@@ -151,7 +112,6 @@ async function fetchKolChannelsFromDirectory(): Promise<GuildLead[]> {
         { url: 'https://tgstat.com/en/search?q=sol+moonshot+100x',         label: 'tgstat-moonshot'      },
         { url: 'https://tgstat.com/en/search?q=solana+token+launch+ido',   label: 'tgstat-ido'           },
         { url: 'https://tgstat.com/en/search?q=crypto+nft+solana+mint',    label: 'tgstat-nft-mint'      },
-        // CommBot directory — different source, same TG channel scraping
         { url: 'https://commbot.ru/en/search?q=solana+alpha',              label: 'commbot-alpha'        },
         { url: 'https://commbot.ru/en/search?q=solana+trading',            label: 'commbot-trading'      },
     ];
@@ -204,14 +164,15 @@ async function fetchKolChannelsFromDirectory(): Promise<GuildLead[]> {
 
             await SLEEP(1500);
         } catch (e: any) {
-            console.warn(`⚠️ [GUILD-LEAD] ${search.label} failed: ${e.message}`);
+            // 🟢 SILENCE LOGGING FIX: Do not spam console with expected Cloudflare 403 blocks or ENOTFOUND errors
+            if (e.response?.status !== 403 && e.code !== 'ENOTFOUND') {
+                console.warn(`⚠️ [GUILD-LEAD] ${search.label} failed: ${e.message}`);
+            }
         }
     }
 
     return leads;
 }
-
-// ─── SOURCE 2: DexScreener Boosted ───────────────────────────────────────────
 
 async function fetchBoostedTokenKols(): Promise<GuildLead[]> {
     const leads: GuildLead[] = [];
@@ -234,7 +195,6 @@ async function fetchBoostedTokenKols(): Promise<GuildLead[]> {
                 const url: string = link.url || '';
                 if (!url) continue;
 
-                // 🟢 TELEGRAM ONLY — Discord links skipped entirely
                 if (!url.includes('t.me/')) continue;
 
                 const { score, pitchType, keywords } = scoreGuildFit(
@@ -247,7 +207,7 @@ async function fetchBoostedTokenKols(): Promise<GuildLead[]> {
                     url, platform: 'telegram', memberCount: 0,
                     title: `$${token.symbol || 'UNKNOWN'} (Boosted)`,
                     description,
-                    guildFitScore: Math.min(100, score + 20), // paid boost = serious
+                    guildFitScore: Math.min(100, score + 20), 
                     pitchType: 'PROJECT_OWNER',
                     source: 'dexscreener-boost',
                     hasToken: true,
@@ -260,8 +220,6 @@ async function fetchBoostedTokenKols(): Promise<GuildLead[]> {
     }
     return leads;
 }
-
-// ─── SOURCE 3: Pump.fun King of the Hill ─────────────────────────────────────
 
 async function fetchPumpKothKols(): Promise<GuildLead[]> {
     const leads: GuildLead[] = [];
@@ -277,7 +235,6 @@ async function fetchPumpKothKols(): Promise<GuildLead[]> {
             const desc = coin.description || '';
             const name = coin.name || coin.symbol || 'Unknown';
 
-            // 🟢 TELEGRAM ONLY — discord/twitter socials ignored
             if (!tg) continue;
             const url = typeof tg === 'string' && tg.startsWith('http') ? tg : `https://t.me/${tg}`;
             if (!url.includes('t.me/')) continue;
@@ -307,10 +264,6 @@ async function fetchPumpKothKols(): Promise<GuildLead[]> {
     return leads;
 }
 
-// ─── SOURCE 4: Pump.fun Recent Graduates (bonding curve completed) ────────────
-// These tokens GRADUATED the bonding curve — they raised real money.
-// The dev has a community and will do another launch. High value prospect.
-
 async function fetchPumpGraduates(): Promise<GuildLead[]> {
     const leads: GuildLead[] = [];
     try {
@@ -321,7 +274,6 @@ async function fetchPumpGraduates(): Promise<GuildLead[]> {
         const coins: any[] = Array.isArray(res.data) ? res.data : [];
 
         for (const coin of coins) {
-            // 🟢 TELEGRAM ONLY — discord/twitter socials ignored
             if (!coin.telegram) continue;
             const url = coin.telegram.startsWith('http') ? coin.telegram : `https://t.me/${coin.telegram}`;
             if (!url.includes('t.me/') || url.length < 10) continue;
@@ -336,7 +288,7 @@ async function fetchPumpGraduates(): Promise<GuildLead[]> {
                 memberCount: 0,
                 title: `${coin.name || 'Unknown'} (Pump Graduate 🎓)`,
                 description: coin.description || '',
-                guildFitScore: Math.min(100, score + 20), // graduated = serious dev
+                guildFitScore: Math.min(100, score + 20), 
                 pitchType: 'PROJECT_OWNER',
                 source: 'pump-graduate',
                 hasToken: true,
@@ -349,8 +301,6 @@ async function fetchPumpGraduates(): Promise<GuildLead[]> {
     return leads;
 }
 
-// ─── SOURCE 5: Birdeye high-holder tokens ────────────────────────────────────
-
 async function fetchHighHolderTokenKols(): Promise<GuildLead[]> {
     const leads: GuildLead[] = [];
     try {
@@ -360,7 +310,6 @@ async function fetchHighHolderTokenKols(): Promise<GuildLead[]> {
         );
         const tokens: any[] = res.data?.data?.tokens || [];
 
-        // Process in parallel chunks of DEEP_PARALLEL
         for (let i = 0; i < tokens.length; i += DEEP_PARALLEL) {
             const chunk = tokens.slice(i, i + DEEP_PARALLEL);
             await Promise.all(chunk.map(async (token: any) => {
@@ -374,7 +323,6 @@ async function fetchHighHolderTokenKols(): Promise<GuildLead[]> {
 
                     for (const link of links) {
                         const url: string = link.url || '';
-                        // 🟢 TELEGRAM ONLY — discord links ignored
                         if (!url.includes('t.me/')) return;
 
                         const { score, pitchType, keywords } = scoreGuildFit(
@@ -403,9 +351,6 @@ async function fetchHighHolderTokenKols(): Promise<GuildLead[]> {
     return leads;
 }
 
-// ─── SOURCE 6: DexScreener new Solana pairs (token socials) ──────────────────
-// Catches fresh tokens the moment they list — before they hit any directory.
-
 async function fetchNewSolanaPairKols(): Promise<GuildLead[]> {
     const leads: GuildLead[] = [];
     try {
@@ -423,7 +368,6 @@ async function fetchNewSolanaPairKols(): Promise<GuildLead[]> {
 
             for (const link of links) {
                 const url: string = link.url || '';
-                // 🟢 TELEGRAM ONLY — discord links ignored
                 if (!url.includes('t.me/')) continue;
 
                 const { score, pitchType, keywords } = scoreGuildFit(
@@ -449,27 +393,18 @@ async function fetchNewSolanaPairKols(): Promise<GuildLead[]> {
     return leads;
 }
 
-// ─── Member count enrichment ──────────────────────────────────────────────────
-// 🟢 TELEGRAM ONLY — discord branch removed
-// 🟢 BUG FIX: "online" count was being matched ahead of "members" count in some
-//    HTML layouts, which under-counts real group size (online << total members).
-//    Members/subscribers pattern is now tried first and exclusively, with
-//    "online" only used as an absolute last resort fallback.
-
 async function enrichMemberCount(lead: GuildLead): Promise<number> {
     if (lead.memberCount > 0) return lead.memberCount;
     try {
         const res = await axios.get(lead.url, { headers: { 'User-Agent': randomUA() }, timeout: 6000 });
         const html: string = res.data;
 
-        // Primary signal — actual member/subscriber count
         const memberMatch = html.match(/([\d\s,]+)\s+(members|subscribers)/i);
         if (memberMatch?.[1]) {
             const n = parseInt(memberMatch[1].replace(/[, ]/g, ''), 10);
             if (n > 0) return n;
         }
 
-        // Fallback only if no members count was found at all
         const onlineMatch = html.match(/([\d\s,]+)\s+online/i);
         if (onlineMatch?.[1]) {
             const n = parseInt(onlineMatch[1].replace(/[, ]/g, ''), 10);
@@ -478,13 +413,6 @@ async function enrichMemberCount(lead: GuildLead): Promise<number> {
     } catch { }
     return 0;
 }
-
-// ─── Qualification gate — HARD ENFORCEMENT of 300+ members ───────────────────
-// This is the actual fix you asked for: MIN_MEMBERS_FOR_GUILD previously
-// existed as a constant but was never checked against memberCount anywhere.
-// A high keyword score could send a 0-member or 50-member lead to your inbox.
-// Now every lead must clear BOTH the score threshold AND the member floor,
-// checked AFTER enrichment so unknown-size leads get a real number first.
 
 async function qualifyLead(lead: GuildLead): Promise<{ qualifies: boolean; memberCount: number }> {
     if (lead.guildFitScore < MIN_GUILD_FIT_SCORE) {
@@ -499,8 +427,6 @@ async function qualifyLead(lead: GuildLead): Promise<{ qualifies: boolean; membe
 
     return { qualifies: true, memberCount };
 }
-
-// ─── Pitch templates ──────────────────────────────────────────────────────────
 
 const PITCH_LABELS: Record<PitchType, string> = {
     LAUNCH_KOL:    '🎙️ LAUNCH KOL — Pitch: Their community earns loyalty points every time they follow a call',
@@ -531,8 +457,6 @@ const PITCH_OPENERS: Record<PitchType, string> = {
         `Want to see how it looks inside your group?`,
 };
 
-// ─── Send lead to admin ───────────────────────────────────────────────────────
-
 async function sendGuildLead(
     bot: any,
     adminId: string,
@@ -541,8 +465,6 @@ async function sendGuildLead(
     memberCount: number
 ): Promise<void> {
     const scoreBar   = '█'.repeat(Math.floor(lead.guildFitScore / 10)) + '░'.repeat(10 - Math.floor(lead.guildFitScore / 10));
-    // memberCount is guaranteed >= MIN_MEMBERS_FOR_GUILD here — qualifyLead()
-    // already verified it before this function is ever called.
     const sizeStr    = `✅ ${memberCount.toLocaleString()} verified members`;
     const tokenBadge = lead.hasToken ? '✅ Has Token (launcher/dev)' : '➖ No token (KOL/group)';
 
@@ -566,8 +488,6 @@ async function sendGuildLead(
     }).catch((e: any) => console.log(`[GUILD-LEAD] Send error: ${e.message}`));
 }
 
-// ─── Main runner ──────────────────────────────────────────────────────────────
-
 export async function runGuildLeadScraper(bot: any, adminId: string): Promise<string> {
     const cancelKey = `state:guild_lead_scraper:${adminId}`;
 
@@ -575,7 +495,6 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
         await redis.set(cancelKey, 'RUNNING', 'EX', 3600);
         console.log(`🏰 [GUILD-LEAD] Starting Guild Prospect Scan (Telegram-only, ${MIN_MEMBERS_FOR_GUILD}+ members)...`);
 
-        // Run all 6 Telegram sources in parallel
         const [
             dirLeads, boostedLeads, kothLeads, graduateLeads,
             holderLeads, newPairLeads
@@ -595,8 +514,6 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
 
         console.log(`🏰 [GUILD-LEAD] Raw leads: ${allLeads.length}`);
 
-        // Dedupe by URL, sort by score descending — score-only pre-filter here,
-        // the real member-count gate happens per-lead below via qualifyLead()
         const seenUrls = new Set<string>();
         const candidates = allLeads
             .filter(l => { if (seenUrls.has(l.url)) return false; seenUrls.add(l.url); return true; })
@@ -611,10 +528,6 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
         for (const lead of candidates) {
             if (await isAlreadyContacted(lead.url)) continue;
 
-            // 🟢 HARD GATE: must clear MIN_MEMBERS_FOR_GUILD (300) after enrichment.
-            // Lead is only marked contacted and sent if it actually qualifies —
-            // failed/under-threshold leads are skipped silently and NOT marked,
-            // so they can be re-checked on a future scan if they grow.
             const { qualifies, memberCount } = await qualifyLead(lead);
 
             if (!qualifies) {
@@ -656,8 +569,6 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
         await redis.del(cancelKey);
     }
 }
-
-// ─── Scheduler — every 45 minutes (was 90) ───────────────────────────────────
 
 export function startGuildLeadScheduler(bot: any, adminId: string) {
     console.log('🏰 [GUILD-LEAD] Guild Prospect Scheduler started — scanning every 45 minutes.');

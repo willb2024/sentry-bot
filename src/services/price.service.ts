@@ -13,7 +13,7 @@ export function getBondingCurveAddress(tokenMint: string): string {
     return pda.toBase58();
 }
 
-export function decodePumpCurvePrice(base64Data: string): number {
+export function decodePumpCurvePrice(base64Data: string, tokenDecimals: number = 6): number {
     try {
         const buffer = Buffer.from(base64Data, 'base64');
         if (buffer.length < 40) return 0;
@@ -22,7 +22,8 @@ export function decodePumpCurvePrice(base64Data: string): number {
         const virtualSolReserves = buffer.readBigUInt64LE(16);
         
         const solAmount = Number(virtualSolReserves) / 1_000_000_000; 
-        const tokenAmount = Number(virtualTokenReserves) / 1_000_000; 
+        const divisor = Math.pow(10, tokenDecimals);
+        const tokenAmount = Number(virtualTokenReserves) / divisor; 
         
         if (tokenAmount === 0) return 0;
         
@@ -59,7 +60,11 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
         }
         return false;
     } catch (e: any) {
-        console.error("⚠️ [PRICE SERVICE] MEV activity check exception:", e.message);
+        // 🟢 SILENCED ERROR: We no longer spam the console if the RPC node throws a 429 rate limit during an MEV check.
+        // It simply assumes 'false' and moves on without crashing your terminal logs.
+        if (!e.message.includes('429')) {
+            console.warn(`⚠️ [PRICE SERVICE] MEV check failed for ${tokenMint.substring(0,6)}... (${e.message})`);
+        }
         return false; 
     }
 }
