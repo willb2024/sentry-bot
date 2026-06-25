@@ -739,11 +739,17 @@ bot.command(['kol', 'kolfinder'], async (ctx) => {
 });
 
 
-// 🟢 NEW FEATURE: Interactive Coin Caller Menu
+// =========================================================
+// 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
+// =========================================================
 async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     const filters = await getUserCallerFilters(tgId);
     
-    const statusText = filters.isActive ? "🟢 <b>ACTIVE & SCANNING</b>" : "🔴 <b>OFFLINE</b>";
+    // 🟢 UI STATUS UPDATE (Searching Indicator)
+    const statusText = filters.isActive 
+        ? "🟢 <b>ACTIVE & SCANNING</b> 🔍\n<i>(Searching mempool for matches every 15s...)</i>" 
+        : "🔴 <b>OFFLINE</b>";
+        
     const mevText = filters.blockMev ? "🟢 Yes (Protected)" : "🔴 No (Risky)";
 
     const text = `🎯 <b>AI COIN CALLER ENGINE</b>\n\n` +
@@ -751,13 +757,19 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         `<b>Engine Status:</b> ${statusText}\n\n` +
         `⚙️ <b>CURRENT FILTERS:</b>\n` +
         `• <b>Minimum Score:</b> ${filters.minScore} / 100\n` +
+        `• <b>Max Token Age:</b> ${filters.maxAgeMins} Mins\n` +
+        `• <b>Momentum % Range:</b> ${filters.minPctChange}% to ${filters.maxPctChange}%\n` +
         `• <b>Block MEV:</b> ${mevText}\n\n` +
-        `<i>Adjust your settings below:</i>`;
+        `<i>Adjust your scanner parameters below:</i>`;
 
     const ui = Markup.inlineKeyboard([
         [Markup.button.callback(filters.isActive ? '🛑 TURN OFF CALLER' : '⚡ TURN ON CALLER', 'toggle_caller_status')],
         [
-            Markup.button.callback(`✏️ Edit Min Score`, 'edit_caller_score'), 
+            Markup.button.callback(`⏱️ Max Age (${filters.maxAgeMins}m)`, 'edit_caller_age'),
+            Markup.button.callback(`📈 % Range (${filters.minPctChange} to ${filters.maxPctChange}%)`, 'edit_caller_pct')
+        ],
+        [
+            Markup.button.callback(`✏️ Min Score (${filters.minScore})`, 'edit_caller_score'), 
             Markup.button.callback(filters.blockMev ? '🛡️ MEV Block: ON' : '⚠️ MEV Block: OFF', 'toggle_caller_mev')
         ],
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
@@ -769,6 +781,54 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         await ctx.replyWithHTML(text, ui);
     }
 }
+
+bot.command('caller', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await sendCallerMenu(ctx, tgId, false);
+});
+
+bot.action('toggle_caller_status', async (ctx) => {
+    const tgId = ctx.from?.id.toString()!;
+    const filters = await getUserCallerFilters(tgId);
+    await setUserCallerFilters(tgId, { isActive: !filters.isActive });
+    
+    if (!filters.isActive) {
+        try { await ctx.answerCbQuery("🔍 Searching... Sentry is now scanning every 15s!", { show_alert: true }); } catch(e){}
+    } else {
+        try { await ctx.answerCbQuery("🛑 Caller Turned Off."); } catch(e){}
+    }
+    await sendCallerMenu(ctx, tgId, true);
+});
+
+bot.action('toggle_caller_mev', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    const filters = await getUserCallerFilters(tgId);
+    await setUserCallerFilters(tgId, { blockMev: !filters.blockMev });
+    await sendCallerMenu(ctx, tgId, true);
+});
+
+bot.action('edit_caller_score', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:edit_caller_score:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`✏️ <b>EDIT MINIMUM SCORE</b>\n\nReply with the minimum score (0-100) a token must get before Sentry alerts you.\n<i>Example: 85</i>\n\n<i>Type /cancel to abort.</i>`);
+});
+
+bot.action('edit_caller_age', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:edit_caller_age:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`⏱️ <b>EDIT MAX TOKEN AGE</b>\n\nReply with the maximum age in minutes a token can be.\n<i>Example: 60 (for max 1 hour old)</i>\n\n<i>Type /cancel to abort.</i>`);
+});
+
+bot.action('edit_caller_pct', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:edit_caller_pct:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`📈 <b>EDIT MOMENTUM % RANGE</b>\n\nReply with the Minimum and Maximum percentage gain allowed, separated by a space.\n<i>Example: 10 500 (Alerts only on coins up 10% to 500%)</i>\n\n<i>Type /cancel to abort.</i>`);
+});
 
 // Open the menu using /caller
 bot.command('caller', async (ctx) => {
@@ -2364,7 +2424,8 @@ bot.on("text", async (ctx, next) => {
             `active_bumper:${telegramId}`,
             `state:lead_scraper:${telegramId}`, // 🟢 ADD THIS LINE
             `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`, // 🟢 ADD THESE
-            `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`
+            `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`,
+            `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`
         ];
         if (redis.del) await redis.del(...keysToClear); 
         await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
@@ -2400,6 +2461,39 @@ bot.on("text", async (ctx, next) => {
             }
             return;
         }
+
+        // Add these to keysToClear in the /cancel intercept block:
+// `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`
+
+// CATCH CALLER AGE EDIT
+const callerAgeState = await redis.get(`state:edit_caller_age:${telegramId}`);
+if (callerAgeState) {
+    await redis.del(`state:edit_caller_age:${telegramId}`);
+    const val = parseInt(text.trim());
+    if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Age.</b> Must be a positive number.");
+    
+    await setUserCallerFilters(telegramId, { maxAgeMins: val });
+    await ctx.replyWithHTML(`✅ <b>Max Age updated to ${val} minutes!</b>`);
+    await sendCallerMenu(ctx, telegramId, false);
+    return;
+}
+
+// CATCH CALLER PCT EDIT
+const callerPctState = await redis.get(`state:edit_caller_pct:${telegramId}`);
+if (callerPctState) {
+    await redis.del(`state:edit_caller_pct:${telegramId}`);
+    const parts = text.trim().split(/\s+/);
+    if (parts.length !== 2) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Use: <code>[MIN_%] [MAX_%]</code> (Example: <code>10 500</code>)");
+    
+    const min = parseFloat(parts[0]);
+    const max = parseFloat(parts[1]);
+    if (isNaN(min) || isNaN(max) || min > max) return ctx.replyWithHTML("🔴 <b>Invalid Range.</b> Make sure Minimum is less than or equal to Maximum.");
+    
+    await setUserCallerFilters(telegramId, { minPctChange: min, maxPctChange: max });
+    await ctx.replyWithHTML(`✅ <b>Percentage Range updated to ${min}% - ${max}%!</b>`);
+    await sendCallerMenu(ctx, telegramId, false);
+    return;
+}
 
 
 // 🟢 CATCH CALLER SCORE EDIT

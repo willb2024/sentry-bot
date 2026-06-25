@@ -12,6 +12,8 @@ export interface TokenScore {
     mint: string;
     symbol: string;
     totalScore: number;
+    ageMins: number;      // 🟢 ADDED: Passed to filter engine
+    pctChange: number;    // 🟢 ADDED: Passed to filter engine
     breakdown: {
         volumeSpike: number;      
         buySellRatio: number;     
@@ -30,20 +32,24 @@ export interface CallerFilters {
     blockMev: boolean;
     minScore: number;
     isActive: boolean;
+    minPctChange: number; // 🟢 ADDED
+    maxPctChange: number; // 🟢 ADDED
 }
 
 const DEFAULT_FILTERS: CallerFilters = {
     minVolUsd: 10000,
-    maxAgeMins: 120,
+    maxAgeMins: 120, // 🟢 Default maximum age in minutes
     blockMev: true,
-    minScore: 50, // 🟢 Default optimized to 50 for max trench alerts
-    isActive: false
+    minScore: 50, 
+    isActive: false,
+    minPctChange: -20, // 🟢 Default momentum floor (-20%)
+    maxPctChange: 1000 // 🟢 Default momentum ceiling (+1000%)
 };
 
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
     try {
         const raw = await redis.get(`caller_filters:${telegramId}`);
-        return raw ? JSON.parse(raw) : DEFAULT_FILTERS;
+        return raw ? { ...DEFAULT_FILTERS, ...JSON.parse(raw) } : DEFAULT_FILTERS;
     } catch (e: any) {
         console.error(`🔴 [CALLER] Failed to read filters for ${telegramId}: ${e.message}`);
         return DEFAULT_FILTERS;
@@ -158,16 +164,17 @@ export async function scoreTokens(): Promise<TokenScore[]> {
 
             const liq = pair.liquidity?.usd || 0;
             let liquidityDepth = 0;
-            
-            // 🟢 REMOVED Low Liquidity warning, added 24H Volume readout
             if (liq > 50000) { liquidityDepth = 15; reasons.push(`💧 Deep liquidity ($${(liq/1000).toFixed(1)}k)`); }
-            const vol24 = pair.volume?.h24 || 0;
-            if (vol24 > 0) { reasons.push(`📊 24H Volume: $${vol24.toLocaleString(undefined, {maximumFractionDigits: 0})}`); }
+            
+            // 🟢 REMOVED 24H Volume check here
 
             const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
             let ageScore = 0;
             if (ageMins < 30) { ageScore = 20; reasons.push(`👶 Very fresh (${ageMins.toFixed(0)} mins old)`); }
             else if (ageMins < 120) { ageScore = 10; }
+
+            // 🟢 Extract Pct Change
+            const pctChange = pair.priceChange?.m5 || pair.priceChange?.h1 || 0;
 
             let curveProgress = 0;
             const isPump = pair.baseToken?.address?.toLowerCase().endsWith('pump');
@@ -211,6 +218,8 @@ export async function scoreTokens(): Promise<TokenScore[]> {
                 mint: pair.baseToken.address,
                 symbol: pair.baseToken.symbol,
                 totalScore: Math.min(100, Math.max(0, totalScore)),
+                ageMins,     // 🟢 Injected for dynamic filtering
+                pctChange,   // 🟢 Injected for dynamic filtering
                 breakdown: { volumeSpike, buySellRatio, liquidityDepth, ageScore, mevRisk: safetyScore, curveProgress },
                 reasons,
                 warnings
@@ -239,9 +248,13 @@ export function startCoinCaller(bot: any) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
+                // 🟢 ADDED: New Dynamic Filtering Engine (Age + Momentum %)
                 const token = topTokens.find(t => 
                     t.totalScore >= filters.minScore && 
-                    (!filters.blockMev || t.breakdown.mevRisk >= 0)
+                    (!filters.blockMev || t.breakdown.mevRisk >= 0) &&
+                    t.ageMins <= filters.maxAgeMins &&
+                    t.pctChange >= filters.minPctChange &&
+                    t.pctChange <= filters.maxPctChange
                 );
 
                 if (token) {
@@ -251,7 +264,8 @@ export function startCoinCaller(bot: any) {
                     if (isNotified) {
                         const msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b>\n\n` +
                                     `<b>Token:</b> $${token.symbol} (<code>${token.mint}</code>)\n` +
-                                    `<b>Score:</b> ${token.totalScore}/100 ⭐\n\n` +
+                                    `<b>Score:</b> ${token.totalScore}/100 ⭐\n` +
+                                    `<b>Age:</b> ${token.ageMins.toFixed(0)} Mins | <b>Gain:</b> ${token.pctChange.toFixed(2)}%\n\n` +
                                     `${token.reasons.map(r => `✅ ${r}`).join('\n')}\n` +
                                     `${token.warnings.map(w => `${w}`).join('\n')}\n\n` +
                                     `<i>Reply with the CA to quick-snipe, or click below.</i>`;
@@ -271,5 +285,5 @@ export function startCoinCaller(bot: any) {
         } catch (e: any) {
             console.error("🔴 [COIN CALLER] Error:", e.message);
         }
-    }, 15 * 1000); // 🟢 15-SECOND LOOP
+    }, 15 * 1000); 
 }
