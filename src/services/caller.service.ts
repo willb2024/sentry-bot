@@ -36,7 +36,7 @@ const DEFAULT_FILTERS: CallerFilters = {
     minVolUsd: 10000,
     maxAgeMins: 120,
     blockMev: true,
-    minScore: 70,
+    minScore: 50, // 🟢 Default optimized to 50 for max trench alerts
     isActive: false
 };
 
@@ -126,7 +126,6 @@ async function mapWithConcurrency<T, R>(
     return results;
 }
 
-// 🟢 EXPORTED: Exposes the breakout scorer to the rest of the system
 export async function scoreTokens(): Promise<TokenScore[]> {
     try {
         const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 8000 });
@@ -159,8 +158,11 @@ export async function scoreTokens(): Promise<TokenScore[]> {
 
             const liq = pair.liquidity?.usd || 0;
             let liquidityDepth = 0;
+            
+            // 🟢 REMOVED Low Liquidity warning, added 24H Volume readout
             if (liq > 50000) { liquidityDepth = 15; reasons.push(`💧 Deep liquidity ($${(liq/1000).toFixed(1)}k)`); }
-            else if (liq < 5000) { warnings.push(`⚠️ Low liquidity ($${liq.toFixed(0)})`); }
+            const vol24 = pair.volume?.h24 || 0;
+            if (vol24 > 0) { reasons.push(`📊 24H Volume: $${vol24.toLocaleString(undefined, {maximumFractionDigits: 0})}`); }
 
             const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
             let ageScore = 0;
@@ -178,7 +180,7 @@ export async function scoreTokens(): Promise<TokenScore[]> {
             }
 
             const prelimScore = volumeSpike + buySellRatio + liquidityDepth + ageScore + curveProgress;
-            let mevRisk = 0;
+            let safetyScore = 0;
 
             if (prelimScore >= 35) { 
                 const cacheKey = `rug_status:${pair.baseToken.address}`;
@@ -193,23 +195,23 @@ export async function scoreTokens(): Promise<TokenScore[]> {
                 }
 
                 if (isRug) {
-                    mevRisk = -25;
+                    safetyScore = -25;
                     warnings.push(`❌ RugCheck flagged: HIGH RISK (LP unlocked or Freeze enabled)`);
                 } else {
-                    mevRisk = 10;
+                    safetyScore = 10;
                     reasons.push(`🛡️ RugCheck passed: Low Risk (Safe contract)`);
                 }
             } else {
                 warnings.push(`⚠️ Skipped safety scan (Low score token)`);
             }
 
-            totalScore = prelimScore + mevRisk;
+            totalScore = prelimScore + safetyScore;
 
             const scored: TokenScore = {
                 mint: pair.baseToken.address,
                 symbol: pair.baseToken.symbol,
                 totalScore: Math.min(100, Math.max(0, totalScore)),
-                breakdown: { volumeSpike, buySellRatio, liquidityDepth, ageScore, mevRisk, curveProgress },
+                breakdown: { volumeSpike, buySellRatio, liquidityDepth, ageScore, mevRisk: safetyScore, curveProgress },
                 reasons,
                 warnings
             };
@@ -223,9 +225,8 @@ export async function scoreTokens(): Promise<TokenScore[]> {
     }
 }
 
-// 🟢 EXPORTED: Launches the optimized 60-second Trench Radar loop
-export function startTrenchRadar(bot: any) {
-    console.log("🎯 [TRENCH RADAR] Background Alpha Engine Initialized. Scanning every 60 seconds.");
+export function startCoinCaller(bot: any) {
+    console.log("🎯 [COIN CALLER] Background Alpha Engine Initialized. Scanning every 15 seconds.");
 
     setInterval(async () => {
         try {
@@ -270,5 +271,5 @@ export function startTrenchRadar(bot: any) {
         } catch (e: any) {
             console.error("🔴 [COIN CALLER] Error:", e.message);
         }
-    }, 60 * 1000); 
+    }, 15 * 1000); // 🟢 15-SECOND LOOP
 }
