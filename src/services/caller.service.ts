@@ -12,8 +12,8 @@ export interface TokenScore {
     mint: string;
     symbol: string;
     totalScore: number;
-    ageMins: number;      // 🟢 ADDED: Passed to filter engine
-    pctChange: number;    // 🟢 ADDED: Passed to filter engine
+    ageMins: number;      
+    pctChange: number;    
     breakdown: {
         volumeSpike: number;      
         buySellRatio: number;     
@@ -32,18 +32,18 @@ export interface CallerFilters {
     blockMev: boolean;
     minScore: number;
     isActive: boolean;
-    minPctChange: number; // 🟢 ADDED
-    maxPctChange: number; // 🟢 ADDED
+    minPctChange: number; 
+    maxPctChange: number; 
 }
 
 const DEFAULT_FILTERS: CallerFilters = {
     minVolUsd: 10000,
-    maxAgeMins: 120, // 🟢 Default maximum age in minutes
+    maxAgeMins: 120, 
     blockMev: true,
     minScore: 50, 
     isActive: false,
-    minPctChange: -20, // 🟢 Default momentum floor (-20%)
-    maxPctChange: 1000 // 🟢 Default momentum ceiling (+1000%)
+    minPctChange: -20, 
+    maxPctChange: 1000 
 };
 
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
@@ -134,11 +134,25 @@ async function mapWithConcurrency<T, R>(
 
 export async function scoreTokens(): Promise<TokenScore[]> {
     try {
-        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 8000 });
-        const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.chainId === 'solana');
-        if (profiles.length === 0) return [];
+        // 🟢 FIX: Massively expanded token search pool to fix the "No Matches" bottleneck
+        const [profilesRes, boostsRes, topRes] = await Promise.allSettled([
+            axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 5000 }),
+            axios.get('https://api.dexscreener.com/token-boosts/latest/v1', { timeout: 5000 }),
+            axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 5000 })
+        ]);
 
-        const mints = profiles.slice(0, 30).map((p: any) => p.tokenAddress).join(',');
+        let rawTokens: any[] = [];
+        if (profilesRes.status === 'fulfilled' && Array.isArray(profilesRes.value.data)) rawTokens.push(...profilesRes.value.data);
+        if (boostsRes.status === 'fulfilled' && Array.isArray(boostsRes.value.data)) rawTokens.push(...boostsRes.value.data);
+        if (topRes.status === 'fulfilled' && Array.isArray(topRes.value.data)) rawTokens.push(...topRes.value.data);
+
+        // Filter for Solana and get unique addresses
+        const solanaTokens = rawTokens.filter((p: any) => p.chainId === 'solana');
+        const uniqueMints = [...new Set(solanaTokens.map((p: any) => p.tokenAddress))].slice(0, 30); // Max 30 for DexScreener pair request
+
+        if (uniqueMints.length === 0) return [];
+
+        const mints = uniqueMints.join(',');
         const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 8000 });
         const pairs = (dexRes.data?.pairs || []).filter((pair: any) => pair.chainId === 'solana');
 
@@ -165,16 +179,14 @@ export async function scoreTokens(): Promise<TokenScore[]> {
             const liq = pair.liquidity?.usd || 0;
             let liquidityDepth = 0;
             if (liq > 50000) { liquidityDepth = 15; reasons.push(`💧 Deep liquidity ($${(liq/1000).toFixed(1)}k)`); }
-            
-            // 🟢 REMOVED 24H Volume check here
 
             const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
             let ageScore = 0;
             if (ageMins < 30) { ageScore = 20; reasons.push(`👶 Very fresh (${ageMins.toFixed(0)} mins old)`); }
             else if (ageMins < 120) { ageScore = 10; }
 
-            // 🟢 Extract Pct Change
-            const pctChange = pair.priceChange?.m5 || pair.priceChange?.h1 || 0;
+            // 🟢 FIX: Safely fallback on percentage change so new tokens aren't blocked by missing 5m candles
+            const pctChange = pair.priceChange?.m5 || pair.priceChange?.h1 || pair.priceChange?.h6 || 0;
 
             let curveProgress = 0;
             const isPump = pair.baseToken?.address?.toLowerCase().endsWith('pump');
@@ -218,8 +230,8 @@ export async function scoreTokens(): Promise<TokenScore[]> {
                 mint: pair.baseToken.address,
                 symbol: pair.baseToken.symbol,
                 totalScore: Math.min(100, Math.max(0, totalScore)),
-                ageMins,     // 🟢 Injected for dynamic filtering
-                pctChange,   // 🟢 Injected for dynamic filtering
+                ageMins,     
+                pctChange,   
                 breakdown: { volumeSpike, buySellRatio, liquidityDepth, ageScore, mevRisk: safetyScore, curveProgress },
                 reasons,
                 warnings
@@ -248,7 +260,7 @@ export function startCoinCaller(bot: any) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
-                // 🟢 ADDED: New Dynamic Filtering Engine (Age + Momentum %)
+                // 🟢 The strict checking block
                 const token = topTokens.find(t => 
                     t.totalScore >= filters.minScore && 
                     (!filters.blockMev || t.breakdown.mevRisk >= 0) &&
