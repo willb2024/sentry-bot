@@ -838,6 +838,13 @@ bot.command(['kol', 'kolfinder'], async (ctx) => {
     }
 });
 
+// 🟢 NEW: Listens for the main dashboard button click to open the Coin Caller menu
+bot.action('menu_caller', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await sendCallerMenu(ctx, tgId, true); // Smoothly edits the dashboard into the caller settings
+});
 
 // =========================================================
 // 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
