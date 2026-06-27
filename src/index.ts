@@ -183,7 +183,7 @@ app.post('/api/affiliate-stats', async (req, res) => {
         
         const recruitList = user.recruits.map(r => {
             const volumeSol = r.trades.reduce((sum, t) => sum + t.amountInSol, 0);
-            const yourEarningSol = volumeSol * 0.005; // 0.5% of their volume
+            const yourEarningSol = r.trades.reduce((sum, t) => sum + (t.affiliateCutSol || 0), 0); 
             const lastTrade = r.trades[0];
             const lastActiveDaysAgo = lastTrade 
                 ? Math.floor((Date.now() - new Date(lastTrade.createdAt).getTime()) / 86400000)
@@ -199,20 +199,46 @@ app.post('/api/affiliate-stats', async (req, res) => {
         // Build 30-day daily earnings array
         const dailyEarnings: number[] = Array(30).fill(0);
         const now = Date.now();
+        let totalHistoricalEarned = 0;
+
         user.recruits.forEach(r => {
             r.trades.forEach(t => {
+                const earned = t.affiliateCutSol || 0;
+                totalHistoricalEarned += earned;
                 const daysAgo = Math.floor((now - new Date(t.createdAt).getTime()) / 86400000);
                 if (daysAgo >= 0 && daysAgo < 30) {
-                    dailyEarnings[29 - daysAgo] += t.amountInSol * 0.005;
+                    dailyEarnings[29 - daysAgo] += earned;
                 }
             });
         });
+
+        // 🟢 Precise dynamic point metrics for the WebApp UI
+        const basePoints = Math.floor((user.totalVolumeSol || 0) * 10000);
+        const welcomeBonus = user.referredById ? 10000 : 0;
+        const recruitBonus = user.recruits.length * 2000;
+        const totalPoints = basePoints + welcomeBonus + recruitBonus;
+
+        let currentTier = "Bronze";
+        let currentRate = 0.40;
+        if (totalPoints >= 1000000) {
+            currentTier = "Diamond";
+            currentRate = 0.70;
+        } else if (totalPoints >= 250000) {
+            currentTier = "Gold";
+            currentRate = 0.60;
+        } else if (totalPoints >= 50000) {
+            currentTier = "Silver";
+            currentRate = 0.50;
+        }
         
         res.json({
             recruits: user.recruits.length,
             pendingYieldSol: parseFloat((user.pendingRewardsSol || 0).toFixed(4)),
-            lifetimeEarnedSol: parseFloat(((user.pendingRewardsSol || 0) + (user.recruits.reduce((s,r) => s + r.trades.reduce((ts,t) => ts + t.amountInSol * 0.005, 0), 0))).toFixed(4)),
+            lifetimeEarnedSol: parseFloat(((user.pendingRewardsSol || 0) + totalHistoricalEarned).toFixed(4)),
             referralLink: `https://t.me/${process.env.BOT_USERNAME}?start=${user.referralCode}`,
+            totalPoints,
+            currentTier,
+            currentRate,
             recruitList,
             dailyEarnings
         });
@@ -695,26 +721,40 @@ bot.action('btn_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){} 
     
     const guideText = 
-        `🏆 <b>SENTRY TERMINAL: THE SOLANA BATTLE STATION</b>\n\n` +
-        `The Solana blockchain is an execution war zone. If you are using standard retail bots, you are acting as easy exit liquidity for MEV bots. Here is why Sentry Terminal is the most advanced execution infrastructure on the market:\n\n` +
-        
-        `🛡️ <b>1. INVISIBLE PRIVATE JITO ROUTING</b>\n` +
-        `Retail bots route your transactions through public RPCs, exposing you to sandwich attacks. Sentry routes 100% of trades privately through <b>Jito MEV Bundles</b>. Your trades are hidden in the mempool and execute securely at the exact price you clicked.\n\n` +
+        `🏆 <b>WHY SENTRY TERMINAL WINS</b>\n\n` +
+        `<i>Every Solana bot promises speed. Here is what actually separates Sentry from everything else on the market:</i>\n\n` +
 
-        `🎯 <b>2. AI COIN CALLER ENGINE</b>\n` +
-        `Why hunt for gems when Sentry can do it for you? Type <code>/caller</code> to turn on the Alpha Engine. Sentry will scan DexScreener every 5 minutes, grade tokens out of 100 based on momentum, liquidity, and MEV risk, and DM you the best plays with a 1-click buy button.\n\n` +
+        `🛡️ <b>1. JITO MEV BUNDLE PROTECTION</b>\n` +
+        `Every single trade — buy, sell, DCA, copy trade, auto-snipe — goes through a private Jito MEV bundle. Your transaction is invisible to sandwich bots in the public mempool. Standard bots route through public RPCs and hand free money to MEV bots on every launch. Sentry does not.\n\n` +
 
-        `👑 <b>3. VIP TIERED FEES</b>\n` +
-        `The more you trade, the less you pay. High-volume operators automatically drop from 1.0% fees to 0.8% and 0.6% fees. Claim a free 10-day VIP pass (0% fees!) if you are one of the first 10 people to use a KOL's invite link today.\n\n` +
+        `⚡ <b>2. MULTI-WALLET WHALE EXECUTION</b>\n` +
+        `Pump.fun silently limits how much a single wallet can buy on any new launch. Sentry fires up to 5 wallets simultaneously inside the same Jito block — same millisecond, same price, no slippage stacking. You get a whale-sized position at retail entry.\n\n` +
 
-        `🏰 <b>4. SENTRY GUILDS (COMMUNITY LOYALTY)</b>\n` +
-        `Sentry Guilds allow KOLs and project devs to establish secure loyalty points systems. The bot tracks your on-chain volume and ranks you dynamically. KOLs can send you instant <b>Bulk SOL Airdrops</b> directly inside the bot based on your rank on the leaderboard!\n\n` +
+        `🎯 <b>3. DUAL-ENGINE AUTO-SNIPER</b>\n` +
+        `Sentry monitors both the Pump.fun bonding curve mempool (via gRPC Yellowstone) and Raydium new pool launches simultaneously. The moment a token launches — before it appears on any chart — your configured filters run: dev bag check, market cap range, anti-dead-coin shield, delay seconds. All in under 500ms.\n\n` +
 
-        `🧹 <b>5. DUST RENT RECOVERY & MULTI-WALLETS</b>\n` +
-        `• <b>Rent Sweeper:</b> Safely close abandoned token accounts to reclaim up to 0.002 SOL of locked rent per account directly to your wallet.\n` +
-        `• <b>Whale Mode:</b> Execute trades simultaneously across up to 5 sub-wallets inside a single Jito block to bypass Pump.fun buy limits.\n\n` +
-        
-        `<i>Stop trading on retail networks. Level up to Sentry.</i>`;
+        `🤖 <b>4. AI COIN CALLER ENGINE</b>\n` +
+        `Type <code>/caller</code> to arm Sentry's scanner. Every 15 seconds it pulls DexScreener, scores tokens 0-100 based on momentum, volume, age, and MEV risk, and DMs you only the ones that pass your thresholds with a one-click buy button. You stop hunting. The caller hunts for you.\n\n` +
+
+        `🛡️ <b>5. TRAILING GUARDS WITH TAKE PROFIT</b>\n` +
+        `Every buy automatically arms an in-memory trailing stop. As price rises, the guard follows it up. The moment it drops more than your set percentage from peak, Sentry auto-sells 100% via Jito — without you watching. You can also pair it with a take-profit target that fires first if price hits the upside target.\n\n` +
+
+        `👥 <b>6. COPY TRADING WITH GUARD PROTECTION</b>\n` +
+        `Mirror any whale wallet in real time via WebSocket. The moment the target buys, Sentry fires your configured size and instantly arms a trailing guard on that position. You are not just copying the entry — you are copying it with a built-in exit strategy.\n\n` +
+
+        `⏳ <b>7. NATIVE DCA & LIMIT ORDERS</b>\n` +
+        `Set a token to accumulate every 60 minutes at 0.05 SOL per interval with a max budget of 2 SOL. Or set a limit order to buy a dip at a specific USD price. Both fire via Jito and automatically arm a guard on every fill. No third-party protocol needed.\n\n` +
+
+        `🏰 <b>8. SENTRY GUILDS (COMMUNITY LOYALTY ENGINE)</b>\n` +
+        `KOLs and project devs can create a Guild. Members join via an invite link and Sentry tracks their on-chain trading volume in real time. The dev exports a verified CSV leaderboard of actual capital allocators — not Twitter bots — and sends bulk SOL airdrops or whitelist spots directly inside the bot. The KOL also earns 50% of every trade fee their community generates, permanently.\n\n` +
+
+        `🧹 <b>9. RENT SWEEPER & CONSOLIDATOR</b>\n` +
+        `After trading you accumulate dozens of empty token accounts each holding ~0.002 SOL in locked rent. The sweeper closes up to 18 at once via Jito and returns the SOL to your wallet instantly. The consolidator sweeps SOL from all sub-wallets back to W1 in one transaction.\n\n` +
+
+        `💰 <b>10. PARTNERSHIP PROGRAM (50/50 SPLIT)</b>\n` +
+        `Share your link. Every recruit permanently pays 10% lower fees and you earn 50% of their trading fees forever. If they unlock the Dev Suite you receive 1 SOL instantly to your balance. The more active your recruits are, the more passive income you generate on-chain.\n\n` +
+
+        `<i>This is not a retail bot. This is infrastructure.</i>`;
 
     await safeEditMessageText(ctx, guideText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
@@ -723,39 +763,42 @@ bot.action('btn_trade_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     
     const manualText = 
-        `📖  <b>SENTRY TERMINAL: USER OPERATIONAL MANUAL</b>\n\n` +
-        `Follow this step-by-step guide to configure your terminal and deploy automations:\n\n` +
+        `📖 <b>SENTRY TERMINAL: MASTER OPERATIONAL MANUAL</b>\n` +
+        `<i>Welcome to the most advanced execution infrastructure on Solana.</i>\n\n` +
         
-        `👛 <b>STEP 1: Fund Your Wallets & Check VIP</b>\n` +
-        `• Deposit SOL into your primary W1 address.\n` +
-        `• Type <code>/vipstatus</code> to see if you have claimed a free 0% fee VIP pass today.\n\n` +
+        `🎯 <b>1. AI COIN CALLER (Start Here)</b>\n` +
+        `• Click the <b>🎯 AI Coin Caller</b> button on your dashboard.\n` +
+        `• Turn the engine <b>ON</b> and configure your preferred <b>Token Age</b> (e.g., 5 to 60 mins) and <b>% Spike</b> (e.g., 15 to 500%).\n` +
+        `• Sentry will scan the blockchain 24/7 and DM you verified breakouts with a 1-click Buy button!\n\n` +
 
-        `🎯 <b>STEP 2: Automated Alpha (Coin Caller)</b>\n` +
-        `• Type <code>/caller</code> to turn on automated token scanning.\n` +
-        `• Type <code>/callerconfig 50 true</code> to receive alerts for early breakout tokens scoring 50/100+ with MEV protection enabled.\n\n` +
+        `🏦 <b>2. VAULTS & WHALE MODE</b>\n` +
+        `• Send SOL to your Primary Deposit Node (W1) to fund your trades.\n` +
+        `• <b>Whale Mode:</b> Go to Vaults & Keys to activate up to 5 wallets. Sentry will execute your trade across all active wallets in the exact same millisecond to bypass Pump.fun limits.\n\n` +
 
-        `⚡ <b>STEP 3: Execute Your First Trade</b>\n` +
-        `• <b>Manual:</b> Send <code>[CONTRACT_ADDRESS] [SOL_AMOUNT]</code> (e.g., <code>74SBV4z... 0.5</code>) to buy immediately.\n` +
-        `• <b>Quick:</b> Paste any token's contract address (CA). Sentry scans safety metrics and executes a buy using your default size.\n\n` +
+        `⚡ <b>3. JITO MEV & SLIPPAGE</b>\n` +
+        `• Sentry hides your trades from the mempool to prevent sandwich attacks.\n` +
+        `• <b>Eco / Fast / Turbo:</b> Adjust your Jito Validator Tip in Settings to speed up your trade.\n` +
+        `• <b>Slippage:</b> Keep this around 20%+ during volatile launches so your trades don't fail.\n\n` +
+
+        `🔫 <b>4. EXECUTION ENGINES</b>\n` +
+        `• <b>Fast Snipe:</b> Paste any Contract Address (CA) into the chat to buy instantly.\n` +
+        `• <b>Auto-Sniper:</b> Scans the mempool to buy new Raydium/Pump pairs at Block-0.\n` +
+        `• <b>DCA Engine:</b> Automate interval buying (e.g., buy 0.1 SOL every 60 mins).\n\n` +
         
-        `🛡️ <b>STEP 4: Deploy Trailing stop-losses</b>\n` +
-        `• Go to <b>Positions</b> to view your active holdings.\n` +
-        `• Navigate to <b>Trailing Stops</b> ➡️ click <b>Deploy Trailing Guard</b>.\n` +
-        `• Send: <code>[CA] [DROP_PERCENT] [SOL_AMOUNT] [OPTIONAL_TP_PERCENT]</code>\n` +
-        `• <i>Example:</i> <code>74SBV4z... 15 0.1 50</code> (Sets a 15% Trailing Stop and a 50% Take Profit).\n\n` +
+        `🛡️ <b>5. RISK MANAGEMENT (GUARDS)</b>\n` +
+        `• <b>Trailing Stops:</b> Deploy a Guard from the menu. It trails the peak price and auto-sells if it drops by your set %.\n` +
+        `• <b>Take Profit:</b> Locks in gains instantly when a coin hits your target %.\n\n` +
 
-        `🏰 <b>STEP 5: Switch Guilds & Earn Airdrops</b>\n` +
-        `• Join a community by typing <code>/join [GUILD_CODE]</code>.\n` +
-        `• Type <code>/guild</code> to view your rank, or click "Switch Active Guild" to change which community receives your volume points.\n\n` +
+        `🏰 <b>6. GUILDS & VIP LOYALTY</b>\n` +
+        `• <b>Guilds:</b> Join a KOL's community to earn Loyalty Points. Top traders win Bulk SOL Airdrops directly to their vaults.\n` +
+        `• <b>VIP Tiers:</b> The more you trade, the lower your platform fees. Claim a free 10-Day VIP Pass (0% Fees!) by using a referral link.\n\n` +
         
-        `👥 <b>STEP 6: Copy-Trade Profitable Whales</b>\n` +
-        `• Go to <b>Copy Trade</b> ➡️ <b>Add Custom Wallet</b>.\n` +
-        `• Send: <code>[WHALE_WALLET] [SOL_AMOUNT] [SL_PERCENT]</code>\n` +
-        `• We also post the best whales to our public alert channel with a 1-click "Copy" button!`;
+        `👥 <b>7. COPY TRADE & DUST SWEEPER</b>\n` +
+        `• <b>Copy Trade:</b> Add a profitable Whale's wallet address to mirror their trades automatically.\n` +
+        `• <b>Sweep Rent:</b> Go to Positions and click 'Sweep' to burn empty token accounts and reclaim locked SOL.`;
 
     await safeEditMessageText(ctx, manualText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
-
 bot.action('action_create_vault', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const telegramId = ctx.from?.id.toString();
@@ -1070,40 +1113,75 @@ bot.action('menu_affiliate', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { _count: { select: { recruits: true } }, referredBy: true } });
+    const user = await prisma.user.findUnique({ 
+        where: { telegramId: tgId }, 
+        include: { _count: { select: { recruits: true } }, referredBy: true } 
+    });
     if (!user) return;
 
     const referredByText = user.referredBy ? `✅ Linked to Partner: <b>${user.referredBy.referralCode}</b>` : `❌ No Partner Linked`;
 
-    await ctx.editMessageText(
-        `💸 <b>SENTRY PARTNERSHIP PROGRAM</b>\n\n` +
-        `Turn your influence into massive passive income. We offer the most lucrative, un-diluted revenue split on Solana.\n\n` +
+    // 🟢 Calculate User's Total Points Dynamically
+    const basePoints = Math.floor((user.totalVolumeSol || 0) * 10000);
+    const welcomeBonus = user.referredById ? 10000 : 0;
+    const recruitBonus = user._count.recruits * 2000;
+    const totalPoints = basePoints + welcomeBonus + recruitBonus;
+
+    // 🟢 Determine Affiliate Tier & Next Goal (40% to 70% dynamic splits)
+    let currentTier = "🥉 Bronze (40% Rev Share)";
+    let nextTier = "Silver (50k PTS)";
+    if (totalPoints >= 1000000) { 
+        currentTier = "💎 Diamond (70% Rev Share)"; 
+        nextTier = "Max Tier Unlocked!"; 
+    } else if (totalPoints >= 250000) { 
+        currentTier = "🥇 Gold (60% Rev Share)"; 
+        nextTier = "Diamond (1M PTS)"; 
+    } else if (totalPoints >= 50000) { 
+        currentTier = "🥈 Silver (50% Rev Share)"; 
+        nextTier = "Gold (250k PTS)"; 
+    }
+
+    const text = 
+        `💸 <b>SENTRY PARTNERSHIP & REWARDS</b>\n\n` +
+        `Turn your influence into massive passive income. As you accumulate <b>$SENTRY Points</b>, your affiliate revenue share increases automatically!\n\n` +
         
-        `👑 <b>WHAT YOU GET (The 50/50 Split):</b>\n` +
-        `• <b>50% of Upgrades:</b> If your recruit unlocks the Dev Suite (2.0 SOL), you instantly receive <b>1.0 SOL</b> deposited directly to your balance.\n` +
-        `• <b>50% of Trading Fees:</b> You earn half of the 1% platform fee every time they trade, forever.\n` +
-        `• <b>Points:</b> <b>+2,000 $SENTRY Points</b> added to your airdrop allocation per recruit.\n\n` +
+        `💰 <b>INSTANT VIP UPGRADE BONUS:</b>\n` +
+        `Every time one of your recruits upgrades to the Dev Suite (PRO/VIP), you instantly receive <b>1.0 SOL</b> deposited directly to your withdrawable balance. No limits!\n\n` +
+
+        `🎯 <b>HOW TO EARN POINTS (CONDITIONS):</b>\n` +
+        `• <b>Trade Volume:</b> 1 SOL Traded = <b>10,000 PTS</b>\n` +
+        `• <b>Recruiting:</b> 1 Active Invite = <b>2,000 PTS</b>\n` +
+        `• <b>Onboarding:</b> Sign up via a partner link = <b>+10,000 PTS</b> head-start\n\n` +
         
-        `🎁 <b>WHAT YOUR RECRUIT GETS:</b>\n` +
-        `• <b>Fee Discount:</b> They permanently pay 10% lower fees just by using your link.\n` +
-        `• <b>Head-start:</b> They instantly receive <b>+10,000 $SENTRY Points</b> upon signup.\n\n` +
- 
+        `👑 <b>TRADING FEE TIERS:</b>\n` +
+        `• 🥉 <b>Bronze (0 - 49k PTS):</b> 40% of recruit trading fees.\n` +
+        `• 🥈 <b>Silver (50k - 249k PTS):</b> 50% of recruit trading fees.\n` +
+        `• 🥇 <b>Gold (250k - 999k PTS):</b> 60% of fees + access to private Alpha.\n` +
+        `• 💎 <b>Diamond (1M+ PTS):</b> 70% of fees + Lifetime 0% fee VIP status.\n\n` +
+        
+        `🎁 <b>YOUR RECRUIT'S BONUS:</b>\n` +
+        `Anyone who uses your link gets a permanent <b>10% fee discount</b> and a 10,000 PTS airdrop head-start!\n\n` +
+        
+        `📊 <b>YOUR LIVE STATS:</b>\n` +
+        `• <b>Total Points:</b> ${totalPoints.toLocaleString()} PTS\n` +
+        `• <b>Current Tier:</b> ${currentTier}\n` +
+        `• <b>Next Tier At:</b> ${nextTier}\n` +
+        `• <b>Active Recruits:</b> ${user._count.recruits}\n` +
+        `• <b>Pending Yield:</b> ${Number(user.pendingRewardsSol||0).toFixed(4)} SOL <i>(Min claim: 0.1 SOL)</i>\n\n` +
+        
         `🔗 <b>Your Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=${user.referralCode}</code>\n\n` +
         
-        `👥 <b>Active Recruits:</b> ${user._count.recruits}\n` +
-        `💰 <b>Pending Yield:</b> ${Number(user.pendingRewardsSol||0).toFixed(4)} SOL\n<i>(Min claim: 0.1 SOL)</i>\n\n` +
-        `<b>Your Status:</b>\n${referredByText}`, 
-        { 
-            parse_mode: "HTML", 
-            ...Markup.inlineKeyboard([
-                ...(user.referredById ? [] : [[Markup.button.callback("🔗 Enter Referral Code", "action_enter_ref_code")]]),
-                [Markup.button.callback("📥 Claim Payout","action_claim_payout")],
-                [Markup.button.callback("⬅️ Back", "btn_dashboard")]
-            ]) 
-        }
-     );
-});
+        `<b>Link Status:</b>\n${referredByText}`;
 
+    await safeEditMessageText(ctx, text, { 
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+            ...(user.referredById ? [] : [[Markup.button.callback("🔗 Enter Referral Code", "action_enter_ref_code")]]),
+            [Markup.button.callback("📥 Claim Payout", "action_claim_payout")],
+            [Markup.button.callback("⬅️ Back to Dashboard", "btn_dashboard")]
+        ]) 
+    });
+});
 // =========================================================
 // 🛠️ SENTRY DEV SUITE & 50/50 KOL PAYWALL (1.5 SOL)
 // =========================================================

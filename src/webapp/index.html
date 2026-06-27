@@ -149,7 +149,7 @@
         <div class="bg-[#121826] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
             <button id="tab-dashboard" onclick="switchView('dashboard')" class="px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Terminal Dashboard</button>
             <button id="tab-leaderboard" onclick="switchView('leaderboard')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
-            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Affiliates</button>
+            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
         </div>
     </div>
 
@@ -285,7 +285,7 @@
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-trophy text-gray-500"></i> Your Tier</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-amber-500" id="aff-stat-tier">Bronze</span>
+                        <span class="text-3xl sm:text-4xl font-bold text-amber-500" id="aff-stat-tier">Bronze (40%)</span>
                     </div>
                 </div>
             </div>
@@ -297,7 +297,7 @@
                     <input type="text" id="aff-ref-link" readonly class="w-full bg-[#0a0d14] text-gray-300 font-mono text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
                     <button onclick="copyReferralLink()" class="glass-btn px-4 py-3 rounded-lg text-sm font-bold text-white whitespace-nowrap"><i class="fa-solid fa-copy mr-1"></i> Copy Link</button>
                 </div>
-                <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn 50% of their trading fees for life.</p>
+                <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn up to 70% of their trading fees for life.</p>
             </div>
 
             <!-- Section 3: Recruits Feed -->
@@ -323,7 +323,8 @@
 
             <!-- Section 5: Projected Earnings -->
             <div class="card-flat p-5">
-                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4">If your recruits maintain current volume:</h3>
+                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4 uppercase">Projected Earnings</h3>
+                <p class="text-xs text-gray-400 mb-4">If your recruits maintain current volume:</p>
                 
                 <div class="space-y-4">
                     <div class="flex justify-between items-center bg-[#0a0d14] p-3 rounded-lg border border-white/5">
@@ -407,7 +408,7 @@
     
     // 🟢 States
     let liveLeaderboardData = { guild: null, members: [] };
-    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", recruitList: [], dailyEarnings: Array(30).fill(0) };
+    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
 
     // 🟢 Demo Data Arrays
     const demoPositions = [
@@ -433,6 +434,9 @@
         pendingYieldSol: 0.21,
         lifetimeEarnedSol: 1.45,
         referralLink: "https://t.me/SentryBot?start=REF-DEMO123",
+        totalPoints: 64000,
+        currentTier: "Silver",
+        currentRate: 0.50,
         recruitList: [
             { username: "whale_hunter", volumeSol: 145.2, yourEarningSol: 0.726, lastActiveDaysAgo: 0 },
             { username: "degen_chad", volumeSol: 82.4, yourEarningSol: 0.412, lastActiveDaysAgo: 1 },
@@ -721,14 +725,34 @@
         document.getElementById('aff-stat-pending').innerText = data.pendingYieldSol.toFixed(4);
         document.getElementById('aff-stat-lifetime').innerText = data.lifetimeEarnedSol.toFixed(4);
         
-        let tier = "Bronze";
+        let tier = data.currentTier || "Bronze";
+        let tierRate = ((data.currentRate || 0.40) * 100).toFixed(0) + "%";
         let tierColor = "text-amber-500";
-        if (data.recruits >= 50) { tier = "Diamond"; tierColor = "text-cyan-400"; }
-        else if (data.recruits >= 20) { tier = "Gold"; tierColor = "text-yellow-400"; }
-        else if (data.recruits >= 5) { tier = "Silver"; tierColor = "text-gray-300"; }
+        let nextTier = "Silver (50k PTS)";
+
+        const pts = data.totalPoints || 0;
+        if (pts >= 1000000) {
+            tierColor = "text-cyan-400";
+            nextTier = "Max Tier Unlocked!";
+            tier = "Diamond";
+            tierRate = "70%";
+        } else if (pts >= 250000) {
+            tierColor = "text-yellow-400";
+            nextTier = "Diamond (1M PTS)";
+            tier = "Gold";
+            tierRate = "60%";
+        } else if (pts >= 50000) {
+            tierColor = "text-gray-300";
+            nextTier = "Gold (250k PTS)";
+            tier = "Silver";
+            tierRate = "50%";
+        } else {
+            tier = "Bronze";
+            tierRate = "40%";
+        }
         
         const tierEl = document.getElementById('aff-stat-tier');
-        tierEl.innerText = tier;
+        tierEl.innerText = `${tier} (${tierRate})`;
         tierEl.className = `text-3xl sm:text-4xl font-bold ${tierColor}`;
         
         document.getElementById('aff-ref-link').value = data.referralLink || "Link not generated";

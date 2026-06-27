@@ -514,11 +514,14 @@ export async function executeSnipe(
         }
 
         const baseFeeRate = getDynamicFeeRate(user.totalVolumeSol, user.hasReferralDiscount);
-        const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
-        const AFFILIATE_RATE = parseFloat(process.env.AFFILIATE_CUT_PERCENT || '0.5');
-        
-        const feeCharged = totalVolume * effectiveFeeRate;
-        const affiliateCut = user.referredById ? (feeCharged * AFFILIATE_RATE) : 0;
+const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
+
+const feeCharged = totalVolume * effectiveFeeRate;
+let affiliateCut = 0;
+if (user.referredById) {
+    const dynamicRate = await getDynamicAffiliateRate(user.referredById);
+    affiliateCut = feeCharged * dynamicRate;
+}
 
         await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: totalVolume } } });
         awardGuildPoints(user.telegramId, totalVolume).catch(() => {});
@@ -691,11 +694,14 @@ export async function executeExit(
         }
 
         const baseFeeRate = getDynamicFeeRate(user.totalVolumeSol, user.hasReferralDiscount);
-        const effectiveFeeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
-        const AFFILIATE_RATE = parseFloat(process.env.AFFILIATE_CUT_PERCENT || '0.5');
-        
-        const feeCharged = totalFeeBase * effectiveFeeRate;
-        const affiliateCut = user.referredById ? (feeCharged * AFFILIATE_RATE) : 0;
+const effectiveFeeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
+
+const feeCharged = totalFeeBase * effectiveFeeRate;
+let affiliateCut = 0;
+if (user.referredById) {
+    const dynamicRate = await getDynamicAffiliateRate(user.referredById);
+    affiliateCut = feeCharged * dynamicRate;
+}
 
         // 🟢 HIGH BUG 3 FIX: Sells use original cost basis for volume accounting if found.
         let volumeToRecord = totalFeeBase; 
@@ -743,6 +749,29 @@ export async function executeExit(
     }
 }
 
+
+// 🟢 Helper to calculate dynamic affiliate rate based on points
+async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
+    try {
+        const referrer = await prisma.user.findUnique({
+            where: { id: referrerId },
+            include: { _count: { select: { recruits: true } } }
+        });
+        if (!referrer) return 0.40; // Default Bronze is 40%
+
+        const basePoints = Math.floor((referrer.totalVolumeSol || 0) * 10000);
+        const welcomeBonus = referrer.referredById ? 10000 : 0;
+        const recruitBonus = (referrer._count.recruits || 0) * 2000;
+        const totalPoints = basePoints + welcomeBonus + recruitBonus;
+
+        if (totalPoints >= 1000000) return 0.70; // Diamond (70%)
+        if (totalPoints >= 250000) return 0.60;  // Gold (60%)
+        if (totalPoints >= 50000) return 0.50;   // Silver (50%)
+        return 0.40;                             // Bronze (40%)
+    } catch {
+        return 0.40;
+    }
+}
 export async function generatePreSignedExitTx(telegramId: string, targetCA: string): Promise<string | null> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
