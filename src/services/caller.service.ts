@@ -32,7 +32,7 @@ export interface CallerFilters {
     minPctChange: number;   
     maxPctChange: number;   
     blockMev: boolean;
-    minScore: number;       // 🟢 FIXED: Restored minScore to satisfy index.ts
+    minScore: number;
     isActive: boolean;
 }
 
@@ -134,8 +134,9 @@ async function mapWithConcurrency<T, R>(
 
 export async function scoreTokens(): Promise<TokenScore[]> {
     try {
+        // Fetch newly boosted tokens (high signal for new launches)
         const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 8000 });
-const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.chainId === 'solana');
+        const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.chainId === 'solana');
         if (profiles.length === 0) return [];
 
         const mints = profiles.slice(0, 30).map((p: any) => p.tokenAddress).join(',');
@@ -169,7 +170,6 @@ const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.
             const vol24 = pair.volume?.h24 || 0;
             if (vol24 > 0) { reasons.push(`📊 24H Volume: $${vol24.toLocaleString(undefined, {maximumFractionDigits: 0})}`); }
 
-            // 🟢 FIXED: Explicitly declared as local variables in scope for shorthand mapping
             const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 1;
             const priceChangeM5 = pair.priceChange?.m5 || (ageMins < 5 ? 10 : 0);
 
@@ -208,7 +208,8 @@ const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.
                     reasons.push(`🛡️ RugCheck passed: Low Risk (Safe contract)`);
                 }
             } else {
-                warnings.push(`⚠️ Skipped safety scan (Low score token)`);
+                // If it doesn't meet the pre-score, don't waste an RPC call
+                warnings.push(`Skipped safety scan (Low score token)`);
             }
 
             totalScore = prelimScore + safetyScore;
@@ -234,7 +235,7 @@ const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.
 }
 
 export async function startCoinCaller(bot: any) {
-    console.log("🎯 [COIN CALLER] Background Alpha Engine Initialized. Scanning every 15 seconds.");
+    console.log("🎯 [COIN CALLER] Background Alpha Engine Initialized. Scanning every 8 seconds.");
 
     setInterval(async () => {
         try {
@@ -247,13 +248,13 @@ export async function startCoinCaller(bot: any) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
-                // Evaluates the updated filters seamlessly
+                // Evaluate filters
                 const token = topTokens.find(t => 
                     t.totalScore >= filters.minScore &&
                     t.ageMins <= filters.maxAgeMins &&
                     t.priceChangeM5 >= filters.minPctChange && 
                     t.priceChangeM5 <= filters.maxPctChange && 
-                    (!filters.blockMev || t.breakdown.mevRisk >= 0)
+                    (!filters.blockMev || t.breakdown.mevRisk > 0)
                 );
 
                 if (token) {
@@ -261,12 +262,19 @@ export async function startCoinCaller(bot: any) {
                     const isNotified = await redis.set(lockKey, '1', 'EX', 86400, 'NX');
                     
                     if (isNotified) {
-                        const msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b>\n\n` +
-                                    `<b>Token:</b> $${token.symbol} (<code>${token.mint}</code>)\n` +
-                                    `<b>Score:</b> ${token.totalScore}/100 ⭐\n\n` +
-                                    `${token.reasons.map(r => `✅ ${r}`).join('\n')}\n` +
-                                    `${token.warnings.map(w => `${w}`).join('\n')}\n\n` +
-                                    `<i>Reply with the CA to quick-snipe, or click below.</i>`;
+                        
+                        // Perfectly formatted to match the screenshot provided
+                        let msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b>\n\n` +
+                                  `<b>Token:</b> $${token.symbol} (<code>${token.mint}</code>)\n` +
+                                  `<b>Score:</b> ${token.totalScore}/100 ⭐\n\n` +
+                                  `${token.reasons.map(r => `✅ ${r}`).join('\n')}\n`;
+
+                        // Only add warning lines if there actually are warnings, to prevent empty spaces
+                        if (token.warnings && token.warnings.length > 0 && !token.warnings.includes('Skipped safety scan (Low score token)')) {
+                            msg += `${token.warnings.map(w => `⚠️ ${w}`).join('\n')}\n`;
+                        }
+
+                        msg += `\n<i>Reply with the CA to quick-snipe, or click below.</i>`;
                         
                         await bot.telegram.sendMessage(user.telegramId, msg, {
                             parse_mode: 'HTML',
@@ -289,5 +297,5 @@ export async function startCoinCaller(bot: any) {
         } catch (e: any) {
             console.error("🔴 [COIN CALLER] Error:", e.message);
         }
-    },  8 * 1000); 
+    }, 8 * 1000); 
 }
