@@ -28,51 +28,6 @@ export async function createGuild(
         if (!user.isDevSuiteUnlocked) return { success: false, message: "Dev Suite not unlocked." };
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
 
-        const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
-        if (!treasuryWalletStr) return { success: false, message: "Platform treasury not configured." };
-
-        const priceLamports = GUILD_SETUP_PRICE_SOL * LAMPORTS_PER_SOL;
-        const vaultPubkey = new PublicKey(user.vaultAddress);
-        const balance = await connection.getBalance(vaultPubkey);
-
-        if (balance < priceLamports + 500000) {
-            return { success: false, message: `Insufficient Funds: You need ${GUILD_SETUP_PRICE_SOL} SOL + gas in your Main Wallet (W1).` };
-        }
-
-        const rawPk = decryptKey(user.turnkeySubOrgId);
-        if (!rawPk) return { success: false, message: "Decryption Fault." };
-        const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
-
-        const ix = SystemProgram.transfer({
-            fromPubkey: vaultPubkey,
-            toPubkey: new PublicKey(treasuryWalletStr),
-            lamports: priceLamports
-        });
-
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const vTx = new VersionedTransaction(new TransactionMessage({
-            payerKey: vaultPubkey, recentBlockhash: blockhash, instructions: [ix]
-        }).compileToV0Message());
-        vTx.sign([keypair]);
-
-        const txBuffer = Buffer.from(vTx.serialize());
-        const signature = bs58.encode(vTx.signatures[0]);
-
-        try {
-            await connection.sendRawTransaction(txBuffer, { skipPreflight: true });
-        } catch (e: any) {
-            console.warn(`⚠️ [GUILD] RPC threw error, but Tx might land. Polling ${signature}... Error: ${e.message}`);
-        }
-
-        let isConfirmed = false;
-        for (let i = 0; i < 15; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) { isConfirmed = true; break; }
-        }
-
-        if (!isConfirmed) return { success: false, message: "Transaction dropped by the network." };
-
         const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
         const randomTwoDigit = Math.floor(10 + Math.random() * 90);
         const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
@@ -102,6 +57,7 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
 
         const guild = await prisma.guild.findUnique({ where: { guildCode: guildCode.toUpperCase() } });
         if (!guild || !guild.isActive) return { success: false, message: "Guild not found or inactive." };
+        if (guild.ownerId === user.id) return { success: false, message: "You cannot join your own Guild." };
 
         await prisma.guildMembership.updateMany({
             where: { userId: user.id },
@@ -128,7 +84,6 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user) return;
 
-        // 🟢 MEDIUM BUG 30 FIX: Ensure points are explicitly restricted to the active guild only.
         const memberships = await prisma.guildMembership.findMany({ 
             where: { userId: user.id, isActive: true } 
         });
@@ -200,9 +155,10 @@ export async function getLeaderboard(guildId: string, limit: number = 50) {
             where: { guildId, userId: { in: userIds } },
             include: { user: true }
         });
+        const memberMap = new Map(memberships.map(m => [m.userId, m]));
 
         const results = userIds.map((userId, index) => {
-            const memberInfo = memberships.find(m => m.userId === userId);
+            const memberInfo = memberMap.get(userId);
             if (!memberInfo) return null;
 
             let daysRemaining = null;
@@ -450,14 +406,15 @@ export async function updateRankCache(guildId: string) {
     try {
         const rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, -1);
         
-        for (let i = 0; i < rawLb.length; i++) {
-            const userId = rawLb[i];
-            const rank = i + 1;
-            
-            await prisma.guildMembership.update({
-                where: { guildId_userId: { guildId, userId } },
-                data: { rank }
-            }).catch(() => {});
+        if (rawLb.length > 0) {
+            await prisma.$transaction(
+                rawLb.map((userId, i) => 
+                    prisma.guildMembership.update({
+                        where: { guildId_userId: { guildId, userId } },
+                        data: { rank: i + 1 }
+                    })
+                )
+            );
         }
     } catch (e: any) {
         console.error("🔴 [GUILD] Rank cache update exception:", e.message);

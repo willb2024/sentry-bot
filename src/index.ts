@@ -929,7 +929,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
                                 ]
                             }
                         });
-                        
+
         } else {
             // No tokens matched their current thresholds
             await ctx.editMessageText(
@@ -1034,39 +1034,6 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         await ctx.replyWithHTML(text, ui);
     }
 }
-bot.command('caller', async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    await sendCallerMenu(ctx, tgId, false);
-});
-
-bot.action('toggle_caller_status', async (ctx) => {
-    const tgId = ctx.from?.id.toString()!;
-    const filters = await getUserCallerFilters(tgId);
-    await setUserCallerFilters(tgId, { isActive: !filters.isActive });
-    
-    if (!filters.isActive) {
-        try { await ctx.answerCbQuery("🔍 Searching... Sentry is now scanning every 15s!", { show_alert: true }); } catch(e){}
-    } else {
-        try { await ctx.answerCbQuery("🛑 Caller Turned Off."); } catch(e){}
-    }
-    await sendCallerMenu(ctx, tgId, true);
-});
-
-bot.action('toggle_caller_mev', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-    const filters = await getUserCallerFilters(tgId);
-    await setUserCallerFilters(tgId, { blockMev: !filters.blockMev });
-    await sendCallerMenu(ctx, tgId, true);
-});
-
-bot.action('edit_caller_score', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-    await redis.set(`state:edit_caller_score:${tgId}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(`✏️ <b>EDIT MINIMUM SCORE</b>\n\nReply with the minimum score (0-100) a token must get before Sentry alerts you.\n<i>Example: 85</i>\n\n<i>Type /cancel to abort.</i>`);
-});
 
 bot.action('edit_caller_age', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -1224,12 +1191,17 @@ bot.action('action_global_cancel', async (ctx) => {
     await prisma.autoSnipeConfig.updateMany({ where: { userId: user.id, isActive: true }, data: { isActive: false } });
     await prisma.copyTradeConfig.updateMany({ where: { userId: user.id, isActive: true }, data: { isActive: false } });
 
+// ADD THIS LINE:
+syncCopyTradeListeners(bot);
+
     // 2. Kill RAM Guards
     const cancelledGuards = await cancelAllUserGuards(tgId);
 
     // 🟢 3. FIX: Kill the AI Coin Caller Automation
     const { setUserCallerFilters } = await import('./services/caller.service.js');
     await setUserCallerFilters(tgId, { isActive: false });
+
+    
 
     await ctx.editMessageText(
         `🛑 <b>ALL AUTOMATIONS HALTED</b>\n\n` +
@@ -2217,7 +2189,7 @@ bot.action('action_consolidate_wallets', async (ctx) => {
         try {
             const vaultPubkey = new PublicKey(w.pub!);
             const balance = await connection.getBalance(vaultPubkey);
-            const gasBuffer = 10000; // 0.002 SOL
+            const gasBuffer = 50000; // 0.002 SOL
             if (balance > gasBuffer) {
                 const rawPk = decryptKey(w.pk!);
                 if (!rawPk) continue;

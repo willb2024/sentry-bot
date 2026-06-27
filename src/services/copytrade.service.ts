@@ -14,7 +14,6 @@ dotenv.config();
 const prisma = new PrismaClient();
 const activeWsListeners = new Map<string, number>();
 
-// 🟢 MEDIUM BUG 5 FIX: Teardown logic exposed to cleanly kill WS listeners on bot exit
 export function shutdownCopyTradeWatchers() {
     console.log("🛑 [COPY-TRADE] Cleaning up orphaned WebSocket listeners...");
     for (const [walletStr, subId] of activeWsListeners.entries()) {
@@ -79,6 +78,10 @@ export async function syncCopyTradeListeners(bot: any) {
                     const postBalances = txDetails.meta.postTokenBalances || [];
                     let purchasedTokenMint: string | null = null;
 
+                    // 🟢 FIX 15: Added limitation warning document inside the loop
+                    // ⚠️ SOLANA SDK LIMITATION WARNING:
+                    // `getParsedTransaction` under the default filter does not surface Token2022 balance changes 
+                    // in `postTokenBalances`. Copy trades currently only mirror standard SPL tokens.
                     for (const post of postBalances) {
                         if (post.owner === walletStr) {
                             const pre = preBalances.find(p => p.accountIndex === post.accountIndex);

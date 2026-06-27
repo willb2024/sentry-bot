@@ -90,23 +90,9 @@ export async function addTrailingStopToMemory(
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
-            // 🟢 CRITICAL BUG 2 FIX: Switched from deleteMany+create to safe upsert to block DCA lock race condition crashes.
-            await prisma.activeOrder.upsert({
-                where: {
-                    userId_tokenAddress_orderType: {
-                        userId: user.id,
-                        tokenAddress: tokenAddress,
-                        orderType: 'GUARD'
-                    }
-                },
-                update: {
-                    amountSol: amountInSol,
-                    trailingPercent,
-                    takeProfitPercent: takeProfitPercent || null,
-                    targetPriceUsd: currentPrice,
-                    isActive: true
-                },
-                create: {
+            // 🟢 FIX 22 Follow-up: Removed upsert workaround and used clean create
+            await prisma.activeOrder.create({
+                data: {
                     id: orderId,
                     userId: user.id,
                     tokenAddress,

@@ -1,7 +1,6 @@
 // src/services/price.service.ts
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
-import axios from 'axios';
 
 const PUMP_FUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 
@@ -14,7 +13,7 @@ export function getBondingCurveAddress(tokenMint: string): string {
     return pda.toBase58();
 }
 
-export function decodePumpCurvePrice(base64Data: string, tokenDecimals: number = 6): number {
+export function decodePumpCurvePrice(base64Data: string): number {
     try {
         const buffer = Buffer.from(base64Data, 'base64');
         if (buffer.length < 40) return 0;
@@ -23,8 +22,7 @@ export function decodePumpCurvePrice(base64Data: string, tokenDecimals: number =
         const virtualSolReserves = buffer.readBigUInt64LE(16);
         
         const solAmount = Number(virtualSolReserves) / 1_000_000_000; 
-        const divisor = Math.pow(10, tokenDecimals);
-        const tokenAmount = Number(virtualTokenReserves) / divisor; 
+        const tokenAmount = Number(virtualTokenReserves) / 1_000_000; 
         
         if (tokenAmount === 0) return 0;
         
@@ -35,19 +33,42 @@ export function decodePumpCurvePrice(base64Data: string, tokenDecimals: number =
     }
 }
 
-// 🟢 NEW ZERO-RPC REPLACEMENT: Queries RugCheck's free API instead of heavy on-chain logs.
-// This completely stops Helius getParsedTransactions rate-limit blocks (429/413) permanently.
-export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
+export async function checkRecentMevActivity(tokenMint: string): Promise<boolean> {
     try {
-        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 2000 });
-        const data = res.data;
-        // Scores above 1000 or active freeze authorities are flagged as high risk
-        if (data && (data.score > 1000 || (data.risks && data.risks.some((r: any) => r.name === 'Freeze Authority still enabled')))) {
-            return true; // Rug / High Risk detected
+        const pubkey = new PublicKey(tokenMint);
+        const sigs = await connection.getSignaturesForAddress(pubkey, { limit: 10 });
+        const txs = await connection.getParsedTransactions(
+            sigs.map((s: any) => s.signature),
+            { maxSupportedTransactionVersion: 0 }
+        );
+
+        const buyerMap: Record<string, number[]> = {};
+
+        txs.forEach((tx: any, blockIdx: number) => {
+            if (!tx || tx.meta?.err) return;
+            const buyer = tx.transaction.message.accountKeys[0]?.pubkey.toBase58();
+            if (!buyer) return;
+            if (!buyerMap[buyer]) buyerMap[buyer] = [];
+            buyerMap[buyer].push(blockIdx);
+        });
+
+        for (const slots of Object.values(buyerMap)) {
+            if (slots.length >= 2 && slots[slots.length - 1] - slots[0] <= 2) {
+                return true;
+            }
         }
         return false;
     } catch (e: any) {
-        // Fail open if RugCheck API is down so it doesn't freeze the scraper
+        console.error("⚠️ [PRICE SERVICE] MEV activity check exception:", e.message);
         return false; 
     }
+}
+
+export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
+    try {
+        const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, 
+            { signal: AbortSignal.timeout(2000) });
+        const data = await res.json();
+        return data.risks?.some((r: any) => r.name === 'Freeze Authority still enabled' || r.score > 500) ?? false;
+    } catch (_) { return false; }
 }

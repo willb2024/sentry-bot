@@ -134,8 +134,8 @@ async function mapWithConcurrency<T, R>(
 
 export async function scoreTokens(): Promise<TokenScore[]> {
     try {
-        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 8000 });
-        const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.chainId === 'solana');
+        const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 8000 });
+const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.chainId === 'solana');
         if (profiles.length === 0) return [];
 
         const mints = profiles.slice(0, 30).map((p: any) => p.tokenAddress).join(',');
@@ -170,8 +170,8 @@ export async function scoreTokens(): Promise<TokenScore[]> {
             if (vol24 > 0) { reasons.push(`📊 24H Volume: $${vol24.toLocaleString(undefined, {maximumFractionDigits: 0})}`); }
 
             // 🟢 FIXED: Explicitly declared as local variables in scope for shorthand mapping
-            const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
-            const priceChangeM5 = pair.priceChange?.m5 || 0;
+            const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 1;
+            const priceChangeM5 = pair.priceChange?.m5 || (ageMins < 5 ? 10 : 0);
 
             if (ageMins < 30) { reasons.push(`👶 Very fresh (${ageMins.toFixed(0)} mins old)`); }
 
@@ -289,5 +289,5 @@ export async function startCoinCaller(bot: any) {
         } catch (e: any) {
             console.error("🔴 [COIN CALLER] Error:", e.message);
         }
-    }, 15 * 1000); 
+    },  8 * 1000); 
 }

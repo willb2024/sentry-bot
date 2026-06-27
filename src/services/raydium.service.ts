@@ -10,18 +10,22 @@ import BN from 'bn.js';
 
 dotenv.config();
 
-let raydiumSdk: Raydium | null = null;
+const sdkCache = new Map<string, Raydium>();
 
 async function getRaydiumSdk(ownerKeypair: Keypair): Promise<Raydium> {
-    if (raydiumSdk) return raydiumSdk;
+    const key = ownerKeypair.publicKey.toBase58();
+    if (sdkCache.has(key)) return sdkCache.get(key)!;
 
-    raydiumSdk = await Raydium.load({
+    const sdk = await Raydium.load({
         owner: ownerKeypair,
         connection: connection,
         disableFeatureCheck: true,
         blockhashCommitment: 'confirmed',
     });
-    return raydiumSdk;
+    
+    sdkCache.set(key, sdk);
+    setTimeout(() => sdkCache.delete(key), 120_000); // 2min TTL
+    return sdk;
 }
 
 export async function buildDirectRaydiumSwap(
@@ -38,6 +42,7 @@ export async function buildDirectRaydiumSwap(
             poolId: poolId
         });
 
+        // Graceful fallback to Jupiter if CPMM or pool not loaded
         if (!poolInfo) {
             console.warn(`[RAYDIUM DIRECT] Pool ${poolId} not found on-chain yet.`);
             return null;

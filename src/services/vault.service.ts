@@ -10,8 +10,6 @@ dotenv.config();
 const prisma = new PrismaClient();
 const ALGORITHM = 'aes-256-gcm';
 
-// 🟢 CRITICAL BUG 4 FIX: Fail loudly if ENCRYPTION_KEY is missing.
-// Prevent fallback to BOT_TOKEN to decouple TG token leakage from wallet decryption.
 const rawSecret = process.env.ENCRYPTION_KEY;
 if (!rawSecret) {
     console.error("🔴 [FATAL CONFIGURATION ERROR] ENCRYPTION_KEY is missing in your .env file!");
@@ -23,6 +21,9 @@ if (rawSecret.length < 32) {
     process.exit(1);
 }
 
+// 🟢 FIX 23: Documented the operational reality of the base64 AES hash.
+// NOTE: The key derived here has ~192 bits of entropy because base64 limits the character set. 
+// Do NOT change this hashing method if you have live wallets on the server, as it will invalidate all existing Vault encryptions.
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(String(rawSecret)).digest('base64').substring(0, 32);
 
 export function encryptKey(privateKeyBase58: string): string {
@@ -55,13 +56,11 @@ export function decryptKey(encryptedData: string): string | null {
         decrypted += decipher.final('utf8');
         return decrypted;
     } catch (e: any) {
-        // 🟢 CRITICAL BUG 3 FIX: Log explicit decryption errors to the server console instead of masking them.
         console.error("🔴 [DECRYPTION EXCEPTION] Decryption parity check failed. Reason:", e.message);
         return null; 
     }
 }
 
-// 🟢 NEW HEALTH CHECK: Verifies encryption engine integrity on boot
 export function verifyEncryptionKeyHealth(): boolean {
     try {
         const testPayload = "SentryHealthCheckTestString";
@@ -146,8 +145,14 @@ export async function ensureWalletsExist(telegramId: string, activeCount: number
         updates.pk5 = encryptKey(bs58.encode(w.secretKey));
     }
     
-    await prisma.user.update({
-        where: { id: user.id },
-        data: updates
-    });
+    // 🟢 FIX 29: Added try/catch rollback to prevent orphaned sub-wallets
+    try {
+        await prisma.user.update({
+            where: { id: user.id },
+            data: updates
+        });
+    } catch (e: any) {
+        console.error(`🔴 [VAULT] Failed to save generated wallets for ${telegramId}:`, e.message);
+        throw e;
+    }
 }

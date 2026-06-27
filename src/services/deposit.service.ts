@@ -12,11 +12,10 @@ export async function startDepositWatcher(bot: any) {
 
     setInterval(async () => {
         try {
-            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+            // Fetch all users with a vault regardless of 7-day update activity
             const activeUsers = await prisma.user.findMany({
                 where: {
-                    vaultAddress: { not: null },
-                    updatedAt: { gte: sevenDaysAgo }
+                    vaultAddress: { not: null }
                 }
             });
 
@@ -68,6 +67,13 @@ export async function startDepositWatcher(bot: any) {
 
                                 if (newBalanceSol > oldBalanceSol) {
                                     const depositAmount = newBalanceSol - oldBalanceSol;
+                                    
+                                    // Ignore micro-deposits from rent refunds (<0.001 SOL)
+                                    if (depositAmount < 0.001) {
+                                        activeListeners.set(address, { subId: cachedData.subId, lastBalance: newBalanceSol });
+                                        return;
+                                    }
+                                    
                                     console.log(`👛 [DEPOSIT DETECTED] +${depositAmount.toFixed(4)} SOL into ${address} (${meta.label})`);
 
                                     try {

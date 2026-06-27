@@ -4,7 +4,7 @@ import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle } 
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
-import { scoreTokens } from './caller.service.js'; // 🟢 STATIC IMPORT: Bypasses type errors
+import { scoreTokens } from './caller.service.js'; 
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
@@ -36,7 +36,6 @@ let isPolling = false;
 let globalCurvePdas = new Set<string>(); 
 
 export let cachedSolUsdPrice = 150.0;
-// 🟢 FIXED: Declared isPriceReady globally so triggerAutoSnipes compiles successfully
 let isPriceReady = false; 
 
 export async function syncInitialSolPrice() {
@@ -50,7 +49,7 @@ export async function syncInitialSolPrice() {
     } catch (e) {
         console.warn("⚠️ [gRPC] Stale boot price check failed, seeding default $150.0.");
     } finally {
-        isPriceReady = true; // Unblocks the auto-sniper regardless of API status
+        isPriceReady = true; 
     }
 }
 syncInitialSolPrice();
@@ -91,11 +90,11 @@ setInterval(async () => {
         try {
             const payload = await generatePreSignedExitTx(guard.telegramId, guard.tokenAddress);
             if (payload) {
-                await redis.set(`presigned_exit:${guard.id}`, payload, 'EX', 40); 
+                await redis.set(`presigned_exit:${guard.id}`, payload, 'EX', 25); 
             }
         } catch(e) {}
     }
-}, 30_000);
+}, 20_000);
 
 async function fetchFreshGuard(guardId: string): Promise<TrailingOrder | null> {
     try {
@@ -566,6 +565,7 @@ async function triggerAutoSnipes(
     for (const sniper of activeSnipers) {
         if (!sniper.user.vaultAddress) continue;
 
+        const delayMs = (sniper.snipeDelaySeconds ?? 0) * 1000;
         setTimeout(async () => {
             try {
                 const liveConfig = cachedActiveSnipers.find(s => s.id === sniper.id);
@@ -702,7 +702,7 @@ async function triggerAutoSnipes(
                     }
                 }
             } catch (_) {}
-        }, sniper.snipeDelaySeconds * 1000);
+        }, delayMs);
     }
 }
 
@@ -726,10 +726,10 @@ function connectPumpPortalStream(bot: any) {
         try {
             const parsed = JSON.parse(data.toString());
             if (parsed.mint && !recentlySnipedTokens.has(parsed.mint)) {
+                if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
                 recentlySnipedTokens.add(parsed.mint);
                 setTimeout(() => recentlySnipedTokens.delete(parsed.mint), 60_000);
                 
-                // Trigger the 60-second Scorer instantly on new mints
                 scoreTokens().catch(() => {});
 
                 const devInitialBuySol = parsed.initialBuy || 0;
@@ -768,6 +768,7 @@ function connectRaydiumFallbackWatcher(bot: any) {
             )?.mint;
 
             if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
+                if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
                 recentlySnipedTokens.add(tokenMint);
                 setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
 
@@ -817,8 +818,9 @@ export async function igniteYellowstoneStream(bot: any) {
                     const accountKeys = tx.transaction.message.accountKeys.map(
                         (k: any) => bs58.encode(Buffer.from(k))
                     );
-                    const newCoinCA = accountKeys[1];
+                    const newCoinCA = accountKeys[2];
                     if (newCoinCA && !recentlySnipedTokens.has(newCoinCA)) {
+                        if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
                         recentlySnipedTokens.add(newCoinCA);
                         setTimeout(() => recentlySnipedTokens.delete(newCoinCA), 60_000);
     
@@ -833,6 +835,7 @@ export async function igniteYellowstoneStream(bot: any) {
                     )?.mint;
 
                     if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
+                        if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
                         recentlySnipedTokens.add(tokenMint);
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         

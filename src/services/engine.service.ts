@@ -211,9 +211,10 @@ async function fetchApiTransaction(
         let apiBuffer: Buffer | null = null;
 
         if (isPumpToken) {
-            const pumpAmount: string | number = action === 'buy'
-                ? amountSolForBuy
-                : (sellPercentage === 100 ? "100%" : uiTokenAmountForSell);
+            // REPLACE lines 181-183 with:
+const pumpAmount: string | number = action === 'buy'
+? amountSolForBuy
+: (sellPercentage === 100 ? "100%" : rawTokenAmountForSell);
             try {
                 const pumpRes = await axios.post(
                     `https://pumpportal.fun/api/trade-local`,
@@ -587,6 +588,8 @@ export async function executeExit(
         const walletReport: string[] = [];
 
         const latestBlockhash = await getLatestBlockhashWithCache();
+        const balances = await Promise.all(wallets.map(w => connection.getBalance(new PublicKey(w.pub)).catch(() => 0)));
+        
 
         const executionPromises = wallets.map(async (w, index) => {
             const vaultPubkey = new PublicKey(w.pub);
