@@ -165,6 +165,62 @@ app.post('/api/positions', async (req, res) => {
     } catch (e) { res.status(500).json([]); }
 });
 
+// 🟢 FEATURE: Affiliate Stats WebApp Data
+app.post('/api/affiliate-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) 
+            return res.status(403).json({ error: 'Unauthorized' });
+        
+        const telegramId = JSON.parse(
+            new URLSearchParams(req.body.initData).get('user')!
+        ).id.toString();
+        
+        const user = await prisma.user.findUnique({
+            where: { telegramId },
+            include: { recruits: { include: { trades: { orderBy: { createdAt: 'desc' }, take: 50 } } } }
+        });
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        
+        const recruitList = user.recruits.map(r => {
+            const volumeSol = r.trades.reduce((sum, t) => sum + t.amountInSol, 0);
+            const yourEarningSol = volumeSol * 0.005; // 0.5% of their volume
+            const lastTrade = r.trades[0];
+            const lastActiveDaysAgo = lastTrade 
+                ? Math.floor((Date.now() - new Date(lastTrade.createdAt).getTime()) / 86400000)
+                : 999;
+            return {
+                username: r.username || r.telegramId,
+                volumeSol: parseFloat(volumeSol.toFixed(4)),
+                yourEarningSol: parseFloat(yourEarningSol.toFixed(4)),
+                lastActiveDaysAgo
+            };
+        });
+        
+        // Build 30-day daily earnings array
+        const dailyEarnings: number[] = Array(30).fill(0);
+        const now = Date.now();
+        user.recruits.forEach(r => {
+            r.trades.forEach(t => {
+                const daysAgo = Math.floor((now - new Date(t.createdAt).getTime()) / 86400000);
+                if (daysAgo >= 0 && daysAgo < 30) {
+                    dailyEarnings[29 - daysAgo] += t.amountInSol * 0.005;
+                }
+            });
+        });
+        
+        res.json({
+            recruits: user.recruits.length,
+            pendingYieldSol: parseFloat((user.pendingRewardsSol || 0).toFixed(4)),
+            lifetimeEarnedSol: parseFloat(((user.pendingRewardsSol || 0) + (user.recruits.reduce((s,r) => s + r.trades.reduce((ts,t) => ts + t.amountInSol * 0.005, 0), 0))).toFixed(4)),
+            referralLink: `https://t.me/${process.env.BOT_USERNAME}?start=${user.referralCode}`,
+            recruitList,
+            dailyEarnings
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'Server Error' });
+    }
+});
+
 // =========================================================
 // ⚡ UTILITIES: MULTI-WALLET BALANCE AGGREGATOR
 // =========================================================
