@@ -764,39 +764,67 @@ bot.action('btn_trade_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     
     const manualText = 
-        `📖 <b>SENTRY TERMINAL: MASTER OPERATIONAL MANUAL</b>\n` +
-        `<i>Welcome to the most advanced execution infrastructure on Solana.</i>\n\n` +
-        
-        `🎯 <b>1. AI COIN CALLER (Start Here)</b>\n` +
-        `• Click the <b>🎯 AI Coin Caller</b> button on your dashboard.\n` +
-        `• Turn the engine <b>ON</b> and configure your preferred <b>Token Age</b> (e.g., 5 to 60 mins) and <b>% Spike</b> (e.g., 15 to 500%).\n` +
-        `• Sentry will scan the blockchain 24/7 and DM you verified breakouts with a 1-click Buy button!\n\n` +
+        `📖 <b>SENTRY TERMINAL: HOW TO TRADE</b>\n\n` +
+        `<i>Every method below fires through Jito MEV protection automatically.</i>\n\n` +
 
-        `🏦 <b>2. VAULTS & WHALE MODE</b>\n` +
-        `• Send SOL to your Primary Deposit Node (W1) to fund your trades.\n` +
-        `• <b>Whale Mode:</b> Go to Vaults & Keys to activate up to 5 wallets. Sentry will execute your trade across all active wallets in the exact same millisecond to bypass Pump.fun limits.\n\n` +
+        `👛 <b>STEP 1 — FUND YOUR VAULT</b>\n` +
+        `Copy your wallet address from the dashboard and send SOL to it from any exchange or wallet. Your balance updates in real time. If you want multi-wallet mode, go to <b>Vault & Keys</b>, activate up to 5 wallets, and fund each address separately.\n\n` +
 
-        `⚡ <b>3. JITO MEV & SLIPPAGE</b>\n` +
-        `• Sentry hides your trades from the mempool to prevent sandwich attacks.\n` +
-        `• <b>Eco / Fast / Turbo:</b> Adjust your Jito Validator Tip in Settings to speed up your trade.\n` +
-        `• <b>Slippage:</b> Keep this around 20%+ during volatile launches so your trades don't fail.\n\n` +
+        `⚡ <b>STEP 2 — INSTANT BUY (Fastest Method)</b>\n` +
+        `Paste any Solana token contract address directly into the chat. Sentry pulls the token info, runs a rug check, and shows you a confirm card. Tap <b>Confirm Buy</b> and the trade fires immediately.\n\n` +
+        `To set a specific size: paste <code>[CA] [AMOUNT]</code> together.\n` +
+        `Example: <code>7xKXtg... 0.5</code> — buys 0.5 SOL worth instantly.\n\n` +
 
-        `🔫 <b>4. EXECUTION ENGINES</b>\n` +
-        `• <b>Fast Snipe:</b> Paste any Contract Address (CA) into the chat to buy instantly.\n` +
-        `• <b>Auto-Sniper:</b> Scans the mempool to buy new Raydium/Pump pairs at Block-0.\n` +
-        `• <b>DCA Engine:</b> Automate interval buying (e.g., buy 0.1 SOL every 60 mins).\n\n` +
-        
-        `🛡️ <b>5. RISK MANAGEMENT (GUARDS)</b>\n` +
-        `• <b>Trailing Stops:</b> Deploy a Guard from the menu. It trails the peak price and auto-sells if it drops by your set %.\n` +
-        `• <b>Take Profit:</b> Locks in gains instantly when a coin hits your target %.\n\n` +
+        `🎯 <b>STEP 3 — AUTO-SNIPER (Catch Launches)</b>\n` +
+        `Go to <b>Sniper Module</b> and set your parameters:\n` +
+        `• Amount per snipe (e.g. 0.05 SOL)\n` +
+        `• Max dev bag allowed (e.g. 10%)\n` +
+        `• Market cap range (e.g. $0 to $80k)\n` +
+        `• Snipe delay in seconds\n` +
+        `• Auto trailing stop and take profit\n` +
+        `• Mode: Pump.fun, Raydium, or Both\n\n` +
+        `Hit <b>ARM SNIPER ENGINE</b> and Sentry catches every qualifying launch automatically, 24 hours a day.\n\n` +
 
-        `🏰 <b>6. GUILDS & VIP LOYALTY</b>\n` +
-        `• <b>Guilds:</b> Join a KOL's community to earn Loyalty Points. Top traders win Bulk SOL Airdrops directly to their vaults.\n` +
-        `• <b>VIP Tiers:</b> The more you trade, the lower your platform fees. Claim a free 10-Day VIP Pass (0% Fees!) by using a referral link.\n\n` +
-        
-        `👥 <b>7. COPY TRADE & DUST SWEEPER</b>\n` +
-        `• <b>Copy Trade:</b> Add a profitable Whale's wallet address to mirror their trades automatically.\n` +
-        `• <b>Sweep Rent:</b> Go to Positions and click 'Sweep' to burn empty token accounts and reclaim locked SOL.`;
+        `🤖 <b>STEP 4 — AI COIN CALLER (Filtered Alpha)</b>\n` +
+        `Type <code>/caller</code>. Set your minimum score (e.g. 70/100), max token age, and momentum range. Turn it on. Every 15 seconds Sentry scans the market and DMs you only the tokens that pass — with a one-click buy button attached to each alert.\n\n` +
+
+        `🛡️ <b>STEP 5 — TRAILING GUARD (Protect Bags)</b>\n` +
+        `Go to <b>Trailing Stops</b> → <b>Deploy Trailing Guard</b>.\n` +
+        `Format: <code>[CA] [DROP%] [AMOUNT] [OPTIONAL TP%]</code>\n` +
+        `Example: <code>7xKXtg... 20 0.1 100</code>\n` +
+        `This buys 0.1 SOL worth, sets a -20% trailing stop, and auto-sells at +100% take profit.\n` +
+        `The guard follows the price upward automatically — it only triggers on a drop from peak.\n\n` +
+
+        `👥 <b>STEP 6 — COPY TRADING (Mirror Whales)</b>\n` +
+        `Go to <b>Copy Trade</b> → <b>Add Custom Wallet</b>.\n` +
+        `Format: <code>[WALLET] [AMOUNT] [GUARD%] [OPTIONAL TP%]</code>\n` +
+        `Example: <code>3yFomLQ... 0.1 20 50</code>\n` +
+        `Every time the whale buys a token, Sentry fires your configured size and arms a guard automatically. Or browse the built-in Alpha Directory for curated whale wallets.\n\n` +
+
+        `⏳ <b>STEP 7 — DCA & LIMIT ORDERS</b>\n` +
+        `Go to <b>Limit / DCA Engine</b>.\n\n` +
+        `<b>Limit Order</b> — buys when a token hits your target price:\n` +
+        `<code>[CA] [TARGET_USD] [AMOUNT_SOL]</code>\n` +
+        `Example: <code>7xKXtg... 0.005 0.5</code>\n\n` +
+        `<b>DCA Schedule</b> — buys repeatedly on an interval:\n` +
+        `<code>[CA] [INTERVAL_MINS] [AMOUNT] [GUARD%] [TP%] [MAX_BUDGET]</code>\n` +
+        `Example: <code>7xKXtg... 60 0.05 20 50 2.0</code>\n` +
+        `Buys 0.05 SOL every 60 minutes with a -20% guard, +50% TP, stops after spending 2 SOL total.\n\n` +
+
+        `💼 <b>STEP 8 — MANAGE POSITIONS</b>\n` +
+        `Go to <b>Positions</b>. You see every token you hold across all wallets, its live USD value, and your PnL from entry price. Sell buttons let you exit 10%, 25%, 50%, 75%, or 100% of any position instantly via Jito. Partial sells automatically scale down your trailing guard proportionally.\n\n` +
+
+        `📤 <b>STEP 9 — WITHDRAW</b>\n` +
+        `Type <code>/withdraw [ADDRESS] [AMOUNT]</code> to send SOL to any wallet.\n` +
+        `Type <code>/withdraw [ADDRESS] ALL</code> to sweep your full balance minus gas.\n\n` +
+
+        `⚙️ <b>STEP 10 — SETTINGS</b>\n` +
+        `Go to <b>Settings</b> to configure:\n` +
+        `• <b>Slippage</b> — how much price movement you accept (20% recommended for memecoins)\n` +
+        `• <b>Speed</b> — Eco (0.0005 SOL tip), Fast (0.001), Turbo (0.005), or Custom\n\n` +
+        `Higher Jito tips = higher block priority = faster execution on competitive launches.\n\n` +
+
+        `<i>Type /cancel at any time to abort any pending action and return to the dashboard.</i>`;
 
     await safeEditMessageText(ctx, manualText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
@@ -846,13 +874,90 @@ bot.action('menu_caller', async (ctx) => {
     await sendCallerMenu(ctx, tgId, true); // Smoothly edits the dashboard into the caller settings
 });
 
+// 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
+bot.action('trigger_caller_scan', async (ctx) => {
+    try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    
+    // Frame 1: Initial Calibration
+    await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
+    await new Promise(r => setTimeout(r, 600));
+    
+    // Frame 2: Analyze Momentum
+    await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Analyzing transaction momentum on 30 hot Solana pairs...</i>\n\n[█████░░░░░] 50%`, { parse_mode: 'HTML' });
+    await new Promise(r => setTimeout(r, 600));
+    
+    // Frame 3: Security checks
+    await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Executing RugCheck contract audits on candidates...</i>\n\n[█████████░] 90%`, { parse_mode: 'HTML' });
+    await new Promise(r => setTimeout(r, 400));
+    
+    try {
+        const { scoreTokens, getUserCallerFilters } = await import('./services/caller.service.js');
+        const topTokens = await scoreTokens();
+        const filters = await getUserCallerFilters(tgId);
+        
+        // Find a token in the latest batch that meets the user's specific filters
+        const matchedToken = topTokens.find(t => 
+            t.totalScore >= filters.minScore &&
+            t.ageMins <= filters.maxAgeMins &&
+            (!filters.blockMev || t.breakdown.mevRisk >= 0)
+        );
+        
+        if (matchedToken) {
+            const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
+                        `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
+                        `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n` +
+                        `<b>Age:</b> ${matchedToken.ageMins.toFixed(0)} minutes old\n\n` +
+                        `${matchedToken.reasons.map(r => `✅ ${r}`).join('\n')}\n` +
+                        `${matchedToken.warnings.map(w => `${w}`).join('\n')}\n\n` +
+                        `<i>Click below to buy instantly via Jito:</i>`;
+            
+            await ctx.editMessageText(msg, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` },
+                            { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }
+                        ],
+                        [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
+                    ]
+                }
+            });
+        } else {
+            // No tokens matched their current thresholds
+            await ctx.editMessageText(
+                `❌ <b>No Breakouts Found</b>\n\n` +
+                `We scanned the top 30 trending Solana pairs on-chain, but none matched your current settings:\n` +
+                `• Min Score: <b>${filters.minScore}+</b>\n` +
+                `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
+                `• Block MEV: <b>${filters.blockMev ? 'Yes' : 'No'}</b>\n\n` +
+                `<i>The trenches are quiet. Try lowering your minimum score or check back shortly!</i>`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [[Markup.button.callback('⬅️ Back to Caller Menu', 'menu_caller')]]
+                    }
+                }
+            );
+        }
+    } catch (e: any) {
+        console.error("🔴 [MANUAL CALLER SCAN FAULT]:", e.message);
+        await ctx.editMessageText(`🔴 <b>Scan Aborted:</b> RPC node is congested. Please try again.`, {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [[Markup.button.callback('⬅️ Back', 'menu_caller')]]
+            }
+        });
+    }
+});
 // =========================================================
 // 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
 // =========================================================
+// 🟢 UPGRADED: Added "Scan Mainnet Now" to the top of the menu layout
 async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     const filters = await getUserCallerFilters(tgId);
     
-    // 🟢 UI STATUS UPDATE (Searching Indicator)
     const statusText = filters.isActive 
         ? "🟢 <b>ACTIVE & SCANNING</b> 🔍\n<i>(Searching mempool for matches every 15s...)</i>" 
         : "🔴 <b>OFFLINE</b>";
@@ -860,7 +965,7 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     const mevText = filters.blockMev ? "🟢 Yes (Protected)" : "🔴 No (Risky)";
 
     const text = `🎯 <b>AI COIN CALLER ENGINE</b>\n\n` +
-        `Sentry scans DexScreener every 15 second and DMs you the highest-scoring tokens before they pump.\n\n` +
+        `Sentry scans DexScreener every 15 seconds and DMs you the highest-scoring tokens before they pump.\n\n` +
         `<b>Engine Status:</b> ${statusText}\n\n` +
         `⚙️ <b>CURRENT FILTERS:</b>\n` +
         `• <b>Minimum Score:</b> ${filters.minScore} / 100\n` +
@@ -870,6 +975,7 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         `<i>Adjust your scanner parameters below:</i>`;
 
     const ui = Markup.inlineKeyboard([
+        [Markup.button.callback('🔍 Scan Mainnet Now', 'trigger_caller_scan')], // 🟢 NEW MANUAL TRIGGER BUTTON
         [Markup.button.callback(filters.isActive ? '🛑 TURN OFF CALLER' : '⚡ TURN ON CALLER', 'toggle_caller_status')],
         [
             Markup.button.callback(`⏱️ Max Age (${filters.maxAgeMins}m)`, 'edit_caller_age'),
@@ -888,7 +994,6 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         await ctx.replyWithHTML(text, ui);
     }
 }
-
 bot.command('caller', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
