@@ -12,8 +12,8 @@ export interface TokenScore {
     mint: string;
     symbol: string;
     totalScore: number;
-    ageMins: number;      
-    pctChange: number;    
+    ageMins: number;        
+    priceChangeM5: number;  
     breakdown: {
         volumeSpike: number;      
         buySellRatio: number;     
@@ -29,27 +29,27 @@ export interface TokenScore {
 export interface CallerFilters {
     minVolUsd: number;
     maxAgeMins: number;
+    minPctChange: number;   
+    maxPctChange: number;   
     blockMev: boolean;
-    minScore: number;
+    minScore: number;       // 🟢 FIXED: Restored minScore to satisfy index.ts
     isActive: boolean;
-    minPctChange: number; 
-    maxPctChange: number; 
 }
 
 const DEFAULT_FILTERS: CallerFilters = {
     minVolUsd: 10000,
-    maxAgeMins: 120, 
+    maxAgeMins: 120,
+    minPctChange: 15,
+    maxPctChange: 1000,
     blockMev: true,
-    minScore: 50, 
-    isActive: false,
-    minPctChange: -20, 
-    maxPctChange: 1000 
+    minScore: 50,
+    isActive: false
 };
 
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
     try {
         const raw = await redis.get(`caller_filters:${telegramId}`);
-        return raw ? { ...DEFAULT_FILTERS, ...JSON.parse(raw) } : DEFAULT_FILTERS;
+        return raw ? JSON.parse(raw) : DEFAULT_FILTERS;
     } catch (e: any) {
         console.error(`🔴 [CALLER] Failed to read filters for ${telegramId}: ${e.message}`);
         return DEFAULT_FILTERS;
@@ -134,25 +134,11 @@ async function mapWithConcurrency<T, R>(
 
 export async function scoreTokens(): Promise<TokenScore[]> {
     try {
-        // 🟢 FIX: Massively expanded token search pool to fix the "No Matches" bottleneck
-        const [profilesRes, boostsRes, topRes] = await Promise.allSettled([
-            axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 5000 }),
-            axios.get('https://api.dexscreener.com/token-boosts/latest/v1', { timeout: 5000 }),
-            axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 5000 })
-        ]);
+        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 8000 });
+        const profiles = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.chainId === 'solana');
+        if (profiles.length === 0) return [];
 
-        let rawTokens: any[] = [];
-        if (profilesRes.status === 'fulfilled' && Array.isArray(profilesRes.value.data)) rawTokens.push(...profilesRes.value.data);
-        if (boostsRes.status === 'fulfilled' && Array.isArray(boostsRes.value.data)) rawTokens.push(...boostsRes.value.data);
-        if (topRes.status === 'fulfilled' && Array.isArray(topRes.value.data)) rawTokens.push(...topRes.value.data);
-
-        // Filter for Solana and get unique addresses
-        const solanaTokens = rawTokens.filter((p: any) => p.chainId === 'solana');
-        const uniqueMints = [...new Set(solanaTokens.map((p: any) => p.tokenAddress))].slice(0, 30); // Max 30 for DexScreener pair request
-
-        if (uniqueMints.length === 0) return [];
-
-        const mints = uniqueMints.join(',');
+        const mints = profiles.slice(0, 30).map((p: any) => p.tokenAddress).join(',');
         const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 8000 });
         const pairs = (dexRes.data?.pairs || []).filter((pair: any) => pair.chainId === 'solana');
 
@@ -178,15 +164,16 @@ export async function scoreTokens(): Promise<TokenScore[]> {
 
             const liq = pair.liquidity?.usd || 0;
             let liquidityDepth = 0;
+            
             if (liq > 50000) { liquidityDepth = 15; reasons.push(`💧 Deep liquidity ($${(liq/1000).toFixed(1)}k)`); }
+            const vol24 = pair.volume?.h24 || 0;
+            if (vol24 > 0) { reasons.push(`📊 24H Volume: $${vol24.toLocaleString(undefined, {maximumFractionDigits: 0})}`); }
 
+            // 🟢 FIXED: Explicitly declared as local variables in scope for shorthand mapping
             const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
-            let ageScore = 0;
-            if (ageMins < 30) { ageScore = 20; reasons.push(`👶 Very fresh (${ageMins.toFixed(0)} mins old)`); }
-            else if (ageMins < 120) { ageScore = 10; }
+            const priceChangeM5 = pair.priceChange?.m5 || 0;
 
-            // 🟢 FIX: Safely fallback on percentage change so new tokens aren't blocked by missing 5m candles
-            const pctChange = pair.priceChange?.m5 || pair.priceChange?.h1 || pair.priceChange?.h6 || 0;
+            if (ageMins < 30) { reasons.push(`👶 Very fresh (${ageMins.toFixed(0)} mins old)`); }
 
             let curveProgress = 0;
             const isPump = pair.baseToken?.address?.toLowerCase().endsWith('pump');
@@ -198,7 +185,7 @@ export async function scoreTokens(): Promise<TokenScore[]> {
                 }
             }
 
-            const prelimScore = volumeSpike + buySellRatio + liquidityDepth + ageScore + curveProgress;
+            const prelimScore = volumeSpike + buySellRatio + liquidityDepth + (ageMins < 30 ? 20 : ageMins < 120 ? 10 : 0) + curveProgress;
             let safetyScore = 0;
 
             if (prelimScore >= 35) { 
@@ -230,9 +217,9 @@ export async function scoreTokens(): Promise<TokenScore[]> {
                 mint: pair.baseToken.address,
                 symbol: pair.baseToken.symbol,
                 totalScore: Math.min(100, Math.max(0, totalScore)),
-                ageMins,     
-                pctChange,   
-                breakdown: { volumeSpike, buySellRatio, liquidityDepth, ageScore, mevRisk: safetyScore, curveProgress },
+                ageMins,             
+                priceChangeM5,       
+                breakdown: { volumeSpike, buySellRatio, liquidityDepth, ageScore: (ageMins < 30 ? 20 : ageMins < 120 ? 10 : 0), mevRisk: safetyScore, curveProgress },
                 reasons,
                 warnings
             };
@@ -246,7 +233,7 @@ export async function scoreTokens(): Promise<TokenScore[]> {
     }
 }
 
-export function startCoinCaller(bot: any) {
+export async function startCoinCaller(bot: any) {
     console.log("🎯 [COIN CALLER] Background Alpha Engine Initialized. Scanning every 15 seconds.");
 
     setInterval(async () => {
@@ -260,13 +247,13 @@ export function startCoinCaller(bot: any) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
-                // 🟢 The strict checking block
+                // Evaluates the updated filters seamlessly
                 const token = topTokens.find(t => 
-                    t.totalScore >= filters.minScore && 
-                    (!filters.blockMev || t.breakdown.mevRisk >= 0) &&
+                    t.totalScore >= filters.minScore &&
                     t.ageMins <= filters.maxAgeMins &&
-                    t.pctChange >= filters.minPctChange &&
-                    t.pctChange <= filters.maxPctChange
+                    t.priceChangeM5 >= filters.minPctChange && 
+                    t.priceChangeM5 <= filters.maxPctChange && 
+                    (!filters.blockMev || t.breakdown.mevRisk >= 0)
                 );
 
                 if (token) {
@@ -276,8 +263,7 @@ export function startCoinCaller(bot: any) {
                     if (isNotified) {
                         const msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b>\n\n` +
                                     `<b>Token:</b> $${token.symbol} (<code>${token.mint}</code>)\n` +
-                                    `<b>Score:</b> ${token.totalScore}/100 ⭐\n` +
-                                    `<b>Age:</b> ${token.ageMins.toFixed(0)} Mins | <b>Gain:</b> ${token.pctChange.toFixed(2)}%\n\n` +
+                                    `<b>Score:</b> ${token.totalScore}/100 ⭐\n\n` +
                                     `${token.reasons.map(r => `✅ ${r}`).join('\n')}\n` +
                                     `${token.warnings.map(w => `${w}`).join('\n')}\n\n` +
                                     `<i>Reply with the CA to quick-snipe, or click below.</i>`;
@@ -285,10 +271,16 @@ export function startCoinCaller(bot: any) {
                         await bot.telegram.sendMessage(user.telegramId, msg, {
                             parse_mode: 'HTML',
                             reply_markup: {
-                                inline_keyboard: [[
-                                    { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${token.mint}_0.1` },
-                                    { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${token.mint}` }
-                                ]]
+                                inline_keyboard: [
+                                    [
+                                        { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${token.mint}_0.1` },
+                                        { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${token.mint}` }
+                                    ],
+                                    [
+                                        { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${token.mint}` },
+                                        { text: '⏳ Start DCA', callback_data: `caller_dca_${token.mint}` }
+                                    ]
+                                ]
                             }
                         }).catch(() => null);
                     }

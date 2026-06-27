@@ -912,18 +912,24 @@ bot.action('trigger_caller_scan', async (ctx) => {
                         `${matchedToken.warnings.map(w => `${w}`).join('\n')}\n\n` +
                         `<i>Click below to buy instantly via Jito:</i>`;
             
-            await ctx.editMessageText(msg, {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [
-                            { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` },
-                            { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }
-                        ],
-                        [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
-                    ]
-                }
-            });
+                        await ctx.editMessageText(msg, {
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [
+                                        { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` },
+                                        { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }
+                                    ],
+                                    // 🟢 ADDED FOR MANUAL SCAN RESPONSES ALSO
+                                    [
+                                        { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` },
+                                        { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }
+                                    ],
+                                    [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
+                                ]
+                            }
+                        });
+                        
         } else {
             // No tokens matched their current thresholds
             await ctx.editMessageText(
@@ -950,6 +956,40 @@ bot.action('trigger_caller_scan', async (ctx) => {
             }
         });
     }
+});
+
+// 🟢 NEW: Direct, auto-filled Guard prompt from a called coin
+bot.action(/^caller_guard_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const mint = ctx.match[1];
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:caller_guard_input:${tgId}`, mint, 'EX', 300);
+    await ctx.replyWithHTML(
+        `🛡️ <b>DEPLOY GUARD & TAKE PROFIT</b>\n\n` +
+        `Token: <code>${mint}</code>\n\n` +
+        `Reply to this message with your guard parameters (excluding the CA):\n` +
+        `<code>[DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>\n\n` +
+        `<i>Example (15% trailing drop, 0.1 SOL buy, 50% Take Profit):</i>\n` +
+        `<code>15 0.1 50</code>\n\n` +
+        `<i>Type /cancel at any time to abort.</i>`
+    );
+});
+
+// 🟢 NEW: Direct, auto-filled DCA prompt from a called coin
+bot.action(/^caller_dca_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const mint = ctx.match[1];
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:caller_dca_input:${tgId}`, mint, 'EX', 300);
+    await ctx.replyWithHTML(
+        `⏳ <b>START TWAP / DCA ENGINE</b>\n\n` +
+        `Token: <code>${mint}</code>\n\n` +
+        `Reply to this message with your DCA parameters (excluding the CA):\n` +
+        `<code>[INTERVAL MINS] [AMOUNT SOL] [DROP %] [OPTIONAL TP %] [OPTIONAL MAX BUDGET SOL]</code>\n\n` +
+        `<i>Example (Buy 0.05 SOL every 60 mins, 10% drop, max 2.0 SOL budget):</i>\n` +
+        `<code>60 0.05 10 50 2.0</code>\n\n` +
+        `<i>Type /cancel at any time to abort.</i>`
+    );
 });
 // =========================================================
 // 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
@@ -2672,7 +2712,8 @@ bot.on("text", async (ctx, next) => {
             `state:lead_scraper:${telegramId}`, // 🟢 ADD THIS LINE
             `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`, // 🟢 ADD THESE
             `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`,
-            `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`
+            `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
+            `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`
         ];
         if (redis.del) await redis.del(...keysToClear); 
         await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
@@ -2711,6 +2752,91 @@ bot.on("text", async (ctx, next) => {
 
         // Add these to keysToClear in the /cancel intercept block:
 // `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`
+
+// 🟢 CATCH CALLER INLINE GUARD INPUT
+const callerGuardCA = await redis.get(`state:caller_guard_input:${telegramId}`);
+if (callerGuardCA) {
+    await redis.del(`state:caller_guard_input:${telegramId}`);
+    const parts = text.trim().split(/\s+/);
+    if (parts.length !== 2 && parts.length !== 3) {
+        return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>");
+    }
+    
+    const trailPct = parseFloat(parts[0]);
+    const solAmt = parseFloat(parts[1]);
+    const tpPct = parts.length === 3 ? parseFloat(parts[2]) : undefined;
+
+    if (isNaN(trailPct) || isNaN(solAmt) || (tpPct !== undefined && isNaN(tpPct))) {
+        return ctx.reply("🔴 Invalid numbers provided.");
+    }
+
+    const loader = await ctx.replyWithHTML(`<i>⏳ Executing Jito Trade & Syncing Guard...</i>`);
+    try {
+        const buyResult = await executeSnipe(telegramId, callerGuardCA, solAmt);
+        if (!buyResult.success) {
+            return await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `${buyResult.message}`, { parse_mode: 'HTML' });
+        }
+
+        let initialPriceNative = 0;
+        try {
+            const priceRes = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${callerGuardCA}`).catch(() => null);
+            initialPriceNative = priceRes?.data?.data?.[callerGuardCA]?.price || 0;
+        } catch (_) {}
+
+        await addTrailingStopToMemory(telegramId, callerGuardCA, trailPct, solAmt, initialPriceNative, tpPct);
+        
+        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
+            `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\nToken: <code>${callerGuardCA.substring(0,8)}...</code>\nInvested: <b>${solAmt} SOL</b>\nTrailing Drop: <b>-${trailPct}%</b>\nTake Profit: ${tpPct ? `<b>+${tpPct}%</b>` : `<i>Not Set</i>`}\n\n🔗 <a href="https://solscan.io/tx/${buyResult.signature}">View on Solscan</a>`, 
+            { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+        );
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Error:</b> ${e.message}`, { parse_mode: 'HTML' });
+    }
+    return;
+}
+
+// 🟢 CATCH CALLER INLINE DCA INPUT
+const callerDcaCA = await redis.get(`state:caller_dca_input:${telegramId}`);
+if (callerDcaCA) {
+    await redis.del(`state:caller_dca_input:${telegramId}`);
+    try {
+        const parts = text.trim().split(/\s+/);
+        if (parts.length < 3 || parts.length > 5) {
+            return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[INTERVAL] [AMOUNT] [DROP %] [OPTIONAL TP] [OPTIONAL BUDGET]</code>");
+        }
+
+        const intervalMins = parseInt(parts[0]);
+        const solAmt = parseFloat(parts[1]);
+        const dropPct = parseFloat(parts[2]);
+        const tpPct = (parts.length >= 4 && parseFloat(parts[3]) !== 0) ? parseFloat(parts[3]) : undefined;
+        const maxBudget = parts.length === 5 ? parseFloat(parts[4]) : undefined;
+
+        if (isNaN(intervalMins) || isNaN(solAmt) || isNaN(dropPct)) {
+            return ctx.reply("🔴 Invalid numbers provided.");
+        }
+
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user) return ctx.reply("🔴 User not found.");
+
+        await prisma.activeOrder.create({
+            data: {
+                userId: user.id,
+                tokenAddress: callerDcaCA,
+                orderType: 'DCA',
+                amountSol: solAmt,
+                dcaIntervalMins: intervalMins,
+                trailingPercent: dropPct,
+                takeProfitPercent: tpPct || null,
+                maxBudgetSol: maxBudget || null,
+                isActive: true
+            }
+        });
+
+        return ctx.replyWithHTML(`🟢 <b>TWAP/DCA SCHEDULE DEPLOYED</b>\n\nToken: <code>${callerDcaCA.substring(0,8)}...</code>\nInterval: <b>Every ${intervalMins} Minutes</b>\nAmount: <b>${solAmt} SOL per interval</b>\nMax Budget: <b>${maxBudget ? `${maxBudget} SOL` : 'Infinite'}</b>\nGuard: <b>-${dropPct}%</b>\nTake Profit: <b>${tpPct ? `+${tpPct}%` : 'Not Set'}</b>`);
+    } catch (e: any) {
+        return ctx.reply(`🔴 Error deploying DCA: ${e.message}`);
+    }
+}
 
 // CATCH CALLER AGE EDIT
 const callerAgeState = await redis.get(`state:edit_caller_age:${telegramId}`);
