@@ -333,13 +333,14 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     `<i>Forward a call here, paste a Token CA, or select a module below.</i>`;
 
     const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca')],
-        [Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing'), Markup.button.callback('💼 Positions', 'menu_positions')],
-        [Markup.button.callback('👥 Copy Trade', 'menu_copytrade'), Markup.button.callback('💰 Affiliates', 'menu_affiliate')], 
-        [Markup.button.callback('🔑 Vault & Keys', 'menu_vault'), Markup.button.callback('🛠️ Dev Suite (PRO)', 'menu_devsuite')],
-        [Markup.button.callback('⚙️ Settings', 'menu_settings'), Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt')],
-        [Markup.button.callback('💎 Why We Are Best', 'btn_guide'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
-        [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }],
+        // 🟢 ADDED CALLER BUTTON AT THE VERY TOP
+        [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+        [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
+        [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
+        [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+        [Markup.button.callback('🛠️ Dev Suite (PRO)', 'menu_devsuite'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+        [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
+        [Markup.button.callback('💎 Why We Are Best', 'btn_guide'), { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }],
         [Markup.button.callback('🛑 CANCEL ALL AUTOMATIONS', 'action_global_cancel')]
     ]);
 
