@@ -412,39 +412,6 @@ async function getHotCache(): Promise<TokenScore[]> {
 
 async function runNotificationPass(bot: any): Promise<void> {
     
-    // SIMULATION INTERCEPT
-    const adminId = process.env.ADMIN_TELEGRAM_ID;
-    if (adminId) {
-        const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
-        if (await isSimulationActive(adminId)) {
-            if (Math.random() > 0.6) {
-                const alert = generateSimCallerAlert();
-                const msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b> 🎮\n\n` +
-                    `<b>Token:</b> $${alert.symbol} (<code>${alert.mint}</code>)\n` +
-                    `<b>Score:</b> ${alert.score}/100 ⭐\n\n` +
-                    `${alert.reasons.map(r => `✅ ${r}`).join('\n')}\n\n` +
-                    `<i>Reply with the CA to quick-snipe, or click below.</i>`;
-
-                await bot.telegram.sendMessage(adminId, msg, {
-                    parse_mode: 'HTML',
-                    reply_markup: {
-                        inline_keyboard: [
-                            [
-                                { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${alert.mint}_0.1` },
-                                { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${alert.mint}` }
-                            ],
-                            [
-                                { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${alert.mint}` },
-                                { text: '⏳ Start DCA', callback_data: `caller_dca_${alert.mint}` }
-                            ]
-                        ]
-                    }
-                }).catch(() => null);
-            }
-            return; // Skip real scoring loop in sim mode
-        }
-    }
-    // END SIMULATION INTERCEPT
     
     try {
         const topTokens = await getHotCache();

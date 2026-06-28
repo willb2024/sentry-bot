@@ -1914,6 +1914,78 @@ bot.action('menu_positions', async (ctx) => {
     }).catch(()=>{});
 });
 
+bot.action('menu_caller', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    // SIMULATION INTERCEPT
+    const { isSimulationActive, generateSimCallerAlert } = await import('./services/simulation.service.js');
+    if (await isSimulationActive(tgId)) {
+        await redis.set(`sim:caller_seq:${tgId}`, 'RUNNING', 'EX', 60);
+        await ctx.editMessageText("🎮 <b>SIMULATION: AI Coin Caller Active</b>\n<i>Sending 5 simulated alerts (3s apart). Type /cancel to abort.</i>", { parse_mode: 'HTML' });
+
+        for (let i = 0; i < 5; i++) {
+            // Check if user cancelled mid-sequence
+            const isRunning = await redis.get(`sim:caller_seq:${tgId}`);
+            if (!isRunning) break; 
+
+            const alert = generateSimCallerAlert();
+            const msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b> 🎮\n\n` +
+                `<b>Token:</b> $${alert.symbol} (<code>${alert.mint}</code>)\n` +
+                `<b>Score:</b> ${alert.score}/100 ⭐\n\n` +
+                `${alert.reasons.map(r => `✅ ${r}`).join('\n')}\n\n` +
+                `<i>Reply with the CA to quick-snipe, or click below.</i>`;
+            
+            await bot.telegram.sendMessage(tgId, msg, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${alert.mint}_0.1` },
+                            { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${alert.mint}` }
+                        ],
+                        [
+                            { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${alert.mint}` },
+                            { text: '⏳ Start DCA', callback_data: `caller_dca_${alert.mint}` }
+                        ]
+                    ]
+                }
+            }).catch(() => null);
+
+            if (i < 4) await new Promise(r => setTimeout(r, 3000)); // Wait 3 seconds between alerts
+        }
+        return;
+    }
+    // END SIMULATION INTERCEPT
+
+    await sendCallerMenu(ctx, tgId, true); 
+});
+
+bot.command('simbal', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
+
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    if (!(await isSimulationActive(tgId))) {
+        return ctx.replyWithHTML("🔴 <b>Simulation mode is NOT active.</b> Turn it on with /sim first.");
+    }
+
+    const text = (ctx.message as any).text || "";
+    const parts = text.trim().split(/\s+/);
+    
+    if (parts.length !== 2) {
+        return ctx.replyWithHTML("🔴 <b>Format Error.</b> Use: <code>/simbal [AMOUNT]</code>\nExample: <code>/simbal 150.5</code>");
+    }
+
+    const newBal = parseFloat(parts[1]);
+    if (isNaN(newBal) || newBal < 0) {
+        return ctx.replyWithHTML("🔴 <b>Invalid Amount.</b> Please provide a valid number.");
+    }
+
+    await redis.set(`sim:balance:${tgId}`, newBal.toFixed(4));
+    await ctx.replyWithHTML(`✅ <b>Simulation Balance Updated!</b>\nYou now have <b>${newBal.toFixed(4)} SOL</b>.`);
+});
 bot.action('sim_regen_wallets', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
@@ -2756,7 +2828,8 @@ bot.on("text", async (ctx, next) => {
             `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`, // 🟢 ADD THESE
             `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`,
             `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
-            `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`
+            `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`,
+            `sim:caller_seq:${telegramId}`
         ];
         if (redis.del) await redis.del(...keysToClear); 
         await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
