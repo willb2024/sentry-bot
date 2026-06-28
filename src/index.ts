@@ -916,7 +916,48 @@ bot.action('menu_caller', async (ctx) => {
 bot.action('trigger_caller_scan', async (ctx) => {
     try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
-    
+
+    // --- 🎮 SIMULATION INTERCEPT ---
+    const { isSimulationActive, generateSimCallerAlert } = await import('./services/simulation.service.js');
+    if (await isSimulationActive(tgId)) {
+        await redis.set(`sim:caller_seq:${tgId}`, 'RUNNING', 'EX', 60);
+        await ctx.editMessageText("🎮 <b>SIMULATION: AI Coin Caller Active</b>\n<i>Sending 5 simulated alerts (3s apart). Type /cancel to abort.</i>", { parse_mode: 'HTML' });
+
+        for (let i = 0; i < 5; i++) {
+            // Check if user cancelled mid-sequence
+            const isRunning = await redis.get(`sim:caller_seq:${tgId}`);
+            if (!isRunning) break; 
+
+            const alert = generateSimCallerAlert();
+            const msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b> 🎮\n\n` +
+                `<b>Token:</b> $${alert.symbol} (<code>${alert.mint}</code>)\n` +
+                `<b>Score:</b> ${alert.score}/100 ⭐\n\n` +
+                `${alert.reasons.map(r => `✅ ${r}`).join('\n')}\n\n` +
+                `<i>Reply with the CA to quick-snipe, or click below.</i>`;
+            
+            await bot.telegram.sendMessage(tgId, msg, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${alert.mint}_0.1` },
+                            { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${alert.mint}` }
+                        ],
+                        [
+                            { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${alert.mint}` },
+                            { text: '⏳ Start DCA', callback_data: `caller_dca_${alert.mint}` }
+                        ]
+                    ]
+                }
+            }).catch(() => null);
+
+            // Wait 3 seconds between alerts (skip delay on the final alert)
+            if (i < 4) await new Promise(r => setTimeout(r, 3000)); 
+        }
+        return;
+    }
+    // --- END SIMULATION INTERCEPT ---
+
     // Frame 1: Initial Calibration
     await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
     await new Promise(r => setTimeout(r, 600));
@@ -934,7 +975,6 @@ bot.action('trigger_caller_scan', async (ctx) => {
         const topTokens = await scoreTokens();
         const filters = await getUserCallerFilters(tgId);
         
-        // Find a token in the latest batch that meets the user's specific filters
         const matchedToken = topTokens.find(t => 
             t.totalScore >= filters.minScore &&
             t.ageMins <= filters.maxAgeMins &&
@@ -950,26 +990,23 @@ bot.action('trigger_caller_scan', async (ctx) => {
                         `${matchedToken.warnings.map(w => `${w}`).join('\n')}\n\n` +
                         `<i>Click below to buy instantly via Jito:</i>`;
             
-                        await ctx.editMessageText(msg, {
-                            parse_mode: 'HTML',
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [
-                                        { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` },
-                                        { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }
-                                    ],
-                                    // 🟢 ADDED FOR MANUAL SCAN RESPONSES ALSO
-                                    [
-                                        { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` },
-                                        { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }
-                                    ],
-                                    [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
-                                ]
-                            }
-                        });
-
+            await ctx.editMessageText(msg, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` },
+                            { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }
+                        ],
+                        [
+                            { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` },
+                            { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }
+                        ],
+                        [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
+                    ]
+                }
+            });
         } else {
-            // No tokens matched their current thresholds
             await ctx.editMessageText(
                 `❌ <b>No Breakouts Found</b>\n\n` +
                 `We scanned the top 30 trending Solana pairs on-chain, but none matched your current settings:\n` +
@@ -980,7 +1017,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
                 {
                     parse_mode: 'HTML',
                     reply_markup: {
-                        inline_keyboard: [[Markup.button.callback('⬅️ Back to Caller Menu', 'menu_caller')]]
+                        inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]]
                     }
                 }
             );
@@ -989,9 +1026,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
         console.error("🔴 [MANUAL CALLER SCAN FAULT]:", e.message);
         await ctx.editMessageText(`🔴 <b>Scan Aborted:</b> RPC node is congested. Please try again.`, {
             parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [[Markup.button.callback('⬅️ Back', 'menu_caller')]]
-            }
+            reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
         });
     }
 });
@@ -1918,47 +1953,6 @@ bot.action('menu_caller', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
-
-    // SIMULATION INTERCEPT
-    const { isSimulationActive, generateSimCallerAlert } = await import('./services/simulation.service.js');
-    if (await isSimulationActive(tgId)) {
-        await redis.set(`sim:caller_seq:${tgId}`, 'RUNNING', 'EX', 60);
-        await ctx.editMessageText("🎮 <b>SIMULATION: AI Coin Caller Active</b>\n<i>Sending 5 simulated alerts (3s apart). Type /cancel to abort.</i>", { parse_mode: 'HTML' });
-
-        for (let i = 0; i < 5; i++) {
-            // Check if user cancelled mid-sequence
-            const isRunning = await redis.get(`sim:caller_seq:${tgId}`);
-            if (!isRunning) break; 
-
-            const alert = generateSimCallerAlert();
-            const msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b> 🎮\n\n` +
-                `<b>Token:</b> $${alert.symbol} (<code>${alert.mint}</code>)\n` +
-                `<b>Score:</b> ${alert.score}/100 ⭐\n\n` +
-                `${alert.reasons.map(r => `✅ ${r}`).join('\n')}\n\n` +
-                `<i>Reply with the CA to quick-snipe, or click below.</i>`;
-            
-            await bot.telegram.sendMessage(tgId, msg, {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [
-                            { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${alert.mint}_0.1` },
-                            { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${alert.mint}` }
-                        ],
-                        [
-                            { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${alert.mint}` },
-                            { text: '⏳ Start DCA', callback_data: `caller_dca_${alert.mint}` }
-                        ]
-                    ]
-                }
-            }).catch(() => null);
-
-            if (i < 4) await new Promise(r => setTimeout(r, 3000)); // Wait 3 seconds between alerts
-        }
-        return;
-    }
-    // END SIMULATION INTERCEPT
-
     await sendCallerMenu(ctx, tgId, true); 
 });
 
