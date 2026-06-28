@@ -14,8 +14,6 @@ export async function getUserPositions(telegramId: string) {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress) return null;
 
-        // 🟢 MEDIUM BUG 16 FIX: Implement a 15-second Redis cache to prevent 
-        // repeated getParsedTokenAccountsByOwner calls from causing RPC 429 rate limit errors.
         const cacheKey = `positions_cache:${telegramId}`;
         const cachedPositions = await redis.get(cacheKey);
         if (cachedPositions) {

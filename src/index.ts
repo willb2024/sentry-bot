@@ -8,6 +8,7 @@ import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, Version
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import { redis } from './lib/redis.js';
+import { isSimulationActive } from './services/simulation.service.js';
 import axios from 'axios';
 import { igniteYellowstoneStream } from './services/grpc.service.js';
 import { sweepExpiredVips } from './services/vip_promo.service.js';
@@ -251,6 +252,12 @@ app.post('/api/affiliate-stats', async (req, res) => {
 // ⚡ UTILITIES: MULTI-WALLET BALANCE AGGREGATOR
 // =========================================================
 async function getLiveBalance(user: any): Promise<string> {
+    // SIMULATION INTERCEPT
+    const { getSimBalance } = await import('./services/simulation.service.js');
+    if (await isSimulationActive(user.telegramId)) {
+        return await getSimBalance(user.telegramId);
+    }
+    
     if (!user || !user.vaultAddress) return "0.0000";
     try {
         const cacheKey = `balance_cache:${user.telegramId}`;
@@ -315,8 +322,12 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 
     const vipStatus = await getVipStatus(telegramId); // 🟢 FETCH VIP
 
+    const isSimMode = await isSimulationActive(telegramId);
+    const simBanner = isSimMode ? `\n🎮 <b>⚠️ SIMULATION MODE ACTIVE — No real trades firing</b>\n` : '';
+
     const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
-    `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` + // 🟢 INJECT BADGE LINE
+    simBanner +
+    `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` +
     `👛 <b>Primary Deposit Node:</b>\n` +
     `<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
     `💰 <b>Total Balance:</b> <code>${liveBalance} SOL</code>\n` +
@@ -352,6 +363,33 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 // =========================================================
 // 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
 // =========================================================
+
+bot.command('sim', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
+
+    const current = await redis.get(`sim:active:${tgId}`);
+    const newState = current === 'true' ? 'false' : 'true';
+    await redis.set(`sim:active:${tgId}`, newState);
+
+    if (newState === 'true') {
+        const { generateSimWallets } = await import('./services/simulation.service.js');
+        await redis.set(`sim:balance:${tgId}`, '12.4521');
+        await redis.set(`sim:wallets:${tgId}`, JSON.stringify(generateSimWallets()));
+    } else {
+        const keys = await redis.keys(`sim:*:${tgId}`);
+        if (keys.length > 0) await redis.del(...keys);
+    }
+
+    await ctx.replyWithHTML(
+        `🎮 <b>SIMULATION MODE: ${newState === 'true' ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
+        `${newState === 'true' ? 
+            '⚠️ <i>All trades, balances, and alerts are now simulated. No real transactions will occur.</i>' : 
+            '<i>Platform returned to live mode.</i>'
+        }`
+    );
+});
+
 
 bot.action('action_create_guild_prompt', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -1781,6 +1819,25 @@ bot.action('menu_positions', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
+    // SIMULATION INTERCEPT
+    const { getSimWallets, getSimBalance } = await import('./services/simulation.service.js');
+    if (await isSimulationActive(tgId)) {
+        const simWallets = await getSimWallets(tgId);
+        const totalBal = await getSimBalance(tgId);
+        
+        let walletText = `🔑 <b>VAULT & KEYS</b> 🎮 <i>[SIMULATION]</i>\n\n`;
+        simWallets.forEach((w, i) => {
+            walletText += `<b>W${i+1}:</b> <code>${w.address}</code> <b>(${w.balance.toFixed(4)} SOL)</b>\n`;
+        });
+        walletText += `\n<b>Total Simulated Balance:</b> <b>${totalBal} SOL</b>\n\n`;
+        walletText += `<i>⚠️ These are simulated wallets. No real funds exist here.</i>`;
+        
+        return safeEditMessageText(ctx, walletText, Markup.inlineKeyboard([
+            [Markup.button.callback('🔄 Regenerate Wallets', 'sim_regen_wallets')],
+            [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
+        ]));
+    }
+
     const loader = await ctx.reply("<i>⏳ Scanning blockchain and fetching live prices...</i>", { parse_mode: 'HTML' });
     
     const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
@@ -1855,6 +1912,20 @@ bot.action('menu_positions', async (ctx) => {
         parse_mode: 'HTML', 
         ...Markup.inlineKeyboard(buttons) 
     }).catch(()=>{});
+});
+
+bot.action('sim_regen_wallets', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
+    
+    const { generateSimWallets } = await import('./services/simulation.service.js');
+    await redis.set(`sim:wallets:${tgId}`, JSON.stringify(generateSimWallets()));
+    
+    try { await ctx.answerCbQuery('🔄 Wallets regenerated!'); } catch(e) {}
+    bot.handleUpdate({ 
+        ...ctx.update, 
+        callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_vault' } 
+    } as any);
 });
 
 // 🟢 PUBLIC VIP STATUS

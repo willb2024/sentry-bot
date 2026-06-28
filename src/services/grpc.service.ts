@@ -151,6 +151,43 @@ async function checkAndTriggerGuard(
     currentPriceNative: number,
     bot: any
 ) {
+
+    // SIMULATION INTERCEPT
+    const { isSimulationActive, generateSimSignature, randomTradeDelay } = await import('./simulation.service.js');
+    if (await isSimulationActive(guardSnapshot.telegramId)) {
+        if (Math.random() > 0.8) {
+            await new Promise(r => setTimeout(r, randomTradeDelay()));
+            const pnlPercent = parseFloat((Math.random() * 280 + 20).toFixed(2));
+            const isProfit = Math.random() > 0.3; 
+            const finalPnl = isProfit ? pnlPercent : -Math.abs(pnlPercent * 0.3);
+            
+            try {
+                const { generatePnlCard } = await import('./image.service.js');
+                const user = await prisma.user.findUnique({ where: { telegramId: guardSnapshot.telegramId } });
+                const imageBuffer = await generatePnlCard(
+                    guardSnapshot.tokenAddress, 
+                    finalPnl, 
+                    user?.referralCode
+                );
+                
+                await bot.telegram.sendPhoto(
+                    guardSnapshot.telegramId,
+                    { source: imageBuffer },
+                    {
+                        caption: `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
+                            `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
+                            `${isProfit ? `💰 <b>Profit: +${finalPnl.toFixed(2)}%</b>` : `🩸 <b>Loss: ${finalPnl.toFixed(2)}%</b>`}\n` +
+                            `Status: 🟢 Auto-Sold 100% via Jito.\n` +
+                            `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`,
+                        parse_mode: 'HTML'
+                    }
+                );
+            } catch (_) {}
+        }
+        return; 
+    }
+    // END SIMULATION INTERCEPT
+
     if (lockedGuards.has(guardSnapshot.id)) return;
 
     let guard = guardSnapshot;

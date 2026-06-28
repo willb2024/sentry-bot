@@ -134,7 +134,6 @@ export async function executeRentSweep(telegramId: string): Promise<{ success: b
 
         if (!isConfirmed) return { success: false, reclaimedSol: 0, message: "Network dropped the sweep transaction." };
 
-        // 🟢 MEDIUM BUG 15 FIX: Mathematically decouple the gross rent returns from the priority tip.
         const RENT_PER_ACCOUNT_LAMPORTS = 2039280;
         const grossReclaimedSol = (targets.length * RENT_PER_ACCOUNT_LAMPORTS) / 1_000_000_000;
         const jitoTipSol = TIP_LAMPORTS / 1_000_000_000;

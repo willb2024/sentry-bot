@@ -136,9 +136,9 @@ async function getLatestBlockhashWithCache(): Promise<{ blockhash: string; lastV
     return await connection.getLatestBlockhash('confirmed');
 }
 
-async function pollSignatureConfirmation(signature: string, maxRetries = 40): Promise<boolean> {
+async function pollSignatureConfirmation(signature: string, maxRetries = 20): Promise<boolean> {
     for (let i = 0; i < maxRetries; i++) {
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 300));
         const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
         if (status?.value) {
             if (status.value.err) return false;
@@ -211,10 +211,9 @@ async function fetchApiTransaction(
         let apiBuffer: Buffer | null = null;
 
         if (isPumpToken) {
-            // REPLACE lines 181-183 with:
-const pumpAmount: string | number = action === 'buy'
-? amountSolForBuy
-: (sellPercentage === 100 ? "100%" : rawTokenAmountForSell);
+            const pumpAmount: string | number = action === 'buy'
+                ? amountSolForBuy
+                : (sellPercentage === 100 ? "100%" : rawTokenAmountForSell);
             try {
                 const pumpRes = await axios.post(
                     `https://pumpportal.fun/api/trade-local`,
@@ -381,6 +380,13 @@ export async function executeSnipe(
     isBumper: boolean = false,
     raydiumPoolId?: string
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
+
+    // SIMULATION INTERCEPT
+    const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        return await simExecuteSnipe(telegramId, targetCA, amountSol);
+    }
+    // END SIMULATION INTERCEPT
     
     if (side === 'sell') {
         let percentage = 100;
@@ -515,14 +521,14 @@ export async function executeSnipe(
         }
 
         const baseFeeRate = getDynamicFeeRate(user.totalVolumeSol, user.hasReferralDiscount);
-const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
+        const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
 
-const feeCharged = totalVolume * effectiveFeeRate;
-let affiliateCut = 0;
-if (user.referredById) {
-    const dynamicRate = await getDynamicAffiliateRate(user.referredById);
-    affiliateCut = feeCharged * dynamicRate;
-}
+        const feeCharged = totalVolume * effectiveFeeRate;
+        let affiliateCut = 0;
+        if (user.referredById) {
+            const dynamicRate = await getDynamicAffiliateRate(user.referredById);
+            affiliateCut = feeCharged * dynamicRate;
+        }
 
         await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: totalVolume } } });
         awardGuildPoints(user.telegramId, totalVolume).catch(() => {});
@@ -564,6 +570,14 @@ export async function executeExit(
     sellPercentage: number = 100,
     isBumper: boolean = false
 ): Promise<{ success: boolean; signature?: string; message: string }> {
+
+    // SIMULATION INTERCEPT
+    const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        return await simExecuteExit(telegramId, targetCA, sellPercentage);
+    }
+    // END SIMULATION INTERCEPT
+    
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) {
@@ -588,8 +602,8 @@ export async function executeExit(
         const walletReport: string[] = [];
 
         const latestBlockhash = await getLatestBlockhashWithCache();
+
         const balances = await Promise.all(wallets.map(w => connection.getBalance(new PublicKey(w.pub)).catch(() => 0)));
-        
 
         const executionPromises = wallets.map(async (w, index) => {
             const vaultPubkey = new PublicKey(w.pub);
@@ -597,7 +611,7 @@ export async function executeExit(
             const keypair = getCachedKeypair(w.pub, w.pk);
             if (!keypair) { lastError = "Decryption Fault."; walletReport[index] = `W${index + 1}: 🔴 Auth`; return; }
 
-            if (await connection.getBalance(vaultPubkey) < 1_500_000) {
+            if (balances[index] < 1_500_000) {
                 lastError = `Insufficient Gas.`;
                 walletReport[index] = `W${index + 1}: 🔴 Gas`;
                 return;
@@ -697,16 +711,15 @@ export async function executeExit(
         }
 
         const baseFeeRate = getDynamicFeeRate(user.totalVolumeSol, user.hasReferralDiscount);
-const effectiveFeeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
+        const effectiveFeeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
 
-const feeCharged = totalFeeBase * effectiveFeeRate;
-let affiliateCut = 0;
-if (user.referredById) {
-    const dynamicRate = await getDynamicAffiliateRate(user.referredById);
-    affiliateCut = feeCharged * dynamicRate;
-}
+        const feeCharged = totalFeeBase * effectiveFeeRate;
+        let affiliateCut = 0;
+        if (user.referredById) {
+            const dynamicRate = await getDynamicAffiliateRate(user.referredById);
+            affiliateCut = feeCharged * dynamicRate;
+        }
 
-        // 🟢 HIGH BUG 3 FIX: Sells use original cost basis for volume accounting if found.
         let volumeToRecord = totalFeeBase; 
         try {
             const lastBuy = await prisma.trade.findFirst({
@@ -752,29 +765,28 @@ if (user.referredById) {
     }
 }
 
-
-// 🟢 Helper to calculate dynamic affiliate rate based on points
 async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
     try {
         const referrer = await prisma.user.findUnique({
             where: { id: referrerId },
             include: { _count: { select: { recruits: true } } }
         });
-        if (!referrer) return 0.40; // Default Bronze is 40%
+        if (!referrer) return 0.40; 
 
         const basePoints = Math.floor((referrer.totalVolumeSol || 0) * 10000);
         const welcomeBonus = referrer.referredById ? 10000 : 0;
         const recruitBonus = (referrer._count.recruits || 0) * 2000;
         const totalPoints = basePoints + welcomeBonus + recruitBonus;
 
-        if (totalPoints >= 1000000) return 0.70; // Diamond (70%)
-        if (totalPoints >= 250000) return 0.60;  // Gold (60%)
-        if (totalPoints >= 50000) return 0.50;   // Silver (50%)
-        return 0.40;                             // Bronze (40%)
+        if (totalPoints >= 1000000) return 0.70; 
+        if (totalPoints >= 250000) return 0.60;  
+        if (totalPoints >= 50000) return 0.50;   
+        return 0.40;                             
     } catch {
         return 0.40;
     }
 }
+
 export async function generatePreSignedExitTx(telegramId: string, targetCA: string): Promise<string | null> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
