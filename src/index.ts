@@ -1854,24 +1854,53 @@ bot.action('menu_positions', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    // SIMULATION INTERCEPT
-    const { getSimWallets, getSimBalance } = await import('./services/simulation.service.js');
-    if (await isSimulationActive(tgId)) {
+    // =========================================================
+    // 🎮 SIMULATION INTERCEPT
+    // =========================================================
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    if (tgId && await isSimulationActive(tgId)) {
+        const { getSimWallets } = await import('./services/simulation.service.js');
         const simWallets = await getSimWallets(tgId);
-        const totalBal = await getSimBalance(tgId);
+        const simPositions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
         
-        let walletText = `🔑 <b>VAULT & KEYS</b> 🎮 <i>[SIMULATION]</i>\n\n`;
-        simWallets.forEach((w, i) => {
-            walletText += `<b>W${i+1}:</b> <code>${w.address}</code> <b>(${w.balance.toFixed(4)} SOL)</b>\n`;
+        let posText = `💼 <b>YOUR CURRENT BAGS</b> 🎮 <i>[SIMULATION]</i>\n\n`;
+        const buttons: any[] = [];
+        
+        if (simPositions.length === 0) {
+            posText += `<i>No active simulation positions. Use the sniper or paste a CA to simulate a buy.</i>`;
+        } else {
+            simPositions.forEach((p: any, i: number) => {
+                const pnlPercent = ((p.priceUsd - (p.entryPrice * 150)) / (p.entryPrice * 150) * 100).toFixed(2);
+                
+                // Calculates the absolute amount of simulated SOL made or lost
+                const solPnl = p.amountInSol * (parseFloat(pnlPercent) / 100); 
+                const sign = parseFloat(pnlPercent) >= 0 ? '+' : '';
+                
+                posText += `${i+1}. <b>$${p.symbol}</b>: <b>$${p.valueUsd.toFixed(2)}</b>\n   PnL: <b>${parseFloat(pnlPercent) >= 0 ? '📈' : '📉'} ${sign}${parseFloat(pnlPercent).toFixed(2)}% (${sign}${solPnl.toFixed(4)} SOL)</b>\n`;
+                buttons.push([
+                    Markup.button.callback(`25%`, `sell_25_${p.mint}`),
+                    Markup.button.callback(`50%`, `sell_50_${p.mint}`),
+                    Markup.button.callback(`💥 100%`, `sell_100_${p.mint}`)
+                ]);
+            });
+        }
+
+        buttons.push([
+            Markup.button.callback('🔄 Refresh', 'menu_positions'),
+            Markup.button.callback('⬅️ Back', 'btn_dashboard')
+        ]);
+
+        const loader = await ctx.reply("<i>⏳ Scanning simulation vault...</i>", { parse_mode: 'HTML' });
+        await new Promise(r => setTimeout(r, 800)); // Realistic simulated RPC delay
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, posText, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard(buttons)
         });
-        walletText += `\n<b>Total Simulated Balance:</b> <b>${totalBal} SOL</b>\n\n`;
-        walletText += `<i>⚠️ These are simulated wallets. No real funds exist here.</i>`;
-        
-        return safeEditMessageText(ctx, walletText, Markup.inlineKeyboard([
-            [Markup.button.callback('🔄 Regenerate Wallets', 'sim_regen_wallets')],
-            [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
-        ]));
+        return;
     }
+    // =========================================================
+    // END SIMULATION INTERCEPT
+    // =========================================================
 
     const loader = await ctx.reply("<i>⏳ Scanning blockchain and fetching live prices...</i>", { parse_mode: 'HTML' });
     

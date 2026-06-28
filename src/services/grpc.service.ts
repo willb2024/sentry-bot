@@ -152,14 +152,18 @@ async function checkAndTriggerGuard(
     bot: any
 ) {
 
-    // SIMULATION INTERCEPT
-    const { isSimulationActive, generateSimSignature, randomTradeDelay } = await import('./simulation.service.js');
+    // --- 🎮 SIMULATION INTERCEPT ---
+    const { isSimulationActive, generateSimSignature, simExecuteExit } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
-        if (Math.random() > 0.8) {
-            await new Promise(r => setTimeout(r, randomTradeDelay()));
+        // Ticks down 1.5% of the time per second to simulate realistic, unhurried on-chain movements
+        if (Math.random() > 0.985) {
+            lockedGuards.add(guardSnapshot.id);
             const pnlPercent = parseFloat((Math.random() * 280 + 20).toFixed(2));
-            const isProfit = Math.random() > 0.3; 
+            const isProfit = Math.random() > 0.3; // 70% chance of profit in demo mode
             const finalPnl = isProfit ? pnlPercent : -Math.abs(pnlPercent * 0.3);
+            
+            // Clean exit in simulation positions
+            await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, finalPnl);
             
             try {
                 const { generatePnlCard } = await import('./image.service.js');
@@ -169,24 +173,33 @@ async function checkAndTriggerGuard(
                     finalPnl, 
                     user?.referralCode
                 );
+
+                const solProfit = guardSnapshot.amountInSol * (finalPnl / 100);
+                const pnlMessage = finalPnl >= 0
+                    ? `💰 <b>Simulated Profit: +${solProfit.toFixed(4)} SOL</b> (+${finalPnl.toFixed(1)}%)`
+                    : `🩸 <b>Simulated Loss: -${Math.abs(solProfit).toFixed(4)} SOL</b> (${finalPnl.toFixed(1)}%)`;
                 
                 await bot.telegram.sendPhoto(
                     guardSnapshot.telegramId,
                     { source: imageBuffer },
                     {
-                        caption: `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
+                        caption: `${finalPnl >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
                             `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
-                            `${isProfit ? `💰 <b>Profit: +${finalPnl.toFixed(2)}%</b>` : `🩸 <b>Loss: ${finalPnl.toFixed(2)}%</b>`}\n` +
-                            `Status: 🟢 Auto-Sold 100% via Jito.\n` +
+                            `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` +
+                            `${pnlMessage}\n` +
+                            `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                             `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`,
                         parse_mode: 'HTML'
                     }
                 );
+                
+                await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
             } catch (_) {}
+            lockedGuards.delete(guardSnapshot.id);
         }
         return; 
     }
-    // END SIMULATION INTERCEPT
+    // --- END SIMULATION INTERCEPT ---
 
     if (lockedGuards.has(guardSnapshot.id)) return;
 
@@ -505,6 +518,15 @@ export function startUniversalGuardPoller(bot: any) {
 
             await Promise.all(activeGuards.map(async (guard) => {
                 if (lockedGuards.has(guard.id)) return;
+
+                // --- 🎮 SIMULATION INTERCEPT ---
+                const { isSimulationActive } = await import('./simulation.service.js');
+                if (await isSimulationActive(guard.telegramId)) {
+                    await checkAndTriggerGuard(guard, 0, bot);
+                    return;
+                }
+                // --- END SIMULATION INTERCEPT ---
+
                 const isPump = guard.tokenAddress.toLowerCase().endsWith("pump");
 
                 if (isPump) {

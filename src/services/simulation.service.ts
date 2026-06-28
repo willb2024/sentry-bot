@@ -98,7 +98,8 @@ export async function simExecuteSnipe(
 export async function simExecuteExit(
     telegramId: string,
     tokenAddress: string,
-    percent: number
+    percent: number,
+    forcedPnlPercent?: number // 🟢 OPTIONALLY PASS FORCED PNL FROM REALISTIC TICK ENGINE
 ): Promise<{ success: boolean, signature: string, message: string }> {
     await new Promise(r => setTimeout(r, randomTradeDelay()));
 
@@ -106,7 +107,9 @@ export async function simExecuteExit(
     const positions = JSON.parse(await redis.get(posKey) || '[]');
     const pos = positions.find((p: any) => p.mint === tokenAddress);
 
-    let pnlPercent = parseFloat((Math.random() * 325 + 15).toFixed(2));
+    let pnlPercent = forcedPnlPercent !== undefined 
+        ? forcedPnlPercent 
+        : parseFloat((Math.random() * 325 + 15).toFixed(2));
 
     if (pos) {
         const soldSol = pos.amountInSol * (percent / 100);
@@ -123,7 +126,7 @@ export async function simExecuteExit(
     return {
         success: true,
         signature: generateSimSignature(),
-        message: `🟢 Simulation: Sold ${percent}% | PnL: +${pnlPercent}%`
+        message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
     };
 }
 
