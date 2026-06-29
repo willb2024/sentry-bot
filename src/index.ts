@@ -19,9 +19,7 @@ import { executeSnipe, executeExit, warmDnsCache } from './services/engine.servi
 import { getUserPositions } from './services/position.service.js';
 import { processAffiliatePayout } from './services/payout.service.js';
 import { getEmptyTokenAccounts, executeRentSweep } from './services/burn.service.js';
-import { createGuild, joinGuild, getLeaderboard, exportLeaderboard, updateRankCache } from './services/guild.service.js';
-import { runLeadScraper, startLeadGenScheduler } from './services/leadgen.service.js';
-import { runGuildLeadScraper, startGuildLeadScheduler } from './services/leadgen_guild.service.js';
+import { createGuild, joinGuild, getLeaderboard, exportLeaderboard, updateRankCache } from './services/guild.service.js';  
 import { startDepositWatcher } from './services/deposit.service.js';
 import { syncGuardsFromDb } from './services/order.service.js';
 import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './services/caller.service.js';
@@ -889,20 +887,6 @@ bot.action('action_create_vault', async (ctx) => {
 // =========================================================
 // 📡 PRIVATE KOL FINDER & LEADERBOARD
 // =========================================================
-bot.command(['kol', 'kolfinder'], async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(',').concat(process.env.ADMIN_TELEGRAM_ID || "").filter(Boolean);
-    
-    if (!tgId || !ADMIN_IDS.includes(tgId)) return ctx.reply("🔴 Unauthorized.");
-
-    const loader = await ctx.replyWithHTML("<i>⏳ Booting Sentry Radar... Mining DexScreener for high-volume Pump.fun tokens...</i>");
-    try {
-        const resultMessage = await runLeadScraper(bot, tgId);
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, resultMessage, { parse_mode: 'HTML' });
-    } catch (e: any) {
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Scraper failed:</b> ${e.message}`, { parse_mode: 'HTML' });
-    }
-});
 
 // 🟢 NEW: Listens for the main dashboard button click to open the Coin Caller menu
 bot.action('menu_caller', async (ctx) => {
@@ -3874,8 +3858,7 @@ async function bootEcosystem() {
         startDepositWatcher(bot); 
         
         const adminId = process.env.ADMIN_TELEGRAM_ID || "8494722111"; // Your Telegram ID
-        startLeadGenScheduler(bot, adminId);       // 🟢 Starts the Token Leadgen
-        startGuildLeadScheduler(bot, adminId);     // 🏰 Starts the new Guild KOL Leadgen
+           // 🏰 Starts the new Guild KOL Leadgen
         
         startCoinCaller(bot); // 🟢 ADDED CALLER ENGINE STARTUP
         
