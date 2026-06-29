@@ -19,7 +19,6 @@ const prisma = new PrismaClient();
 const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
 
 const GRPC_URL = `https://atlas-mainnet.helius-rpc.com`;
-
 const PUMP_FUN_PROGRAM  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
@@ -155,43 +154,45 @@ async function checkAndTriggerGuard(
     // --- 🎮 SIMULATION INTERCEPT ---
     const { isSimulationActive, generateSimSignature, simExecuteExit } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
-        // Ticks down 1.5% of the time per second to simulate realistic, unhurried on-chain movements
-        if (Math.random() > 0.985) {
+        // Triggers perfectly in ~2 seconds (50% chance every 1s poll)
+        if (Math.random() > 0.5) {
             lockedGuards.add(guardSnapshot.id);
-            const pnlPercent = parseFloat((Math.random() * 280 + 20).toFixed(2));
-            const isProfit = Math.random() > 0.3; // 70% chance of profit in demo mode
-            const finalPnl = isProfit ? pnlPercent : -Math.abs(pnlPercent * 0.3);
             
-            // Clean exit in simulation positions
-            await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100,);
+            // EXACT PnL MATCHING: If TP is 350, it hits 350. If SL is 20, it hits -20.
+            const pnlPercent = guardSnapshot.takeProfitPercent ? guardSnapshot.takeProfitPercent : -Math.abs(guardSnapshot.trailingPercent);
+            const isProfit = pnlPercent >= 0;
+            
+            // Execute the clean simulated exit using the exact PnL
+            await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
             
             try {
-                const { generatePnlCard } = await import('./image.service.js');
                 const user = await prisma.user.findUnique({ where: { telegramId: guardSnapshot.telegramId } });
-                const imageBuffer = await generatePnlCard(
-                    guardSnapshot.tokenAddress, 
-                    finalPnl, 
-                    user?.referralCode
-                );
+                const imageBuffer = await generatePnlCard(guardSnapshot.tokenAddress, pnlPercent, user?.referralCode);
 
-                const solProfit = guardSnapshot.amountInSol * (finalPnl / 100);
-                const pnlMessage = finalPnl >= 0
-                    ? `💰 <b>Simulated Profit: +${solProfit.toFixed(4)} SOL</b> (+${finalPnl.toFixed(1)}%)`
-                    : `🩸 <b>Simulated Loss: -${Math.abs(solProfit).toFixed(4)} SOL</b> (${finalPnl.toFixed(1)}%)`;
+                const solPnl = guardSnapshot.amountInSol * Math.abs(pnlPercent / 100);
+                const pnlMessage = isProfit
+                    ? `💰 <b>Simulated Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
+                    : `🩸 <b>Simulated Loss: -${solPnl.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
                 
-                await bot.telegram.sendPhoto(
-                    guardSnapshot.telegramId,
-                    { source: imageBuffer },
-                    {
-                        caption: `${finalPnl >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
+                const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
                             `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
-                            `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` +
+                            `${!isProfit ? `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` : ''}` +
                             `${pnlMessage}\n` +
                             `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
-                            `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`,
-                        parse_mode: 'HTML'
-                    }
-                );
+                            `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
+                
+                // @ts-ignore
+                const fetch = (await import('node-fetch')).default;
+                // @ts-ignore
+                const FormData = (await import('form-data')).default;
+                
+                const form = new FormData();
+                form.append('chat_id', guardSnapshot.telegramId);
+                form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
+                form.append('caption', captionText);
+                form.append('parse_mode', 'HTML');
+                
+                await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form });
                 
                 await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
             } catch (_) {}
@@ -268,23 +269,6 @@ async function checkAndTriggerGuard(
                                     { source: imageBuffer },
                                     { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                                 );
-
-                                const whaleChannelId = process.env.WHALE_ALERT_CHANNEL_ID;
-                                if (whaleChannelId && profitPercent > 0) {
-                                    const botUsername = bot.botInfo?.username || 'lightningsnipe_bot';
-                                    await bot.telegram.sendPhoto(
-                                        whaleChannelId,
-                                        { source: imageBuffer },
-                                        {
-                                            caption:
-                                                `🔥 <b>SENTRY TERMINAL PROFIT ALERT</b>\n\n` +
-                                                `A trader just secured gains using Jito MEV protection.\n\n` +
-                                                `👉 Copy their strategy: https://t.me/${botUsername}`,
-                                            parse_mode: 'HTML'
-                                        }
-                                    ).catch(() => null);
-                                }
-
                             } catch (_) {
                                 await bot.telegram.sendMessage(guard.telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                             }
@@ -342,23 +326,6 @@ async function checkAndTriggerGuard(
                                     { source: imageBuffer },
                                     { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                                 );
-
-                                const whaleChannelId = process.env.WHALE_ALERT_CHANNEL_ID;
-                                if (whaleChannelId && totalPnlPercent > 0) {
-                                    const botUsername = bot.botInfo?.username || 'lightningsnipe_bot';
-                                    await bot.telegram.sendPhoto(
-                                        whaleChannelId,
-                                        { source: imageBuffer },
-                                        {
-                                            caption:
-                                                `🔥 <b>SENTRY TERMINAL PROFIT ALERT</b>\n\n` +
-                                                `A trader just secured gains using Jito MEV protection.\n\n` +
-                                                `👉 Copy their strategy: https://t.me/${botUsername}`,
-                                            parse_mode: 'HTML'
-                                        }
-                                    ).catch(() => null);
-                                }
-
                             } catch (_) {
                                 await bot.telegram.sendMessage(guard.telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                             }
