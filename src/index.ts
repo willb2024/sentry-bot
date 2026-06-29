@@ -1795,25 +1795,31 @@ bot.action('toggle_autosnipe', async (ctx) => {
     const { isSimulationActive, toggleSimAutoSnipe } = await import('./services/simulation.service.js');
     if (await isSimulationActive(tgId)) {
         const isActive = await toggleSimAutoSnipe(tgId, bot);
-        const cardText = 
-            `🤖 <b>SIM AUTO-SNIPER: ${isActive ? '🟢 ON' : '🔴 OFF'}</b> 🎮\n\n` +
-            `${isActive ? '<i>Buying tokens every 2s, taking profit after 3s... Click below or type /cancel to stop.</i>' : '<i>Auto-Sniper stopped.</i>'}`;
         
-        const editRes = await ctx.editMessageText(cardText, {
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: isActive ? '🛑 SHUT DOWN SIM SNIPER' : '⚡ ARM SIM SNIPER', callback_data: 'toggle_autosnipe' }],
-                    [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]
-                ]
-            }
-        });
-
-        // 🟢 NEW: Stores the active status card message ID in Redis
-        if (isActive && editRes && typeof editRes !== 'boolean') {
-            await redis.set(`sim:autosnipe_msg:${tgId}`, editRes.message_id.toString(), 'EX', 3600);
-        } else {
+        if (!isActive) {
+            await ctx.editMessageText(`🤖 <b>SIM AUTO-SNIPER: 🔴 OFF</b> 🎮\n\n<i>Auto-Sniper stopped.</i>`, {
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: [[{ text: '⚡ ARM SIM SNIPER', callback_data: 'toggle_autosnipe' }], [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]] }
+            });
             await redis.del(`sim:autosnipe_msg:${tgId}`);
+            return;
+        }
+
+        const editRes = await ctx.editMessageText(
+            `🤖 <b>SIM AUTO-SNIPER: 🟢 ON</b> 🎮\n\n<i>Executing dynamic trades (random 2s - 5s delays)... Click below to stop.</i>`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🛑 SHUT DOWN SIM SNIPER', callback_data: 'toggle_autosnipe' }],
+                        [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]
+                    ]
+                }
+            }
+        );
+
+        if (editRes && typeof editRes !== 'boolean') {
+            await redis.set(`sim:autosnipe_msg:${tgId}`, editRes.message_id.toString(), 'EX', 3600);
         }
         return;
     }
@@ -2913,16 +2919,18 @@ bot.on("text", async (ctx, next) => {
         ];
         if (redis.del) await redis.del(...keysToClear); 
 
-        // 🟢 NEW: Instantly edits the active "ON" card on screen to "OFF"
+        // 🟢 INSTANTLY EDIT THE ACTIVE CARD TO "OFF" WITHOUT SPAMMING THE CHAT
         const activeMsgId = await redis.get(`sim:autosnipe_msg:${telegramId}`);
         if (activeMsgId) {
             await bot.telegram.editMessageText(ctx.chat.id, parseInt(activeMsgId), undefined, 
-                `🤖 <b>SIM AUTO-SNIPER: 🔴 OFF</b> 🎮\n\n<i>Auto-Sniper stopped via /cancel command.</i>`, 
-                { parse_mode: 'HTML' }
+                `🤖 <b>SIM AUTO-SNIPER: 🔴 OFF</b> 🎮\n\n<i>Auto-Sniper stopped.</i>`, 
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⚡ ARM SIM SNIPER', callback_data: 'toggle_autosnipe' }], [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]] } }
             ).catch(() => null);
             await redis.del(`sim:autosnipe_msg:${telegramId}`);
+            return; // EXIT SILENTLY
         }
 
+        // Only send generic cancel message if there was no active sim card
         await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
         await sendOrEditDashboard(ctx, telegramId, false);
         return;
