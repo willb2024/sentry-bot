@@ -1795,19 +1795,26 @@ bot.action('toggle_autosnipe', async (ctx) => {
     const { isSimulationActive, toggleSimAutoSnipe } = await import('./services/simulation.service.js');
     if (await isSimulationActive(tgId)) {
         const isActive = await toggleSimAutoSnipe(tgId, bot);
-        await ctx.editMessageText(
+        const cardText = 
             `🤖 <b>SIM AUTO-SNIPER: ${isActive ? '🟢 ON' : '🔴 OFF'}</b> 🎮\n\n` +
-            `${isActive ? '<i>Buying tokens every 2s, taking profit after 3s... Click below or type /cancel to stop.</i>' : '<i>Auto-Sniper stopped.</i>'}`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: isActive ? '🛑 SHUT DOWN SIM SNIPER' : '⚡ ARM SIM SNIPER', callback_data: 'toggle_autosnipe' }],
-                        [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]
-                    ]
-                }
+            `${isActive ? '<i>Buying tokens every 2s, taking profit after 3s... Click below or type /cancel to stop.</i>' : '<i>Auto-Sniper stopped.</i>'}`;
+        
+        const editRes = await ctx.editMessageText(cardText, {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: isActive ? '🛑 SHUT DOWN SIM SNIPER' : '⚡ ARM SIM SNIPER', callback_data: 'toggle_autosnipe' }],
+                    [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]
+                ]
             }
-        );
+        });
+
+        // 🟢 NEW: Stores the active status card message ID in Redis
+        if (isActive && editRes && typeof editRes !== 'boolean') {
+            await redis.set(`sim:autosnipe_msg:${tgId}`, editRes.message_id.toString(), 'EX', 3600);
+        } else {
+            await redis.del(`sim:autosnipe_msg:${tgId}`);
+        }
         return;
     }
     // --- END SIMULATION INTERCEPT ---
@@ -1819,7 +1826,6 @@ bot.action('toggle_autosnipe', async (ctx) => {
     if (newState) try { await ctx.telegram.sendMessage(ctx.chat!.id, `📡 <b>SNIPER ARMED & SCANNING PUMP.FUN</b>\n\nYour engine is now actively listening to the Solana Mempool. It will execute via Jito MEV.`, { parse_mode: 'HTML' }); } catch(e) {}
     await sendOrEditSniper(ctx, tgId!, true);
 });
-
 bot.action('toggle_antidead', async (ctx) => {
     try { await ctx.answerCbQuery("👻 Anti-Dead Coin Shield Toggled!"); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -2901,14 +2907,22 @@ bot.on("text", async (ctx, next) => {
             `state:enter_ref:${telegramId}`, `state:edit_slippage:${telegramId}`, `state:edit_custom_speed:${telegramId}`, 
             `state:dev_volume:${telegramId}`, `state:dev_nuke:${telegramId}`,
             `active_bumper:${telegramId}`,
-            `state:lead_scraper:${telegramId}`, // 🟢 ADD THIS LINE
-            `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`, // 🟢 ADD THESE
-            `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`,
             `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
             `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`,
-            `sim:caller_seq:${telegramId}`
+            `sim:autosnipe:${telegramId}`, `sim:caller_seq:${telegramId}`
         ];
         if (redis.del) await redis.del(...keysToClear); 
+
+        // 🟢 NEW: Instantly edits the active "ON" card on screen to "OFF"
+        const activeMsgId = await redis.get(`sim:autosnipe_msg:${telegramId}`);
+        if (activeMsgId) {
+            await bot.telegram.editMessageText(ctx.chat.id, parseInt(activeMsgId), undefined, 
+                `🤖 <b>SIM AUTO-SNIPER: 🔴 OFF</b> 🎮\n\n<i>Auto-Sniper stopped via /cancel command.</i>`, 
+                { parse_mode: 'HTML' }
+            ).catch(() => null);
+            await redis.del(`sim:autosnipe_msg:${telegramId}`);
+        }
+
         await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
         await sendOrEditDashboard(ctx, telegramId, false);
         return;

@@ -174,7 +174,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
         
-        // 🟢 Strictly use whatever you typed in your settings! No random numbers!
+        // 🟢 Strictly use whatever you adjusted in your settings! No random numbers!
         const amountSol = config?.amountSol || 0.1;
         const slPercent = config?.autoTrailingDropPercent || 20;
         const tpPercent = config?.autoTakeProfitPercent || 50; 
@@ -213,10 +213,11 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         // Wait 3 seconds before buying the NEXT coin in the sequence
         if (i < sequence.length - 1) {
             await new Promise(r => setTimeout(r, 3000)); 
+            if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break; // instant cancel checkpoint
         }
     }
 
-    // 🛑 Silently reset the state without showing the "Simulation Complete" spam message
+    // 🛑 Silently reset the state
     await redis.set(`sim:autosnipe:${telegramId}`, 'false');
 }
 
