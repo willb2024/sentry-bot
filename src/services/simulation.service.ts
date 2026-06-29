@@ -91,9 +91,6 @@ export async function simExecuteSnipe(
     });
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
 
-    // NOTE: Removed the fake random guard trigger from here so that the actual
-    // grpc.service.ts intercept handles the precise % TP/SL you ask for!
-
     return {
         success: true,
         signature: generateSimSignature(),
@@ -170,23 +167,17 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const tokenCA = generateSimTokenCA();
         const amountSol = parseFloat((Math.random() * 2 + 0.5).toFixed(2));
         
-        // 1. Fake Buy
         await simExecuteSnipe(telegramId, tokenCA, amountSol);
 
-        // 2. Wait exactly 3 seconds as requested
         await new Promise(r => setTimeout(r, 3000));
 
-        // Ensure user didn't hit cancel during the 3 seconds
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
 
-        // 3. Fake Sell (Forced Profit to show off the PnL card)
         const pnl = parseFloat((Math.random() * 250 + 50).toFixed(2)); 
         await simExecuteExit(telegramId, tokenCA, 100, pnl);
         
-        // 4. Send the beautiful PnL Card directly
         await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, pnl);
 
-        // 5. Wait 2 seconds before buying the NEXT coin
         await new Promise(r => setTimeout(r, 2000)); 
     }
 }
@@ -196,7 +187,6 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         const exitSig = generateSimSignature();
         const pnlSol = (amountInSol * Math.abs(pnlPercent / 100));
 
-        // Removed the word "Simulated" from the caption!
         const captionText = 
             `🎯 <b>TAKE PROFIT TRIGGERED!</b> 🎮\n\n` +
             `Token: <code>${tokenAddress.substring(0, 8)}...</code>\n` +

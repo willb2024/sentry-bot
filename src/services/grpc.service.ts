@@ -154,11 +154,10 @@ async function checkAndTriggerGuard(
     // --- 🎮 SIMULATION INTERCEPT ---
     const { isSimulationActive, generateSimSignature, simExecuteExit } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
-        // High trigger rate so you don't wait forever to see the result
         if (Math.random() > 0.5) {
-            lockedGuards.add(guardSnapshot.id);
+            lockedGuards.add(guardSnapshot.id); // Locked prevents double-firing
             
-            // EXACT PNL LOGIC: Strictly use the numbers you typed in!
+            // EXACT PNL MATCHING: If TP is 350, it hits 350. If SL is 20, it hits -20.
             const pnlPercent = guardSnapshot.takeProfitPercent 
                 ? guardSnapshot.takeProfitPercent 
                 : -Math.abs(guardSnapshot.trailingPercent);
@@ -173,7 +172,7 @@ async function checkAndTriggerGuard(
 
                 const solPnl = guardSnapshot.amountInSol * Math.abs(pnlPercent / 100);
                 
-                // NO "Simulated" text anywhere!
+                // Pure real-world wording
                 const pnlMessage = isProfit
                     ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
                     : `🩸 <b>Incurred Loss: -${solPnl.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
@@ -200,7 +199,9 @@ async function checkAndTriggerGuard(
                 
                 await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
             } catch (_) {}
-            lockedGuards.delete(guardSnapshot.id);
+            
+            // DELAYED DELETION PREVENTS DOUBLE FIRES FROM CACHE OVERLAPS
+            setTimeout(() => lockedGuards.delete(guardSnapshot.id), 15_000);
         }
         return; 
     }
@@ -243,8 +244,7 @@ async function checkAndTriggerGuard(
             triggerInstantExit(guard).then(async (result) => {
                 if (result.success || (result as any).message?.includes("No tokens found")) {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
-                    lockedGuards.delete(guard.id);
-
+                    
                     if (result.success) {
                         await redis.del(`balance_cache:${guard.telegramId}`);
                         
@@ -295,6 +295,7 @@ async function checkAndTriggerGuard(
                             }
                         } catch (_) {}
                     }
+                    setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 } else {
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 }
@@ -315,8 +316,7 @@ async function checkAndTriggerGuard(
             triggerInstantExit(guard).then(async (result) => {
                 if (result.success || (result as any).message?.includes("No tokens found")) {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
-                    lockedGuards.delete(guard.id);
-
+                    
                     if (result.success) {
                         await redis.del(`balance_cache:${guard.telegramId}`);
 
@@ -369,6 +369,7 @@ async function checkAndTriggerGuard(
                             }
                         } catch (_) {}
                     }
+                    setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 } else {
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 }

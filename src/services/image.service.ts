@@ -19,93 +19,93 @@ function drawRoundRect(ctx: any, x: number, y: number, width: number, height: nu
 }
 
 export async function generatePnlCard(tokenMint: string, pnlPercent: number, refCode: string | undefined): Promise<Buffer> {
-    const width = 900;
-    const height = 500;
+    const width = 850;
+    const height = 450;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
-    // 1. Cool Color Gradient Background (Deep Purple -> Dark Slate -> Pitch Black)
-    const bgGrad = ctx.createLinearGradient(0, 0, width, height);
-    bgGrad.addColorStop(0, '#1e003b'); // Deep Purple
-    bgGrad.addColorStop(0.5, '#0f172a'); // Dark Slate
-    bgGrad.addColorStop(1, '#020617'); // Pitch Black
-    ctx.fillStyle = bgGrad;
+    // 1. Dashboard Background (#0a0d14)
+    ctx.fillStyle = '#0a0d14';
     ctx.fillRect(0, 0, width, height);
 
+    // 2. Dashboard Grid Overlay
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < width; x += 24) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+    }
+    for (let y = 0; y < height; y += 24) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
+    }
+
     const isProfit = pnlPercent >= 0;
-    const themeColor = isProfit ? '#10b981' : '#f43f5e'; // Emerald Green vs Rose Red
+    const themeColor = isProfit ? '#10b981' : '#ef4444'; // Dashboard Green / Red
     const sign = isProfit ? '+' : '';
     const label = isProfit ? 'PROFIT SECURED' : 'STOP LOSS TRIGGERED';
 
-    // 2. Glowing Background Orbs
-    ctx.shadowBlur = 150;
-    ctx.shadowColor = themeColor;
-    ctx.fillStyle = themeColor;
-    ctx.globalAlpha = 0.15;
-    ctx.beginPath();
-    ctx.arc(200, 150, 100, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(700, 350, 120, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Reset shadow & alpha for the main glass card
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1.0;
-
-    // 3. Glassmorphic Panel
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.lineWidth = 2;
-    drawRoundRect(ctx, 40, 40, 820, 420, 24);
+    // 3. Dashboard Flat Card (#121826)
+    ctx.fillStyle = '#121826';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    drawRoundRect(ctx, 40, 40, width - 80, height - 80, 16);
     ctx.fill();
     ctx.stroke();
 
-    // 4. Emoji Shield & Bot Name (Universal sans-serif font)
-    ctx.font = '40px sans-serif';
-    ctx.fillText('🛡️', 70, 110);
+    // 4. Logo (Green Square)
+    ctx.fillStyle = '#10b981';
+    drawRoundRect(ctx, 75, 75, 46, 46, 12);
+    ctx.fill();
 
+    // 5. Lightning Bolt Inside Logo
+    ctx.fillStyle = '#0a0d14'; // slateDark
+    ctx.beginPath();
+    ctx.moveTo(103, 85);
+    ctx.lineTo(91, 101);
+    ctx.lineTo(100, 101);
+    ctx.lineTo(95, 113);
+    ctx.lineTo(110, 95);
+    ctx.lineTo(100, 95);
+    ctx.closePath();
+    ctx.fill();
+
+    // 6. Bot Name
     const botName = process.env.BOT_NAME || 'Sentry Terminal';
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 36px sans-serif';
-    ctx.fillText(botName.toUpperCase(), 130, 105);
+    ctx.font = 'bold 30px sans-serif';
+    ctx.fillText(botName, 135, 108);
 
-    // 5. Token Info & Status
-    ctx.font = '500 24px sans-serif';
-    ctx.fillStyle = '#94a3b8'; // Slate 400
-    ctx.fillText(`Token: ${tokenMint.substring(0, 8)}...${tokenMint.substring(tokenMint.length - 4)}`, 75, 180);
-    
-    ctx.fillStyle = themeColor;
-    ctx.font = 'bold 24px sans-serif';
-    ctx.fillText(label, 75, 225);
-
-    // 6. Massive PnL Percentage (Shadow for Pop)
-    ctx.font = 'bold 130px sans-serif';
-    ctx.fillStyle = '#ffffff'; 
-    ctx.shadowBlur = 25;
-    ctx.shadowColor = themeColor;
-    ctx.fillText(`${sign}${pnlPercent.toFixed(2)}%`, 65, 340);
-    ctx.shadowBlur = 0; 
-
-    // 7. Footer Link
+    // 7. Token Info
+    ctx.font = '500 20px monospace';
     ctx.fillStyle = '#64748b'; // Slate 500
-    ctx.font = 'bold 18px sans-serif';
+    ctx.fillText(`Token: ${tokenMint.substring(0, 12)}...pump`, 75, 175);
+    
+    // 8. Status Label
+    ctx.fillStyle = themeColor;
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText(label, 75, 210);
+
+    // 9. Massive PnL Percentage
+    ctx.font = '900 115px sans-serif';
+    ctx.fillStyle = themeColor; 
+    ctx.fillText(`${sign}${pnlPercent.toFixed(2)}%`, 65, 320);
+
+    // 10. Footer Link
+    ctx.fillStyle = '#475569'; // Slate 600
+    ctx.font = '500 16px sans-serif';
     const supportUser = process.env.SUPPORT_USERNAME || 'sentrylead';
     const linkText = refCode 
         ? `Mirror my trades via TG with code: ${refCode}` 
         : `Powered by ${botName} on Solana | @${supportUser}`;
-    ctx.fillText(linkText, 75, 425);
+    ctx.fillText(linkText, 75, 395);
 
-    // 8. "Share to X" Button Design
-    ctx.fillStyle = '#000000'; // Black X button
-    drawRoundRect(ctx, 670, 390, 150, 40, 20);
+    // 11. "Share to X" Fake UI Button
+    ctx.fillStyle = '#0a0d14'; // slateDark
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    drawRoundRect(ctx, 610, 365, 150, 40, 8);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
     ctx.stroke();
-    
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px sans-serif';
-    ctx.fillText('𝕏 Share to X', 695, 416);
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText('𝕏 Share to X', 638, 391);
 
     return canvas.toBuffer('image/png');
 }
