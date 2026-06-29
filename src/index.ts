@@ -1701,12 +1701,19 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     let config = user.autoSnipeConfig;
     if (!config) config = await prisma.autoSnipeConfig.create({ data: { userId: user.id, amountSol: 0.01, sniperMode: "PUMP" } });
 
-    // 🟢 UPDATED: Handles PUMP, RAYDIUM, and BOTH mode displays
+    // --- 🎮 SIMULATION STATUS INTERCEPT ---
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSimMode = await isSimulationActive(telegramId);
+    const isSimActive = isSimMode && (await redis.get(`sim:autosnipe:${telegramId}`) === 'true');
+    
+    const isCurrentlyActive = isSimMode ? isSimActive : config.isActive;
+    const statusObj = isCurrentlyActive ? "🟢 ACTIVE & SCANNING MEMPOOL" : "🔴 OFFLINE (Stopped)";
+    // --- END SIMULATION INTERCEPT ---
+
     let modeDisplay = "💊 PUMP.FUN COINS (BONDING CURVES)";
     if (config.sniperMode === "RAYDIUM") modeDisplay = "🧪 RAYDIUM LIQUIDITY POOLS";
     else if (config.sniperMode === "BOTH") modeDisplay = "🔥 BOTH (PUMP.FUN & RAYDIUM)";
 
-    const statusObj = config.isActive ? "🟢 ACTIVE & SCANNING MEMPOOL" : "🔴 OFFLINE (Stopped)";
     const tpDisplay = config.autoTakeProfitPercent ? `+${config.autoTakeProfitPercent}%` : `OFF`;
     const mcDisplay = `$${(config.minMarketCap || 0).toLocaleString()} - $${(config.maxMarketCap || 100000).toLocaleString()}`;
     const spentSol = config.totalSpentSol || 0;
@@ -1722,38 +1729,29 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
         `  ├ <i>Explanation: Shows if Sentry is actively scanning Solana blocks or turned off.</i>\n\n` +
         
         `• <b>Target Mode:</b> <b>${modeDisplay}</b>\n\n` +
-        
         `• <b>Spend:</b> <b>${config.amountSol} SOL</b> per wallet\n` +
         `  ├ <i>Example: If you have 3 wallets active, Sentry fires 3 concurrent transactions, investing <b>${(config.amountSol * 3).toFixed(2)} SOL</b> total.</i>\n\n` +
-        
         `• <b>Max Budget:</b> <b>${config.maxBudgetSol ? config.maxBudgetSol + ' SOL' : 'Infinite (No Limit)'}</b>\n` +
         `  ├ <i>Example: Set this to 1.0 SOL. Sentry will automatically shut down the moment it buys 10 tokens to protect your wallet.</i>\n\n` +
-        
         `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n` +
         `  ├ <i>Total cumulative SOL spent by your sniper during this session.</i>\n\n` +
-        
         `• <b>Market Cap Filter:</b> <b>${mcDisplay}</b>\n` +
         `  ├ <i>Example: Set to $20k - $80k. Sentry blocks "ghost launches" and only buys coins that have immediate volume.</i>\n\n` +
-        
         `• <b>Max Dev Bag:</b> <b>${devBagDisplay}</b>\n` +
         `  ├ <i>Example: Set to 10%. If the creator buys more than 10% of their own supply at launch, Sentry immediately aborts.</i>\n\n` +
-        
         `• <b>Anti-Dead Shield:</b> ${antiDeadObj}\n` +
         `  ├ <i>Explanation: Blocks coin launches where the developer has 0 SOL of their own skin in the game.</i>\n\n` +
-        
         `• <b>Block Delay:</b> <b>${config.snipeDelaySeconds} Seconds</b>\n` +
         `  ├ <i>Example: Set to 2s. Sentry waits exactly 2 blocks before buying to let metadata and developer holding checks fully populate on-chain.</i>\n\n` +
-        
         `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n` +
         `  ├ <i>Example: Sentry deploys an in-memory Trailing Stop and Take Profit the exact millisecond your buy confirms.</i>\n`;
 
-    // 🟢 UPDATED: Button Label Logic
     let modeBtnText = '🟢 Mode: Pump.fun 💊';
     if (config.sniperMode === 'RAYDIUM') modeBtnText = '🟢 Mode: Raydium LPs 🧪';
     else if (config.sniperMode === 'BOTH') modeBtnText = '🟢 Mode: BOTH 🔥';
 
     const UI = Markup.inlineKeyboard([
-        [Markup.button.callback(config.isActive ? '🛑 SHUT DOWN ENGINE' : '⚡ ARM SNIPER ENGINE', 'toggle_autosnipe')],
+        [Markup.button.callback(isCurrentlyActive ? '🛑 SHUT DOWN ENGINE' : '⚡ ARM SNIPER ENGINE', 'toggle_autosnipe')],
         [Markup.button.callback(modeBtnText, 'toggle_sniper_mode')],
         [Markup.button.callback(`👻 Anti-Dead Shield: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
         [Markup.button.callback(`✏️ Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
@@ -1794,33 +1792,8 @@ bot.action('toggle_autosnipe', async (ctx) => {
     // --- 🎮 SIMULATION INTERCEPT ---
     const { isSimulationActive, toggleSimAutoSnipe } = await import('./services/simulation.service.js');
     if (await isSimulationActive(tgId)) {
-        const isActive = await toggleSimAutoSnipe(tgId, bot);
-        
-        if (!isActive) {
-            await ctx.editMessageText(`🤖 <b>SIM AUTO-SNIPER: 🔴 OFF</b> 🎮\n\n<i>Auto-Sniper stopped.</i>`, {
-                parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: [[{ text: '⚡ ARM SIM SNIPER', callback_data: 'toggle_autosnipe' }], [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]] }
-            });
-            await redis.del(`sim:autosnipe_msg:${tgId}`);
-            return;
-        }
-
-        const editRes = await ctx.editMessageText(
-            `🤖 <b>SIM AUTO-SNIPER: 🟢 ON</b> 🎮\n\n<i>Executing dynamic trades (random 2s - 5s delays)... Click below to stop.</i>`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🛑 SHUT DOWN SIM SNIPER', callback_data: 'toggle_autosnipe' }],
-                        [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]
-                    ]
-                }
-            }
-        );
-
-        if (editRes && typeof editRes !== 'boolean') {
-            await redis.set(`sim:autosnipe_msg:${tgId}`, editRes.message_id.toString(), 'EX', 3600);
-        }
+        await toggleSimAutoSnipe(tgId, bot);
+        await sendOrEditSniper(ctx, tgId!, true); // Smoothly refreshes the real dashboard UI
         return;
     }
     // --- END SIMULATION INTERCEPT ---
@@ -2919,18 +2892,6 @@ bot.on("text", async (ctx, next) => {
         ];
         if (redis.del) await redis.del(...keysToClear); 
 
-        // 🟢 INSTANTLY EDIT THE ACTIVE CARD TO "OFF" WITHOUT SPAMMING THE CHAT
-        const activeMsgId = await redis.get(`sim:autosnipe_msg:${telegramId}`);
-        if (activeMsgId) {
-            await bot.telegram.editMessageText(ctx.chat.id, parseInt(activeMsgId), undefined, 
-                `🤖 <b>SIM AUTO-SNIPER: 🔴 OFF</b> 🎮\n\n<i>Auto-Sniper stopped.</i>`, 
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⚡ ARM SIM SNIPER', callback_data: 'toggle_autosnipe' }], [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]] } }
-            ).catch(() => null);
-            await redis.del(`sim:autosnipe_msg:${telegramId}`);
-            return; // EXIT SILENTLY
-        }
-
-        // Only send generic cancel message if there was no active sim card
         await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
         await sendOrEditDashboard(ctx, telegramId, false);
         return;
