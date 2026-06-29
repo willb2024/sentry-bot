@@ -152,16 +152,18 @@ async function checkAndTriggerGuard(
 ) {
 
     // --- 🎮 SIMULATION INTERCEPT ---
-    const { isSimulationActive, generateSimSignature, simExecuteExit } = await import('./simulation.service.js');
+    const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
         if (Math.random() > 0.5) {
-            lockedGuards.add(guardSnapshot.id); // Locked prevents double-firing
+            lockedGuards.add(guardSnapshot.id); 
             
-            // EXACT PNL MATCHING: If TP is 350, it hits 350. If SL is 20, it hits -20.
-            const pnlPercent = guardSnapshot.takeProfitPercent 
+            // Strictly fetch the exact Take Profit or Trailing Drop target you added!
+            const targetPnl = guardSnapshot.takeProfitPercent 
                 ? guardSnapshot.takeProfitPercent 
                 : -Math.abs(guardSnapshot.trailingPercent);
                 
+            // 🟢 SLIPPAGE APPLIED: Slippage deviation applied dynamically to your manual inputs
+            const pnlPercent = applySimSlippage(targetPnl);
             const isProfit = pnlPercent >= 0;
             
             await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
@@ -170,12 +172,15 @@ async function checkAndTriggerGuard(
                 const user = await prisma.user.findUnique({ where: { telegramId: guardSnapshot.telegramId } });
                 const imageBuffer = await generatePnlCard(guardSnapshot.tokenAddress, pnlPercent, user?.referralCode);
 
-                const solPnl = guardSnapshot.amountInSol * Math.abs(pnlPercent / 100);
+                // 🟢 FEE & TIP DRAG APPLIED: 1% platform fee + Jito tip fee subtracted to show real-world net SOL returns!
+                const grossReturn = guardSnapshot.amountInSol * (1 + pnlPercent / 100);
+                const platformFee = grossReturn * 0.01;
+                const jitoTip = 0.0015;
+                const pnlSol = (grossReturn - guardSnapshot.amountInSol) - platformFee - jitoTip;
                 
-                // Pure real-world wording
                 const pnlMessage = isProfit
-                    ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
-                    : `🩸 <b>Incurred Loss: -${solPnl.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
+                    ? `💰 <b>Net Profit: +${Math.abs(pnlSol).toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
+                    : `🩸 <b>Incurred Loss: -${Math.abs(pnlSol).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
                 
                 const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
                             `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
@@ -200,7 +205,6 @@ async function checkAndTriggerGuard(
                 await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
             } catch (_) {}
             
-            // DELAYED DELETION PREVENTS DOUBLE FIRES FROM CACHE OVERLAPS
             setTimeout(() => lockedGuards.delete(guardSnapshot.id), 15_000);
         }
         return; 
@@ -273,23 +277,6 @@ async function checkAndTriggerGuard(
                                     { source: imageBuffer },
                                     { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                                 );
-
-                                const whaleChannelId = process.env.WHALE_ALERT_CHANNEL_ID;
-                                if (whaleChannelId && profitPercent > 0) {
-                                    const botUsername = bot.botInfo?.username || 'lightningsnipe_bot';
-                                    await bot.telegram.sendPhoto(
-                                        whaleChannelId,
-                                        { source: imageBuffer },
-                                        {
-                                            caption:
-                                                `🔥 <b>SENTRY TERMINAL PROFIT ALERT</b>\n\n` +
-                                                `A trader just secured gains using Jito MEV protection.\n\n` +
-                                                `👉 Copy their strategy: https://t.me/${botUsername}`,
-                                            parse_mode: 'HTML'
-                                        }
-                                    ).catch(() => null);
-                                }
-
                             } catch (_) {
                                 await bot.telegram.sendMessage(guard.telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                             }
@@ -347,23 +334,6 @@ async function checkAndTriggerGuard(
                                     { source: imageBuffer },
                                     { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                                 );
-
-                                const whaleChannelId = process.env.WHALE_ALERT_CHANNEL_ID;
-                                if (whaleChannelId && totalPnlPercent > 0) {
-                                    const botUsername = bot.botInfo?.username || 'lightningsnipe_bot';
-                                    await bot.telegram.sendPhoto(
-                                        whaleChannelId,
-                                        { source: imageBuffer },
-                                        {
-                                            caption:
-                                                `🔥 <b>SENTRY TERMINAL PROFIT ALERT</b>\n\n` +
-                                                `A trader just secured gains using Jito MEV protection.\n\n` +
-                                                `👉 Copy their strategy: https://t.me/${botUsername}`,
-                                            parse_mode: 'HTML'
-                                        }
-                                    ).catch(() => null);
-                                }
-
                             } catch (_) {
                                 await bot.telegram.sendMessage(guard.telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                             }

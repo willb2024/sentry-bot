@@ -16,6 +16,13 @@ function randomBase58(length: number): string {
     return result;
 }
 
+// 🟢 NEW: Generates believable price slippage and execution gaps (e.g., target 50% becomes 47.8% or 51.3%)
+export function applySimSlippage(targetPnl: number): number {
+    const maxPercentDeviation = Math.abs(targetPnl) * 0.05; // up to 5% of the target value
+    const absoluteDeviation = (Math.random() * 2 - 1) * Math.max(1.2, maxPercentDeviation);
+    return parseFloat((targetPnl + absoluteDeviation).toFixed(2));
+}
+
 export function generateSimWallets(): Array<{ address: string, balance: number }> {
     const count = Math.floor(Math.random() * 5) + 1;
     return Array.from({ length: count }, () => ({
@@ -117,9 +124,15 @@ export async function simExecuteExit(
 
     if (pos) {
         const soldSol = pos.amountInSol * (percent / 100);
-        const returnSol = soldSol * (1 + pnlPercent / 100);
+        
+        // Exact on-chain math replication: gross returns minus 1% fee & Jito tip
+        const rawReturn = soldSol * (1 + pnlPercent / 100);
+        const platformFee = rawReturn * 0.01;
+        const jitoTip = 0.0015;
+        const netReturnSol = rawReturn - platformFee - jitoTip;
+
         const currentBal = parseFloat(await getSimBalance(telegramId));
-        await redis.set(`sim:balance:${telegramId}`, (currentBal + returnSol).toFixed(4));
+        await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
 
         if (percent === 100) {
             const updated = positions.filter((p: any) => p.mint !== tokenAddress);
@@ -171,7 +184,7 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
 }
 
 async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
-    // Programmed Sequence: 3 loss, 1 win, 2 win, 2 losses, 1 win, 1 loss, 2 losses, 2 win (14 items)
+    // 3 loss, 1 win, 2 win, 2 losses, 1 win, 1 loss, 2 losses, 2 win (14 items)
     const baseSequence = [
         false, false, false, // 3 loss
         true,                // 1 win
@@ -189,20 +202,19 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
 
     while (await redis.get(`sim:autosnipe:${telegramId}`) === 'true' && await isSimulationActive(telegramId)) {
         
-        // Re-shuffle the cycle once we run through all 14 outcomes to keep the pattern organic
+        // Endless loop: reshuffle the 14-item pack once depleted so it never repeats the same pattern!
         if (sequenceIndex >= sequence.length) {
             sequence = shuffleArray(baseSequence);
             sequenceIndex = 0;
         }
 
-        // Fetch your exact live configurations [1]
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
         
         const amountSol = config?.amountSol || 0.1;
         const slPercent = config?.autoTrailingDropPercent || 20;
         const tpPercent = config?.autoTakeProfitPercent || 50; 
-        const maxBudget = config?.maxBudgetSol || 10.0; // Fallback to 10 SOL if none configured
+        const maxBudget = config?.maxBudgetSol || 10.0;
 
         // Check if next simulated buy exceeds your configured max budget
         if (totalSimSpent + amountSol > maxBudget) {
@@ -218,9 +230,11 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         sequenceIndex++;
 
         const tokenCA = generateSimTokenCA();
-        const finalPnl = isProfit ? tpPercent : -Math.abs(slPercent);
+        
+        // 🟢 SLIPPAGE APPLIED: Target PnL is adjusted with natural gapping/slippage!
+        const targetPnl = isProfit ? tpPercent : -Math.abs(slPercent);
+        const finalPnl = applySimSlippage(targetPnl);
 
-        // 1. Realistic Entry Math
         const entryPriceSol = parseFloat((Math.random() * 0.000008 + 0.0000005).toFixed(10));
         const tokensBought = Math.floor(amountSol / entryPriceSol);
 
@@ -240,17 +254,17 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         
         await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
 
-        // 2. RANDOMIZED DELAY: 2s, 3s, 4s, or 5s [1]
+        // 🟢 RANDOMIZED PNL TIMING (2, 3, 4, or 5 seconds)
         const randomWaitMs = [2000, 3000, 4000, 5000][Math.floor(Math.random() * 4)];
         await new Promise(r => setTimeout(r, randomWaitMs));
 
         // Ensure user didn't hit cancel during the sleep
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
 
-        // 3. Fake Sell using exact PnL from your configs
+        // Execute Fake Sell using exact PnL with slippage applied
         await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
         
-        // 4. Send the beautiful PnL Card directly
+        // Send the beautiful PnL Card directly
         await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, finalPnl, slPercent, entryPriceSol, tokensBought);
 
         // Wait 2 seconds before buying the NEXT coin in the sequence
@@ -258,7 +272,6 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
     }
 
-    // Silently reset the state
     await redis.set(`sim:autosnipe:${telegramId}`, 'false');
 }
 
@@ -267,10 +280,12 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         const exitSig = generateSimSignature();
         const isProfit = pnlPercent >= 0;
 
-        // Accurate mathematical tracking
+        // 🟢 ON-CHAIN MATH drag: Subtracts 1% platform fee & Jito tip fee from the raw return
         const exitPriceSol = entryPriceSol * (1 + pnlPercent / 100);
         const grossReturn = tokensBought * exitPriceSol;
-        const pnlSol = grossReturn - amountInSol;
+        const platformFee = grossReturn * 0.01;
+        const jitoTip = 0.0015;
+        const pnlSol = (grossReturn - amountInSol) - platformFee - jitoTip;
 
         const pnlMessage = isProfit
             ? `💰 <b>Net Profit: +${Math.abs(pnlSol).toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
