@@ -1772,6 +1772,29 @@ bot.action('menu_sniper', async (ctx) => {
 bot.action('toggle_autosnipe', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    // --- 🎮 SIMULATION INTERCEPT ---
+    const { isSimulationActive, toggleSimAutoSnipe } = await import('./services/simulation.service.js');
+    if (await isSimulationActive(tgId)) {
+        const isActive = await toggleSimAutoSnipe(tgId, bot);
+        await ctx.editMessageText(
+            `🤖 <b>SIM AUTO-SNIPER: ${isActive ? '🟢 ON' : '🔴 OFF'}</b> 🎮\n\n` +
+            `${isActive ? '<i>Buying tokens every 2s, taking profit after 3s... Click below or type /cancel to stop.</i>' : '<i>Auto-Sniper stopped.</i>'}`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: isActive ? '🛑 SHUT DOWN SIM SNIPER' : '⚡ ARM SIM SNIPER', callback_data: 'toggle_autosnipe' }],
+                        [{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
+    // --- END SIMULATION INTERCEPT ---
+
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
     if (!user || !user.autoSnipeConfig) return;
     const newState = !user.autoSnipeConfig.isActive;
