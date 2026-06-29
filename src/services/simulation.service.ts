@@ -1,8 +1,8 @@
 // src/services/simulation.service.ts
 import { redis } from '../lib/redis.js';
 import crypto from 'crypto';
-import { generatePnlCard } from './image.service.js';
 import { PrismaClient } from '@prisma/client';
+import { generatePnlCard } from './image.service.js';
 
 const prisma = new PrismaClient();
 
@@ -90,6 +90,9 @@ export async function simExecuteSnipe(
         highestSeenPrice: entryPriceSol
     });
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
+
+    // NOTE: Removed the fake random guard trigger from here so that the actual
+    // grpc.service.ts intercept handles the precise % TP/SL you ask for!
 
     return {
         success: true,
@@ -193,6 +196,7 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         const exitSig = generateSimSignature();
         const pnlSol = (amountInSol * Math.abs(pnlPercent / 100));
 
+        // Removed the word "Simulated" from the caption!
         const captionText = 
             `🎯 <b>TAKE PROFIT TRIGGERED!</b> 🎮\n\n` +
             `Token: <code>${tokenAddress.substring(0, 8)}...</code>\n` +

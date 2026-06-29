@@ -18,26 +18,16 @@ function drawRoundRect(ctx: any, x: number, y: number, width: number, height: nu
     ctx.closePath();
 }
 
-function drawShield(ctx: any, x: number, y: number, width: number, height: number) {
-    ctx.beginPath();
-    ctx.moveTo(x + width / 2, y);
-    ctx.lineTo(x + width, y + height * 0.15);
-    ctx.lineTo(x + width, y + height * 0.5);
-    ctx.bezierCurveTo(x + width, y + height * 0.8, x + width / 2, y + height, x + width / 2, y + height);
-    ctx.bezierCurveTo(x + width / 2, y + height, x, y + height * 0.8, x, y + height * 0.5);
-    ctx.lineTo(x, y + height * 0.15);
-    ctx.closePath();
-}
-
 export async function generatePnlCard(tokenMint: string, pnlPercent: number, refCode: string | undefined): Promise<Buffer> {
     const width = 900;
     const height = 500;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
-    // 1. Cool Color Gradient Background
+    // 1. Cool Color Gradient Background (Deep Purple -> Dark Slate -> Pitch Black)
     const bgGrad = ctx.createLinearGradient(0, 0, width, height);
-    bgGrad.addColorStop(0, '#0f172a'); // Deep Slate
+    bgGrad.addColorStop(0, '#1e003b'); // Deep Purple
+    bgGrad.addColorStop(0.5, '#0f172a'); // Dark Slate
     bgGrad.addColorStop(1, '#020617'); // Pitch Black
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, width, height);
@@ -71,48 +61,42 @@ export async function generatePnlCard(tokenMint: string, pnlPercent: number, ref
     ctx.fill();
     ctx.stroke();
 
-    // 4. Draw Shield Logo
-    ctx.fillStyle = themeColor;
-    drawShield(ctx, 70, 70, 40, 50);
-    ctx.fill();
+    // 4. Emoji Shield & Bot Name (Universal sans-serif font)
+    ctx.font = '40px sans-serif';
+    ctx.fillText('🛡️', 70, 110);
 
-    // 5. Bot Name (Spaced Font)
     const botName = process.env.BOT_NAME || 'Sentry Terminal';
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 34px "Helvetica Neue", Helvetica, Arial, sans-serif';
-    ctx.letterSpacing = "2px";
+    ctx.font = 'bold 36px sans-serif';
     ctx.fillText(botName.toUpperCase(), 130, 105);
-    ctx.letterSpacing = "0px";
 
-    // 6. Token Info & Status
-    ctx.font = '500 24px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    // 5. Token Info & Status
+    ctx.font = '500 24px sans-serif';
     ctx.fillStyle = '#94a3b8'; // Slate 400
     ctx.fillText(`Token: ${tokenMint.substring(0, 8)}...${tokenMint.substring(tokenMint.length - 4)}`, 75, 180);
     
     ctx.fillStyle = themeColor;
-    ctx.font = 'bold 24px "Helvetica Neue", Helvetica, Arial, sans-serif';
-    ctx.letterSpacing = "1px";
+    ctx.font = 'bold 24px sans-serif';
     ctx.fillText(label, 75, 225);
-    ctx.letterSpacing = "0px";
 
-    // 7. Massive PnL Percentage (Shadow for Pop)
-    ctx.font = '900 130px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    // 6. Massive PnL Percentage (Shadow for Pop)
+    ctx.font = 'bold 130px sans-serif';
     ctx.fillStyle = '#ffffff'; 
     ctx.shadowBlur = 25;
     ctx.shadowColor = themeColor;
     ctx.fillText(`${sign}${pnlPercent.toFixed(2)}%`, 65, 340);
     ctx.shadowBlur = 0; 
 
-    // 8. Footer Link
+    // 7. Footer Link
     ctx.fillStyle = '#64748b'; // Slate 500
-    ctx.font = '500 18px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    ctx.font = 'bold 18px sans-serif';
     const supportUser = process.env.SUPPORT_USERNAME || 'sentrylead';
     const linkText = refCode 
         ? `Mirror my trades via TG with code: ${refCode}` 
         : `Powered by ${botName} on Solana | @${supportUser}`;
     ctx.fillText(linkText, 75, 425);
 
-    // 9. "Share to X" Button Design
+    // 8. "Share to X" Button Design
     ctx.fillStyle = '#000000'; // Black X button
     drawRoundRect(ctx, 670, 390, 150, 40, 20);
     ctx.fill();
@@ -120,7 +104,7 @@ export async function generatePnlCard(tokenMint: string, pnlPercent: number, ref
     ctx.stroke();
     
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    ctx.font = 'bold 16px sans-serif';
     ctx.fillText('𝕏 Share to X', 695, 416);
 
     return canvas.toBuffer('image/png');

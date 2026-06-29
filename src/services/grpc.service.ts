@@ -154,15 +154,17 @@ async function checkAndTriggerGuard(
     // --- 🎮 SIMULATION INTERCEPT ---
     const { isSimulationActive, generateSimSignature, simExecuteExit } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
-        // Triggers perfectly in ~2 seconds (50% chance every 1s poll)
+        // High trigger rate so you don't wait forever to see the result
         if (Math.random() > 0.5) {
             lockedGuards.add(guardSnapshot.id);
             
-            // EXACT PnL MATCHING: If TP is 350, it hits 350. If SL is 20, it hits -20.
-            const pnlPercent = guardSnapshot.takeProfitPercent ? guardSnapshot.takeProfitPercent : -Math.abs(guardSnapshot.trailingPercent);
+            // EXACT PNL LOGIC: Strictly use the numbers you typed in!
+            const pnlPercent = guardSnapshot.takeProfitPercent 
+                ? guardSnapshot.takeProfitPercent 
+                : -Math.abs(guardSnapshot.trailingPercent);
+                
             const isProfit = pnlPercent >= 0;
             
-            // Execute the clean simulated exit using the exact PnL
             await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
             
             try {
@@ -170,9 +172,11 @@ async function checkAndTriggerGuard(
                 const imageBuffer = await generatePnlCard(guardSnapshot.tokenAddress, pnlPercent, user?.referralCode);
 
                 const solPnl = guardSnapshot.amountInSol * Math.abs(pnlPercent / 100);
+                
+                // NO "Simulated" text anywhere!
                 const pnlMessage = isProfit
-                    ? `💰 <b>Simulated Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
-                    : `🩸 <b>Simulated Loss: -${solPnl.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
+                    ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
+                    : `🩸 <b>Incurred Loss: -${solPnl.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
                 
                 const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
                             `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
@@ -269,6 +273,23 @@ async function checkAndTriggerGuard(
                                     { source: imageBuffer },
                                     { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                                 );
+
+                                const whaleChannelId = process.env.WHALE_ALERT_CHANNEL_ID;
+                                if (whaleChannelId && profitPercent > 0) {
+                                    const botUsername = bot.botInfo?.username || 'lightningsnipe_bot';
+                                    await bot.telegram.sendPhoto(
+                                        whaleChannelId,
+                                        { source: imageBuffer },
+                                        {
+                                            caption:
+                                                `🔥 <b>SENTRY TERMINAL PROFIT ALERT</b>\n\n` +
+                                                `A trader just secured gains using Jito MEV protection.\n\n` +
+                                                `👉 Copy their strategy: https://t.me/${botUsername}`,
+                                            parse_mode: 'HTML'
+                                        }
+                                    ).catch(() => null);
+                                }
+
                             } catch (_) {
                                 await bot.telegram.sendMessage(guard.telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                             }
@@ -306,7 +327,7 @@ async function checkAndTriggerGuard(
                             const pnlSol        = (guard.amountInSol * (Math.abs(totalPnlPercent) / 100)) * multiplier;
 
                             const pnlMessage = totalPnlPercent >= 0
-                                ? `💰 <b>Secured Profit: +${pnlSol.toFixed(4)} SOL</b> (+${totalPnlPercent.toFixed(1)}%)`
+                                ? `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${totalPnlPercent.toFixed(1)}%)`
                                 : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${totalPnlPercent.toFixed(1)}%)`;
 
                             const captionText =
@@ -326,6 +347,23 @@ async function checkAndTriggerGuard(
                                     { source: imageBuffer },
                                     { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                                 );
+
+                                const whaleChannelId = process.env.WHALE_ALERT_CHANNEL_ID;
+                                if (whaleChannelId && totalPnlPercent > 0) {
+                                    const botUsername = bot.botInfo?.username || 'lightningsnipe_bot';
+                                    await bot.telegram.sendPhoto(
+                                        whaleChannelId,
+                                        { source: imageBuffer },
+                                        {
+                                            caption:
+                                                `🔥 <b>SENTRY TERMINAL PROFIT ALERT</b>\n\n` +
+                                                `A trader just secured gains using Jito MEV protection.\n\n` +
+                                                `👉 Copy their strategy: https://t.me/${botUsername}`,
+                                            parse_mode: 'HTML'
+                                        }
+                                    ).catch(() => null);
+                                }
+
                             } catch (_) {
                                 await bot.telegram.sendMessage(guard.telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                             }
