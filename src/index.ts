@@ -124,6 +124,16 @@ app.post('/api/analytics', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
+        
+        // --- 🎮 SIMULATION INTERCEPT ---
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        if (await isSimulationActive(telegramId)) {
+            const { redis } = await import('./lib/redis.js');
+            const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
+            return res.json(simTrades); // Pushes fake trades directly to WebApp!
+        }
+        // --- END SIMULATION INTERCEPT ---
+
         const user = await prisma.user.findUnique({ where: { telegramId }});
         if (!user) return res.json([]);
         const trades = await prisma.trade.findMany({
@@ -289,17 +299,30 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     });
     if (!user) return; 
 
+    // The getLiveBalance function handles its own simulation intercept
     const liveBalance = await getLiveBalance(user); 
 
     const whaleModeText = user.activeWallets > 1 
         ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` 
         : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
 
-    const basePoints = Math.floor(user.totalVolumeSol * 10000);
+    // =========================================================
+    // 🎮 SIMULATION INTERCEPT (DYNAMIC SENTRY POINTS)
+    // =========================================================
+    const { isSimulationActive, getSimVolume } = await import('./services/simulation.service.js');
+    const isSimMode = await isSimulationActive(telegramId);
+    
+    let displayVolume = user.totalVolumeSol;
+    if (isSimMode) {
+        displayVolume += await getSimVolume(telegramId);
+    }
+
+    const basePoints = Math.floor(displayVolume * 10000);
     const welcomeBonus = user.referredById ? 10000 : 0;
     const recruitBonus = user._count.recruits * 2000;
     const sentryPoints = (basePoints + welcomeBonus + recruitBonus).toLocaleString();
-    
+    // =========================================================
+
     const welcomeText = user.referredById ? `\n• Partner Bonus: <b>+10,000 PTS</b>` : ``;
     const recruitText = user._count.recruits > 0 ? `\n• Network Bonus: <b>+${recruitBonus.toLocaleString()} PTS</b> <i>(${user._count.recruits} Recruits)</i>` : ``;
 
@@ -318,20 +341,20 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
                        `🏆 <b>Your Rank:</b> <b>${rankDisplay}</b> (${primaryGuild.loyaltyPoints.toLocaleString()} GLP)\n`;
     }
 
-    const vipStatus = await getVipStatus(telegramId); // 🟢 FETCH VIP
+    const vipStatus = await getVipStatus(telegramId); 
 
-    const isSimMode = await isSimulationActive(telegramId);
+    // Simulation Banner UI
     const simBanner = isSimMode ? `\n🎮 <b>⚠️ SIMULATION MODE ACTIVE — No real trades firing</b>\n` : '';
 
     const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
     simBanner +
-    `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` +
+    `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` + 
     `👛 <b>Primary Deposit Node:</b>\n` +
     `<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
     `💰 <b>Total Balance:</b> <code>${liveBalance} SOL</code>\n` +
     `${whaleModeText}\n\n` +
     `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
-    `${guildDisplay}\n` + // 🟢 ADD THIS LINE HERE
+    `${guildDisplay}\n` + 
 
     `• Your Points: <b>${sentryPoints} PTS</b>\n` +
     `<i>(1 SOL traded = 10k PTS | 1 Invite = 2k PTS)</i>` +
@@ -342,7 +365,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     `<i>Forward a call here, paste a Token CA, or select a module below.</i>`;
 
     const UI = Markup.inlineKeyboard([
-        // 🟢 ADDED CALLER BUTTON AT THE VERY TOP
         [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
         [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
         [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],

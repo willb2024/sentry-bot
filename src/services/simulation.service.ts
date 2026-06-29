@@ -34,10 +34,6 @@ export function generateSimSignature(): string {
     return randomBase58(87);
 }
 
-export function randomTradeDelay(): number {
-    return Math.floor(Math.random() * 2000) + 500;
-}
-
 export async function isSimulationActive(telegramId: string): Promise<boolean> {
     const val = await redis.get(`sim:active:${telegramId}`);
     return val === 'true';
@@ -48,6 +44,11 @@ export async function getSimBalance(telegramId: string): Promise<string> {
     return bal || '12.4521';
 }
 
+export async function getSimVolume(telegramId: string): Promise<number> {
+    const vol = await redis.get(`sim:volume:${telegramId}`);
+    return vol ? parseFloat(vol) : 0;
+}
+
 export async function getSimWallets(telegramId: string): Promise<Array<{ address: string, balance: number }>> {
     const raw = await redis.get(`sim:wallets:${telegramId}`);
     if (raw) return JSON.parse(raw);
@@ -56,12 +57,29 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     return wallets;
 }
 
+// 🟢 NEW: Records trades into Redis so they show up in your WebApp "Track Trades"
+export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number) {
+    const key = `sim:trades:${telegramId}`;
+    const existing = JSON.parse(await redis.get(key) || '[]');
+    existing.unshift({
+        createdAt: new Date().toISOString(),
+        isBuy,
+        amountInSol,
+        profitPercent: 0
+    });
+    
+    await redis.set(key, JSON.stringify(existing.slice(0, 100)), 'EX', 3600); // Keep last 100
+    
+    // Add to simulation volume (which generates Sentry Points)
+    await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
+}
+
 export async function simExecuteSnipe(
     telegramId: string,
     tokenAddress: string,
     amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
-    await new Promise(r => setTimeout(r, randomTradeDelay()));
+    await new Promise(r => setTimeout(r, 400)); // Fast execution
 
     const currentBal = parseFloat(await getSimBalance(telegramId));
     const newBal = Math.max(0, currentBal - amountSol - 0.001).toFixed(4);
@@ -91,6 +109,9 @@ export async function simExecuteSnipe(
     });
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
 
+    // Record trade for WebApp
+    await recordSimTrade(telegramId, true, amountSol);
+
     return {
         success: true,
         signature: generateSimSignature(),
@@ -105,7 +126,7 @@ export async function simExecuteExit(
     percent: number,
     forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
-    await new Promise(r => setTimeout(r, randomTradeDelay()));
+    await new Promise(r => setTimeout(r, 400));
 
     const posKey = `sim:positions:${telegramId}`;
     const positions = JSON.parse(await redis.get(posKey) || '[]');
@@ -125,6 +146,9 @@ export async function simExecuteExit(
             const updated = positions.filter((p: any) => p.mint !== tokenAddress);
             await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
         }
+        
+        // Record trade for WebApp
+        await recordSimTrade(telegramId, false, soldSol);
     }
 
     return {
@@ -139,15 +163,13 @@ export function generateSimCallerAlert(): { mint: string, symbol: string, score:
     const priceChangeM5 = parseFloat((Math.random() * 220 + 30).toFixed(1));
     return {
         mint: generateSimTokenCA(),
-        symbol: symbols[Math.floor(Math.random() * symbols.length)],
+        symbol: symbols[Math.floor(Math.random() * Math.random() * symbols.length)],
         score: Math.floor(Math.random() * 25) + 75,
         reasons: [`🔥 High momentum (+${Math.floor(priceChangeM5 * 1.3)}% vol spike)`, `📈 Heavy buy pressure`, `💧 Deep liquidity`],
         priceChangeM5,
         ageMins: Math.floor(Math.random() * 45) + 2
     };
 }
-
-// ─── 🟢 SIMULATED AUTO SNIPE LOOP ──────────────────────────────
 
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
     const key = `sim:autosnipe:${telegramId}`;
@@ -161,37 +183,80 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
     return newState === 'true';
 }
 
+// ─── 🟢 SIMULATED AUTO SNIPE LOOP (SEQUENCED) ──────────────────────────────
+
 async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
-    while (await redis.get(`sim:autosnipe:${telegramId}`) === 'true' && await isSimulationActive(telegramId)) {
-        
+    // Exactly as requested: 2 Profit, 1 Loss, 3 Profit, 2 Loss, 1 Loss, 1 Profit. Total 10.
+    const sequence = [true, true, false, true, true, true, false, false, false, true];
+
+    for (let i = 0; i < sequence.length; i++) {
+        if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true' || !(await isSimulationActive(telegramId))) {
+            break;
+        }
+
+        const isProfit = sequence[i];
         const tokenCA = generateSimTokenCA();
-        const amountSol = parseFloat((Math.random() * 2 + 0.5).toFixed(2));
         
-        await simExecuteSnipe(telegramId, tokenCA, amountSol);
+        // Randomize the exact numbers to look realistic
+        const amountSol = parseFloat((Math.random() * 15 + 5).toFixed(1)); // Invests 5 to 20 SOL
+        const slPercent = parseFloat((Math.random() * 15 + 10).toFixed(0)); // 10% to 25% Stop Loss
+        const tpPercent = isProfit ? parseFloat((Math.random() * 250 + 60).toFixed(0)) : 0; 
 
-        await new Promise(r => setTimeout(r, 3000));
+        // 1. Execute Fake Buy
+        const buyRes = await simExecuteSnipe(telegramId, tokenCA, amountSol);
 
+        // 2. IMMEDIATE Buy & Guard Successful Message (Matches your screenshot)
+        const buyMsg = 
+            `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\n` +
+            `Token: <code>${tokenCA.substring(0,8)}...</code>\n` +
+            `Invested: <b>${amountSol} SOL</b>\n` +
+            `Trailing Drop: <b>-${slPercent}%</b>\n` +
+            `Take Profit: <b>${isProfit ? `+${tpPercent}%` : 'OFF'}</b>\n\n` +
+            `🔗 <a href="https://solscan.io/tx/${buyRes.signature}">View on Solscan</a>`;
+        
+        await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+
+        // 3. Wait EXACTLY 2 seconds
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Ensure user didn't hit cancel during the 2 seconds
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
 
-        const pnl = parseFloat((Math.random() * 250 + 50).toFixed(2)); 
-        await simExecuteExit(telegramId, tokenCA, 100, pnl);
+        // 4. Fake Sell
+        const finalPnl = isProfit ? tpPercent : -slPercent; 
+        await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
         
-        await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, pnl);
+        // 5. Send the beautiful PnL Card directly
+        await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, finalPnl, slPercent);
 
-        await new Promise(r => setTimeout(r, 2000)); 
+        // Wait 3 seconds before buying the NEXT coin in the sequence
+        if (i < sequence.length - 1) {
+            await new Promise(r => setTimeout(r, 3000)); 
+        }
+    }
+
+    // Shut down gracefully at the end of the 10 sequence
+    if (await redis.get(`sim:autosnipe:${telegramId}`) === 'true') {
+        await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+        await bot.telegram.sendMessage(telegramId, `🛑 <b>SIMULATION COMPLETE</b>\n\nThe programmed sequence of 10 trades has finished. Auto-Sniper deactivated.`, { parse_mode: 'HTML' });
     }
 }
 
-async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string, amountInSol: number, pnlPercent: number) {
+async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string, amountInSol: number, pnlPercent: number, slPercent: number) {
     try {
         const exitSig = generateSimSignature();
         const pnlSol = (amountInSol * Math.abs(pnlPercent / 100));
+        const isProfit = pnlPercent >= 0;
 
-        const captionText = 
-            `🎯 <b>TAKE PROFIT TRIGGERED!</b> 🎮\n\n` +
-            `Token: <code>${tokenAddress.substring(0, 8)}...</code>\n` +
-            `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)\n` +
-            `Status: 🟢 Auto-Sold 100% via Jito.\n` +
+        const pnlMessage = isProfit
+            ? `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
+            : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
+
+        const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
+            `Token: <code>${tokenAddress.substring(0,8)}...</code>\n` +
+            `${!isProfit ? `📉 <b>Peak Drop: -${slPercent.toFixed(1)}%</b>\n` : ''}` +
+            `${pnlMessage}\n` +
+            `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
             `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
 
         const user = await prisma.user.findUnique({ where: { telegramId } });
