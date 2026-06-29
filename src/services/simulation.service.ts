@@ -120,6 +120,10 @@ async function scheduleSimGuardTrigger(
     setTimeout(async () => {
         try {
             const guardRaw = await redis.get(`sim:guard:${tokenAddress}:${telegramId}`);
+            const firedKey = `sim:pnl_fired:${tokenAddress}:${telegramId}`;
+const alreadyFired = await redis.get(firedKey);
+if (alreadyFired) return;
+await redis.set(firedKey, '1', 'EX', 60);
             if (!guardRaw) return;
 
             // Guaranteed Profit for the demo! (+50% to +150%)
@@ -246,6 +250,6 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         
         // Wait 2 seconds before buying the NEXT coin
         // (Since the buy/sell lifecycle above takes 3 seconds, waiting 5 seconds total ensures they don't overlap wildly)
-        await new Promise(r => setTimeout(r, 5000)); 
+        await new Promise(r => setTimeout(r, 2000));
     }
 }
