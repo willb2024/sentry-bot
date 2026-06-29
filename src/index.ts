@@ -125,30 +125,27 @@ app.post('/api/analytics', async (req, res) => {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
         
-        // --- 🎮 SIMULATION INTERCEPT ---
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        if (await isSimulationActive(telegramId)) {
-            const { redis } = await import('./lib/redis.js');
-            const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
-            return res.json(simTrades); // Pushes fake trades directly to WebApp!
-        }
-        // --- END SIMULATION INTERCEPT ---
-
+        // Strictly fetch real trades from the live database
         const user = await prisma.user.findUnique({ where: { telegramId }});
         if (!user) return res.json([]);
+        
         const trades = await prisma.trade.findMany({
             where: { userId: user.id },
             orderBy: { createdAt: 'desc' },
             take: 100
         });
+        
         const formattedTrades = trades.map(t => ({
             createdAt: t.createdAt.toISOString(),
             isBuy: t.isBuy,
             amountInSol: t.amountInSol,
             profitPercent: 0 
         }));
+        
         res.json(formattedTrades);
-    } catch (e) { res.status(500).json([]); }
+    } catch (e) { 
+        res.status(500).json([]); 
+    }
 });
 
 app.post('/api/positions', async (req, res) => {
@@ -307,15 +304,13 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
 
     // =========================================================
-    // 🎮 SIMULATION INTERCEPT (DYNAMIC SENTRY POINTS)
+    // 🎮 SIMULATION INTERCEPT (DASHBOARD BANNER)
     // =========================================================
-    const { isSimulationActive, getSimVolume } = await import('./services/simulation.service.js');
+    const { isSimulationActive } = await import('./services/simulation.service.js');
     const isSimMode = await isSimulationActive(telegramId);
     
-    let displayVolume = user.totalVolumeSol;
-    if (isSimMode) {
-        displayVolume += await getSimVolume(telegramId);
-    }
+    // Points and volume strictly track your real trades only
+    const displayVolume = user.totalVolumeSol;
 
     const basePoints = Math.floor(displayVolume * 10000);
     const welcomeBonus = user.referredById ? 10000 : 0;
