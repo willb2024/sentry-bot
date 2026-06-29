@@ -920,40 +920,41 @@ bot.action('trigger_caller_scan', async (ctx) => {
     // --- 🎮 SIMULATION INTERCEPT ---
     const { isSimulationActive, generateSimCallerAlert } = await import('./services/simulation.service.js');
     if (await isSimulationActive(tgId)) {
-        await redis.set(`sim:caller_seq:${tgId}`, 'RUNNING', 'EX', 60);
-        await ctx.editMessageText("🎮 <b>SIMULATION: AI Coin Caller Active</b>\n<i>Sending 5 simulated alerts (3s apart). Type /cancel to abort.</i>", { parse_mode: 'HTML' });
-
-        for (let i = 0; i < 5; i++) {
-            // Check if user cancelled mid-sequence
-            const isRunning = await redis.get(`sim:caller_seq:${tgId}`);
-            if (!isRunning) break; 
-
-            const alert = generateSimCallerAlert();
-            const msg = `🎯 <b>SENTRY CALLER — Top Alpha Pick</b> 🎮\n\n` +
-                `<b>Token:</b> $${alert.symbol} (<code>${alert.mint}</code>)\n` +
-                `<b>Score:</b> ${alert.score}/100 ⭐\n\n` +
-                `${alert.reasons.map(r => `✅ ${r}`).join('\n')}\n\n` +
-                `<i>Reply with the CA to quick-snipe, or click below.</i>`;
-            
-            await bot.telegram.sendMessage(tgId, msg, {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [
-                            { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${alert.mint}_0.1` },
-                            { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${alert.mint}` }
-                        ],
-                        [
-                            { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${alert.mint}` },
-                            { text: '⏳ Start DCA', callback_data: `caller_dca_${alert.mint}` }
-                        ]
-                    ]
-                }
-            }).catch(() => null);
-
-            // Wait 3 seconds between alerts (skip delay on the final alert)
-            if (i < 4) await new Promise(r => setTimeout(r, 3000)); 
-        }
+        // Generate exactly ONE alert — single wallet, not a sequence
+        const alert = generateSimCallerAlert();
+        
+        // Show the same scanning frames as real mode
+        await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
+        await new Promise(r => setTimeout(r, 600));
+        await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Analyzing transaction momentum on 30 hot Solana pairs...</i>\n\n[█████░░░░░] 50%`, { parse_mode: 'HTML' });
+        await new Promise(r => setTimeout(r, 600));
+        await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Executing RugCheck contract audits on candidates...</i>\n\n[█████████░] 90%`, { parse_mode: 'HTML' });
+        await new Promise(r => setTimeout(r, 400));
+    
+        const msg =
+            `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
+            `<b>Token:</b> $${alert.symbol} (<code>${alert.mint}</code>)\n` +
+            `<b>Score:</b> ${alert.score}/100 ⭐\n` +
+            `<b>Age:</b> ${alert.ageMins} minutes old\n\n` +
+            `${alert.reasons.map(r => `✅ ${r}`).join('\n')}\n\n` +
+            `<i>Click below to buy instantly via Jito:</i>`;
+    
+        await ctx.editMessageText(msg, {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${alert.mint}_0.1` },
+                        { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${alert.mint}` }
+                    ],
+                    [
+                        { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${alert.mint}` },
+                        { text: '⏳ Start DCA', callback_data: `caller_dca_${alert.mint}` }
+                    ],
+                    [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
+                ]
+            }
+        });
         return;
     }
     // --- END SIMULATION INTERCEPT ---
@@ -2185,16 +2186,42 @@ bot.action(/^sell_(10|25|50|75|100)_(.+)$/, async (ctx) => {
     try {
         const result = await executeExit(tgId, targetCA, percentage);
         if (result.success) {
-            await redis.del(`balance_cache:${tgId}`); 
-            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
-                `🟢 <b>MANUAL SELL SUCCESSFUL!</b>\n\n<b>Token:</b> <code>${targetCA}</code>\n<b>Amount Sold:</b> ${percentage}%\n<b>Status:</b> ${result.message}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`, 
-                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-            );
+            await redis.del(`balance_cache:${tgId}`);
+            
+            const { isSimulationActive } = await import('./services/simulation.service.js');
+            if (await isSimulationActive(tgId)) {
+                const pnlMatch = result.message.match(/PnL: \+?([\d.]+)%/);
+                const pnlPercent = pnlMatch ? parseFloat(pnlMatch[1]) : parseFloat((Math.random() * 200 + 20).toFixed(2));
+                const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+                
+                const captionText =
+                    `🟢 <b>MANUAL SELL SUCCESSFUL!</b>\n\n` +
+                    `<b>Token:</b> <code>${targetCA}</code>\n` +
+                    `<b>Amount Sold:</b> ${percentage}%\n` +
+                    `💰 <b>PnL: +${pnlPercent.toFixed(2)}%</b>\n` +
+                    `Status: 🟢 Executed via Jito Bundle.\n` +
+                    `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
+                
+                try {
+                    const { generatePnlCard } = await import('./services/image.service.js');
+                    const imageBuffer = await generatePnlCard(targetCA, pnlPercent, user?.referralCode);
+                    const tweetText = encodeURIComponent(`Just secured +${pnlPercent.toFixed(1)}% using Sentry Terminal ⚡️\nhttps://t.me/${process.env.BOT_USERNAME}?start=${user?.referralCode}`);
+                    const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+                    await ctx.replyWithPhoto({ source: imageBuffer }, { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn });
+                    await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
+                } catch (_) {
+                    await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+                }
+            } else {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                    `🟢 <b>MANUAL SELL SUCCESSFUL!</b>\n\n<b>Token:</b> <code>${targetCA}</code>\n<b>Amount Sold:</b> ${percentage}%\n<b>Status:</b> ${result.message}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`, 
+                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                );
+            }
 
             if (percentage === 100) {
                 await cancelAllGuardsForToken(tgId, targetCA); 
             } else {
-                // Scale down guard size proportionally for partial sells
                 const guards = await redis.smembers(`token_guards:${tgId}:${targetCA}`);
                 for (const id of guards) {
                     const raw = await redis.get(`order:trail:${id}`);
@@ -2204,11 +2231,14 @@ bot.action(/^sell_(10|25|50|75|100)_(.+)$/, async (ctx) => {
                     }
                 }
             }
-        }else {
+        } else {
             await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>SELL FAILED:</b> ${result.message}`, { parse_mode: 'HTML' });
         }
-    } catch (e: any) { await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>FATAL ERROR:</b> Could not process sell.`, { parse_mode: 'HTML' }); } 
-    finally { await redis.del(sellLockKey); }
+    } catch (e: any) { 
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>FATAL ERROR:</b> Could not process sell.`, { parse_mode: 'HTML' }); 
+    } finally { 
+        await redis.del(sellLockKey); 
+    }
 });
 
 // =========================================================

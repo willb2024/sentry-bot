@@ -163,7 +163,7 @@ async function checkAndTriggerGuard(
             const finalPnl = isProfit ? pnlPercent : -Math.abs(pnlPercent * 0.3);
             
             // Clean exit in simulation positions
-            await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, finalPnl);
+            await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100,);
             
             try {
                 const { generatePnlCard } = await import('./image.service.js');
