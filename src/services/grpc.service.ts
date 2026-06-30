@@ -152,19 +152,21 @@ async function checkAndTriggerGuard(
 ) {
 
     // --- 🎮 SIMULATION INTERCEPT ---
-    const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage } = await import('./simulation.service.js');
+    const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage, getNextSimOutcome } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
-        if (Math.random() > 0.5) {
+        
+        // Random wait delay: trigger chance logic (~2-8 seconds typical)
+        if (Math.random() > 0.8) {
             lockedGuards.add(guardSnapshot.id); 
             
-            // Strictly fetch the exact Take Profit or Trailing Drop target you added!
-            const targetPnl = guardSnapshot.takeProfitPercent 
-                ? guardSnapshot.takeProfitPercent 
+            // 🟢 Pull from the exact sequence you requested (2 loss, 1 win, etc.)
+            const isProfit = await getNextSimOutcome(guardSnapshot.telegramId, 'guard');
+            
+            const targetPnl = isProfit 
+                ? (guardSnapshot.takeProfitPercent ? guardSnapshot.takeProfitPercent : 50) 
                 : -Math.abs(guardSnapshot.trailingPercent);
                 
-            // 🟢 SLIPPAGE APPLIED: Slippage deviation applied dynamically to your manual inputs
             const pnlPercent = applySimSlippage(targetPnl);
-            const isProfit = pnlPercent >= 0;
             
             await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
             
@@ -172,11 +174,10 @@ async function checkAndTriggerGuard(
                 const user = await prisma.user.findUnique({ where: { telegramId: guardSnapshot.telegramId } });
                 const imageBuffer = await generatePnlCard(guardSnapshot.tokenAddress, pnlPercent, user?.referralCode);
 
-                // 🟢 FEE & TIP DRAG APPLIED: 1% platform fee + Jito tip fee subtracted to show real-world net SOL returns!
-                const grossReturn = guardSnapshot.amountInSol * (1 + pnlPercent / 100);
-                const platformFee = grossReturn * 0.01;
+                const rawSolPnl = guardSnapshot.amountInSol * (pnlPercent / 100);
+                const platformFee = (guardSnapshot.amountInSol * (1 + pnlPercent / 100)) * 0.01;
                 const jitoTip = 0.0015;
-                const pnlSol = (grossReturn - guardSnapshot.amountInSol) - platformFee - jitoTip;
+                const pnlSol = rawSolPnl - platformFee - jitoTip;
                 
                 const pnlMessage = isProfit
                     ? `💰 <b>Net Profit: +${Math.abs(pnlSol).toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`

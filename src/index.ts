@@ -919,56 +919,73 @@ bot.action('trigger_caller_scan', async (ctx) => {
     const tgId = ctx.from?.id.toString()!;
 
     // --- 🎮 SIMULATION INTERCEPT ---
-    const { isSimulationActive, generateSimCallerAlert } = await import('./services/simulation.service.js');
+    const { isSimulationActive, generateSimCallerAlert, getNextSimOutcome } = await import('./services/simulation.service.js');
     if (await isSimulationActive(tgId)) {
-        // Generate exactly ONE alert — single wallet, not a sequence
-        const alert = generateSimCallerAlert();
-        
-        // Show the same scanning frames as real mode
         await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
         await new Promise(r => setTimeout(r, 600));
+        
         await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Analyzing transaction momentum on 30 hot Solana pairs...</i>\n\n[█████░░░░░] 50%`, { parse_mode: 'HTML' });
         await new Promise(r => setTimeout(r, 600));
+        
         await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Executing RugCheck contract audits on candidates...</i>\n\n[█████████░] 90%`, { parse_mode: 'HTML' });
         await new Promise(r => setTimeout(r, 400));
-    
-        const msg =
-            `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
-            `<b>Token:</b> $${alert.symbol} (<code>${alert.mint}</code>)\n` +
-            `<b>Score:</b> ${alert.score}/100 ⭐\n` +
-            `<b>Age:</b> ${alert.ageMins} minutes old\n\n` +
-            `${alert.reasons.map(r => `✅ ${r}`).join('\n')}\n\n` +
-            `<i>Click below to buy instantly via Jito:</i>`;
-    
-        await ctx.editMessageText(msg, {
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${alert.mint}_0.1` },
-                        { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${alert.mint}` }
-                    ],
-                    [
-                        { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${alert.mint}` },
-                        { text: '⏳ Start DCA', callback_data: `caller_dca_${alert.mint}` }
-                    ],
-                    [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
-                ]
-            }
-        });
+
+        // 🟢 Uses the Exact Sequencer from simulation.service.ts
+        const isSuccess = await getNextSimOutcome(tgId, 'caller');
+
+        if (isSuccess) {
+            const alert = generateSimCallerAlert();
+            const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` + 
+                        `<b>Token:</b> $${alert.symbol} (<code>${alert.mint}</code>)\n` +
+                        `<b>Score:</b> ${alert.score}/100 ⭐\n` +
+                        `<b>Age:</b> ${alert.ageMins} minutes old\n\n` +
+                        `${alert.reasons.map(r => `✅ ${r}`).join('\n')}\n\n` +
+                        `<i>Click below to buy instantly via Jito:</i>`;
+            
+            await ctx.editMessageText(msg, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${alert.mint}_0.1` },
+                            { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${alert.mint}` }
+                        ],
+                        [
+                            { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${alert.mint}` },
+                            { text: '⏳ Start DCA', callback_data: `caller_dca_${alert.mint}` }
+                        ],
+                        [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
+                    ]
+                }
+            });
+        } else {
+            const { getUserCallerFilters } = await import('./services/caller.service.js');
+            const filters = await getUserCallerFilters(tgId);
+            await ctx.editMessageText(
+                `❌ <b>No Breakouts Found</b>\n\n` +
+                `We scanned the top 30 trending Solana pairs on-chain, but none matched your current settings:\n` +
+                `• Min Score: <b>${filters.minScore}+</b>\n` +
+                `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
+                `• Block MEV: <b>${filters.blockMev ? 'Yes' : 'No'}</b>\n\n` +
+                `<i>The trenches are quiet. Try lowering your minimum score or check back shortly!</i>`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]]
+                    }
+                }
+            );
+        }
         return;
     }
     // --- END SIMULATION INTERCEPT ---
 
-    // Frame 1: Initial Calibration
     await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
     await new Promise(r => setTimeout(r, 600));
     
-    // Frame 2: Analyze Momentum
     await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Analyzing transaction momentum on 30 hot Solana pairs...</i>\n\n[█████░░░░░] 50%`, { parse_mode: 'HTML' });
     await new Promise(r => setTimeout(r, 600));
     
-    // Frame 3: Security checks
     await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Executing RugCheck contract audits on candidates...</i>\n\n[█████████░] 90%`, { parse_mode: 'HTML' });
     await new Promise(r => setTimeout(r, 400));
     

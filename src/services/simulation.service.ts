@@ -16,9 +16,8 @@ function randomBase58(length: number): string {
     return result;
 }
 
-// 🟢 NEW: Generates believable price slippage and execution gaps (e.g., target 50% becomes 47.8% or 51.3%)
 export function applySimSlippage(targetPnl: number): number {
-    const maxPercentDeviation = Math.abs(targetPnl) * 0.05; // up to 5% of the target value
+    const maxPercentDeviation = Math.abs(targetPnl) * 0.05; 
     const absoluteDeviation = (Math.random() * 2 - 1) * Math.max(1.2, maxPercentDeviation);
     return parseFloat((targetPnl + absoluteDeviation).toFixed(2));
 }
@@ -55,6 +54,11 @@ export async function getSimBalance(telegramId: string): Promise<string> {
     return bal || '12.4521';
 }
 
+export async function getSimVolume(telegramId: string): Promise<number> {
+    const vol = await redis.get(`sim:volume:${telegramId}`);
+    return vol ? parseFloat(vol) : 0;
+}
+
 export async function getSimWallets(telegramId: string): Promise<Array<{ address: string, balance: number }>> {
     const raw = await redis.get(`sim:wallets:${telegramId}`);
     if (raw) return JSON.parse(raw);
@@ -63,12 +67,26 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     return wallets;
 }
 
+export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number) {
+    const key = `sim:trades:${telegramId}`;
+    const existing = JSON.parse(await redis.get(key) || '[]');
+    existing.unshift({
+        createdAt: new Date().toISOString(),
+        isBuy,
+        amountInSol,
+        profitPercent: 0
+    });
+    
+    await redis.set(key, JSON.stringify(existing.slice(0, 100)), 'EX', 3600);
+    await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
+}
+
 export async function simExecuteSnipe(
     telegramId: string,
     tokenAddress: string,
     amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
-    await new Promise(r => setTimeout(r, randomTradeDelay()));
+    await new Promise(r => setTimeout(r, 400));
 
     const currentBal = parseFloat(await getSimBalance(telegramId));
     const newBal = Math.max(0, currentBal - amountSol - 0.001).toFixed(4);
@@ -97,6 +115,7 @@ export async function simExecuteSnipe(
         highestSeenPrice: entryPriceSol
     });
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
+    await recordSimTrade(telegramId, true, amountSol);
 
     return {
         success: true,
@@ -112,7 +131,7 @@ export async function simExecuteExit(
     percent: number,
     forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
-    await new Promise(r => setTimeout(r, randomTradeDelay()));
+    await new Promise(r => setTimeout(r, 400));
 
     const posKey = `sim:positions:${telegramId}`;
     const positions = JSON.parse(await redis.get(posKey) || '[]');
@@ -125,7 +144,6 @@ export async function simExecuteExit(
     if (pos) {
         const soldSol = pos.amountInSol * (percent / 100);
         
-        // Exact on-chain math replication: gross returns minus 1% fee & Jito tip
         const rawReturn = soldSol * (1 + pnlPercent / 100);
         const platformFee = rawReturn * 0.01;
         const jitoTip = 0.0015;
@@ -138,6 +156,7 @@ export async function simExecuteExit(
             const updated = positions.filter((p: any) => p.mint !== tokenAddress);
             await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
         }
+        await recordSimTrade(telegramId, false, soldSol);
     }
 
     return {
@@ -169,7 +188,29 @@ function shuffleArray<T>(array: T[]): T[] {
     return arr;
 }
 
-// ─── 🟢 SIMULATED AUTO SNIPE LOOP ──────────────────────────────
+// ─── 🟢 SIMULATED SEQUENCER ENGINE ──────────────────────────────
+
+export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard'): Promise<boolean> {
+    const key = `sim:${type}_seq:${telegramId}`;
+    let seqStr = await redis.get(key);
+    let seq: boolean[] = [];
+    
+    if (seqStr) seq = JSON.parse(seqStr);
+    
+    if (!seq || seq.length === 0) {
+        if (type === 'caller') {
+            // Requested Mix: 2 fail, 1 win, 1 win, 1 fail, 2 wins, 1 fail -> (4 Wins, 4 Fails)
+            seq = shuffleArray([false, false, true, true, false, true, true, false]);
+        } else if (type === 'guard') {
+            // Requested Mix: 2 loss, 1 win, 1 win, 2 wins, 1 loss -> (4 Wins, 3 Losses)
+            seq = shuffleArray([false, false, true, true, true, true, false]);
+        }
+    }
+    
+    const outcome = seq.pop() ?? true;
+    await redis.set(key, JSON.stringify(seq), 'EX', 86400); // Sequence memory expires after 24h
+    return outcome;
+}
 
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
     const key = `sim:autosnipe:${telegramId}`;
@@ -184,16 +225,15 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
 }
 
 async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
-    // 3 loss, 1 win, 2 win, 2 losses, 1 win, 1 loss, 2 losses, 2 win (14 items)
     const baseSequence = [
-        false, false, false, // 3 loss
-        true,                // 1 win
-        true, true,          // 2 win
-        false, false,        // 2 losses
-        true,                // 1 win
-        false,               // 1 loss
-        false, false,        // 2 losses
-        true, true           // 2 win
+        false, false, false, 
+        true,                
+        true, true,          
+        false, false,        
+        true,                
+        false,               
+        false, false,        
+        true, true           
     ];
 
     let sequence = shuffleArray(baseSequence);
@@ -201,8 +241,6 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
     let sequenceIndex = 0;
 
     while (await redis.get(`sim:autosnipe:${telegramId}`) === 'true' && await isSimulationActive(telegramId)) {
-        
-        // Endless loop: reshuffle the 14-item pack once depleted so it never repeats the same pattern!
         if (sequenceIndex >= sequence.length) {
             sequence = shuffleArray(baseSequence);
             sequenceIndex = 0;
@@ -216,7 +254,6 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const tpPercent = config?.autoTakeProfitPercent || 50; 
         const maxBudget = config?.maxBudgetSol || 10.0;
 
-        // Check if next simulated buy exceeds your configured max budget
         if (totalSimSpent + amountSol > maxBudget) {
             await bot.telegram.sendMessage(
                 telegramId, 
@@ -230,15 +267,12 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         sequenceIndex++;
 
         const tokenCA = generateSimTokenCA();
-        
-        // 🟢 SLIPPAGE APPLIED: Target PnL is adjusted with natural gapping/slippage!
         const targetPnl = isProfit ? tpPercent : -Math.abs(slPercent);
         const finalPnl = applySimSlippage(targetPnl);
 
         const entryPriceSol = parseFloat((Math.random() * 0.000008 + 0.0000005).toFixed(10));
         const tokensBought = Math.floor(amountSol / entryPriceSol);
 
-        // Execute Fake Buy using your real Config Amount
         const buyRes = await simExecuteSnipe(telegramId, tokenCA, amountSol);
         totalSimSpent += amountSol;
 
@@ -254,21 +288,16 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         
         await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
 
-        // 🟢 RANDOMIZED PNL TIMING (2, 3, 4, or 5 seconds)
         const randomWaitMs = [2000, 3000, 4000, 5000][Math.floor(Math.random() * 4)];
         await new Promise(r => setTimeout(r, randomWaitMs));
 
-        // Ensure user didn't hit cancel during the sleep
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
 
-        // Execute Fake Sell using exact PnL with slippage applied
         await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
-        
-        // Send the beautiful PnL Card directly
         await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, finalPnl, slPercent, entryPriceSol, tokensBought);
 
-        // Wait 2 seconds before buying the NEXT coin in the sequence
-        await new Promise(r => setTimeout(r, 2000)); 
+        // Wait 3 seconds before buying the NEXT coin
+        await new Promise(r => setTimeout(r, 3000)); 
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
     }
 
@@ -280,12 +309,11 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         const exitSig = generateSimSignature();
         const isProfit = pnlPercent >= 0;
 
-        // 🟢 ON-CHAIN MATH drag: Subtracts 1% platform fee & Jito tip fee from the raw return
         const exitPriceSol = entryPriceSol * (1 + pnlPercent / 100);
         const grossReturn = tokensBought * exitPriceSol;
         const platformFee = grossReturn * 0.01;
         const jitoTip = 0.0015;
-        const pnlSol = (grossReturn - amountInSol) - platformFee - jitoTip;
+        const pnlSol = grossReturn - amountInSol - platformFee - jitoTip;
 
         const pnlMessage = isProfit
             ? `💰 <b>Net Profit: +${Math.abs(pnlSol).toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
