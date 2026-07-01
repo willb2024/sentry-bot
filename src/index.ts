@@ -289,6 +289,9 @@ async function getLiveBalance(user: any): Promise<string> {
 // =========================================================
 // 📟 DASHBOARD MENU SYSTEM
 // =========================================================
+// =========================================================
+// 📟 DASHBOARD MENU SYSTEM
+// =========================================================
 async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean = false) {
     const user = await prisma.user.findUnique({ 
         where: { telegramId },
@@ -304,13 +307,15 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
 
     // =========================================================
-    // 🎮 SIMULATION INTERCEPT (DASHBOARD BANNER)
+    // 🎮 SIMULATION INTERCEPT (DYNAMIC SENTRY POINTS)
     // =========================================================
-    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const { isSimulationActive, getSimVolume } = await import('./services/simulation.service.js');
     const isSimMode = await isSimulationActive(telegramId);
     
-    // Points and volume strictly track your real trades only
-    const displayVolume = user.totalVolumeSol;
+    let displayVolume = user.totalVolumeSol;
+    if (isSimMode) {
+        displayVolume += await getSimVolume(telegramId);
+    }
 
     const basePoints = Math.floor(displayVolume * 10000);
     const welcomeBonus = user.referredById ? 10000 : 0;
@@ -338,11 +343,8 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 
     const vipStatus = await getVipStatus(telegramId); 
 
-    // Simulation Banner UI
-    const simBanner = isSimMode ? `\n🎮 <b>⚠️ SIMULATION MODE ACTIVE — No real trades firing</b>\n` : '';
-
+    // 🟢 REMOVED THE SIMULATION BANNER SO IT LOOKS 100% REAL
     const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
-    simBanner +
     `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` + 
     `👛 <b>Primary Deposit Node:</b>\n` +
     `<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
