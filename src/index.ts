@@ -418,6 +418,16 @@ bot.action('action_create_guild_prompt', async (ctx) => {
     );
 });
 
+bot.command('findkols', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
+    
+    await ctx.reply("🔍 <i>Scanning for Telegram communities (100+ members)...</i>", { parse_mode: 'HTML' });
+    const { runGuildLeadScraper } = await import('./services/leadgen_guild.service.js');
+    const result = await runGuildLeadScraper(bot, tgId);
+    await ctx.replyWithHTML(result);
+});
+
 bot.command('createguild', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
@@ -3904,6 +3914,8 @@ async function bootEcosystem() {
         
         startCoinCaller(bot); // 🟢 ADDED CALLER ENGINE STARTUP
         
+const { startGuildLeadScheduler } = await import('./services/leadgen_guild.service.js');
+startGuildLeadScheduler(bot, adminId);
         
     } catch (err: any) {
         console.error("🔴 TELEGRAM BOOT FAILED:", err.message);
