@@ -538,39 +538,57 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 // =========================================================
 
 bot.command('sim', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+    const tgId = ctx.from?.id?.toString();
     
-    // 🟢 FIX: Default to the user's own ID if none is provided
-    const args = ctx.message.text.split(' ');
-    const targetId = args[1] || ctx.from.id.toString(); 
-    
-    const { toggleSimAutoSnipe } = await import('./services/simulation.service.js');
-    const isActive = await toggleSimAutoSnipe(targetId, bot);
-    
-    ctx.reply(`🎮 Simulation mode for ${targetId} is now ${isActive ? 'ACTIVE' : 'INACTIVE'}.`);
+    // Hard check — silent ignore for anyone who is not admin
+    if (!tgId || tgId !== process.env.ADMIN_TELEGRAM_ID) return;
+
+    try {
+        const current = await redis.get(`sim:active:${tgId}`);
+        const newState = current === 'true' ? 'false' : 'true';
+        await redis.set(`sim:active:${tgId}`, newState);
+
+        if (newState === 'true') {
+            // Seed starting balance and wallets
+            const existing = await redis.get(`sim:balance:${tgId}`);
+            if (!existing) {
+                await redis.set(`sim:balance:${tgId}`, '12.4521');
+            }
+            const { generateSimWallets } = await import('./services/simulation.service.js');
+            const wallets = generateSimWallets();
+            await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
+        } else {
+            // Full cleanup on deactivation
+            const keys = await redis.keys(`sim:*:${tgId}`);
+            if (keys.length > 0) await redis.del(...keys);
+        }
+
+        await ctx.replyWithHTML(
+            `🎮 <b>SIMULATION MODE: ${newState === 'true' ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
+            `${newState === 'true'
+                ? `⚠️ <i>All trades, balances, and alerts are now simulated.\nNo real transactions will occur.</i>\n\n` +
+                  `💰 Starting balance: <b>12.4521 SOL</b>\n` +
+                  `🎯 Type <code>/simbal [amount]</code> to set a custom balance.`
+                : `<i>Platform returned to live mode. All sim data cleared.</i>`
+            }`
+        );
+    } catch (e: any) {
+        await ctx.replyWithHTML(`🔴 <b>SIM ERROR:</b> ${e.message}`);
+    }
 });
 
 bot.command('simbal', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId || tgId !== process.env.ADMIN_TELEGRAM_ID) return;
     
-    const args = ctx.message.text.split(' ');
-    let targetId = ctx.from.id.toString();
-    let amount = 10; // Default to 10 SOL if they just type /simbal
-    
-    // 🟢 FIX: Allow "/simbal 50" (self) OR "/simbal <id> 50" (someone else)
-    if (args.length === 2) {
-        amount = parseFloat(args[1]);
-    } else if (args.length >= 3) {
-        targetId = args[1];
-        amount = parseFloat(args[2]);
+    const parts = ctx.message.text.split(' ');
+    const amount = parseFloat(parts[1]);
+    if (isNaN(amount) || amount <= 0) {
+        return ctx.replyWithHTML('Usage: <code>/simbal 50</code>');
     }
-    
-    const { redis } = await import('./lib/redis.js');
-    await redis.set(`sim:balance:${targetId}`, amount.toString());
-    
-    ctx.reply(`💰 Sim balance for ${targetId} set to ${amount} SOL.`);
+    await redis.set(`sim:balance:${tgId}`, amount.toFixed(4));
+    await ctx.replyWithHTML(`🎮 Sim balance set to <b>${amount.toFixed(4)} SOL</b>`);
 });
-
 bot.command('findkols', async (ctx) => {
     if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
     

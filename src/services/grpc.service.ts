@@ -809,6 +809,7 @@ function connectPumpPortalStream(bot: any) {
         } catch (_) {}
     });
 
+    // 🟢 FIX: Added error logging and a 30-second backoff to prevent 429 WebSocket IP bans
     ws.on('error', (err: any) => {
         console.warn(`⚠️ [PUMP WS] Error: ${err.message}`);
     });
@@ -816,7 +817,6 @@ function connectPumpPortalStream(bot: any) {
     ws.on('close', () => {
         isWsConnecting = false;
         console.warn("⚠️ [PUMP WS] Dropped. Reconnecting in 30s to avoid 429 IP bans...");
-        // 🟢 FIX: Huge 30-second backoff to satisfy PumpPortal's strict rate limits
         setTimeout(() => connectPumpPortalStream(bot), 30_000);
     });
 }

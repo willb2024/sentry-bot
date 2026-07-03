@@ -95,27 +95,25 @@ const pumpClient = axios.create({
 });
 
 // 🟢 REPLACED: Added a 250ms delay to respect RPC rate limits
+// 🟢 FIX: Forced sequential execution with a 400ms delay to stop Solana RPC 429 bans
 async function mapParallel<T, R>(
     items: T[],
     limit: number,
     fn: (item: T, idx: number) => Promise<R>
 ): Promise<R[]> {
-    const results: R[] = new Array(items.length);
-    let nextIdx = 0;
-
-    async function worker() {
-        while (true) {
-            const i = nextIdx++;
-            if (i >= items.length) return;
-            results[i] = await fn(items[i], i);
-            // Throttle requests to prevent 429 RPC bans
-            await new Promise(r => setTimeout(r, 400)); 
+    const results: R[] = [];
+    
+    for (let i = 0; i < items.length; i++) {
+        try {
+            const res = await fn(items[i], i);
+            results.push(res);
+        } catch (e) {
+            // skip on error
         }
+        // Strict 400ms delay between token checks
+        await new Promise(resolve => setTimeout(resolve, 400));
     }
-
-    await Promise.all(
-        Array.from({ length: Math.min(limit, items.length) }, worker)
-    );
+    
     return results;
 }
 async function fetchTrendingPairs(): Promise<any[]> {
