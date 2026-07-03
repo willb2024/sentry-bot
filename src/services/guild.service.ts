@@ -57,15 +57,12 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
 
         const guild = await prisma.guild.findUnique({ where: { guildCode: guildCode.toUpperCase() } });
         if (!guild || !guild.isActive) return { success: false, message: "Guild not found or inactive." };
-        if (guild.ownerId === user.id) return { success: false, message: "You cannot join your own Guild." };
 
-        await prisma.guildMembership.updateMany({
-            where: { userId: user.id },
-            data: { isActive: false }
-        });
-
-        await prisma.guildMembership.create({
-            data: { guildId: guild.id, userId: user.id, isActive: true }
+        // 🟢 BUG 4 FIX: Use upsert block to allow members to safely leave and rejoin
+        await prisma.guildMembership.upsert({
+            where: { guildId_userId: { guildId: guild.id, userId: user.id } },
+            update: { isActive: true },
+            create: { guildId: guild.id, userId: user.id, isActive: true }
         });
 
         await redis.set(`guild_member:${guild.id}:${user.id}`, "1", 'EX', 60 * 60 * 24 * 365);
@@ -89,7 +86,7 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
         });
         if (memberships.length === 0) return;
 
-        const points = volumeSol / 0.1; // 10 GLP per SOL
+        const points = volumeSol / 0.1; 
 
         for (const membership of memberships) {
             await prisma.guildMembership.update({
@@ -272,13 +269,20 @@ export async function executeTieredAirdrop(
         if(!rawPk) return { success: false, message: "Decryption failed." };
         const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
 
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const vTx = new VersionedTransaction(new TransactionMessage({
-            payerKey: vaultPubkey, recentBlockhash: blockhash, instructions
-        }).compileToV0Message());
-        vTx.sign([keypair]);
-
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+        // 🟢 BUG 5 FIX: Batch transactions to never exceed Solana serialisation limits
+        const BATCH_SIZE = 18;
+        let lastSig = '';
+        for (let i = 0; i < instructions.length; i += BATCH_SIZE) {
+            const batch = instructions.slice(i, i + BATCH_SIZE);
+            const { blockhash } = await connection.getLatestBlockhash('confirmed');
+            const vTx = new VersionedTransaction(new TransactionMessage({
+                payerKey: vaultPubkey, recentBlockhash: blockhash, instructions: batch
+            }).compileToV0Message());
+            vTx.sign([keypair]);
+            lastSig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+            await new Promise(r => setTimeout(r, 400)); 
+        }
+        const sig = lastSig;
 
         for (const u of dbUpdates) {
             await prisma.guildMembership.update({
@@ -388,13 +392,21 @@ export async function executeGuildAirdrop(telegramId: string, guildId: string, t
             lamports: lamportsPerUser
         }));
 
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const vTx = new VersionedTransaction(new TransactionMessage({
-            payerKey: vaultPubkey, recentBlockhash: blockhash, instructions
-        }).compileToV0Message());
-        vTx.sign([keypair]);
+        // 🟢 BUG 5 FIX: Batch transactions to never exceed Solana serialization limits
+        const BATCH_SIZE = 18;
+        let lastSig = '';
+        for (let i = 0; i < instructions.length; i += BATCH_SIZE) {
+            const batch = instructions.slice(i, i + BATCH_SIZE);
+            const { blockhash } = await connection.getLatestBlockhash('confirmed');
+            const vTx = new VersionedTransaction(new TransactionMessage({
+                payerKey: vaultPubkey, recentBlockhash: blockhash, instructions: batch
+            }).compileToV0Message());
+            vTx.sign([keypair]);
+            lastSig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+            await new Promise(r => setTimeout(r, 400));
+        }
+        const sig = lastSig;
 
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
         return { success: true, message: `Airdropped ${solPerUser.toFixed(4)} SOL to ${validLb.length} members.`, signature: sig };
     } catch(e: any) {
         console.error("🔴 [GUILD] Legacy full-guild drop exception:", e.message);

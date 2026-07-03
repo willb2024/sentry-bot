@@ -1,3 +1,4 @@
+```markdown:Sentry Terminal Dashboard HTML:src/webapp/index.html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -133,6 +134,11 @@
                         <span class="h-1.5 w-1.5 rounded-full bg-jupGreen animate-pulse"></span> LIVE
                     </span>
                 </div>
+                <!-- 🎮 SIMULATION MODE ACTIVE BANNER -->
+                <div id="sim-mode-banner" class="hidden mt-2 px-3 py-1 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-[10px] font-bold flex items-center gap-1.5">
+                    <i class="fa-solid fa-flask-vial"></i>
+                    <span>SIMULATION MODE ACTIVE</span>
+                </div>
             </div>
         </div>
         <div class="flex flex-col items-end gap-1">
@@ -210,7 +216,9 @@
             
             <div class="card-flat p-5">
                 <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">FLOW ANALYTICS</h3>
+                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">
+                        FLOW ANALYTICS <span id="sim-chart-label" class="hidden text-yellow-400 ml-1">🎮 SIM</span>
+                    </h3>
                     <div class="flex gap-1 bg-black/50 p-1 rounded-lg border border-white/5 text-[10px]">
                         <button onclick="setFilter('1H')" id="btn-1H" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1H</button>
                         <button onclick="setFilter('1D')" id="btn-1D" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1D</button>
@@ -1007,6 +1015,58 @@
                 renderAffiliates();
             }
         }).catch(() => {});
+
+        // 🎮 Fetch Simulation Stats if admin is in sim mode
+        fetch('/api/sim-stats', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: tg.initData || "" })
+        })
+        .then(r => r.ok ? r.json() : { isActive: false })
+        .then(simStats => {
+            const banner = document.getElementById('sim-mode-banner');
+            if (simStats.isActive) {
+                banner.classList.remove('hidden');
+                document.getElementById('sim-chart-label').classList.remove('hidden');
+
+                // Override the dashboard stats with sim data
+                userTrades = simStats.trades || [];
+
+                const simPositions = simStats.positions.map(p => ({
+                    mint: p.mint,
+                    symbol: p.symbol,
+                    amount: p.amount,
+                    priceUsd: p.priceUsd,
+                    valueUsd: p.valueUsd,
+                    entryPrice: p.entryPriceUsd
+                }));
+
+                livePositionsForSynth = simPositions;
+
+                populateDashboard({
+                    networth: simStats.balance * 150,
+                    networthSol: simStats.balance.toFixed(4) + " SOL",
+                    pnlPercent: simStats.wins + simStats.losses > 0
+                        ? (((simStats.wins - simStats.losses) / (simStats.wins + simStats.losses)) * 100).toFixed(2)
+                        : "0.00",
+                    pnlUsd: (simStats.balance - 12.4521) * 150, // profit vs starting balance
+                    winrate: simStats.winRate,
+                    winLossText: `${simStats.wins} Wins / ${simStats.losses} Losses`,
+                    volume: simStats.volume.toFixed(4) + " SOL"
+                },
+                simPositions.length ? simPositions.map(p => p.symbol) : ['No Positions'],
+                simPositions.length ? simPositions.map(p => p.valueUsd) : [100],
+                simPositions);
+
+                // Show sim positions in the positions container
+                renderPositions(simPositions);
+
+            } else {
+                banner.classList.add('hidden');
+                document.getElementById('sim-chart-label').classList.add('hidden');
+            }
+        })
+        .catch(() => {});
     }
 
     document.getElementById('demo-toggle').addEventListener('change', function(e) {
@@ -1046,3 +1106,4 @@
 </script>
 </body>
 </html>
+```

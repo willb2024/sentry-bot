@@ -34,8 +34,8 @@ export function resolveBadge(
     daysRemaining: number | null
 ): { badge: string; badgeLabel: string; badgeLine: string } {
 
-    // 🟢 MEDIUM BUG 32 FIX: Handle missing source (legacy VIPs) gracefully
-    if (isVip && !isExpired && (source !== 'PROMO' || !source)) {
+    // 🟢 BUG 3 FIX: Handled logical operators gracefully to support legacy custom VIP tiers
+    if (isVip && !isExpired && source !== 'PROMO') {
         return {
             badge: '👑',
             badgeLabel: 'SENTRY VIP ELITE',
@@ -117,7 +117,6 @@ export async function getVipStatus(telegramId: string): Promise<VipStatus> {
     };
 }
 
-// 🟢 CRITICAL BUG 27 FIX: Dynamically read maxSlots from the DB
 export async function getPromoConfig(): Promise<{ maxSlots: number }> {
     const today = new Date().toISOString().split('T')[0];
     let promo = await prisma.dailyVipPromo.findUnique({ where: { date: today } });
@@ -131,7 +130,6 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
     const isActive = await redis.get('vip_promo:active');
     if (isActive !== 'true') return { granted: false, slotsRemaining: 0, reason: 'PROMO_INACTIVE' };
 
-    // 🟢 CRITICAL BUG 26 FIX: Re-entrancy Lock to prevent slot oversell
     const lockKey = `vip_promo:claiming:${telegramId}`;
     const isLocked = await redis.set(lockKey, 'LOCKED', 'EX', 10, 'NX');
     if (!isLocked) return { granted: false, slotsRemaining: await getSlotsRemaining(), reason: 'ALREADY_CLAIMED_TODAY' };
@@ -162,7 +160,6 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
 
         if (currentCount === 1) await redis.expire(`vip_promo:date:${today}`, 90000); 
 
-        // Uses dynamic DB limit instead of hardcoded 10
         if (currentCount > maxSlots) {
             await redis.decr(`vip_promo:date:${today}`);
             return { granted: false, slotsRemaining: 0, reason: 'SLOTS_FULL' };
@@ -225,7 +222,6 @@ export async function getPromoStats(): Promise<{ isActive: boolean; today: strin
     };
 }
 
-// 🟢 HIGH BUG 28 FIX: Proactive sweep to cleanly demote expired VIPs asynchronously
 export async function sweepExpiredVips() {
     try {
         const now = new Date();

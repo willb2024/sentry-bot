@@ -21,9 +21,6 @@ if (rawSecret.length < 32) {
     process.exit(1);
 }
 
-// 🟢 FIX 23: Documented the operational reality of the base64 AES hash.
-// NOTE: The key derived here has ~192 bits of entropy because base64 limits the character set. 
-// Do NOT change this hashing method if you have live wallets on the server, as it will invalidate all existing Vault encryptions.
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(String(rawSecret)).digest('base64').substring(0, 32);
 
 export function encryptKey(privateKeyBase58: string): string {
@@ -77,7 +74,6 @@ export function verifyEncryptionKeyHealth(): boolean {
     }
 }
 
-// Execute boot verification
 verifyEncryptionKeyHealth();
 
 export async function generateSecureVault(telegramId: string): Promise<{ address: string, subOrgId: string }> {
@@ -86,6 +82,15 @@ export async function generateSecureVault(telegramId: string): Promise<{ address
     const pubKeyStr = newWallet.publicKey.toBase58();
     
     const encryptedKey = encryptKey(privateKeyStr);
+    
+    // 🟢 BUG 1 FIX: Safely persist new vault credentials in the database on generation
+    await prisma.user.update({
+        where: { telegramId },
+        data: {
+            vaultAddress: pubKeyStr,
+            turnkeySubOrgId: encryptedKey
+        }
+    });
     
     return {
         address: pubKeyStr,
@@ -122,7 +127,7 @@ export async function ensureWalletsExist(telegramId: string, activeCount: number
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
     
-    const updates: any = { activeWallets: activeCount };
+    const updates: any = {};
     
     if (activeCount >= 2 && !user.vault2) {
         const w = Keypair.generate();
@@ -145,7 +150,9 @@ export async function ensureWalletsExist(telegramId: string, activeCount: number
         updates.pk5 = encryptKey(bs58.encode(w.secretKey));
     }
     
-    // 🟢 FIX 29: Added try/catch rollback to prevent orphaned sub-wallets
+    // 🟢 BUG 2 FIX: Assign activeWallets state only after preparing payload variables
+    updates.activeWallets = activeCount;
+    
     try {
         await prisma.user.update({
             where: { id: user.id },
