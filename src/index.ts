@@ -148,6 +148,69 @@ app.post('/api/analytics', async (req, res) => {
     }
 });
 
+// 🟢 GAP 2 FIX: Serves the raw binary PNG of the PnL card from Redis cache
+app.get('/pnl-img/:imgId', async (req, res) => {
+    try {
+        const imgId = req.params.imgId;
+        const base64 = await redis.get(`pnl_img:${imgId}`);
+        if (!base64) return res.status(404).send("Not found");
+        
+        const buffer = Buffer.from(base64, 'base64');
+        res.writeHead(200, {
+            'Content-Type': 'image/png',
+            'Content-Length': buffer.length
+        });
+        res.end(buffer);
+    } catch (e) {
+        res.status(500).send("Error serving image");
+    }
+});
+
+// 🟢 GAP 2 FIX: Serves a dynamic OpenGraph meta-tag index page that automatically
+// unfurls in X/Twitter, then instantly redirects visitors to Sentry Terminal on TG
+app.get('/share/:imgId', async (req, res) => {
+    try {
+        const imgId = req.params.imgId;
+        const botName = process.env.BOT_NAME || 'Sentry Terminal';
+        const botUsername = process.env.BOT_USERNAME || 'SentryTerminalBot';
+        
+        // Appends the referral code to the redirection string to map recruits seamlessly
+        const referralCode = req.query.ref ? `?start=${req.query.ref}` : '';
+        const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
+
+        const html = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="twitter:card" content="summary_large_image">
+            <meta name="twitter:title" content="${botName} — Trade Executed Successfully">
+            <meta name="twitter:description" content="Secured block execution using zero-latency Jito bundle protection.">
+            <meta name="twitter:image" content="${hostUrl}/pnl-img/${imgId}">
+            <meta property="og:title" content="${botName} — Trade Executed Successfully">
+            <meta property="og:description" content="Secured block execution using zero-latency Jito bundle protection.">
+            <meta property="og:image" content="${hostUrl}/pnl-img/${imgId}">
+            <meta property="og:type" content="website">
+            <title>${botName}</title>
+            <script>
+                setTimeout(() => {
+                    window.location.href = "https://t.me/${botUsername}${referralCode}";
+                }, 100);
+            </script>
+        </head>
+        <body style="background:#0a0d14; color:#fff; font-family:sans-serif; display:flex; justify-content:center; align-items:center; height:100vh;">
+            <div style="text-align:center;">
+                <p>Redirecting to Sentry Terminal on Telegram...</p>
+            </div>
+        </body>
+        </html>`;
+        
+        res.send(html);
+    } catch (e) {
+        res.status(500).send("Error generating share page");
+    }
+});
+
 app.post('/api/positions', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) {
@@ -689,30 +752,36 @@ bot.action(/^export_guild_(.+)$/, async (ctx) => {
 // =========================================================
 // 🚀 COMMAND: /start & ONBOARDING
 // =========================================================
-bot.start(async (ctx: Context & { startPayload?: string }) => {
+bot.start(async (ctx: Context) => {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
     try {
         let userCheck = await prisma.user.findUnique({ where: { telegramId } });
         const botName = process.env.BOT_NAME || 'Sentry Terminal';
-        const botTagline = process.env.BOT_TAGLINE || 'The Institutional Standard for Pump.fun Execution.';
         
-        let pendingGuildCode: string | null = null;
+        let pendingGuildCode: string | undefined = undefined;
         let referrerId: string | null = null;
         let getsDiscount = false;
 
-        if (ctx.startPayload) {
-            if (ctx.startPayload.startsWith('guild_')) {
-                pendingGuildCode = ctx.startPayload.replace('guild_', '');
+        // 🟢 GAP 1 FIX: Safely retrieve deep-linking start payload using native ctx.payload
+        // @ts-ignore
+        const payload = ctx.payload || '';
+
+        if (payload) {
+            if (payload.startsWith('guild_')) {
+                pendingGuildCode = payload.replace('guild_', '') || undefined;
                 const guild = await prisma.guild.findUnique({ where: { guildCode: pendingGuildCode } });
                 if (guild) {
                     referrerId = guild.ownerId; 
                     getsDiscount = true;
                 }
             } else {
-                const referrer = await prisma.user.findUnique({ where: { referralCode: ctx.startPayload } });
-                if (referrer) { referrerId = referrer.id; getsDiscount = true; }
+                const referrer = await prisma.user.findUnique({ where: { referralCode: payload } });
+                if (referrer) { 
+                    referrerId = referrer.id; 
+                    getsDiscount = true; 
+                }
             }
         }
 
@@ -729,10 +798,8 @@ bot.start(async (ctx: Context & { startPayload?: string }) => {
             });
         }
 
-        // 🟢 VIP PROMO ENGINE: Intercept normal referral links
-        if (ctx.startPayload && !ctx.startPayload.startsWith('guild_') && !ctx.startPayload.startsWith('ct_')) {
-            const promoResult = await checkAndGrantDailyVip(telegramId, ctx.startPayload);
-
+        if (payload && !payload.startsWith('guild_') && !payload.startsWith('ct_')) {
+            const promoResult = await checkAndGrantDailyVip(telegramId, payload);
             if (promoResult.granted) {
                 await ctx.replyWithHTML(
                     `🎉 <b>YOU GOT A VIP PASS!</b>\n\n` +
@@ -744,12 +811,6 @@ bot.start(async (ctx: Context & { startPayload?: string }) => {
                     `• <b>Custom VIP Badges</b> — flex your status on the global leaderboards\n\n` +
                     `⏰ <b>Your VIP expires in 10 days.</b> After that you become a standard member. No auto-charges. No tricks.\n\n` +
                     `<b>${promoResult.slotsRemaining} VIP slots remaining today.</b>`
-                );
-            } else if (promoResult.reason === 'SLOTS_FULL') {
-                await ctx.replyWithHTML(
-                    `⚡ <b>Today's VIP slots are full!</b>\n\n` +
-                    `All 10 daily VIP passes were claimed today. New slots open at midnight UTC.\n\n` +
-                    `<i>You have been registered as a standard member. All core features are available — come back tomorrow for a VIP slot!</i>`
                 );
             }
         }
@@ -769,18 +830,17 @@ bot.start(async (ctx: Context & { startPayload?: string }) => {
 
         if (userCheck.vaultAddress) return await sendOrEditDashboard(ctx, telegramId, false);
 
-        const bonusMessage = userCheck.referredById ? `🎁 <b>PARTNER BONUS UNLOCKED:</b> You received an instant <b>10,000 PTS</b> head-start for the airdrop by using an invite link!\n\n` : ``;
-
         const welcomeText = `🛡️ <b>WELCOME TO ${botName.toUpperCase()}</b>\n\n` +
-            `<i>${botTagline}</i>\n\n` + bonusMessage +
+            `Sentry is an institutional-grade high-frequency trading terminal for Pump.fun and Raydium. We bypass public RPC congestion by bundling your transactions privately.\n\n` +
             `✅ <b>Zero-Latency Vaults:</b> Local Memory Execution.\n` +
-            `✅ <b>Jito Turbo MEV:</b> Bypass congested public RPCs.\n` +
-            `✅ <b>Pump.fun Domination:</b> Multi-wallet whale mode bypasses buy limits.\n` +
-            `🪂 <b>FARM $SENTRY:</b> Every 1 SOL you traded earns you 10,000 points towards the upcoming protocol airdrop.\n\n` +
-            `Click below to accept these terms and initialize your trading vault:`;
+            `✅ <b>Jito Turbo MEV:</b> Bypass congested public nodes.\n` +
+            `✅ <b>Pump.fun Domination:</b> Multi-wallet whale mode bypasses buy limits.\n\n` +
+            `Click below to initialize your secure trading vault and begin:`;
 
         await ctx.replyWithHTML(welcomeText, Markup.inlineKeyboard([[Markup.button.callback('✅ I AGREE & CREATE VAULT', 'action_create_vault')]]));
-    } catch (error) { console.error("🔴 Registration Fault:", error); }
+    } catch (error) { 
+        console.error("🔴 Registration Fault:", error); 
+    }
 });
 
 bot.action('btn_guide', async (ctx) => {
@@ -893,6 +953,8 @@ bot.action('btn_trade_guide', async (ctx) => {
 
     await safeEditMessageText(ctx, manualText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
+
+
 bot.action('action_create_vault', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const telegramId = ctx.from?.id.toString();
@@ -902,16 +964,53 @@ bot.action('action_create_vault', async (ctx) => {
 
     try {
         const vaultData = await generateSecureVault(telegramId);
-        await prisma.user.update({
-            where: { telegramId },
-            data: { vaultAddress: vaultData.address, turnkeySubOrgId: vaultData.subOrgId }
-        });
+        
         await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id);
-        await sendOrEditDashboard(ctx, telegramId, false);
+
+        const step1Text = 
+            `👛 <b>STEP 1/3: FUND YOUR VAULT</b>\n\n` +
+            `Your secure, zero-latency trading vault has been generated and encrypted on-chain!\n\n` +
+            `To prepare your trading capital and gas buffers, deposit SOL into your primary address:\n` +
+            `<code>${vaultData.address}</code>\n\n` +
+            `<i>Sentry is 100% MEV-protected. When you are ready, click below to set up your speed and slippage.</i>`;
+
+        await ctx.replyWithHTML(step1Text, Markup.inlineKeyboard([[Markup.button.callback('➡️ STEP 2: SETTINGS', 'onboard_step2')]]));
     } catch (e) {
         await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, "🔴 Vault Generation Failed.");
     }
 });
+
+bot.action('onboard_step2', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    
+    const step2Text = 
+        `⚙️ <b>STEP 2/3: OPTIMAL DEFAULTS</b>\n\n` +
+        `To ensure your buy and sell transactions never fail, Sentry applies pre-configured, optimized parameters:\n\n` +
+        `• <b>Default Slippage:</b> 20%\n` +
+        `  ├ <i>Why?</i> Protects your transactions from failing during high-volatility token launches.\n` +
+        `• <b>Priority Fee:</b> Fast 🐎 (0.001 SOL Jito Tip)\n` +
+        `  ├ <i>Why?</i> Bypasses public network congestion to guarantee you land in the very next block.\n\n` +
+        `<i>You can customize both settings at any time in the Settings menu. Click below to continue.</i>`;
+
+    await ctx.replyWithHTML(step2Text, Markup.inlineKeyboard([[Markup.button.callback('➡️ STEP 3: HOW TO TRADE', 'onboard_step3')]]));
+});
+
+bot.action('onboard_step3', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    
+    const step3Text = 
+        `🎯 <b>STEP 3/3: READY TO SNIPE</b>\n\n` +
+        `You are fully prepared to trade. To execute your first transaction:\n\n` +
+        `1. Locate any Solana token Contract Address (CA).\n` +
+        `2. <b>Paste the CA directly into this chat.</b>\n\n` +
+        `<i>Click below to launch your main dashboard and initialize the terminal!</i>`;
+
+    await ctx.replyWithHTML(step3Text, Markup.inlineKeyboard([[Markup.button.callback('🚀 LAUNCH DASHBOARD', 'btn_dashboard')]]));
+});
+
+
+
+
 
 // =========================================================
 // 📡 PRIVATE KOL FINDER & LEADERBOARD
@@ -3654,24 +3753,30 @@ if (airdropGuildId) {
         await redis.del(spamLockKey);
         await ctx.telegram.deleteMessage(ctx.chat.id, loader.message_id).catch(() => {});
 
-        await ctx.reply(
-            `🔍 <b>TOKEN INFO</b>\n\n` +
-            `<code>${possibleCA}</code>\n\n` +
-            `📊 Market Cap: <b>${mcap}</b>\n` +
-            `💹 24H Volume: <b>${vol24h}</b>\n` +
-            `🔗 Socials: ${socialsLine}` +
-            mevWarning +
-            `\n\n<i>Tap below to confirm your buy of ${tradeAmountSol} SOL:</i>`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [[
+       // Locate where you send the TOKEN INFO card and replace its markup:
+       await ctx.reply(
+        `🔍 <b>TOKEN INFO</b>\n\n` +
+        `<code>${possibleCA}</code>\n\n` +
+        `📊 Market Cap: <b>${mcap}</b>\n` +
+        `💹 24H Volume: <b>${vol24h}</b>\n` +
+        `🔗 Socials: ${socialsLine}` +
+        mevWarning +
+        `\n\n<i>Tap below to buy instantly or set up a price alert guard:</i>`,
+        {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [
                         { text: '✅ Confirm Buy', callback_data: `confirm_buy_${possibleCA}` },
+                        { text: '👀 Watch Price', callback_data: `confirm_watch_${possibleCA}` } // 🟢 GAP 3 BUTTON
+                    ],
+                    [
                         { text: '❌ Cancel', callback_data: 'cancel_buy' }
-                    ]]
-                }
+                    ]
+                ]
             }
-        );
+        }
+    );
 
         // Store pending buy in Redis temporarily
         await redis.set(`pending_buy:${telegramId}:${possibleCA}`, tradeAmountSol.toString(), 'EX', 120);
@@ -3679,6 +3784,25 @@ if (airdropGuildId) {
     }
 
     return next();
+});
+
+// 🟢 GAP 3 FIX: Seamlessly route the user from the "Watch Price" button directly into the Guard Flow
+bot.action(/^confirm_watch_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tokenAddress = ctx.match[1];
+    const telegramId = ctx.from?.id.toString()!;
+
+    await redis.set(`state:guard:${telegramId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(
+        `🛡️ <b>DEPLOY WATCH GUARD & TAKE PROFIT</b>\n\n` +
+        `Token: <code>${tokenAddress}</code>\n\n` +
+        `Reply to this message with your guard parameters (excluding the CA):\n` +
+        `<code>[DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>\n\n` +
+        `<i>Example: 15 0.1 50 (Sentry will buy 0.1 SOL, deploy a 15% trailing stop-loss, and set a 50% take profit)</i>`
+    );
+    
+    // Store the target CA for the incoming text interceptor
+    await redis.set(`state:guard_ca:${telegramId}`, tokenAddress, 'EX', 120);
 });
 
 // 🟢 AUDIT FIX 7: Added /join command handler

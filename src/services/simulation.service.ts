@@ -115,7 +115,6 @@ export async function simExecuteSnipe(
         highestSeenPrice: entryPriceSol
     });
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
-    await recordSimTrade(telegramId, true, amountSol);
 
     return {
         success: true,
@@ -156,7 +155,6 @@ export async function simExecuteExit(
             const updated = positions.filter((p: any) => p.mint !== tokenAddress);
             await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
         }
-        await recordSimTrade(telegramId, false, soldSol);
     }
 
     return {
@@ -188,33 +186,7 @@ function shuffleArray<T>(array: T[]): T[] {
     return arr;
 }
 
-// ─── 🟢 SIMULATED SEQUENCER ENGINE ──────────────────────────────
-
-export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard'): Promise<boolean> {
-    const key = `sim:${type}_seq:${telegramId}`;
-    let seqStr = await redis.get(key);
-    let seq: boolean[] = [];
-    
-    if (seqStr) seq = JSON.parse(seqStr);
-    
-    if (!seq || seq.length === 0) {
-        if (type === 'caller') {
-            // 🟢 UPDATED: 3 Fails + 1 Win, 2 Fails + 1 Win, 1 Fail + 1 Win (6 Fails, 3 Wins total)
-            seq = shuffleArray([
-                false, false, false, true, // 3 fails, 1 win
-                false, false, true,       // 2 fails, 1 win
-                false, true               // 1 fail, 1 win
-            ]);
-        } else if (type === 'guard') {
-            // Requested Mix: 2 loss, 1 win, 1 win, 2 wins, 1 loss -> (4 Wins, 3 Losses)
-            seq = shuffleArray([false, false, true, true, true, true, false]);
-        }
-    }
-    
-    const outcome = seq.pop() ?? true;
-    await redis.set(key, JSON.stringify(seq), 'EX', 86400); // Sequence memory expires after 24h
-    return outcome;
-}
+// ─── 🟢 SIMULATED AUTO SNIPE LOOP ──────────────────────────────
 
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
     const key = `sim:autosnipe:${telegramId}`;
@@ -251,7 +223,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             sequenceIndex = 0;
         }
 
-        const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+        const user = await prisma.user.findUnique({ where: { telegramId: telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
         
         const amountSol = config?.amountSol || 0.1;
@@ -301,8 +273,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
         await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, finalPnl, slPercent, entryPriceSol, tokensBought);
 
-        // Wait 3 seconds before buying the NEXT coin
-        await new Promise(r => setTimeout(r, 3000)); 
+        await new Promise(r => setTimeout(r, 2000)); 
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
     }
 
@@ -324,6 +295,23 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
             ? `💰 <b>Net Profit: +${Math.abs(pnlSol).toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
             : `🩸 <b>Incurred Loss: -${Math.abs(pnlSol).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
 
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        const telegramBotToken = process.env.BOT_TOKEN!;
+        const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
+        
+        // 🟢 GAP 2 FIX: Host the image on Redis and build the dynamic OpenGraph sharing link
+        const imgId = crypto.randomBytes(8).toString('hex');
+        await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
+        
+        const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
+        const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
+        
+        const tweetText = encodeURIComponent(
+            `Just secured a verified ${isProfit ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\n` +
+            `Verified details: ${shareUrl}`
+        );
+        const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+
         const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
             `Token: <code>${tokenAddress.substring(0,8)}...</code>\n` +
             `Exit Price: <b>${exitPriceSol.toFixed(9)} SOL</b>\n` +
@@ -332,10 +320,6 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
             `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
             `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
 
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-        const telegramBotToken = process.env.BOT_TOKEN!;
-        const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
-        
         // @ts-ignore
         const fetch = (await import('node-fetch')).default;
         // @ts-ignore
@@ -346,9 +330,34 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
         form.append('caption', captionText);
         form.append('parse_mode', 'HTML');
+        form.append('reply_markup', JSON.stringify(twitterBtn));
         
         await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
             method: 'POST', body: form
         });
     } catch (_) {}
+}
+
+export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard'): Promise<boolean> {
+    const key = `sim:${type}_seq:${telegramId}`;
+    let seqStr = await redis.get(key);
+    let seq: boolean[] = [];
+    
+    if (seqStr) seq = JSON.parse(seqStr);
+    
+    if (!seq || seq.length === 0) {
+        if (type === 'caller') {
+            seq = shuffleArray([
+                false, false, false, true, 
+                false, false, true,       
+                false, true               
+            ]);
+        } else if (type === 'guard') {
+            seq = shuffleArray([false, false, true, true, true, true, false]);
+        }
+    }
+    
+    const outcome = seq.pop() ?? true;
+    await redis.set(key, JSON.stringify(seq), 'EX', 86400); 
+    return outcome;
 }

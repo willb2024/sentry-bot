@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import bs58 from 'bs58';
+import crypto from 'crypto';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 
@@ -154,16 +155,12 @@ async function checkAndTriggerGuard(
     // --- 🎮 SIMULATION INTERCEPT ---
     const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage, getNextSimOutcome } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
-        
-        // Random wait delay: trigger chance logic (~2-8 seconds typical)
-        if (Math.random() > 0.8) {
+        if (Math.random() > 0.5) {
             lockedGuards.add(guardSnapshot.id); 
             
-            // 🟢 Pull from the exact sequence you requested (2 loss, 1 win, etc.)
             const isProfit = await getNextSimOutcome(guardSnapshot.telegramId, 'guard');
-            
             const targetPnl = isProfit 
-                ? (guardSnapshot.takeProfitPercent ? guardSnapshot.takeProfitPercent : 50) 
+                ? (guardSnapshot.takeProfitPercent || 50) 
                 : -Math.abs(guardSnapshot.trailingPercent);
                 
             const pnlPercent = applySimSlippage(targetPnl);
@@ -177,15 +174,28 @@ async function checkAndTriggerGuard(
                 const rawSolPnl = guardSnapshot.amountInSol * (pnlPercent / 100);
                 const platformFee = (guardSnapshot.amountInSol * (1 + pnlPercent / 100)) * 0.01;
                 const jitoTip = 0.0015;
-                const pnlSol = rawSolPnl - platformFee - jitoTip;
+                const solPnl = rawSolPnl - platformFee - jitoTip;
                 
-                const pnlMessage = isProfit
-                    ? `💰 <b>Net Profit: +${Math.abs(pnlSol).toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
-                    : `🩸 <b>Incurred Loss: -${Math.abs(pnlSol).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
+                // 🟢 GAP 2 FIX: Host the simulated image on Redis and build the dynamic OpenGraph sharing link
+                const imgId = crypto.randomBytes(8).toString('hex');
+                await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
                 
-                const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
+                const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
+                const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
+                
+                const tweetText = encodeURIComponent(
+                    `Just secured a verified ${pnlPercent >= 0 ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${guardSnapshot.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\n` +
+                    `Verified details: ${shareUrl}`
+                );
+                const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+
+                const pnlMessage = pnlPercent >= 0
+                    ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
+                    : `🩸 <b>Incurred Loss: -${Math.abs(solPnl).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
+                
+                const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
                             `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
-                            `${!isProfit ? `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` : ''}` +
+                            `${pnlPercent < 0 ? `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` : ''}` +
                             `${pnlMessage}\n` +
                             `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                             `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
@@ -200,6 +210,7 @@ async function checkAndTriggerGuard(
                 form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
                 form.append('caption', captionText);
                 form.append('parse_mode', 'HTML');
+                form.append('reply_markup', JSON.stringify(twitterBtn));
                 
                 await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form });
                 
@@ -257,6 +268,20 @@ async function checkAndTriggerGuard(
                             const user = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
                             const multiplier = user?.activeWallets || 1;
                             const profitSol  = (guard.amountInSol * (profitPercent / 100)) * multiplier;
+                            
+                            const imgId = crypto.randomBytes(8).toString('hex');
+                            const imageBuffer = await generatePnlCard(guard.tokenAddress, profitPercent, user?.referralCode);
+                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
+                            
+                            const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
+                            const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
+                            
+                            const tweetText = encodeURIComponent(
+                                `Just secured a verified gain of +${profitPercent.toFixed(1)}% on $${guard.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\n` +
+                                `Verified details: ${shareUrl}`
+                            );
+                            const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+
                             const captionText =
                                 `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\n` +
                                 `Token: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n` +
@@ -264,23 +289,19 @@ async function checkAndTriggerGuard(
                                 `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                                 `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            try {
-                                const imageBuffer = await generatePnlCard(guard.tokenAddress, profitPercent, user?.referralCode);
-                                const tweetText = encodeURIComponent(
-                                    `Just secured +${profitPercent.toFixed(1)}% on ${guard.tokenAddress.substring(0, 8)} using Sentry Terminal ⚡\n\n` +
-                                    `100% MEV Protected & Lightning Fast.\n\n` +
-                                    `Copy my trades: https://t.me/${bot.botInfo?.username || 'SentryBot'}?start=${user?.referralCode}`
-                                );
-                                const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
-                                
-                                await bot.telegram.sendPhoto(
-                                    guard.telegramId,
-                                    { source: imageBuffer },
-                                    { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
-                                );
-                            } catch (_) {
-                                await bot.telegram.sendMessage(guard.telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-                            }
+                            // @ts-ignore
+                            const fetch = (await import('node-fetch')).default;
+                            // @ts-ignore
+                            const FormData = (await import('form-data')).default;
+                            
+                            const form = new FormData();
+                            form.append('chat_id', guard.telegramId);
+                            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
+                            form.append('caption', captionText);
+                            form.append('parse_mode', 'HTML');
+                            form.append('reply_markup', JSON.stringify(twitterBtn));
+                            
+                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form });
                         } catch (_) {}
                     }
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
@@ -314,6 +335,19 @@ async function checkAndTriggerGuard(
                             const totalPnlPercent = entryPrice > 0 ? ((currentPriceNative - entryPrice) / entryPrice) * 100 : 0;
                             const pnlSol        = (guard.amountInSol * (Math.abs(totalPnlPercent) / 100)) * multiplier;
 
+                            const imgId = crypto.randomBytes(8).toString('hex');
+                            const imageBuffer = await generatePnlCard(guard.tokenAddress, totalPnlPercent, user?.referralCode);
+                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
+                            
+                            const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
+                            const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
+                            
+                            const tweetText = encodeURIComponent(
+                                `Just secured a verified execution of ${totalPnlPercent >= 0 ? `+${totalPnlPercent.toFixed(1)}%` : `${totalPnlPercent.toFixed(1)}%`} on $${guard.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\n` +
+                                `Verified details: ${shareUrl}`
+                            );
+                            const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share Guard to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+
                             const pnlMessage = totalPnlPercent >= 0
                                 ? `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${totalPnlPercent.toFixed(1)}%)`
                                 : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${totalPnlPercent.toFixed(1)}%)`;
@@ -326,18 +360,19 @@ async function checkAndTriggerGuard(
                                 `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                                 `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            try {
-                                const imageBuffer = await generatePnlCard(guard.tokenAddress, totalPnlPercent, user?.referralCode);
-                                const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share Guard to X (Twitter)', url: `https://twitter.com/intent/tweet?text=Sentry%20Terminal` }]] };
-                                
-                                await bot.telegram.sendPhoto(
-                                    guard.telegramId,
-                                    { source: imageBuffer },
-                                    { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
-                                );
-                            } catch (_) {
-                                await bot.telegram.sendMessage(guard.telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-                            }
+                            // @ts-ignore
+                            const fetch = (await import('node-fetch')).default;
+                            // @ts-ignore
+                            const FormData = (await import('form-data')).default;
+                            
+                            const form = new FormData();
+                            form.append('chat_id', guard.telegramId);
+                            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
+                            form.append('caption', captionText);
+                            form.append('parse_mode', 'HTML');
+                            form.append('reply_markup', JSON.stringify(twitterBtn));
+                            
+                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form });
                         } catch (_) {}
                     }
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
