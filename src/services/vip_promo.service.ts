@@ -34,7 +34,7 @@ export function resolveBadge(
     daysRemaining: number | null
 ): { badge: string; badgeLabel: string; badgeLine: string } {
 
-    // 🟢 BUG 3 FIX: Handled logical operators gracefully to support legacy custom VIP tiers
+    // 🟢 BUG 3 FIX: Corrected parenthesisation so custom VIP sources display badges without colliding
     if (isVip && !isExpired && source !== 'PROMO') {
         return {
             badge: '👑',

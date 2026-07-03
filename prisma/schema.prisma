@@ -80,13 +80,18 @@ model Trade {
   affiliateCutSol Float    
   loyaltyRebateSol Float   
 
-  txSignature     String   @unique 
+  txSignature     String   // 🟢 Removed @unique to prevent multi-wallet trade logging crashes
   status          String   @default("CONFIRMED") 
+
+  // 🟢 Realized PnL fields added
+  profitPercent   Float?   @default(0)
+  realizedPnlSol  Float?   @default(0)
 
   createdAt       DateTime @default(now())
 
   @@index([userId])
   @@index([tokenAddress])
+  @@index([txSignature])  // 🟢 Added non-unique index for fast signature lookups
 }
 
 model ActiveOrder {
@@ -112,9 +117,6 @@ model ActiveOrder {
 
   @@index([userId, isActive])
   @@index([tokenAddress])
-  
-  // 🟢 FIX 22: Removed the broken @@unique([userId, tokenAddress, orderType]) constraint 
-  // that prevented multiple trailing guards on the same token.
 }
 
 model AutoSnipeConfig {
@@ -198,9 +200,8 @@ model GuildMembership {
   rank             Int?                            
   airdropsReceivedSol Float          @default(0.0)
 
-  // 🟢 FIX 30: Distinguished active routing vs standard membership.
-  isMember         Boolean           @default(true) // User is in the guild
-  isActive         Boolean           @default(false) // User chose this guild for point routing
+  // 🟢 NEW: Tracks if this is the user's currently selected active guild
+  isActive         Boolean           @default(true) 
 
   joinedAt         DateTime          @default(now())
   lastActiveAt     DateTime          @default(now())
@@ -209,9 +210,10 @@ model GuildMembership {
   @@index([guildId, loyaltyPoints])
 }
 
+// 🟢 NEW: VIP PROMO MODEL
 model DailyVipPromo {
   id          String   @id @default(uuid())
-  date        String   @unique  
+  date        String   @unique  // "2026-06-21" format
   slotsUsed   Int      @default(0)
   maxSlots    Int      @default(10)
   isActive    Boolean  @default(true)

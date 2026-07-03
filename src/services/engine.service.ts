@@ -731,12 +731,17 @@ export async function executeExit(
             }
         } catch (_) {}
 
+        // 🟢 BUG A FIX: Calculate exact realized PnL metrics
+        const realizedPnlSol = totalFeeBase - volumeToRecord;
+        const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
+
         await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } });
         awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
         if (user.referredById) {
             await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } });
         }
 
+        // 🟢 BUG A FIX: Persist profitPercent and realizedPnlSol to the Prisma database
         await prisma.trade.create({
             data: {
                 userId: user.id,
@@ -747,7 +752,9 @@ export async function executeExit(
                 affiliateCutSol: affiliateCut,
                 loyaltyRebateSol: 0,
                 txSignature: firstSignature,
-                status: 'CONFIRMED'
+                status: 'CONFIRMED',
+                profitPercent: parseFloat(profitPercent.toFixed(2)),
+                realizedPnlSol: parseFloat(realizedPnlSol.toFixed(6))
             }
         }).catch(() => {});
 

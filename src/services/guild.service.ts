@@ -57,8 +57,9 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
 
         const guild = await prisma.guild.findUnique({ where: { guildCode: guildCode.toUpperCase() } });
         if (!guild || !guild.isActive) return { success: false, message: "Guild not found or inactive." };
+        if (guild.ownerId === user.id) return { success: false, message: "You cannot join your own Guild." };
 
-        // 🟢 BUG 4 FIX: Use upsert block to allow members to safely leave and rejoin
+        // 🟢 BUG 4 FIX: Use upsert to prevent re-join unique constraint crashes
         await prisma.guildMembership.upsert({
             where: { guildId_userId: { guildId: guild.id, userId: user.id } },
             update: { isActive: true },
@@ -81,6 +82,7 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user) return;
 
+        // 🟢 BUG 18/A FIX: Ensure points are explicitly restricted to the active guild
         const memberships = await prisma.guildMembership.findMany({ 
             where: { userId: user.id, isActive: true } 
         });
@@ -148,6 +150,7 @@ export async function getLeaderboard(guildId: string, limit: number = 50) {
             scoreMap[userId] = parseFloat(rawLb[i + 1]);
         }
 
+        // 🟢 BUG 9 FIX: Optimized to perform a single query to eliminate N+1 roundtrips
         const memberships = await prisma.guildMembership.findMany({
             where: { guildId, userId: { in: userIds } },
             include: { user: true }
@@ -269,7 +272,7 @@ export async function executeTieredAirdrop(
         if(!rawPk) return { success: false, message: "Decryption failed." };
         const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
 
-        // 🟢 BUG 5 FIX: Batch transactions to never exceed Solana serialisation limits
+        // 🟢 BUG 5 FIX: Chunk transfers into batches of maximum 18 instructions to prevent transaction oversize errors
         const BATCH_SIZE = 18;
         let lastSig = '';
         for (let i = 0; i < instructions.length; i += BATCH_SIZE) {
@@ -280,7 +283,7 @@ export async function executeTieredAirdrop(
             }).compileToV0Message());
             vTx.sign([keypair]);
             lastSig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-            await new Promise(r => setTimeout(r, 400)); 
+            await new Promise(r => setTimeout(r, 400)); // small gap between raw submissions
         }
         const sig = lastSig;
 
@@ -392,7 +395,7 @@ export async function executeGuildAirdrop(telegramId: string, guildId: string, t
             lamports: lamportsPerUser
         }));
 
-        // 🟢 BUG 5 FIX: Batch transactions to never exceed Solana serialization limits
+        // 🟢 BUG 5 FIX: Chunk transfers into batches of maximum 18 instructions to prevent transaction oversize errors
         const BATCH_SIZE = 18;
         let lastSig = '';
         for (let i = 0; i < instructions.length; i += BATCH_SIZE) {

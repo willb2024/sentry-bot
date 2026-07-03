@@ -67,17 +67,17 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     return wallets;
 }
 
-export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number) {
+// 🟢 BUG A FIX: Expanded recordSimTrade to write profitPercent correctly with 24h TTL
+export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number, profitPercent: number = 0) {
     const key = `sim:trades:${telegramId}`;
     const existing = JSON.parse(await redis.get(key) || '[]');
     existing.unshift({
         createdAt: new Date().toISOString(),
         isBuy,
         amountInSol,
-        profitPercent: 0
+        profitPercent
     });
-    
-    await redis.set(key, JSON.stringify(existing.slice(0, 100)), 'EX', 3600);
+    await redis.set(key, JSON.stringify(existing.slice(0, 100)), 'EX', 86400); // 24-hour TTL
     await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
 
@@ -115,30 +115,70 @@ export async function simExecuteSnipe(
         highestSeenPrice: entryPriceSol
     });
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
-
-    // Also store as a guard in Redis exactly like the real system does
-    const orderId = crypto.randomUUID();
-    const guardOrder = {
-        id: orderId,
-        telegramId,
-        tokenAddress,
-        trailingPercent: 20,
-        highestSeenPrice: entryPriceSol,
-        amountInSol: amountSol,
-        entryPrice: entryPriceSol,
-        takeProfitPercent: 50
-    };
-    await redis.set(`sim:guard:${tokenAddress}:${telegramId}`, JSON.stringify(guardOrder), 'EX', 3600);
-
-    // Schedule a realistic guard trigger between 10-45 seconds after buy
-    const triggerDelay = Math.floor(Math.random() * 35000) + 10000;
-    scheduleSimGuardTrigger(telegramId, tokenAddress, orderId, amountSol, entryPriceSol, symbol, triggerDelay);
+    
+    // 🟢 Record simulated Buy trade correctly (profitPercent = 0)
+    await recordSimTrade(telegramId, true, amountSol, 0);
 
     return {
         success: true,
         signature: generateSimSignature(),
         message: '🟢 Simulation: Jito bundle confirmed.',
         volumeSpent: amountSol
+    };
+}
+
+export async function simExecuteExit(
+    telegramId: string,
+    tokenAddress: string,
+    percent: number,
+    forcedPnlPercent?: number 
+): Promise<{ success: boolean, signature: string, message: string }> {
+    await new Promise(r => setTimeout(r, randomTradeDelay()));
+
+    const posKey = `sim:positions:${telegramId}`;
+    const positions = JSON.parse(await redis.get(posKey) || '[]');
+    const pos = positions.find((p: any) => p.mint === tokenAddress);
+
+    let pnlPercent = forcedPnlPercent !== undefined 
+        ? forcedPnlPercent 
+        : parseFloat((Math.random() * 325 + 15).toFixed(2));
+
+    if (pos) {
+        const soldSol = pos.amountInSol * (percent / 100);
+        const rawReturn = soldSol * (1 + pnlPercent / 100);
+        const platformFee = rawReturn * 0.01;
+        const jitoTip = 0.0015;
+        const netReturnSol = rawReturn - platformFee - jitoTip;
+
+        const currentBal = parseFloat(await getSimBalance(telegramId));
+        await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
+
+        if (percent === 100) {
+            const updated = positions.filter((p: any) => p.mint !== tokenAddress);
+            await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
+        }
+        
+        // 🟢 BUG A FIX: Record simulated Sell trade with actual profit/loss percentage
+        await recordSimTrade(telegramId, false, soldSol, pnlPercent);
+    }
+
+    return {
+        success: true,
+        signature: generateSimSignature(),
+        message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
+    };
+}
+
+export function generateSimCallerAlert(): { mint: string, symbol: string, score: number, reasons: string[], priceChangeM5: number, ageMins: number } {
+    const symbols = ['DOGE', 'BONK', 'WIF', 'MYRO', 'POPCAT', 'ZEUS', 'BOME', 'MEW', 'SLERF'];
+    const priceChangeM5 = parseFloat((Math.random() * 220 + 30).toFixed(1));
+    return {
+        mint: generateSimTokenCA(),
+        symbol: symbols[Math.floor(Math.random() * symbols.length)],
+        score: Math.floor(Math.random() * 25) + 75,
+        reasons: [`🔥 High momentum (+${Math.floor(priceChangeM5 * 1.3)}% vol spike)`, `📈 Heavy buy pressure`, `💧 Deep liquidity`],
+        priceChangeM5,
+        ageMins: Math.floor(Math.random() * 45) + 2
     };
 }
 
@@ -165,31 +205,47 @@ async function scheduleSimGuardTrigger(
                 : -parseFloat((Math.random() * 25 + 5).toFixed(2));   // 🟢 Fixed type compiler error
 
             const exitSig = generateSimSignature();
-            const currentPrice = entryPrice * (1 + pnlPercent / 100);
             const pnlSol = (amountInSol * Math.abs(pnlPercent / 100));
 
-            const pnlMessage = pnlPercent >= 0
-                ? `💰 <b>Secured Profit: +${pnlSol.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
+            const pnlMessage = isProfit
+                ? `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
                 : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
 
             const isTP = isProfit && Math.random() > 0.5;
 
-            const captionText = isTP
-                ? `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\n` +
-                  `Token: <code>${tokenAddress.substring(0, 8)}...</code>\n` +
-                  `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)\n` +
-                  `Status: 🟢 Auto-Sold 100% via Jito.\n` +
-                  `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`
-                : `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\n` +
-                  `Token: <code>${tokenAddress.substring(0, 8)}...</code>\n` +
-                  `📉 <b>Peak Drop: -${Math.abs(pnlPercent).toFixed(1)}%</b>\n` +
-                  `${pnlMessage}\n` +
-                  `Status: 🟢 Auto-Sold 100% to protect capital.\n` +
-                  `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
+            const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
+                `Token: <code>${tokenAddress.substring(0,8)}...</code>\n` +
+                `Exit Price: <b>${(entryPrice * (1 + pnlPercent / 100)).toFixed(9)} SOL</b>\n` +
+                `${!isProfit ? `📉 <b>Peak Drop: -${pnlPercent.toFixed(1)}%</b>\n` : ''}` +
+                `${pnlMessage}\n` +
+                `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
+                `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
+
+            const user = await prisma.user.findUnique({ where: { telegramId } });
+            const telegramBotToken = process.env.BOT_TOKEN!;
+            const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
+            
+            // @ts-ignore
+            const fetch = (await import('node-fetch')).default;
+            // @ts-ignore
+            const FormData = (await import('form-data')).default;
+            
+            const form = new FormData();
+            form.append('chat_id', telegramId);
+            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
+            form.append('caption', captionText);
+            form.append('parse_mode', 'HTML');
+            
+            await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
+                method: 'POST', body: form
+            });
+
+            // 🟢 BUG A FIX: Record closed simulated guard exit trade correctly
+            await recordSimTrade(telegramId, false, amountInSol, pnlPercent);
 
             // Update sim balance
             const currentBal = parseFloat(await getSimBalance(telegramId));
-            const returnSol = amountInSol + (amountInSol * (pnlPercent / 100));
+            const returnSol = amountInSol + pnlSol;
             await redis.set(`sim:balance:${telegramId}`, Math.max(0, currentBal + returnSol).toFixed(4));
 
             // Remove position
@@ -198,127 +254,10 @@ async function scheduleSimGuardTrigger(
             const updated = positions.filter((p: any) => p.mint !== tokenAddress);
             await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
             await redis.del(`sim:guard:${tokenAddress}:${telegramId}`);
-
-            // Send PnL card exactly like the real system
-            const user = await prisma.user.findUnique({ where: { telegramId } });
-
-            try {
-                const telegramBotToken = process.env.BOT_TOKEN!;
-                const imageBuffer = await generatePnlCard(
-                    tokenAddress,
-                    pnlPercent,
-                    user?.referralCode ?? undefined
-                );
-                
-                // @ts-ignore
-                const fetch = (await import('node-fetch')).default;
-                // @ts-ignore
-                const FormData = (await import('form-data')).default;
-                
-                const form = new FormData();
-                form.append('chat_id', telegramId);
-                form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
-                form.append('caption', captionText);
-                form.append('parse_mode', 'HTML');
-                
-                await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
-                    method: 'POST',
-                    body: form
-                });
-            } catch (_) {
-                // Text fallback
-                // @ts-ignore
-                const fetch = (await import('node-fetch')).default;
-                await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        chat_id: telegramId,
-                        text: captionText,
-                        parse_mode: 'HTML',
-                        disable_web_page_preview: true
-                    })
-                });
-            }
         } catch (_) {}
     }, delayMs);
 }
 
-export async function simExecuteExit(
-    telegramId: string,
-    tokenAddress: string,
-    percent: number,
-    forcedPnlPercent?: number 
-): Promise<{ success: boolean, signature: string, message: string }> {
-    await new Promise(r => setTimeout(r, randomTradeDelay()));
-
-    const posKey = `sim:positions:${telegramId}`;
-    const positions = JSON.parse(await redis.get(posKey) || '[]');
-    const pos = positions.find((p: any) => p.mint === tokenAddress);
-
-    const pnlPercent = parseFloat((Math.random() * 280 + 15).toFixed(2));
-    const sig = generateSimSignature();
-
-    if (pos) {
-        const soldSol = pos.amountInSol * (percent / 100);
-        const returnSol = soldSol * (1 + pnlPercent / 100);
-        const currentBal = parseFloat(await getSimBalance(telegramId));
-        await redis.set(`sim:balance:${telegramId}`, (currentBal + returnSol).toFixed(4));
-
-        if (percent === 100) {
-            const updated = positions.filter((p: any) => p.mint !== tokenAddress);
-            await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
-            await redis.del(`sim:guard:${tokenAddress}:${telegramId}`);
-        }
-    }
-
-    return {
-        success: true,
-        signature: sig,
-        message: `🟢 Trade Confirmed via Jito Bundle. W1: ✅`
-    };
-}
-
-export function generateSimCallerAlert(): {
-    mint: string,
-    symbol: string,
-    score: number,
-    reasons: string[],
-    priceChangeM5: number,
-    ageMins: number
-} {
-    const symbols = ['DOGE', 'BONK', 'WIF', 'MYRO', 'POPCAT', 'ZEUS', 'BOME', 'MEW', 'SLERF', 'GIGA', 'HARAMBE', 'COPE', 'CHAD', 'FOMO', 'MOCHI'];
-    const symbol = symbols[Math.floor(Math.random() * symbols.length)];
-    const score = Math.floor(Math.random() * 25) + 75; // 75-100 — only high scores in sim
-    const priceChangeM5 = parseFloat((Math.random() * 220 + 30).toFixed(1));
-    const ageMins = Math.floor(Math.random() * 45) + 2;
-    const liqK = Math.floor(Math.random() * 120 + 25);
-    const buyPct = Math.floor(Math.random() * 20 + 65);
-
-    const possibleReasons = [
-        `🔥 High momentum (+${Math.floor(priceChangeM5 * 1.3)}% vol spike vs last hour)`,
-        `📈 Heavy buy pressure (${buyPct}% buys in last 60 txs)`,
-        `💧 Deep liquidity ($${liqK}k USD locked)`,
-        `👶 Very fresh (${ageMins} mins old)`,
-        `🛡️ RugCheck passed: Low Risk (Safe contract)`,
-        `🚀 Curve ${Math.floor(Math.random() * 30 + 55)}% to graduation`,
-        `📊 24H Volume: $${Math.floor(Math.random() * 800 + 50).toLocaleString()}k`
-    ];
-
-    const shuffled = possibleReasons.sort(() => Math.random() - 0.5);
-    const reasons = shuffled.slice(0, Math.floor(Math.random() * 2) + 3);
-
-    return {
-        mint: generateSimTokenCA(), // Single random CA — not a sequence
-        symbol,
-        score,
-        reasons,
-        priceChangeM5,
-        ageMins
-    };
-}
-
-// 🟢 Utility: Shuffle arrays safely
 function shuffleArray<T>(array: T[]): T[] {
     const arr = [...array];
     for (let i = arr.length - 1; i > 0; i--) {

@@ -211,6 +211,80 @@ app.get('/share/:imgId', async (req, res) => {
     }
 });
 
+// 🎮 SIMULATION INTERCEPT: Fetch simulated trades for Flow Analytics
+app.post('/api/sim-trades', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData))
+            return res.status(403).json({ error: 'Unauthorized' });
+
+        const telegramId = JSON.parse(
+            new URLSearchParams(req.body.initData).get('user')!
+        ).id.toString();
+
+        // Strict security: Only the admin can access simulated trades
+        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
+            return res.status(403).json({ error: 'Admin only' });
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        if (!await isSimulationActive(telegramId))
+            return res.json([]);
+
+        const raw = await redis.get(`sim:trades:${telegramId}`);
+        const trades = raw ? JSON.parse(raw) : [];
+        res.json(trades);
+    } catch (e: any) {
+        res.status(500).json([]);
+    }
+});
+
+// 🎮 SIMULATION INTERCEPT: Fetch simulated balance, volume, positions, and win/loss rates
+app.post('/api/sim-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData))
+            return res.status(403).json({ error: 'Unauthorized' });
+
+        const telegramId = JSON.parse(
+            new URLSearchParams(req.body.initData).get('user')!
+        ).id.toString();
+
+        // Strict security: Only the admin can access simulated statistics
+        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
+            return res.status(403).json({ error: 'Admin only' });
+
+        const { isSimulationActive, getSimBalance, getSimVolume } = 
+            await import('./services/simulation.service.js');
+
+        if (!await isSimulationActive(telegramId))
+            return res.json({ isActive: false });
+
+        const balance = await getSimBalance(telegramId);
+        const volume = await getSimVolume(telegramId);
+        const posRaw = await redis.get(`sim:positions:${telegramId}`);
+        const positions = posRaw ? JSON.parse(posRaw) : [];
+        const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
+        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+
+        let wins = 0, losses = 0;
+        trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
+            if (t.profitPercent > 0) wins++;
+            else losses++;
+        });
+
+        res.json({
+            isActive: true,
+            balance: parseFloat(balance),
+            volume,
+            positions,
+            trades,
+            wins,
+            losses,
+            winRate: (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0"
+        });
+    } catch (e: any) {
+        res.status(500).json({ isActive: false });
+    }
+});
+
 app.post('/api/positions', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) {
