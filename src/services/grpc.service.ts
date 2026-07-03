@@ -809,10 +809,15 @@ function connectPumpPortalStream(bot: any) {
         } catch (_) {}
     });
 
-    ws.on('error', () => {});
+    ws.on('error', (err: any) => {
+        console.warn(`⚠️ [PUMP WS] Error: ${err.message}`);
+    });
+    
     ws.on('close', () => {
         isWsConnecting = false;
-        setTimeout(() => connectPumpPortalStream(bot), 15_000);
+        console.warn("⚠️ [PUMP WS] Dropped. Reconnecting in 30s to avoid 429 IP bans...");
+        // 🟢 FIX: Huge 30-second backoff to satisfy PumpPortal's strict rate limits
+        setTimeout(() => connectPumpPortalStream(bot), 30_000);
     });
 }
 

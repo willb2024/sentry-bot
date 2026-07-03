@@ -540,8 +540,9 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 bot.command('sim', async (ctx) => {
     if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
     
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("Usage: /sim <telegramId>");
+    // 🟢 FIX: Default to the user's own ID if none is provided
+    const args = ctx.message.text.split(' ');
+    const targetId = args[1] || ctx.from.id.toString(); 
     
     const { toggleSimAutoSnipe } = await import('./services/simulation.service.js');
     const isActive = await toggleSimAutoSnipe(targetId, bot);
@@ -553,10 +554,16 @@ bot.command('simbal', async (ctx) => {
     if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
     
     const args = ctx.message.text.split(' ');
-    if (args.length < 3) return ctx.reply("Usage: /simbal <telegramId> <amountSol>");
+    let targetId = ctx.from.id.toString();
+    let amount = 10; // Default to 10 SOL if they just type /simbal
     
-    const targetId = args[1];
-    const amount = parseFloat(args[2]);
+    // 🟢 FIX: Allow "/simbal 50" (self) OR "/simbal <id> 50" (someone else)
+    if (args.length === 2) {
+        amount = parseFloat(args[1]);
+    } else if (args.length >= 3) {
+        targetId = args[1];
+        amount = parseFloat(args[2]);
+    }
     
     const { redis } = await import('./lib/redis.js');
     await redis.set(`sim:balance:${targetId}`, amount.toString());

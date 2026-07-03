@@ -109,7 +109,7 @@ async function mapParallel<T, R>(
             if (i >= items.length) return;
             results[i] = await fn(items[i], i);
             // Throttle requests to prevent 429 RPC bans
-            await new Promise(r => setTimeout(r, 250)); 
+            await new Promise(r => setTimeout(r, 400)); 
         }
     }
 
@@ -371,7 +371,7 @@ export async function scoreTokens(): Promise<TokenScore[]> {
 
         console.log(`⚡ [CALLER] Scoring ${deduped.length} unique pairs from 4 sources...`);
 
-        const scored = await mapParallel(deduped, 3, async ({ pair, source }) => {
+        const scored = await mapParallel(deduped, 12, async ({ pair, source }) => {
             return await scorePair(pair, source);
         });
 
