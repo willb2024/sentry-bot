@@ -86,7 +86,7 @@ export async function simExecuteSnipe(
     tokenAddress: string,
     amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, randomTradeDelay()));
 
     const currentBal = parseFloat(await getSimBalance(telegramId));
     const newBal = Math.max(0, currentBal - amountSol - 0.001).toFixed(4);
@@ -131,7 +131,7 @@ export async function simExecuteExit(
     percent: number,
     forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, randomTradeDelay()));
 
     const posKey = `sim:positions:${telegramId}`;
     const positions = JSON.parse(await redis.get(posKey) || '[]');
@@ -199,8 +199,12 @@ export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'gu
     
     if (!seq || seq.length === 0) {
         if (type === 'caller') {
-            // Requested Mix: 2 fail, 1 win, 1 win, 1 fail, 2 wins, 1 fail -> (4 Wins, 4 Fails)
-            seq = shuffleArray([false, false, true, true, false, true, true, false]);
+            // 🟢 UPDATED: 3 Fails + 1 Win, 2 Fails + 1 Win, 1 Fail + 1 Win (6 Fails, 3 Wins total)
+            seq = shuffleArray([
+                false, false, false, true, // 3 fails, 1 win
+                false, false, true,       // 2 fails, 1 win
+                false, true               // 1 fail, 1 win
+            ]);
         } else if (type === 'guard') {
             // Requested Mix: 2 loss, 1 win, 1 win, 2 wins, 1 loss -> (4 Wins, 3 Losses)
             seq = shuffleArray([false, false, true, true, true, true, false]);
@@ -225,6 +229,7 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
 }
 
 async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
+    // 3 loss, 1 win, 2 win, 2 losses, 1 win, 1 loss, 2 losses, 2 win (14 items)
     const baseSequence = [
         false, false, false, 
         true,                
