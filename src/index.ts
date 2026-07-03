@@ -49,6 +49,7 @@ console.log("🟢 [1/5] Booting Sentry Terminal Core...");
 
 const prisma = new PrismaClient();
 const BOT_TOKEN = process.env.BOT_TOKEN || "";
+const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
 
 if (!BOT_TOKEN) { console.error("🔴 FATAL: BOT_TOKEN is missing in .env!"); process.exit(1); }
 if (!process.env.TREASURY_WALLET_ADDRESS) { console.error("🔴 FATAL: TREASURY_WALLET_ADDRESS is missing in .env! All trades will run fee-free."); process.exit(1); }
@@ -120,31 +121,49 @@ app.post('/api/sol-price', (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Server Error' }); }
 });
 
-app.post('/api/analytics', async (req, res) => {
+// 🟢 ADD THIS HELPER FUNCTION
+function extractTelegramId(initData: string): string | null {
     try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
-        
-        // Strictly fetch real trades from the live database
-        const user = await prisma.user.findUnique({ where: { telegramId }});
+        const params = new URLSearchParams(initData);
+        const userStr = params.get('user');
+        if (userStr) {
+            const user = JSON.parse(userStr);
+            return user.id ? user.id.toString() : null;
+        }
+    } catch (e) {
+        return null;
+    }
+    return null;
+}
+
+app.post('/api/analytics', async (req, res) => {
+    const initData = req.body.initData;
+    if (!initData) return res.status(401).json({ error: "No initData" });
+    const tgId = extractTelegramId(initData);
+    if (!tgId) return res.status(401).json({ error: "Invalid initData" });
+
+    try {
+        const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
         if (!user) return res.json([]);
-        
+
         const trades = await prisma.trade.findMany({
             where: { userId: user.id },
             orderBy: { createdAt: 'desc' },
             take: 100
         });
-        
-        const formattedTrades = trades.map(t => ({
-            createdAt: t.createdAt.toISOString(),
+
+        const mappedTrades = trades.map((t: any) => ({
+            createdAt: t.createdAt,
             isBuy: t.isBuy,
             amountInSol: t.amountInSol,
-            profitPercent: 0 
+            // 🟢 FIX: Send actual realized data instead of hardcoded 0
+            profitPercent: t.profitPercent || 0,
+            realizedPnlSol: t.realizedPnlSol || 0
         }));
         
-        res.json(formattedTrades);
-    } catch (e) { 
-        res.status(500).json([]); 
+        res.json(mappedTrades);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -519,51 +538,58 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 // =========================================================
 
 bot.command('sim', async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
-
-    const current = await redis.get(`sim:active:${tgId}`);
-    const newState = current === 'true' ? 'false' : 'true';
-    await redis.set(`sim:active:${tgId}`, newState);
-
-    if (newState === 'true') {
-        const { generateSimWallets } = await import('./services/simulation.service.js');
-        await redis.set(`sim:balance:${tgId}`, '12.4521');
-        await redis.set(`sim:wallets:${tgId}`, JSON.stringify(generateSimWallets()));
-    } else {
-        const keys = await redis.keys(`sim:*:${tgId}`);
-        if (keys.length > 0) await redis.del(...keys);
-    }
-
-    await ctx.replyWithHTML(
-        `🎮 <b>SIMULATION MODE: ${newState === 'true' ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
-        `${newState === 'true' ? 
-            '⚠️ <i>All trades, balances, and alerts are now simulated. No real transactions will occur.</i>' : 
-            '<i>Platform returned to live mode.</i>'
-        }`
-    );
+    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+    
+    const targetId = ctx.message.text.split(' ')[1];
+    if (!targetId) return ctx.reply("Usage: /sim <telegramId>");
+    
+    const { toggleSimAutoSnipe } = await import('./services/simulation.service.js');
+    const isActive = await toggleSimAutoSnipe(targetId, bot);
+    
+    ctx.reply(`🎮 Simulation mode for ${targetId} is now ${isActive ? 'ACTIVE' : 'INACTIVE'}.`);
 });
 
-
-bot.action('action_create_guild_prompt', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await ctx.editMessageText(
-        `🏰 <b>CREATE YOUR SENTRY GUILD</b>\n\n` +
-        `Creating a Guild costs a one-time setup fee of <b>2.0 SOL</b>.\n\n` +
-        `To begin, close this menu and type: <code>/createguild</code>`,
-        { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_devsuite')]]) }
-    );
+bot.command('simbal', async (ctx) => {
+    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
+    
+    const args = ctx.message.text.split(' ');
+    if (args.length < 3) return ctx.reply("Usage: /simbal <telegramId> <amountSol>");
+    
+    const targetId = args[1];
+    const amount = parseFloat(args[2]);
+    
+    const { redis } = await import('./lib/redis.js');
+    await redis.set(`sim:balance:${targetId}`, amount.toString());
+    
+    ctx.reply(`💰 Sim balance for ${targetId} set to ${amount} SOL.`);
 });
 
 bot.command('findkols', async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
+    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
     
-    await ctx.reply("🔍 <i>Scanning for Telegram communities (100+ members)...</i>", { parse_mode: 'HTML' });
     const { runGuildLeadScraper } = await import('./services/leadgen_guild.service.js');
-    const result = await runGuildLeadScraper(bot, tgId);
-    await ctx.replyWithHTML(result);
+    
+    ctx.reply("🔍 Scanning for high-quality KOLs (>100 members)... This takes 10-15 seconds.");
+    const result = await runGuildLeadScraper(bot, ctx.from.id.toString());
+    ctx.reply(`🏁 Scan Finished:\n${result}`, { parse_mode: 'HTML' });
 });
+
+bot.action('action_create_guild_prompt', async (ctx) => {
+    const msg = `🏰 <b>CREATE YOUR GUILD</b>\n\n` +
+                `Your Developer Suite subscription covers the cost of this Guild. Creating it is completely free!\n\n` +
+                `Use the command below to launch your Guild:\n` +
+                `<code>/createguild [Name] | [Description] | [Reward]</code>\n\n` +
+                `<i>Example:</i>\n<code>/createguild Alpha Wolves | The premier 100x gem hunters | Top 5 get WL allocation</code>`;
+    
+    await ctx.editMessageText(msg, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [[ { text: '⬅️ Back', callback_data: 'menu_guilds' } ]]
+        }
+    }).catch(() => {});
+});
+
+
 
 bot.command('createguild', async (ctx) => {
     const tgId = ctx.from?.id.toString();
@@ -2197,30 +2223,7 @@ bot.action('menu_caller', async (ctx) => {
     await sendCallerMenu(ctx, tgId, true); 
 });
 
-bot.command('simbal', async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
 
-    const { isSimulationActive } = await import('./services/simulation.service.js');
-    if (!(await isSimulationActive(tgId))) {
-        return ctx.replyWithHTML("🔴 <b>Simulation mode is NOT active.</b> Turn it on with /sim first.");
-    }
-
-    const text = (ctx.message as any).text || "";
-    const parts = text.trim().split(/\s+/);
-    
-    if (parts.length !== 2) {
-        return ctx.replyWithHTML("🔴 <b>Format Error.</b> Use: <code>/simbal [AMOUNT]</code>\nExample: <code>/simbal 150.5</code>");
-    }
-
-    const newBal = parseFloat(parts[1]);
-    if (isNaN(newBal) || newBal < 0) {
-        return ctx.replyWithHTML("🔴 <b>Invalid Amount.</b> Please provide a valid number.");
-    }
-
-    await redis.set(`sim:balance:${tgId}`, newBal.toFixed(4));
-    await ctx.replyWithHTML(`✅ <b>Simulation Balance Updated!</b>\nYou now have <b>${newBal.toFixed(4)} SOL</b>.`);
-});
 bot.action('sim_regen_wallets', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;

@@ -59,6 +59,12 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
         if (!guild || !guild.isActive) return { success: false, message: "Guild not found or inactive." };
         if (guild.ownerId === user.id) return { success: false, message: "You cannot join your own Guild." };
 
+        // 🟢 BUG FIX: Deactivate all other guild memberships first to preserve single-active-guild invariant
+        await prisma.guildMembership.updateMany({
+            where: { userId: user.id },
+            data: { isActive: false }
+        });
+
         // 🟢 BUG 4 FIX: Use upsert to prevent re-join unique constraint crashes
         await prisma.guildMembership.upsert({
             where: { guildId_userId: { guildId: guild.id, userId: user.id } },

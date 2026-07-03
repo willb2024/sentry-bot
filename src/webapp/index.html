@@ -918,11 +918,9 @@
                 const simStats = await simRes.json();
 
                 if (simStats.isActive) {
-                    // Hide the banner (no text shown — sim label on chart is enough)
                     document.getElementById('sim-mode-banner').classList.add('hidden');
                     document.getElementById('sim-chart-label').classList.remove('hidden');
 
-                    // Build sim positions for the dashboard
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint,
                         symbol: p.symbol,
@@ -932,7 +930,6 @@
                         entryPrice: p.entryPriceUsd || p.entryPrice
                     }));
 
-                    // Load sim trades into the chart data array
                     userTrades = (simStats.trades || []).map(t => ({
                         createdAt: t.createdAt,
                         isBuy: t.isBuy,
@@ -942,18 +939,15 @@
 
                     livePositionsForSynth = simPositions;
 
-                    // Calculate real stats from sim trades
                     let wins = simStats.wins || 0;
                     let losses = simStats.losses || 0;
                     let totalVolumeSol = simStats.volume || 0;
 
-                    // Calculate net worth from sim positions
                     const totalValueUsd = simPositions.reduce((sum, p) => sum + (p.valueUsd || 0), 0);
                     const simBalanceSol = parseFloat(simStats.balance) || 0;
                     const networthUsd = Math.max(totalValueUsd, simBalanceSol * 150);
                     const networthSol = simBalanceSol.toFixed(4) + " SOL";
 
-                    // PnL = difference between current balance and starting balance of 12.4521
                     const startingBalance = 12.4521;
                     const pnlSol = simBalanceSol - startingBalance;
                     const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00";
@@ -982,7 +976,6 @@
 
                     setFilter(currentFilter);
 
-                    // Render positions container with sim positions
                     if (simPositions.length === 0) {
                         document.getElementById('positions-container').innerHTML = `
                             <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
@@ -994,7 +987,6 @@
                         renderPositions(simPositions);
                     }
 
-                    // Still fetch leaderboard and affiliates normally
                     fetch('/api/my-leaderboard', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ initData: tg.initData || "" })
@@ -1007,17 +999,15 @@
                     }).then(r => r.ok ? r.json() : null)
                       .then(data => { if (data) liveAffiliateData = data; }).catch(() => {});
 
-                    // Re-poll every 4 seconds while sim is active to track new trades
                     setTimeout(() => {
                         if (!document.getElementById('demo-toggle').checked) fetchLiveData();
                     }, 4000);
 
-                    return; // STOP HERE — do not run the real data fetches below
+                    return; 
                 }
             }
         } catch (_) {}
 
-        // If we reach here, sim is not active — run normal live data fetches
         document.getElementById('sim-chart-label').classList.add('hidden');
         document.getElementById('sim-mode-banner').classList.add('hidden');
 
@@ -1066,29 +1056,39 @@
                 });
 
                 const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
-                let pnlUsd = totalValueUsd - totalInvestedUsd;
-                let pnlPercent = totalInvestedUsd > 0 ? (pnlUsd / totalInvestedUsd) * 100 : 0;
 
+                // 🟢 FIX: Realized PnL Calculation
                 let wins = 0, losses = 0, totalVolumeSol = 0;
+                let totalRealizedPnlSol = 0; 
                 let tradesForStats = userTrades.length > 0 ? userTrades : synthesizeTradesFromPositions(posArray);
 
                 tradesForStats.forEach(t => {
                     totalVolumeSol += parseFloat(t.amountInSol || 0);
                     if (!t.isBuy) {
-                        if (t.profitPercent && t.profitPercent > 0) wins++;
-                        else if (t.profitPercent && t.profitPercent < 0) losses++;
-                        else wins++;
+                        // 🟢 FIX: Tighten win/loss logic for real numbers
+                        if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) {
+                            wins++;
+                        } else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) {
+                            losses++;
+                        }
+                        
+                        // 🟢 FIX: Sum actual realized PnL
+                        totalRealizedPnlSol += (t.realizedPnlSol || 0);
                     }
                 });
 
                 const totalClosed = wins + losses;
                 const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
+                
+                // 🟢 FIX: Push realized USD into the display
+                const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
+                const finalPnlPercent = totalInvestedUsd > 0 ? (realizedPnlUsd / totalInvestedUsd) * 100 : 0;
 
                 populateDashboard({
                     networth: totalValueUsd,
                     networthSol: networthSol,
-                    pnlPercent: pnlPercent.toFixed(2),
-                    pnlUsd: pnlUsd,
+                    pnlPercent: finalPnlPercent.toFixed(2),
+                    pnlUsd: realizedPnlUsd, 
                     winrate: winRate,
                     winLossText: `${wins} Wins / ${losses} Losses`,
                     volume: `${totalVolumeSol.toFixed(2)} SOL`

@@ -94,6 +94,7 @@ const pumpClient = axios.create({
     headers: { 'User-Agent': 'Mozilla/5.0' }
 });
 
+// 🟢 REPLACED: Added a 250ms delay to respect RPC rate limits
 async function mapParallel<T, R>(
     items: T[],
     limit: number,
@@ -107,6 +108,8 @@ async function mapParallel<T, R>(
             const i = nextIdx++;
             if (i >= items.length) return;
             results[i] = await fn(items[i], i);
+            // Throttle requests to prevent 429 RPC bans
+            await new Promise(r => setTimeout(r, 250)); 
         }
     }
 
@@ -115,7 +118,6 @@ async function mapParallel<T, R>(
     );
     return results;
 }
-
 async function fetchTrendingPairs(): Promise<any[]> {
     try {
         const res = await dexClient.get('/token-profiles/latest/v1', { timeout: 5000 });
@@ -369,7 +371,7 @@ export async function scoreTokens(): Promise<TokenScore[]> {
 
         console.log(`⚡ [CALLER] Scoring ${deduped.length} unique pairs from 4 sources...`);
 
-        const scored = await mapParallel(deduped, 12, async ({ pair, source }) => {
+        const scored = await mapParallel(deduped, 3, async ({ pair, source }) => {
             return await scorePair(pair, source);
         });
 

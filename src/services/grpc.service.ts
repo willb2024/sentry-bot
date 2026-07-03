@@ -812,7 +812,7 @@ function connectPumpPortalStream(bot: any) {
     ws.on('error', () => {});
     ws.on('close', () => {
         isWsConnecting = false;
-        setTimeout(() => connectPumpPortalStream(bot), 5_000);
+        setTimeout(() => connectPumpPortalStream(bot), 15_000);
     });
 }
 
