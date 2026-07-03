@@ -37,6 +37,8 @@ interface GuildLead {
     source: string;
     hasToken: boolean;
     keywords: string[];
+    tokenAddress?: string;   // 🟢 NEW: Capture token contract address
+    creatorWallet?: string;  // 🟢 NEW: Capture creator/deployer wallet address
 }
 
 // ─── Redis dedup ──────────────────────────────────────────────────────────────
@@ -177,7 +179,8 @@ async function fetchBoostedTokenKols(): Promise<GuildLead[]> {
                 const { score, pitchType, keywords } = scoreGuildFit(0, description + ' launch token presale solana', true);
                 leads.push({
                     url, platform: 'telegram', memberCount: 0, title: `$${token.symbol || 'UNKNOWN'} (Boosted)`, description,
-                    guildFitScore: Math.min(100, score + 20), pitchType: 'PROJECT_OWNER', source: 'dexscreener-boost', hasToken: true, keywords: [...keywords, 'paid-boost']
+                    guildFitScore: Math.min(100, score + 20), pitchType: 'PROJECT_OWNER', source: 'dexscreener-boost', hasToken: true, keywords: [...keywords, 'paid-boost'],
+                    tokenAddress: token.tokenAddress // 🟢 Capture contract address
                 });
             }
         }
@@ -206,6 +209,16 @@ async function enrichMemberCount(lead: GuildLead): Promise<number> {
         }
     } catch { }
     return 0;
+}
+
+// 🟢 NEW: Fetch pump.fun coin creator directly via HTTP (Zero RPC overhead to prevent 429s)
+async function fetchPumpCreator(mint: string): Promise<string | null> {
+    try {
+        const res = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, { timeout: 3500 });
+        return res.data?.creator || null;
+    } catch {
+        return null;
+    }
 }
 
 async function qualifyLead(lead: GuildLead): Promise<{ qualifies: boolean; memberCount: number }> {
@@ -249,9 +262,27 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
                 continue;
             }
 
+            // 🟢 NEW: If there is an associated token CA, query the developer/creator wallet
+            if (lead.tokenAddress && lead.tokenAddress.toLowerCase().endsWith('pump')) {
+                const creator = await fetchPumpCreator(lead.tokenAddress);
+                if (creator) {
+                    lead.creatorWallet = creator;
+                }
+            }
+
             await markContacted(lead.url);
             sent++;
             
+            // 🟢 NEW: Format a ready-to-copy customized pitch message with CA, Wallet & Text
+            let tokenAndPitchInfo = '';
+            if (lead.tokenAddress) {
+                tokenAndPitchInfo = 
+                    `🪙 <b>Token Address (CA):</b> <code>${lead.tokenAddress}</code>\n` +
+                    `🐋 <b>Creator Wallet:</b> <code>${lead.creatorWallet || 'Unable to fetch'}</code>\n\n` +
+                    `📢 <b>PITCH TEMPLATE (Ready to copy & send):</b>\n` +
+                    `<code>Hey! Just saw your project trending on DexScreener. I bought a bag at CA ${lead.tokenAddress} to show support. Would love to bring our Alpha Guild trading volume into your community. Let's run a leaderboard together to coordinate our buys!</code>\n\n`;
+            }
+
             const message = 
                 `🔥 <b>KOL FOUND #${sent}</b>\n\n` +
                 `<b>Target:</b> ${lead.title}\n` +
@@ -259,6 +290,7 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
                 `<b>Source:</b> <code>${lead.source}</code>\n\n` +
                 `<b>Quality Score:</b> ${lead.guildFitScore}/100 ⭐\n` +
                 `<b>Type:</b> ${lead.pitchType}\n\n` +
+                tokenAndPitchInfo +
                 `🔗 <b>Link:</b> ${lead.url}`;
 
             await bot.telegram.sendMessage(adminId, message, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }).catch(() => null);
