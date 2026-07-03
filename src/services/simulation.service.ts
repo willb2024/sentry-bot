@@ -116,12 +116,132 @@ export async function simExecuteSnipe(
     });
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
 
+    // Also store as a guard in Redis exactly like the real system does
+    const orderId = crypto.randomUUID();
+    const guardOrder = {
+        id: orderId,
+        telegramId,
+        tokenAddress,
+        trailingPercent: 20,
+        highestSeenPrice: entryPriceSol,
+        amountInSol: amountSol,
+        entryPrice: entryPriceSol,
+        takeProfitPercent: 50
+    };
+    await redis.set(`sim:guard:${tokenAddress}:${telegramId}`, JSON.stringify(guardOrder), 'EX', 3600);
+
+    // Schedule a realistic guard trigger between 10-45 seconds after buy
+    const triggerDelay = Math.floor(Math.random() * 35000) + 10000;
+    scheduleSimGuardTrigger(telegramId, tokenAddress, orderId, amountSol, entryPriceSol, symbol, triggerDelay);
+
     return {
         success: true,
         signature: generateSimSignature(),
         message: '🟢 Simulation: Jito bundle confirmed.',
         volumeSpent: amountSol
     };
+}
+
+// Fires a realistic guard/TP notification after a delay — identical to the real grpc.service output
+async function scheduleSimGuardTrigger(
+    telegramId: string,
+    tokenAddress: string,
+    orderId: string,
+    amountInSol: number,
+    entryPrice: number,
+    symbol: string,
+    delayMs: number
+) {
+    setTimeout(async () => {
+        try {
+            // Check the guard still exists (user may have sold manually)
+            const guardRaw = await redis.get(`sim:guard:${tokenAddress}:${telegramId}`);
+            if (!guardRaw) return;
+
+            // 70% chance profit, 30% chance loss — weighted toward profit for demo
+            const isProfit = Math.random() > 0.3;
+            const pnlPercent = isProfit
+                ? parseFloat((Math.random() * 280 + 20).toFixed(2))   // +20% to +300%
+                : -parseFloat((Math.random() * 25 + 5).toFixed(2));   // 🟢 Fixed type compiler error
+
+            const exitSig = generateSimSignature();
+            const currentPrice = entryPrice * (1 + pnlPercent / 100);
+            const pnlSol = (amountInSol * Math.abs(pnlPercent / 100));
+
+            const pnlMessage = pnlPercent >= 0
+                ? `💰 <b>Secured Profit: +${pnlSol.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
+                : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
+
+            const isTP = isProfit && Math.random() > 0.5;
+
+            const captionText = isTP
+                ? `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\n` +
+                  `Token: <code>${tokenAddress.substring(0, 8)}...</code>\n` +
+                  `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)\n` +
+                  `Status: 🟢 Auto-Sold 100% via Jito.\n` +
+                  `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`
+                : `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\n` +
+                  `Token: <code>${tokenAddress.substring(0, 8)}...</code>\n` +
+                  `📉 <b>Peak Drop: -${Math.abs(pnlPercent).toFixed(1)}%</b>\n` +
+                  `${pnlMessage}\n` +
+                  `Status: 🟢 Auto-Sold 100% to protect capital.\n` +
+                  `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
+
+            // Update sim balance
+            const currentBal = parseFloat(await getSimBalance(telegramId));
+            const returnSol = amountInSol + (amountInSol * (pnlPercent / 100));
+            await redis.set(`sim:balance:${telegramId}`, Math.max(0, currentBal + returnSol).toFixed(4));
+
+            // Remove position
+            const posKey = `sim:positions:${telegramId}`;
+            const positions = JSON.parse(await redis.get(posKey) || '[]');
+            const updated = positions.filter((p: any) => p.mint !== tokenAddress);
+            await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
+            await redis.del(`sim:guard:${tokenAddress}:${telegramId}`);
+
+            // Send PnL card exactly like the real system
+            const user = await prisma.user.findUnique({ where: { telegramId } });
+
+            try {
+                const telegramBotToken = process.env.BOT_TOKEN!;
+                const imageBuffer = await generatePnlCard(
+                    tokenAddress,
+                    pnlPercent,
+                    user?.referralCode ?? undefined
+                );
+                
+                // @ts-ignore
+                const fetch = (await import('node-fetch')).default;
+                // @ts-ignore
+                const FormData = (await import('form-data')).default;
+                
+                const form = new FormData();
+                form.append('chat_id', telegramId);
+                form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
+                form.append('caption', captionText);
+                form.append('parse_mode', 'HTML');
+                
+                await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
+                    method: 'POST',
+                    body: form
+                });
+            } catch (_) {
+                // Text fallback
+                // @ts-ignore
+                const fetch = (await import('node-fetch')).default;
+                await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chat_id: telegramId,
+                        text: captionText,
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true
+                    })
+                });
+            }
+        } catch (_) {}
+    }, delayMs);
 }
 
 export async function simExecuteExit(
@@ -136,47 +256,69 @@ export async function simExecuteExit(
     const positions = JSON.parse(await redis.get(posKey) || '[]');
     const pos = positions.find((p: any) => p.mint === tokenAddress);
 
-    let pnlPercent = forcedPnlPercent !== undefined 
-        ? forcedPnlPercent 
-        : parseFloat((Math.random() * 325 + 15).toFixed(2));
+    const pnlPercent = parseFloat((Math.random() * 280 + 15).toFixed(2));
+    const sig = generateSimSignature();
 
     if (pos) {
         const soldSol = pos.amountInSol * (percent / 100);
-        
-        const rawReturn = soldSol * (1 + pnlPercent / 100);
-        const platformFee = rawReturn * 0.01;
-        const jitoTip = 0.0015;
-        const netReturnSol = rawReturn - platformFee - jitoTip;
-
+        const returnSol = soldSol * (1 + pnlPercent / 100);
         const currentBal = parseFloat(await getSimBalance(telegramId));
-        await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
+        await redis.set(`sim:balance:${telegramId}`, (currentBal + returnSol).toFixed(4));
 
         if (percent === 100) {
             const updated = positions.filter((p: any) => p.mint !== tokenAddress);
             await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
+            await redis.del(`sim:guard:${tokenAddress}:${telegramId}`);
         }
     }
 
     return {
         success: true,
-        signature: generateSimSignature(),
-        message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
+        signature: sig,
+        message: `🟢 Trade Confirmed via Jito Bundle. W1: ✅`
     };
 }
 
-export function generateSimCallerAlert(): { mint: string, symbol: string, score: number, reasons: string[], priceChangeM5: number, ageMins: number } {
-    const symbols = ['DOGE', 'BONK', 'WIF', 'MYRO', 'POPCAT', 'ZEUS', 'BOME', 'MEW', 'SLERF'];
+export function generateSimCallerAlert(): {
+    mint: string,
+    symbol: string,
+    score: number,
+    reasons: string[],
+    priceChangeM5: number,
+    ageMins: number
+} {
+    const symbols = ['DOGE', 'BONK', 'WIF', 'MYRO', 'POPCAT', 'ZEUS', 'BOME', 'MEW', 'SLERF', 'GIGA', 'HARAMBE', 'COPE', 'CHAD', 'FOMO', 'MOCHI'];
+    const symbol = symbols[Math.floor(Math.random() * symbols.length)];
+    const score = Math.floor(Math.random() * 25) + 75; // 75-100 — only high scores in sim
     const priceChangeM5 = parseFloat((Math.random() * 220 + 30).toFixed(1));
+    const ageMins = Math.floor(Math.random() * 45) + 2;
+    const liqK = Math.floor(Math.random() * 120 + 25);
+    const buyPct = Math.floor(Math.random() * 20 + 65);
+
+    const possibleReasons = [
+        `🔥 High momentum (+${Math.floor(priceChangeM5 * 1.3)}% vol spike vs last hour)`,
+        `📈 Heavy buy pressure (${buyPct}% buys in last 60 txs)`,
+        `💧 Deep liquidity ($${liqK}k USD locked)`,
+        `👶 Very fresh (${ageMins} mins old)`,
+        `🛡️ RugCheck passed: Low Risk (Safe contract)`,
+        `🚀 Curve ${Math.floor(Math.random() * 30 + 55)}% to graduation`,
+        `📊 24H Volume: $${Math.floor(Math.random() * 800 + 50).toLocaleString()}k`
+    ];
+
+    const shuffled = possibleReasons.sort(() => Math.random() - 0.5);
+    const reasons = shuffled.slice(0, Math.floor(Math.random() * 2) + 3);
+
     return {
-        mint: generateSimTokenCA(),
-        symbol: symbols[Math.floor(Math.random() * symbols.length)],
-        score: Math.floor(Math.random() * 25) + 75,
-        reasons: [`🔥 High momentum (+${Math.floor(priceChangeM5 * 1.3)}% vol spike)`, `📈 Heavy buy pressure`, `💧 Deep liquidity`],
+        mint: generateSimTokenCA(), // Single random CA — not a sequence
+        symbol,
+        score,
+        reasons,
         priceChangeM5,
-        ageMins: Math.floor(Math.random() * 45) + 2
+        ageMins
     };
 }
 
+// 🟢 Utility: Shuffle arrays safely
 function shuffleArray<T>(array: T[]): T[] {
     const arr = [...array];
     for (let i = arr.length - 1; i > 0; i--) {
@@ -295,23 +437,6 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
             ? `💰 <b>Net Profit: +${Math.abs(pnlSol).toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
             : `🩸 <b>Incurred Loss: -${Math.abs(pnlSol).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
 
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-        const telegramBotToken = process.env.BOT_TOKEN!;
-        const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
-        
-        // 🟢 GAP 2 FIX: Host the image on Redis and build the dynamic OpenGraph sharing link
-        const imgId = crypto.randomBytes(8).toString('hex');
-        await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
-        
-        const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
-        const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
-        
-        const tweetText = encodeURIComponent(
-            `Just secured a verified ${isProfit ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\n` +
-            `Verified details: ${shareUrl}`
-        );
-        const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
-
         const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
             `Token: <code>${tokenAddress.substring(0,8)}...</code>\n` +
             `Exit Price: <b>${exitPriceSol.toFixed(9)} SOL</b>\n` +
@@ -320,6 +445,10 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
             `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
             `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
 
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        const telegramBotToken = process.env.BOT_TOKEN!;
+        const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
+        
         // @ts-ignore
         const fetch = (await import('node-fetch')).default;
         // @ts-ignore
@@ -330,7 +459,6 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
         form.append('caption', captionText);
         form.append('parse_mode', 'HTML');
-        form.append('reply_markup', JSON.stringify(twitterBtn));
         
         await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
             method: 'POST', body: form
