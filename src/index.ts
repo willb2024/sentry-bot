@@ -576,6 +576,41 @@ bot.command('sim', async (ctx) => {
         await ctx.replyWithHTML(`🔴 <b>SIM ERROR:</b> ${e.message}`);
     }
 });
+bot.action('menu_token_launcher', async (ctx) => {
+    const tgId = ctx.from?.id.toString()!;
+    const { redis } = await import('./lib/redis.js');
+    
+    const keys = await redis.keys(`token_launch:${tgId}:*`);
+    if (keys.length > 0) await redis.del(...keys);
+
+    await redis.set(`token_launch:${tgId}:step`, 'AWAITING_NAME', 'EX', 900);
+
+    const msg = `🚀 <b>THE SENTRY LAUNCHPAD</b> 🚀\n` +
+                `<i>Launch a Pump.fun coin with Elite Insider Tools.</i>\n\n` +
+                `<b>Why launch with Sentry?</b>\n` +
+                `🛡️ <b>MEV Protection:</b> Your launch + dev buys are packed in a Block-0 Jito Bundle. Zero snipers can front-run your entry.\n` +
+                `🐋 <b>Whale Stealth:</b> Split your dev buy across up to 4 different wallets instantly. Look organic and hide your footprint.\n` +
+                `✨ <b>Vanity CAs:</b> Generate a custom Contract Address (e.g. <code>CAT...pump</code>).\n\n` +
+                `<b>Step 1/7:</b> What is the <b>Name</b> of your token?\n` +
+                `<i>(e.g., Doge Killer)</i>\n\n` +
+                `<i>Type /cancel at any time to abort.</i>`;
+
+    await ctx.editMessageText(msg, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'action_abort_token_launch' }]] }
+    }).catch(() => {});
+});
+
+bot.action('action_abort_token_launch', async (ctx) => {
+    const tgId = ctx.from?.id.toString()!;
+    const { redis } = await import('./lib/redis.js');
+    const keys = await redis.keys(`token_launch:${tgId}:*`);
+    if (keys.length > 0) await redis.del(...keys);
+    await ctx.editMessageText(`❌ <b>Token launch cancelled.</b>`, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Menu', callback_data: 'menu_main' }]] }
+    }).catch(() => {});
+});
 
 bot.command('simbal', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
@@ -874,6 +909,9 @@ bot.action(/^export_guild_(.+)$/, async (ctx) => {
 
     await ctx.replyWithHTML(guideText);
 });
+// =========================================================
+// 🚀 COMMAND: /start & ONBOARDING
+// =========================================================
 // =========================================================
 // 🚀 COMMAND: /start & ONBOARDING
 // =========================================================
@@ -3100,12 +3138,141 @@ bot.action('cancel_buy', async (ctx) => {
 });
 
 // =========================================================
+// 🚀 TOKEN LAUNCHER CONFIRMATION
+// =========================================================
+bot.action('action_confirm_token_launch', async (ctx) => {
+    const tgId = ctx.from?.id.toString()!;
+    const { redis } = await import('./lib/redis.js');
+    const { uploadMetadataToIpfs, launchTokenOnPumpFun } = await import('./services/token_launch.service.js');
+
+    const step = await redis.get(`token_launch:${tgId}:step`);
+    if (step !== 'READY_TO_LAUNCH') return ctx.answerCbQuery("Launch session expired.", { show_alert: true });
+
+    const name = await redis.get(`token_launch:${tgId}:name`);
+    const symbol = await redis.get(`token_launch:${tgId}:symbol`);
+    const description = await redis.get(`token_launch:${tgId}:description`);
+    const imageUrl = await redis.get(`token_launch:${tgId}:imageUrl`);
+    const vanity = await redis.get(`token_launch:${tgId}:vanity`);
+    const devBuy = parseFloat(await redis.get(`token_launch:${tgId}:devbuy`) || '0');
+    const wallets = parseInt(await redis.get(`token_launch:${tgId}:wallets`) || '1');
+
+    const loader = await ctx.replyWithHTML(`<i>⏳ Generating Token Metadata and sending Jito Bundle... This takes ~15 seconds.</i>`);
+
+    // Clean up Redis immediately to prevent double clicks
+    const keys = await redis.keys(`token_launch:${tgId}:*`);
+    if (keys.length > 0) await redis.del(...keys);
+
+    const metadataUri = await uploadMetadataToIpfs(name!, symbol!, description!, imageUrl!);
+    if (!metadataUri) {
+        return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Metadata Upload Failed.</b> Please try again.`, { parse_mode: 'HTML' });
+    }
+
+    const result = await launchTokenOnPumpFun(tgId, name!, symbol!, description!, metadataUri, devBuy, vanity!, wallets);
+
+    if (result.success) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `✅ <b>TOKEN LAUNCHED SUCCESSFULLY!</b> 🚀\n\n` +
+            `• <b>Token:</b> ${name} ($${symbol})\n` +
+            `• <b>Contract (CA):</b> <code>${result.tokenAddress}</code>\n\n` +
+            `🔗 <a href="https://pump.fun/${result.tokenAddress}">View on Pump.fun</a>\n` +
+            `🔗 <a href="https://solscan.io/tx/${result.signature}">View Receipt on Solscan</a>\n\n` +
+            `<i>What do you want to do next?</i>`,
+            {
+                parse_mode: 'HTML',
+                link_preview_options: { is_disabled: true },
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '📈 View Positions & Arm Guard', callback_data: 'menu_positions' }],
+                        [{ text: '⬅️ Main Menu', callback_data: 'btn_dashboard' }]
+                    ]
+                }
+            }
+        );
+    } else {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `🔴 <b>Launch Failed:</b>\n<code>${result.message}</code>\n\nCheck that you have enough SOL in your Main Wallet (W1) to cover the Dev Buy + Fees.`,
+            { parse_mode: 'HTML' }
+        );
+    }
+});
+
+// =========================================================
+// 📷 PHOTO INTERCEPTOR (For Token Logo)
+// =========================================================
+bot.on('photo', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    
+    const { redis } = await import('./lib/redis.js');
+    const launchStep = await redis.get(`token_launch:${tgId}:step`);
+
+    if (launchStep === 'AWAITING_IMAGE') {
+        const loader = await ctx.replyWithHTML(`<i>⏳ Generating Vanity CA and uploading to IPFS...</i>`);
+        
+        try {
+            const photo = ctx.message.photo[ctx.message.photo.length - 1];
+            const fileLink = await ctx.telegram.getFileLink(photo.file_id);
+            const fetch = (await import('node-fetch')).default;
+            const imageRes = await fetch(fileLink.href);
+            const imageBuffer = Buffer.from(await imageRes.arrayBuffer());
+            
+            const { uploadImageToIpfs, TOKEN_LAUNCH_PLATFORM_FEE_SOL } = await import('./services/token_launch.service.js');
+            const imageUrl = await uploadImageToIpfs(imageBuffer, `${tgId}_token.png`);
+            if (!imageUrl) throw new Error("IPFS upload failed.");
+            
+            await redis.set(`token_launch:${tgId}:imageUrl`, imageUrl, 'EX', 900);
+            await redis.set(`token_launch:${tgId}:step`, 'READY_TO_LAUNCH', 'EX', 900);
+            
+            const name = await redis.get(`token_launch:${tgId}:name`);
+            const symbol = await redis.get(`token_launch:${tgId}:symbol`);
+            const description = await redis.get(`token_launch:${tgId}:description`);
+            const devBuy = parseFloat(await redis.get(`token_launch:${tgId}:devbuy`) || '0');
+            const wallets = parseInt(await redis.get(`token_launch:${tgId}:wallets`) || '1');
+
+            // Admin Backdoor Check for display purposes
+            const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
+            const isAdmin = ADMIN_IDS.includes(tgId);
+            const displayFee = isAdmin ? 0 : TOKEN_LAUNCH_PLATFORM_FEE_SOL;
+            const totalCost = (0.02 + displayFee + devBuy).toFixed(3);
+
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                `🚀 <b>CONFIRM TOKEN LAUNCH</b>\n\n` +
+                `• <b>Name:</b> ${name}\n` +
+                `• <b>Symbol:</b> $${symbol}\n` +
+                `• <b>Description:</b> ${description}\n` +
+                `• <b>Dev Buy:</b> ${devBuy} SOL\n` +
+                `• <b>Stealth Wallets:</b> ${wallets}\n\n` +
+                `💳 <b>ESTIMATED COST:</b>\n` +
+                `  <code>0.02 SOL</code> (Pump.fun curve fee)\n` +
+                `  <code>${displayFee} SOL</code> (Sentry Platform fee${isAdmin ? ' [WAIVED]' : ''})\n` +
+                `  <code>${devBuy} SOL</code> (Your Dev Buy)\n` +
+                `  <b>~${totalCost} SOL Total</b> (Plus network gas/Jito Tip)\n\n` +
+                `<i>Ready to deploy via Jito?</i>`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🚀 DEPLOY TOKEN NOW', callback_data: 'action_confirm_token_launch' }],
+                            [{ text: '❌ Cancel', callback_data: 'action_abort_token_launch' }]
+                        ]
+                    }
+                }
+            );
+        } catch (e: any) {
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Error:</b> ${e.message}\nPlease try sending the image again.`, { parse_mode: 'HTML' });
+        }
+    }
+});
+
+// =========================================================
 // ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
 // =========================================================
 bot.on("text", async (ctx, next) => {
     const text = ctx.message.text.trim();
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return next();
+
+    const { redis } = await import('./lib/redis.js');
 
     if (text.toLowerCase() === '/cancel' || text.toLowerCase() === 'cancel') {
         const keysToClear = [
@@ -3120,13 +3287,59 @@ bot.on("text", async (ctx, next) => {
             `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`,
             `sim:autosnipe:${telegramId}`, `sim:caller_seq:${telegramId}`
         ];
-        if (redis.del) await redis.del(...keysToClear); 
+        
+        await redis.del(...keysToClear); 
+        
+        const launchKeys = await redis.keys(`token_launch:${telegramId}:*`);
+        if (launchKeys.length > 0) await redis.del(...launchKeys);
 
         await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
         await sendOrEditDashboard(ctx, telegramId, false);
         return;
     }
     
+    // 🚀 TOKEN LAUNCH WIZARD INTERCEPTOR
+    const launchStep = await redis.get(`token_launch:${telegramId}:step`);
+    if (launchStep) {
+        if (launchStep === 'AWAITING_NAME') {
+            await redis.set(`token_launch:${telegramId}:name`, text, 'EX', 900);
+            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_SYMBOL', 'EX', 900);
+            return ctx.replyWithHTML(`✅ Name saved.\n\n<b>Step 2/7:</b> What is your token <b>Ticker/Symbol</b>?\n<i>(e.g., DOGE) Max 10 chars.</i>`);
+        }
+        if (launchStep === 'AWAITING_SYMBOL') {
+            const symbol = text.toUpperCase().trim().replace(/[^A-Z0-9]/g, '').substring(0, 10);
+            await redis.set(`token_launch:${telegramId}:symbol`, symbol, 'EX', 900);
+            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_DESC', 'EX', 900);
+            return ctx.replyWithHTML(`✅ Symbol saved as <b>$${symbol}</b>\n\n<b>Step 3/7:</b> Enter a short <b>Description</b> for your token:`);
+        }
+        if (launchStep === 'AWAITING_DESC') {
+            await redis.set(`token_launch:${telegramId}:description`, text, 'EX', 900);
+            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_VANITY', 'EX', 900);
+            return ctx.replyWithHTML(`✅ Description saved.\n\n<b>Step 4/7:</b> Do you want a <b>Vanity Contract Address</b>?\n\nIf you want your CA to start with specific letters (e.g., <code>CAT</code>), enter 2 to 4 letters here.\n\n<i>Type <b>NO</b> for a standard random address.</i>`);
+        }
+        if (launchStep === 'AWAITING_VANITY') {
+            const prefix = text.toUpperCase().trim();
+            await redis.set(`token_launch:${telegramId}:vanity`, prefix, 'EX', 900);
+            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_DEVBUY', 'EX', 900);
+            return ctx.replyWithHTML(`✅ Vanity preference saved.\n\n<b>Step 5/7:</b> How much SOL do you want to <b>Invest (Dev Buy)</b> initially?\n<i>(Enter a number, e.g., 0.5. Enter 0 for no dev buy)</i>`);
+        }
+        if (launchStep === 'AWAITING_DEVBUY') {
+            const buyAmt = parseFloat(text);
+            if (isNaN(buyAmt) || buyAmt < 0) return ctx.replyWithHTML("⚠️ Invalid amount. Please enter a number.");
+            await redis.set(`token_launch:${telegramId}:devbuy`, buyAmt.toString(), 'EX', 900);
+            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_SPLIT', 'EX', 900);
+            return ctx.replyWithHTML(`✅ Dev Buy set to <b>${buyAmt} SOL</b>.\n\n<b>Step 6/7: Whale Stealth Distribution</b> 🐋\nHow many wallets should we split this buy across simultaneously in Block-0?\n\n<i>Enter a number from <b>1 to 4</b>.</i>`);
+        }
+        if (launchStep === 'AWAITING_SPLIT') {
+            const wallets = parseInt(text);
+            if (isNaN(wallets) || wallets < 1 || wallets > 4) return ctx.replyWithHTML("⚠️ Invalid. Please enter 1, 2, 3, or 4.");
+            await redis.set(`token_launch:${telegramId}:wallets`, wallets.toString(), 'EX', 900);
+            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_IMAGE', 'EX', 900);
+            return ctx.replyWithHTML(`✅ Stealth Split set to <b>${wallets} Wallets</b>.\n\n<b>Step 7/7:</b> Please send an <b>Image</b> (JPG/PNG) for your token logo to complete the setup.`);
+        }
+        return;
+    }
+
     if (text.startsWith("/")) return next();
 
     try {
@@ -3156,126 +3369,122 @@ bot.on("text", async (ctx, next) => {
             return;
         }
 
-        // Add these to keysToClear in the /cancel intercept block:
-// `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`
-
-// 🟢 CATCH CALLER INLINE GUARD INPUT
-const callerGuardCA = await redis.get(`state:caller_guard_input:${telegramId}`);
-if (callerGuardCA) {
-    await redis.del(`state:caller_guard_input:${telegramId}`);
-    const parts = text.trim().split(/\s+/);
-    if (parts.length !== 2 && parts.length !== 3) {
-        return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>");
-    }
-    
-    const trailPct = parseFloat(parts[0]);
-    const solAmt = parseFloat(parts[1]);
-    const tpPct = parts.length === 3 ? parseFloat(parts[2]) : undefined;
-
-    if (isNaN(trailPct) || isNaN(solAmt) || (tpPct !== undefined && isNaN(tpPct))) {
-        return ctx.reply("🔴 Invalid numbers provided.");
-    }
-
-    const loader = await ctx.replyWithHTML(`<i>⏳ Executing Jito Trade & Syncing Guard...</i>`);
-    try {
-        const buyResult = await executeSnipe(telegramId, callerGuardCA, solAmt);
-        if (!buyResult.success) {
-            return await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `${buyResult.message}`, { parse_mode: 'HTML' });
-        }
-
-        let initialPriceNative = 0;
-        try {
-            const priceRes = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${callerGuardCA}`).catch(() => null);
-            initialPriceNative = priceRes?.data?.data?.[callerGuardCA]?.price || 0;
-        } catch (_) {}
-
-        await addTrailingStopToMemory(telegramId, callerGuardCA, trailPct, solAmt, initialPriceNative, tpPct);
-        
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
-            `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\nToken: <code>${callerGuardCA.substring(0,8)}...</code>\nInvested: <b>${solAmt} SOL</b>\nTrailing Drop: <b>-${trailPct}%</b>\nTake Profit: ${tpPct ? `<b>+${tpPct}%</b>` : `<i>Not Set</i>`}\n\n🔗 <a href="https://solscan.io/tx/${buyResult.signature}">View on Solscan</a>`, 
-            { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-        );
-    } catch (e: any) {
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Error:</b> ${e.message}`, { parse_mode: 'HTML' });
-    }
-    return;
-}
-
-// 🟢 CATCH CALLER INLINE DCA INPUT
-const callerDcaCA = await redis.get(`state:caller_dca_input:${telegramId}`);
-if (callerDcaCA) {
-    await redis.del(`state:caller_dca_input:${telegramId}`);
-    try {
-        const parts = text.trim().split(/\s+/);
-        if (parts.length < 3 || parts.length > 5) {
-            return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[INTERVAL] [AMOUNT] [DROP %] [OPTIONAL TP] [OPTIONAL BUDGET]</code>");
-        }
-
-        const intervalMins = parseInt(parts[0]);
-        const solAmt = parseFloat(parts[1]);
-        const dropPct = parseFloat(parts[2]);
-        const tpPct = (parts.length >= 4 && parseFloat(parts[3]) !== 0) ? parseFloat(parts[3]) : undefined;
-        const maxBudget = parts.length === 5 ? parseFloat(parts[4]) : undefined;
-
-        if (isNaN(intervalMins) || isNaN(solAmt) || isNaN(dropPct)) {
-            return ctx.reply("🔴 Invalid numbers provided.");
-        }
-
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-        if (!user) return ctx.reply("🔴 User not found.");
-
-        await prisma.activeOrder.create({
-            data: {
-                userId: user.id,
-                tokenAddress: callerDcaCA,
-                orderType: 'DCA',
-                amountSol: solAmt,
-                dcaIntervalMins: intervalMins,
-                trailingPercent: dropPct,
-                takeProfitPercent: tpPct || null,
-                maxBudgetSol: maxBudget || null,
-                isActive: true
+        // 🟢 CATCH CALLER INLINE GUARD INPUT
+        const callerGuardCA = await redis.get(`state:caller_guard_input:${telegramId}`);
+        if (callerGuardCA) {
+            await redis.del(`state:caller_guard_input:${telegramId}`);
+            const parts = text.trim().split(/\s+/);
+            if (parts.length !== 2 && parts.length !== 3) {
+                return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>");
             }
-        });
+            
+            const trailPct = parseFloat(parts[0]);
+            const solAmt = parseFloat(parts[1]);
+            const tpPct = parts.length === 3 ? parseFloat(parts[2]) : undefined;
 
-        return ctx.replyWithHTML(`🟢 <b>TWAP/DCA SCHEDULE DEPLOYED</b>\n\nToken: <code>${callerDcaCA.substring(0,8)}...</code>\nInterval: <b>Every ${intervalMins} Minutes</b>\nAmount: <b>${solAmt} SOL per interval</b>\nMax Budget: <b>${maxBudget ? `${maxBudget} SOL` : 'Infinite'}</b>\nGuard: <b>-${dropPct}%</b>\nTake Profit: <b>${tpPct ? `+${tpPct}%` : 'Not Set'}</b>`);
-    } catch (e: any) {
-        return ctx.reply(`🔴 Error deploying DCA: ${e.message}`);
-    }
-}
+            if (isNaN(trailPct) || isNaN(solAmt) || (tpPct !== undefined && isNaN(tpPct))) {
+                return ctx.reply("🔴 Invalid numbers provided.");
+            }
 
-// CATCH CALLER AGE EDIT
-const callerAgeState = await redis.get(`state:edit_caller_age:${telegramId}`);
-if (callerAgeState) {
-    await redis.del(`state:edit_caller_age:${telegramId}`);
-    const val = parseInt(text.trim());
-    if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Age.</b> Must be a positive number.");
-    
-    await setUserCallerFilters(telegramId, { maxAgeMins: val });
-    await ctx.replyWithHTML(`✅ <b>Max Age updated to ${val} minutes!</b>`);
-    await sendCallerMenu(ctx, telegramId, false);
-    return;
-}
+            const loader = await ctx.replyWithHTML(`<i>⏳ Executing Jito Trade & Syncing Guard...</i>`);
+            try {
+                const buyResult = await executeSnipe(telegramId, callerGuardCA, solAmt);
+                if (!buyResult.success) {
+                    return await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `${buyResult.message}`, { parse_mode: 'HTML' });
+                }
 
-// CATCH CALLER PCT EDIT
-const callerPctState = await redis.get(`state:edit_caller_pct:${telegramId}`);
-if (callerPctState) {
-    await redis.del(`state:edit_caller_pct:${telegramId}`);
-    const parts = text.trim().split(/\s+/);
-    if (parts.length !== 2) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Use: <code>[MIN_%] [MAX_%]</code> (Example: <code>10 500</code>)");
-    
-    const min = parseFloat(parts[0]);
-    const max = parseFloat(parts[1]);
-    if (isNaN(min) || isNaN(max) || min > max) return ctx.replyWithHTML("🔴 <b>Invalid Range.</b> Make sure Minimum is less than or equal to Maximum.");
-    
-    await setUserCallerFilters(telegramId, { minPctChange: min, maxPctChange: max });
-    await ctx.replyWithHTML(`✅ <b>Percentage Range updated to ${min}% - ${max}%!</b>`);
-    await sendCallerMenu(ctx, telegramId, false);
-    return;
-}
+                let initialPriceNative = 0;
+                try {
+                    const priceRes = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${callerGuardCA}`).catch(() => null);
+                    initialPriceNative = priceRes?.data?.data?.[callerGuardCA]?.price || 0;
+                } catch (_) {}
 
+                await addTrailingStopToMemory(telegramId, callerGuardCA, trailPct, solAmt, initialPriceNative, tpPct);
+                
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                    `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\nToken: <code>${callerGuardCA.substring(0,8)}...</code>\nInvested: <b>${solAmt} SOL</b>\nTrailing Drop: <b>-${trailPct}%</b>\nTake Profit: ${tpPct ? `<b>+${tpPct}%</b>` : `<i>Not Set</i>`}\n\n🔗 <a href="https://solscan.io/tx/${buyResult.signature}">View on Solscan</a>`, 
+                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                );
+            } catch (e: any) {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Error:</b> ${e.message}`, { parse_mode: 'HTML' });
+            }
+            return;
+        }
 
-// 🟢 CATCH CALLER SCORE EDIT
+        // 🟢 CATCH CALLER INLINE DCA INPUT
+        const callerDcaCA = await redis.get(`state:caller_dca_input:${telegramId}`);
+        if (callerDcaCA) {
+            await redis.del(`state:caller_dca_input:${telegramId}`);
+            try {
+                const parts = text.trim().split(/\s+/);
+                if (parts.length < 3 || parts.length > 5) {
+                    return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[INTERVAL] [AMOUNT] [DROP %] [OPTIONAL TP] [OPTIONAL BUDGET]</code>");
+                }
+
+                const intervalMins = parseInt(parts[0]);
+                const solAmt = parseFloat(parts[1]);
+                const dropPct = parseFloat(parts[2]);
+                const tpPct = (parts.length >= 4 && parseFloat(parts[3]) !== 0) ? parseFloat(parts[3]) : undefined;
+                const maxBudget = parts.length === 5 ? parseFloat(parts[4]) : undefined;
+
+                if (isNaN(intervalMins) || isNaN(solAmt) || isNaN(dropPct)) {
+                    return ctx.reply("🔴 Invalid numbers provided.");
+                }
+
+                const user = await prisma.user.findUnique({ where: { telegramId } });
+                if (!user) return ctx.reply("🔴 User not found.");
+
+                await prisma.activeOrder.create({
+                    data: {
+                        userId: user.id,
+                        tokenAddress: callerDcaCA,
+                        orderType: 'DCA',
+                        amountSol: solAmt,
+                        dcaIntervalMins: intervalMins,
+                        trailingPercent: dropPct,
+                        takeProfitPercent: tpPct || null,
+                        maxBudgetSol: maxBudget || null,
+                        isActive: true
+                    }
+                });
+
+                return ctx.replyWithHTML(`🟢 <b>TWAP/DCA SCHEDULE DEPLOYED</b>\n\nToken: <code>${callerDcaCA.substring(0,8)}...</code>\nInterval: <b>Every ${intervalMins} Minutes</b>\nAmount: <b>${solAmt} SOL per interval</b>\nMax Budget: <b>${maxBudget ? `${maxBudget} SOL` : 'Infinite'}</b>\nGuard: <b>-${dropPct}%</b>\nTake Profit: <b>${tpPct ? `+${tpPct}%` : 'Not Set'}</b>`);
+            } catch (e: any) {
+                return ctx.reply(`🔴 Error deploying DCA: ${e.message}`);
+            }
+        }
+
+        // CATCH CALLER AGE EDIT
+        const callerAgeState = await redis.get(`state:edit_caller_age:${telegramId}`);
+        if (callerAgeState) {
+            await redis.del(`state:edit_caller_age:${telegramId}`);
+            const val = parseInt(text.trim());
+            if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Age.</b> Must be a positive number.");
+            
+            await setUserCallerFilters(telegramId, { maxAgeMins: val });
+            await ctx.replyWithHTML(`✅ <b>Max Age updated to ${val} minutes!</b>`);
+            await sendCallerMenu(ctx, telegramId, false);
+            return;
+        }
+
+        // CATCH CALLER PCT EDIT
+        const callerPctState = await redis.get(`state:edit_caller_pct:${telegramId}`);
+        if (callerPctState) {
+            await redis.del(`state:edit_caller_pct:${telegramId}`);
+            const parts = text.trim().split(/\s+/);
+            if (parts.length !== 2) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Use: <code>[MIN_%] [MAX_%]</code> (Example: <code>10 500</code>)");
+            
+            const min = parseFloat(parts[0]);
+            const max = parseFloat(parts[1]);
+            if (isNaN(min) || isNaN(max) || min > max) return ctx.replyWithHTML("🔴 <b>Invalid Range.</b> Make sure Minimum is less than or equal to Maximum.");
+            
+            await setUserCallerFilters(telegramId, { minPctChange: min, maxPctChange: max });
+            await ctx.replyWithHTML(`✅ <b>Percentage Range updated to ${min}% - ${max}%!</b>`);
+            await sendCallerMenu(ctx, telegramId, false);
+            return;
+        }
+
+        // 🟢 CATCH CALLER SCORE EDIT
         const callerScoreState = await redis.get(`state:edit_caller_score:${telegramId}`);
         if (callerScoreState) {
             await redis.del(`state:edit_caller_score:${telegramId}`);
@@ -3288,125 +3497,120 @@ if (callerPctState) {
             return;
         }
         
+        // 🟢 CATCH TIERED AIRDROP EXECUTION
+        const tieredGuildId = await redis.get(`state:guild_tiered_drop:${telegramId}`);
+        if (tieredGuildId) {
+            await redis.del(`state:guild_tiered_drop:${telegramId}`);
+            const parts = text.trim().split(/\s+/);
+            if (parts.length !== 3) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please use: <code>[SOL_TOP_3] [SOL_NEXT_7] [SOL_RANKS_11_TO_50]</code>");
+            
+            const amtTop3 = parseFloat(parts[0]);
+            const amtTop10 = parseFloat(parts[1]);
+            const amtTop50 = parseFloat(parts[2]);
+            if (isNaN(amtTop3) || isNaN(amtTop10) || isNaN(amtTop50) || amtTop3 < 0 || amtTop10 < 0 || amtTop50 < 0) {
+                return ctx.replyWithHTML("🔴 <b>Invalid Payout parameters.</b> Check entries.");
+            }
 
-  // 🟢 CATCH TIERED AIRDROP EXECUTION
-  const tieredGuildId = await redis.get(`state:guild_tiered_drop:${telegramId}`);
-  if (tieredGuildId) {
-      await redis.del(`state:guild_tiered_drop:${telegramId}`);
-      const parts = text.trim().split(/\s+/);
-      if (parts.length !== 3) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please use: <code>[SOL_TOP_3] [SOL_NEXT_7] [SOL_RANKS_11_TO_50]</code>");
-      
-      const amtTop3 = parseFloat(parts[0]);
-      const amtTop10 = parseFloat(parts[1]);
-      const amtTop50 = parseFloat(parts[2]);
-      if (isNaN(amtTop3) || isNaN(amtTop10) || isNaN(amtTop50) || amtTop3 < 0 || amtTop10 < 0 || amtTop50 < 0) {
-          return ctx.replyWithHTML("🔴 <b>Invalid Payout parameters.</b> Check entries.");
-      }
+            const loader = await ctx.replyWithHTML("<i>⏳ Packing tiered transfers and submitting Jito bundle...</i>");
+            
+            const { executeTieredAirdrop } = await import('./services/guild.service.js');
+            const res = await executeTieredAirdrop(telegramId, tieredGuildId, amtTop3, amtTop10, amtTop50);
+            
+            if (res.success) {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>TIERED AIRDROP COMPLETE!</b>\n\n${res.message}\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Transaction</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+                
+                if (res.notifiedUsers) {
+                    for (const winner of res.notifiedUsers) {
+                        try {
+                            await bot.telegram.sendMessage(
+                                winner.tgId, 
+                                `🎁 <b>GUILD REWARD RECEIVED!</b>\n\nYou just received a customized reward of <b>${winner.amount.toFixed(4)} SOL</b> directly from your Guild Leader for ranking high on the <b>${winner.guildName}</b> leaderboard!\n\n<i>Check your W1 balance on Sentry to see it.</i>`, 
+                                { parse_mode: 'HTML' }
+                            );
+                        } catch (e) {}
+                    }
+                }
+            } else {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Airdrop Failed:</b> ${res.message}`, { parse_mode: 'HTML' });
+            }
+            return;
+        }
 
-      const loader = await ctx.replyWithHTML("<i>⏳ Packing tiered transfers and submitting Jito bundle...</i>");
-      
-      // @ts-ignore
-      const { executeTieredAirdrop } = await import('./services/guild.service.js');
-      const res = await executeTieredAirdrop(telegramId, tieredGuildId, amtTop3, amtTop10, amtTop50);
-      
-      if (res.success) {
-          await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `✅ <b>TIERED AIRDROP COMPLETE!</b>\n\n${res.message}\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Transaction</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-          
-          if (res.notifiedUsers) {
-              for (const winner of res.notifiedUsers) {
-                  try {
-                      await bot.telegram.sendMessage(
-                          winner.tgId, 
-                          `🎁 <b>GUILD REWARD RECEIVED!</b>\n\nYou just received a customized reward of <b>${winner.amount.toFixed(4)} SOL</b> directly from your Guild Leader for ranking high on the <b>${winner.guildName}</b> leaderboard!\n\n<i>Check your W1 balance on Sentry to see it.</i>`, 
-                          { parse_mode: 'HTML' }
-                      );
-                  } catch (e) {}
-              }
-          }
-      } else {
-          await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Airdrop Failed:</b> ${res.message}`, { parse_mode: 'HTML' });
-      }
-      return;
-  }
+        // 🟢 CATCH INDIVIDUAL PAYOUT EXECUTION
+        const indivGuildId = await redis.get(`state:guild_indiv_drop:${telegramId}`);
+        if (indivGuildId) {
+            await redis.del(`state:guild_indiv_drop:${telegramId}`);
+            const parts = text.trim().split(/\s+/);
+            if (parts.length !== 2) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please use: <code>[TARGET_RANK] [AMOUNT_SOL]</code>");
+            
+            const targetRank = parseInt(parts[0]);
+            const amountSol = parseFloat(parts[1]);
+            if (isNaN(targetRank) || isNaN(amountSol) || targetRank <= 0 || amountSol <= 0) {
+                return ctx.replyWithHTML("🔴 <b>Invalid Payout parameters.</b> Check rank or amount.");
+            }
 
-   // 🟢 CATCH INDIVIDUAL PAYOUT EXECUTION
-   const indivGuildId = await redis.get(`state:guild_indiv_drop:${telegramId}`);
-   if (indivGuildId) {
-       await redis.del(`state:guild_indiv_drop:${telegramId}`);
-       const parts = text.trim().split(/\s+/);
-       if (parts.length !== 2) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please use: <code>[TARGET_RANK] [AMOUNT_SOL]</code>");
-       
-       const targetRank = parseInt(parts[0]);
-       const amountSol = parseFloat(parts[1]);
-       if (isNaN(targetRank) || isNaN(amountSol) || targetRank <= 0 || amountSol <= 0) {
-           return ctx.replyWithHTML("🔴 <b>Invalid Payout parameters.</b> Check rank or amount.");
-       }
+            const loader = await ctx.replyWithHTML("<i>⏳ Processing individual transfer via Jito...</i>");
+            
+            const { executeIndividualAirdrop } = await import('./services/guild.service.js');
+            const res = await executeIndividualAirdrop(telegramId, indivGuildId, targetRank, amountSol);
+            
+            if (res.success) {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>PAYOUT SUCCESSFUL!</b>\n\n${res.message}\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Transaction</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+                
+                if (res.notifiedUser) {
+                    try {
+                        await bot.telegram.sendMessage(
+                            res.notifiedUser.tgId, 
+                            `🎁 <b>GUILD REWARD RECEIVED!</b>\n\nYour Guild Leader has hand-picked you for an individual reward of <b>${res.notifiedUser.amount.toFixed(4)} SOL</b> inside the <b>${res.notifiedUser.guildName}</b> community!\n\n<i>Check your W1 balance on Sentry to see it.</i>`, 
+                            { parse_mode: 'HTML' }
+                        );
+                    } catch (e) {}
+                }
+            } else {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Payout Failed:</b> ${res.message}`, { parse_mode: 'HTML' });
+            }
+            return;
+        }     
 
-       const loader = await ctx.replyWithHTML("<i>⏳ Processing individual transfer via Jito...</i>");
-       
-       // @ts-ignore
-       const { executeIndividualAirdrop } = await import('./services/guild.service.js');
-       const res = await executeIndividualAirdrop(telegramId, indivGuildId, targetRank, amountSol);
-       
-       if (res.success) {
-           await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `✅ <b>PAYOUT SUCCESSFUL!</b>\n\n${res.message}\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Transaction</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-           
-           // Send automated direct alert to the handpicked winner
-           if (res.notifiedUser) {
-               try {
-                   await bot.telegram.sendMessage(
-                       res.notifiedUser.tgId, 
-                       `🎁 <b>GUILD REWARD RECEIVED!</b>\n\nYour Guild Leader has hand-picked you for an individual reward of <b>${res.notifiedUser.amount.toFixed(4)} SOL</b> inside the <b>${res.notifiedUser.guildName}</b> community!\n\n<i>Check your W1 balance on Sentry to see it.</i>`, 
-                       { parse_mode: 'HTML' }
-                   );
-               } catch (e) {}
-           }
-       } else {
-           await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Payout Failed:</b> ${res.message}`, { parse_mode: 'HTML' });
-       }
-       return;
-   }     
+        // 🟢 CATCH GUILD NAME EDIT
+        const editGuildNameId = await redis.get(`state:edit_guild_name:${telegramId}`);
+        if (editGuildNameId) {
+            await redis.del(`state:edit_guild_name:${telegramId}`);
+            if (text.length < 3 || text.length > 30) return ctx.replyWithHTML("🔴 <b>Error:</b> Name must be between 3 and 30 characters.");
+            
+            await prisma.guild.update({ where: { id: editGuildNameId }, data: { name: text.trim() } });
+            await ctx.replyWithHTML(`✅ <b>Guild Name successfully updated to:</b> <code>${text.trim()}</code>`);
+            return;
+        }
 
-// 🟢 CATCH GUILD NAME EDIT
-const editGuildNameId = await redis.get(`state:edit_guild_name:${telegramId}`);
-if (editGuildNameId) {
-    await redis.del(`state:edit_guild_name:${telegramId}`);
-    if (text.length < 3 || text.length > 30) return ctx.replyWithHTML("🔴 <b>Error:</b> Name must be between 3 and 30 characters.");
-    
-    await prisma.guild.update({ where: { id: editGuildNameId }, data: { name: text.trim() } });
-    await ctx.replyWithHTML(`✅ <b>Guild Name successfully updated to:</b> <code>${text.trim()}</code>`);
-    return;
-}
+        // 🟢 CATCH GUILD REWARD EDIT
+        const editGuildRewardId = await redis.get(`state:edit_guild_reward:${telegramId}`);
+        if (editGuildRewardId) {
+            await redis.del(`state:edit_guild_reward:${telegramId}`);
+            await prisma.guild.update({ where: { id: editGuildRewardId }, data: { rewardDescription: text.trim() } });
+            await ctx.replyWithHTML(`✅ <b>Guild Reward successfully updated.</b> Your members will now see the new offer when they check their /guild status.`);
+            return;
+        }
 
-// 🟢 CATCH GUILD REWARD EDIT
-const editGuildRewardId = await redis.get(`state:edit_guild_reward:${telegramId}`);
-if (editGuildRewardId) {
-    await redis.del(`state:edit_guild_reward:${telegramId}`);
-    await prisma.guild.update({ where: { id: editGuildRewardId }, data: { rewardDescription: text.trim() } });
-    await ctx.replyWithHTML(`✅ <b>Guild Reward successfully updated.</b> Your members will now see the new offer when they check their /guild status.`);
-    return;
-}
+        // 🟢 CATCH BULK AIRDROP EXECUTION
+        const airdropGuildId = await redis.get(`state:guild_airdrop:${telegramId}`);
+        if (airdropGuildId) {
+            await redis.del(`state:guild_airdrop:${telegramId}`);
+            const totalSol = parseFloat(text.trim());
+            if (isNaN(totalSol) || totalSol <= 0) return ctx.reply("🔴 Invalid amount.");
 
-// 🟢 CATCH BULK AIRDROP EXECUTION
-const airdropGuildId = await redis.get(`state:guild_airdrop:${telegramId}`);
-if (airdropGuildId) {
-    await redis.del(`state:guild_airdrop:${telegramId}`);
-    const totalSol = parseFloat(text.trim());
-    if (isNaN(totalSol) || totalSol <= 0) return ctx.reply("🔴 Invalid amount.");
-
-    const loader = await ctx.reply("<i>⏳ Compiling multi-transfer transaction block...</i>", { parse_mode: 'HTML' });
-    
-    // @ts-ignore
-    const { executeGuildAirdrop } = await import('./services/guild.service.js');
-    const res = await executeGuildAirdrop(telegramId, airdropGuildId, totalSol);
-    
-    if (res.success) {
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `✅ <b>AIRDROP SUCCESSFUL!</b>\n\n${res.message}\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-    } else {
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Airdrop Failed:</b> ${res.message}`, { parse_mode: 'HTML' });
-    }
-    return;
-}
+            const loader = await ctx.reply("<i>⏳ Compiling multi-transfer transaction block...</i>", { parse_mode: 'HTML' });
+            
+            const { executeGuildAirdrop } = await import('./services/guild.service.js');
+            const res = await executeGuildAirdrop(telegramId, airdropGuildId, totalSol);
+            
+            if (res.success) {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>AIRDROP SUCCESSFUL!</b>\n\n${res.message}\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+            } else {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Airdrop Failed:</b> ${res.message}`, { parse_mode: 'HTML' });
+            }
+            return;
+        }
 
         // AUTO-SNIPER CONFIGURATIONS
         if (await redis.get(`state:autosnipe_amt:${telegramId}`)) {
@@ -3481,36 +3685,35 @@ if (airdropGuildId) {
             return;
         }
 
-        
-     // 👑 ADMIN: GLOBAL BROADCAST EXECUTOR
-     if (await redis.get(`state:admin_broadcast`)) {
-        await redis.del(`state:admin_broadcast`);
-        const ADMIN_IDS = [process.env.ADMIN_TELEGRAM_ID, '8620131746', '7998928457'];
-        if (!telegramId || !ADMIN_IDS.includes(telegramId)) return;
+        // 👑 ADMIN: GLOBAL BROADCAST EXECUTOR
+        if (await redis.get(`state:admin_broadcast`)) {
+            await redis.del(`state:admin_broadcast`);
+            const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
+            if (!telegramId || !ADMIN_IDS.includes(telegramId)) return;
 
-        const messageToBlast = text;
-        const allUsers = await prisma.user.findMany({ select: { telegramId: true } });
-        
-        const loader = await ctx.replyWithHTML(`<i>⏳ Broadcasting message to ${allUsers.length} users... Please wait.</i>`);
-        
-        let sentCount = 0;
-        for (const u of allUsers) {
-            try {
-                await bot.telegram.sendMessage(
-                    u.telegramId, 
-                    `📢 <b>Platform Announcement</b>\n\n${messageToBlast}`, 
-                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                );
-                sentCount++;
-                await new Promise(r => setTimeout(r, 50)); 
-            } catch(e) {} 
+            const messageToBlast = text;
+            const allUsers = await prisma.user.findMany({ select: { telegramId: true } });
+            
+            const loader = await ctx.replyWithHTML(`<i>⏳ Broadcasting message to ${allUsers.length} users... Please wait.</i>`);
+            
+            let sentCount = 0;
+            for (const u of allUsers) {
+                try {
+                    await bot.telegram.sendMessage(
+                        u.telegramId, 
+                        `📢 <b>Platform Announcement</b>\n\n${messageToBlast}`, 
+                        { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                    );
+                    sentCount++;
+                    await new Promise(r => setTimeout(r, 50)); 
+                } catch(e) {} 
+            }
+
+            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>BROADCAST COMPLETE</b>\n\nSuccessfully delivered to <b>${sentCount} / ${allUsers.length}</b> users!`, { parse_mode: 'HTML' });
         }
 
-        return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `✅ <b>BROADCAST COMPLETE</b>\n\nSuccessfully delivered to <b>${sentCount} / ${allUsers.length}</b> users!`, { parse_mode: 'HTML' });
-    }
-
-         // DEV SUITE BUMP BOT EXECUTOR
-         if (await redis.get(`state:dev_volume:${telegramId}`)) {
+        // DEV SUITE BUMP BOT EXECUTOR
+        if (await redis.get(`state:dev_volume:${telegramId}`)) {
             await redis.del(`state:dev_volume:${telegramId}`);
             const parts = text.trim().split(/\s+/);
             
@@ -3538,7 +3741,7 @@ if (airdropGuildId) {
                     if (spentFees >= maxBudget) {
                         await redis.del(`active_bumper:${telegramId}`);
                         try {
-                            await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, 
+                            await ctx.telegram.editMessageText(ctx.chat!.id, statusMsg.message_id, undefined, 
                                 `✅ <b>BUMPER COMPLETE (BUDGET REACHED)</b>\n\nMax budget of <b>${maxBudget} SOL</b> spent in platform & gas fees.\nTotal Volume Generated: <b>~${totalVolume.toFixed(2)} SOL</b>\nTrades Executed: <b>${tradeCount}</b>`, 
                                 { parse_mode: 'HTML' }
                             );
@@ -3563,7 +3766,7 @@ if (airdropGuildId) {
                             tradeCount++;
 
                             try {
-                                await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, 
+                                await ctx.telegram.editMessageText(ctx.chat!.id, statusMsg.message_id, undefined, 
                                     `📈 <b>VOLUME BUMPER RUNNING 🟢</b>\n\n` +
                                     `<b>Target:</b> <code>${ca.substring(0,8)}...</code>\n` +
                                     `<b>Trade Size:</b> ${tradeSize} SOL\n` +
@@ -3596,12 +3799,12 @@ if (airdropGuildId) {
             const loader = await ctx.replyWithHTML(`<i>⏳ NUKING ALL WALLETS: Executing concurrent Jito exit for <code>${ca.substring(0,6)}...</code>...</i>`);
             const result = await executeExit(telegramId, ca, 100);
             if (result.success) {
-                await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
                     `💥 <b>NUKE SUCCESSFUL!</b>\n\nToken exited 100% across active wallets.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View Bundle Receipt</a>`, 
                     { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                 );
             } else {
-                await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Nuke Failed:</b> ${result.message}`, { parse_mode: 'HTML' });
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Nuke Failed:</b> ${result.message}`, { parse_mode: 'HTML' });
             }
             return;
         }
@@ -3621,7 +3824,7 @@ if (airdropGuildId) {
            const user = await prisma.user.findUnique({ 
             where: { telegramId },
             include: { autoSnipeConfig: true } 
-        });
+           });
            if (!user) return;
 
            await prisma.activeOrder.create({
@@ -3658,7 +3861,7 @@ if (airdropGuildId) {
 
             try {
                 const buyResult = await executeSnipe(telegramId, targetCA, solAmt);
-                if (!buyResult.success) return await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `${buyResult.message}`, { parse_mode: 'HTML' });
+                if (!buyResult.success) return await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `${buyResult.message}`, { parse_mode: 'HTML' });
 
                 let initialPriceNative = 0;
                 try {
@@ -3673,11 +3876,11 @@ if (airdropGuildId) {
 
                 await addTrailingStopToMemory(telegramId, targetCA, trailPct, solAmt, initialPriceNative, tpPct);
                 
-                await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
                     `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\nToken: <code>${targetCA.substring(0,8)}...</code>\nInvested: <b>${solAmt} SOL</b>\nTrailing Drop: <b>-${trailPct}%</b>\nTake Profit: ${tpPct ? `<b>+${tpPct}%</b>` : `<i>Not Set (Trailing Only)</i>`}\n\n🔗 <a href="https://solscan.io/tx/${buyResult.signature}">View Receipt (Fee Extracted)</a>`, 
                     { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Guards Menu', 'menu_trailing')]]) }
                 );
-            } catch (e) { await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, "🔴 Failed to process transaction or memory block."); }
+            } catch (e) { await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, "🔴 Failed to process transaction or memory block."); }
             return;
         }
 
@@ -3720,7 +3923,7 @@ if (airdropGuildId) {
             return;
         }
 
-        // 🏰 SENTRY GUILDS SETUP WIZARD (Mempool Interceptor)
+        // 🏰 SENTRY GUILDS SETUP WIZARD
         const setupState = await redis.hgetall(`guild_setup:${telegramId}`);
         if (setupState && Object.keys(setupState).length > 0) {
             const step = parseInt(setupState.step);
@@ -3769,10 +3972,10 @@ if (airdropGuildId) {
 
             const success = await importPrivateKey(telegramId, text.trim());
             if (success) {
-                await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `✅ <b>Wallet Imported Successfully!</b>\nYour Sentry terminal is now linked to your new encrypted address.`, { parse_mode: 'HTML' });
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>Wallet Imported Successfully!</b>\nYour Sentry terminal is now linked to your new encrypted address.`, { parse_mode: 'HTML' });
                 await sendOrEditDashboard(ctx, telegramId, false);
             } else {
-                await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Import Failed.</b> Not a valid Solana Base58 Private Key.`, { parse_mode: 'HTML' });
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Import Failed.</b> Not a valid Solana Base58 Private Key.`, { parse_mode: 'HTML' });
             }
             return;
         }
@@ -3817,25 +4020,22 @@ if (airdropGuildId) {
             if (user?.autoSnipeConfig?.amountSol) tradeAmountSol = user.autoSnipeConfig.amountSol;
         }
 
-        // 🟢 AUDIT FIX: Adjusted spam lock to 3 seconds (down from 15s) to allow faster legitimate trading
         const spamLockKey = `lock:manual_snipe:${telegramId}`;
         if (!(await redis.set(spamLockKey, 'LOCKED', 'EX', 3, 'NX'))) return ctx.reply("⚠️ <b>Please wait a moment before sending another snipe command.</b>", { parse_mode: 'HTML' });
 
-        // 🟢 NEW: PRE-TRADE SAFETY SCAN & TOKEN INFO CONFIRM CARD
         const loader = await ctx.replyWithHTML(`⚡ <b>SNIPE ENGAGED</b>\n\nTarget: <code>${possibleCA.substring(0,8)}...</code>\nAmount: <b>${tradeAmountSol} SOL</b>\n<i>⏳ Running security scan & fetching Token Info...</i>`);
         
         try {
             const rugRes = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${possibleCA}/report/summary`, { timeout: 800 }).catch(() => null);
             if (rugRes?.data?.risks?.some((r: any) => r.name === 'Freeze Authority still enabled' || r.score > 500)) {
                 await redis.del(spamLockKey);
-                return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
+                return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
                     `🚨 <b>SECURITY WARNING: HIGH RISK TOKEN</b> 🚨\n\nRugCheck detected critical risks (e.g. Freeze Authority enabled or Honeypot). Sentry has blocked this transaction to protect your funds.\n\nIf you know what you are doing, click below to override the shield.`, 
                     { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⚠️ IGNORE WARNING & BUY ANYWAY', `forcebuy_${possibleCA}_${tradeAmountSol}`)]]) }
                 );
             }
         } catch (e) {} 
 
-        // Fetch token info before confirming buy
         const dexRes = await fetch(
             `https://api.dexscreener.com/latest/dex/tokens/${possibleCA}`
         ).then(r => r.json()).catch(() => null);
@@ -3846,41 +4046,37 @@ if (airdropGuildId) {
         const tgLink = pair?.info?.socials?.find((s: any) => s.type === 'telegram')?.url || null;
         const twitterLink = pair?.info?.socials?.find((s: any) => s.type === 'twitter')?.url || null;
 
-        // MEV check
-        // RugCheck scan (Zero RPC credit usage)
         const rugDetected = await checkTokenRugRisk(possibleCA);
         const mevWarning = rugDetected ? `\n\n🚨 <b>WARNING: Critical Rug/Honeypot risk detected on RugCheck!</b>` : '';
         const socialsLine = [tgLink, twitterLink].filter(Boolean).join(' | ') || 'None found';
 
         await redis.del(spamLockKey);
-        await ctx.telegram.deleteMessage(ctx.chat.id, loader.message_id).catch(() => {});
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
 
-       // Locate where you send the TOKEN INFO card and replace its markup:
-       await ctx.reply(
-        `🔍 <b>TOKEN INFO</b>\n\n` +
-        `<code>${possibleCA}</code>\n\n` +
-        `📊 Market Cap: <b>${mcap}</b>\n` +
-        `💹 24H Volume: <b>${vol24h}</b>\n` +
-        `🔗 Socials: ${socialsLine}` +
-        mevWarning +
-        `\n\n<i>Tap below to buy instantly or set up a price alert guard:</i>`,
-        {
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: '✅ Confirm Buy', callback_data: `confirm_buy_${possibleCA}` },
-                        { text: '👀 Watch Price', callback_data: `confirm_watch_${possibleCA}` } // 🟢 GAP 3 BUTTON
-                    ],
-                    [
-                        { text: '❌ Cancel', callback_data: 'cancel_buy' }
+        await ctx.reply(
+            `🔍 <b>TOKEN INFO</b>\n\n` +
+            `<code>${possibleCA}</code>\n\n` +
+            `📊 Market Cap: <b>${mcap}</b>\n` +
+            `💹 24H Volume: <b>${vol24h}</b>\n` +
+            `🔗 Socials: ${socialsLine}` +
+            mevWarning +
+            `\n\n<i>Tap below to buy instantly or set up a price alert guard:</i>`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '✅ Confirm Buy', callback_data: `confirm_buy_${possibleCA}` },
+                            { text: '👀 Watch Price', callback_data: `confirm_watch_${possibleCA}` } 
+                        ],
+                        [
+                            { text: '❌ Cancel', callback_data: 'cancel_buy' }
+                        ]
                     ]
-                ]
+                }
             }
-        }
-    );
+        );
 
-        // Store pending buy in Redis temporarily
         await redis.set(`pending_buy:${telegramId}:${possibleCA}`, tradeAmountSol.toString(), 'EX', 120);
         return;
     }
