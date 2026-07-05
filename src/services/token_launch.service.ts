@@ -1,6 +1,7 @@
 // src/services/token_launch.service.ts
 import { Keypair, VersionedTransaction, SystemProgram, TransactionMessage, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
+// @ts-ignore
 import fetch from 'node-fetch';
 import FormData from 'form-data';
 import { PrismaClient } from '@prisma/client';
