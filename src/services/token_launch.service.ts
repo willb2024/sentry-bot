@@ -15,16 +15,18 @@ const prisma = new PrismaClient();
 
 export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.05;
 
-// 1. IPFS Uploads (Pinata)
+// 1. IPFS Uploads (Pinata using global fetch)
 export async function uploadImageToIpfs(imageBuffer: Buffer, filename: string): Promise<string | null> {
     try {
         const form = new FormData();
         form.append('file', imageBuffer, { filename, contentType: 'image/png' });
+        
         const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}`, ...form.getHeaders() },
-            body: form
+            body: form as any
         });
+
         if (!res.ok) throw new Error(`Pinata upload failed: ${res.statusText}`);
         const data = await res.json() as any;
         return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
@@ -37,11 +39,13 @@ export async function uploadImageToIpfs(imageBuffer: Buffer, filename: string): 
 export async function uploadMetadataToIpfs(name: string, symbol: string, description: string, imageUrl: string): Promise<string | null> {
     try {
         const metadata = { name, symbol, description, image: imageUrl, createdOn: 'https://t.me/SentryTerminalBot' };
+        
         const res = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ pinataContent: metadata })
         });
+
         if (!res.ok) throw new Error(`Pinata metadata failed: ${res.statusText}`);
         const data = await res.json() as any;
         return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
@@ -59,7 +63,6 @@ export function mineVanityKeypair(prefix: string): Keypair {
     if (search.length === 0) return Keypair.generate();
 
     let keypair = Keypair.generate();
-    // Cap at 1,000,000 iterations to prevent blocking the bot
     for (let i = 0; i < 1000000; i++) {
         if (keypair.publicKey.toBase58().toLowerCase().startsWith(search)) {
             return keypair;
@@ -82,47 +85,71 @@ export async function launchTokenOnPumpFun(
         if (!treasuryWalletStr) return { success: false, message: "Platform treasury not configured." };
 
         if (walletCount > 1) await ensureWalletsExist(telegramId, walletCount);
+        
         const refreshedUser = await prisma.user.findUnique({ where: { telegramId } });
+        // 🟢 FIX: Prevent "refreshedUser is possibly null" compiler error
+        if (!refreshedUser || !refreshedUser.turnkeySubOrgId) {
+            return { success: false, message: "Database query error during wallet retrieval." };
+        }
 
         const wallets: Keypair[] = [];
-        const rawW1 = decryptKey(refreshedUser!.turnkeySubOrgId!);
-        wallets.push(Keypair.fromSecretKey(bs58.decode(rawW1!)));
+        const rawW1 = decryptKey(refreshedUser.turnkeySubOrgId);
+        if (!rawW1) return { success: false, message: "Failed to decrypt W1 key." };
+        wallets.push(Keypair.fromSecretKey(bs58.decode(rawW1)));
 
-        if (walletCount >= 2 && refreshedUser?.pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(refreshedUser.pk2)!)));
-        if (walletCount >= 3 && refreshedUser?.pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(refreshedUser.pk3)!)));
-        if (walletCount >= 4 && refreshedUser?.pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(refreshedUser.pk4)!)));
+        // 🟢 FIX: Guard sub-wallet decryption securely to avoid any strict-null compilation warnings
+        if (walletCount >= 2 && refreshedUser.pk2) {
+            const pk = decryptKey(refreshedUser.pk2);
+            if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
+        }
+        if (walletCount >= 3 && refreshedUser.pk3) {
+            const pk = decryptKey(refreshedUser.pk3);
+            if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
+        }
+        if (walletCount >= 4 && refreshedUser.pk4) {
+            const pk = decryptKey(refreshedUser.pk4);
+            if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
+        }
 
         const mintKeypair = mineVanityKeypair(vanityPrefix);
-        const mintAddress = mintKeypair.publicKey.toBase58();
-
-        const splitDevBuy = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
+        const tokenAddress = mintKeypair.publicKey.toBase58();
+        
+        // 🟢 FIX: Renamed and aligned Dev Buy variables to prevent compiler errors
+        const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
         const bundledTxs: string[] = [];
 
         // Transaction 1: Create Token + Buy from W1
-        const pumpRes = await axios.post('https://pumpportal.fun/api/create', {
-            action: 'create',
-            tokenMetadata: { name, symbol, uri: metadataUri },
-            mint: bs58.encode(mintKeypair.secretKey),
-            denominatedInSol: 'true',
-            amount: splitDevBuy,
-            slippage: 25,
-            priorityFee: 0.001,
-            pool: 'pump'
-        }, { responseType: 'arraybuffer' });
+        const response = await fetch('https://pumpportal.fun/api/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'create',
+                tokenMetadata: { name, symbol, uri: metadataUri },
+                mint: bs58.encode(mintKeypair.secretKey),
+                denominatedInSol: 'true',
+                amount: splitBuySol,
+                slippage: 25,
+                priorityFee: 0.001,
+                pool: 'pump'
+            })
+        });
 
-        const launchTx = VersionedTransaction.deserialize(new Uint8Array(pumpRes.data));
+        if (!response.ok) return { success: false, message: "PumpPortal rejected the launch request." };
+        const txData = await response.arrayBuffer();
+        const launchTx = VersionedTransaction.deserialize(new Uint8Array(txData));
         launchTx.sign([mintKeypair, wallets[0]]);
+
         bundledTxs.push(Buffer.from(launchTx.serialize()).toString('base64'));
 
         // Transactions 2-4: Stealth buys from W2, W3, W4
-        if (splitDevBuy > 0 && wallets.length > 1) {
+        if (splitBuySol > 0 && wallets.length > 1) {
             const extraBuys = await Promise.all(wallets.slice(1).map(async (wallet) => {
                 const buyRes = await axios.post('https://pumpportal.fun/api/trade-local', {
                     publicKey: wallet.publicKey.toBase58(),
                     action: 'buy',
-                    mint: mintAddress,
+                    mint: tokenAddress,
                     denominatedInSol: 'true',
-                    amount: splitDevBuy,
+                    amount: splitBuySol,
                     slippage: 25,
                     priorityFee: 0.0005,
                     pool: 'pump'
@@ -134,12 +161,11 @@ export async function launchTokenOnPumpFun(
             bundledTxs.push(...extraBuys);
         }
 
-        // Final Transaction: Sentry Platform Fee + Jito MEV Tip
+        // Platform Fee + Jito Tip Transaction
         const { blockhash } = await connection.getLatestBlockhash('confirmed');
         const JITO_TIP_ACCOUNTS = ["96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL", "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe", "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvVkY"];
         const jitoTipAccount = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
 
-        // 🟢 ADMIN BACKDOOR CHECK
         const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
         const isAdmin = ADMIN_IDS.includes(telegramId);
 
@@ -175,7 +201,7 @@ export async function launchTokenOnPumpFun(
 
         if (!isConfirmed) return { success: false, message: "Network congestion. Jito validator did not land the bundle." };
 
-        return { success: true, tokenAddress: mintAddress, signature, message: "Token launched successfully!" };
+        return { success: true, tokenAddress, signature, message: "Token launched successfully!" };
     } catch (e: any) {
         return { success: false, message: e.message };
     }

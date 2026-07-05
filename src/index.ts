@@ -3317,6 +3317,9 @@ bot.action('action_confirm_token_launch', async (ctx) => {
 // =========================================================
 // 📷 PHOTO INTERCEPTOR (For Token Logo)
 // =========================================================
+// =========================================================
+// 📷 PHOTO INTERCEPTOR (For Token Logo using Native Fetch)
+// =========================================================
 bot.on('photo', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
@@ -3330,9 +3333,8 @@ bot.on('photo', async (ctx) => {
         try {
             const photo = ctx.message.photo[ctx.message.photo.length - 1];
             const fileLink = await ctx.telegram.getFileLink(photo.file_id);
-            // @ts-ignore
-// @ts-ignore
-const fetch = (await import('node-fetch')).default;
+            
+            // 🟢 NATIVE FETCH: No node-fetch import or require needed!
             const imageRes = await fetch(fileLink.href);
             const imageBuffer = Buffer.from(await imageRes.arrayBuffer());
             
@@ -3954,7 +3956,7 @@ bot.on("text", async (ctx, next) => {
            return ctx.replyWithHTML(`🟢 <b>LIMIT ORDER DEPLOYED</b>\n\nToken: <code>${targetCA.substring(0,8)}...</code>\nTarget Price: <b>$${targetPrice}</b>\nAmount: <b>${solAmt} SOL</b>\n<i>The engine will monitor the price and execute automatically via Jito.</i>`, { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]]) });
         }
 
-        // COPY TRADE
+        // COPY TRADE WITH WHALE SCORING
         if (await redis.get(`state:copytrade:${telegramId}`)) {
             await redis.del(`state:copytrade:${telegramId}`);
             const parts = text.split(/\s+/);
@@ -3964,8 +3966,22 @@ bot.on("text", async (ctx, next) => {
             if (targetWallet.length < 32 || targetWallet.length > 44) return ctx.reply("🔴 Invalid Solana Wallet Address.");
             const user = await prisma.user.findUnique({ where: { telegramId } });
             if (!user) return;
+
+            const loader = await ctx.replyWithHTML(`<i>⏳ Auditing Target Wallet behavior via Helius...</i>`);
+            
+            const { scoreWallet } = await import('./services/copytrade.service.js');
+            const audit = await scoreWallet(targetWallet);
+
             await prisma.copyTradeConfig.create({ data: { userId: user.id, targetWallet, tradeAmountSol: solAmt, autoTrailingDropPercent: dropPct, autoTakeProfitPercent: tpPct || null, isActive: true } });
-            return ctx.replyWithHTML(`🟢 <b>COPY TRADE ACTIVE</b>\n\nTarget: <code>${targetWallet.substring(0,8)}...</code>\nAmount: <b>${solAmt} SOL</b>\nGuard: <b>-${dropPct}%</b>\nTake Profit: <b>${tpPct ? `+${tpPct}%` : 'Not Set'}</b>`, { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Copy Trade Menu', 'menu_copytrade')]]) });
+            
+            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                `🟢 <b>COPY TRADE ACTIVE</b>\n\n` +
+                `Target: <code>${targetWallet.substring(0,8)}...</code>\n` +
+                `Amount: <b>${solAmt} SOL</b>\nGuard: <b>-${dropPct}%</b>\n\n` +
+                `📊 <b>WALLET AUDIT SCORE: ${audit.score}/100</b>\n` +
+                `<i>${audit.message}</i>`, 
+                { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Copy Trade Menu', 'menu_copytrade')]]) }
+            );
         }
 
         // GUARD
@@ -4156,9 +4172,10 @@ bot.on("text", async (ctx, next) => {
             }
         } catch (e) {} 
 
-        const dexRes = await fetch(
+        // 🟢 FIX: Typecast DexScreener result to "any" to prevent compiler errors
+        const dexRes = (await fetch(
             `https://api.dexscreener.com/latest/dex/tokens/${possibleCA}`
-        ).then(r => r.json()).catch(() => null);
+        ).then(r => r.json()).catch(() => null)) as any;
 
         const pair = dexRes?.pairs?.[0];
         const mcap = pair?.fdv ? `$${Number(pair.fdv).toLocaleString()}` : 'Unknown';
