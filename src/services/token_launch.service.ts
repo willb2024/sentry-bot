@@ -7,6 +7,7 @@ import FormData from 'form-data';
 import { PrismaClient } from '@prisma/client';
 import { connection } from '../lib/connection.js';
 import { decryptKey, ensureWalletsExist } from './vault.service.js';
+import { redis } from '../lib/redis.js';
 import dotenv from 'dotenv';
 import axios from 'axios';
 
@@ -14,6 +15,20 @@ dotenv.config();
 const prisma = new PrismaClient();
 
 export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.05;
+
+// 🟢 NEW: Wizard State Helper Wrappers to satisfy index.ts compilation
+export async function setLaunchWizardField(telegramId: string, field: string, value: string): Promise<void> {
+    await redis.set(`token_launch:${telegramId}:${field}`, value, 'EX', 900);
+}
+
+export async function getLaunchWizardField(telegramId: string, field: string): Promise<string | null> {
+    return await redis.get(`token_launch:${telegramId}:${field}`);
+}
+
+export async function clearLaunchWizard(telegramId: string): Promise<void> {
+    const keys = await redis.keys(`token_launch:${telegramId}:*`);
+    if (keys.length > 0) await redis.del(...keys);
+}
 
 // 1. IPFS Uploads (Pinata using global fetch)
 export async function uploadImageToIpfs(imageBuffer: Buffer, filename: string): Promise<string | null> {
@@ -88,7 +103,6 @@ export async function launchTokenOnPumpFun(
         
         const refreshedUser = await prisma.user.findUnique({ where: { telegramId } });
         
-        // 🟢 FIX: Prevent "refreshedUser is possibly null" compiler error
         if (!refreshedUser || !refreshedUser.turnkeySubOrgId) {
             return { success: false, message: "Database query error during wallet retrieval." };
         }
@@ -98,7 +112,6 @@ export async function launchTokenOnPumpFun(
         if (!rawW1) return { success: false, message: "Failed to decrypt W1 key." };
         wallets.push(Keypair.fromSecretKey(bs58.decode(rawW1)));
 
-        // 🟢 FIX: Explicitly check for refreshedUser properties to prevent null safety warnings
         if (walletCount >= 2 && refreshedUser.pk2) {
             const pk = decryptKey(refreshedUser.pk2);
             if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
@@ -115,7 +128,6 @@ export async function launchTokenOnPumpFun(
         const mintKeypair = mineVanityKeypair(vanityPrefix);
         const tokenAddress = mintKeypair.publicKey.toBase58();
         
-        // 🟢 FIX: Aligned all variables to splitBuySol consistently to resolve variable warnings
         const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
         const bundledTxs: string[] = [];
 
