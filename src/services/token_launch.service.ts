@@ -87,6 +87,7 @@ export async function launchTokenOnPumpFun(
         if (walletCount > 1) await ensureWalletsExist(telegramId, walletCount);
         
         const refreshedUser = await prisma.user.findUnique({ where: { telegramId } });
+        
         // 🟢 FIX: Prevent "refreshedUser is possibly null" compiler error
         if (!refreshedUser || !refreshedUser.turnkeySubOrgId) {
             return { success: false, message: "Database query error during wallet retrieval." };
@@ -97,7 +98,7 @@ export async function launchTokenOnPumpFun(
         if (!rawW1) return { success: false, message: "Failed to decrypt W1 key." };
         wallets.push(Keypair.fromSecretKey(bs58.decode(rawW1)));
 
-        // 🟢 FIX: Guard sub-wallet decryption securely to avoid any strict-null compilation warnings
+        // 🟢 FIX: Explicitly check for refreshedUser properties to prevent null safety warnings
         if (walletCount >= 2 && refreshedUser.pk2) {
             const pk = decryptKey(refreshedUser.pk2);
             if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
@@ -114,7 +115,7 @@ export async function launchTokenOnPumpFun(
         const mintKeypair = mineVanityKeypair(vanityPrefix);
         const tokenAddress = mintKeypair.publicKey.toBase58();
         
-        // 🟢 FIX: Renamed and aligned Dev Buy variables to prevent compiler errors
+        // 🟢 FIX: Aligned all variables to splitBuySol consistently to resolve variable warnings
         const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
         const bundledTxs: string[] = [];
 
