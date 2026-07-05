@@ -519,6 +519,8 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 
     const UI = Markup.inlineKeyboard([
         [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+        // 🟢 FIX: The Launchpad button is now successfully injected into the UI
+        [Markup.button.callback('🚀 Token Launcher (Pump.fun)', 'menu_token_launcher')], 
         [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
         [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
         [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
@@ -577,12 +579,14 @@ bot.command('sim', async (ctx) => {
     }
 });
 
+// =========================================================
+// 🚀 THE SENTRY LAUNCHPAD (PUMP.FUN DEPLOYER)
+// =========================================================
 bot.action('menu_token_launcher', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
-    const { redis } = await import('./lib/redis.js');
     
-    // Clear old state just in case
+    // 🟢 FIX: Used global redis to prevent freezing
     const keys = await redis.keys(`token_launch:${tgId}:*`);
     if (keys.length > 0) await redis.del(...keys);
 
@@ -609,19 +613,9 @@ bot.action('menu_token_launcher', async (ctx) => {
     ]));
 });
 
-bot.action('action_abort_token_launch', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-    const { redis } = await import('./lib/redis.js');
-    const keys = await redis.keys(`token_launch:${tgId}:*`);
-    if (keys.length > 0) await redis.del(...keys);
-    await safeEditMessageText(ctx, `❌ <b>Token launch cancelled.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'btn_dashboard')]]));
-});
-
 bot.action('start_token_wizard', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
-    const { redis } = await import('./lib/redis.js');
     await redis.set(`token_launch:${tgId}:step`, 'AWAITING_NAME', 'EX', 900);
     
     await safeEditMessageText(ctx, 
@@ -632,6 +626,17 @@ bot.action('start_token_wizard', async (ctx) => {
         Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'action_abort_token_launch')]])
     );
 });
+
+bot.action('action_abort_token_launch', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    const keys = await redis.keys(`token_launch:${tgId}:*`);
+    if (keys.length > 0) await redis.del(...keys);
+    await safeEditMessageText(ctx, `❌ <b>Token launch cancelled.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'btn_dashboard')]]));
+});
+
+
+
 
 bot.command('simbal', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
@@ -3241,12 +3246,12 @@ bot.action('cancel_buy', async (ctx) => {
 // 🚀 TOKEN LAUNCHER CONFIRMATION
 // =========================================================
 bot.action('action_confirm_token_launch', async (ctx) => {
+    try { await ctx.answerCbQuery("Initiating Deployment Sequence..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
-    const { redis } = await import('./lib/redis.js');
     const { uploadMetadataToIpfs, launchTokenOnPumpFun } = await import('./services/token_launch.service.js');
 
     const step = await redis.get(`token_launch:${tgId}:step`);
-    if (step !== 'READY_TO_LAUNCH') return ctx.answerCbQuery("Launch session expired.", { show_alert: true });
+    if (step !== 'READY_TO_LAUNCH') return ctx.replyWithHTML("⚠️ Launch session expired. Please start over.");
 
     const name = await redis.get(`token_launch:${tgId}:name`);
     const symbol = await redis.get(`token_launch:${tgId}:symbol`);
@@ -3299,14 +3304,10 @@ bot.action('action_confirm_token_launch', async (ctx) => {
 // =========================================================
 // 📷 PHOTO INTERCEPTOR (For Token Logo)
 // =========================================================
-// =========================================================
-// 📷 PHOTO INTERCEPTOR (For Token Logo using Native Fetch)
-// =========================================================
 bot.on('photo', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
     
-    const { redis } = await import('./lib/redis.js');
     const launchStep = await redis.get(`token_launch:${tgId}:step`);
 
     if (launchStep === 'AWAITING_IMAGE') {
@@ -3316,7 +3317,7 @@ bot.on('photo', async (ctx) => {
             const photo = ctx.message.photo[ctx.message.photo.length - 1];
             const fileLink = await ctx.telegram.getFileLink(photo.file_id);
             
-            // 🟢 NATIVE FETCH: No node-fetch import or require needed!
+            // 🟢 NATIVE FETCH
             const imageRes = await fetch(fileLink.href);
             const imageBuffer = Buffer.from(await imageRes.arrayBuffer());
             
@@ -3333,7 +3334,6 @@ bot.on('photo', async (ctx) => {
             const devBuy = parseFloat(await redis.get(`token_launch:${tgId}:devbuy`) || '0');
             const wallets = parseInt(await redis.get(`token_launch:${tgId}:wallets`) || '1');
 
-            // Admin Backdoor Check for display purposes
             const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
             const isAdmin = ADMIN_IDS.includes(tgId);
             const displayFee = isAdmin ? 0 : TOKEN_LAUNCH_PLATFORM_FEE_SOL;
