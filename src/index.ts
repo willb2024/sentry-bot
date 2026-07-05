@@ -1105,40 +1105,47 @@ bot.action('btn_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){} 
     
     const guideText = 
-        `🏆 <b>WHY SENTRY TERMINAL WINS</b>\n\n` +
-        `<i>Every Solana bot promises speed. Here is what actually separates Sentry from everything else on the market:</i>\n\n` +
+        `🏆 <b>SENTRY TERMINAL — INSTITUTIONAL SUPERIORITY</b>\n\n` +
+        `<i>Retail trading bots are built for convenience, but they often leave your capital vulnerable on the blockchain. Sentry Terminal is engineered from the ground up as a robust trading interface, built to protect your trades, optimize execution speed, and automate your token's lifecycle. Here is the deep technical breakdown of why Sentry is the premier utility on Solana:</i>\n\n` +
 
-        `🛡️ <b>1. JITO MEV BUNDLE PROTECTION</b>\n` +
-        `Every single trade — buy, sell, DCA, copy trade, auto-snipe — goes through a private Jito MEV bundle. Your transaction is invisible to sandwich bots in the public mempool. Standard bots route through public RPCs and hand free money to MEV bots on every launch. Sentry does not.\n\n` +
+        `🚀 <b>1. THE SENTRY DEPLOYER (ELITE TOKEN LAUNCHPAD)</b>\n` +
+        `• <b>The Problem:</b> When you launch a token on the Pump.fun website, snipers and public bots read the mempool and buy the supply before your transaction even processes. To make things worse, if you buy too much supply from a single wallet to protect your launch, buyers get spooked by the centralized holder list.\n` +
+        `• <b>Our Architecture:</b> Sentry introduces the first complete Telegram-native launcher. It runs a local CPU miner to instantly generate a custom **Vanity Contract Address** (e.g. starting with <code>CAT...</code>) so your token stands out. \n` +
+        `• <b>The Stealth Advantage:</b> You can split your initial dev buy across up to 4 of your active Sentry sub-wallets simultaneously. The deploy transaction, the metadata uploads, and all 4 stealth buys are packed together into a single **Block-0 Jito Bundle**. The coin goes live and is funded across multiple separate wallets in the exact same millisecond, making your entry completely sniper-proof and organic.\n\n` +
 
-        `⚡ <b>2. MULTI-WALLET WHALE EXECUTION</b>\n` +
-        `Pump.fun silently limits how much a single wallet can buy on any new launch. Sentry fires up to 5 wallets simultaneously inside the same Jito block — same millisecond, same price, no slippage stacking. You get a whale-sized position at retail entry.\n\n` +
+        `🛡️ <b>2. JITO MEV PRIVATE BUNDLE ROUTING</b>\n` +
+        `• <b>The Problem:</b> On Solana, public transactions sit in the queue waiting to be validated. Arbitrage and MEV (Maximal Extractable Value) sandwich bots read these public transactions and buy right before you and sell right after you, stealing your slippage as profit on every single trade.\n` +
+        `• <b>Our Architecture:</b> Every trade on Sentry—whether manual, DCA, copy trade, or auto-sniper—bypasses the public mempool entirely. We wrap your transaction inside a private Jito Bundle alongside a validator tip. The transaction remains invisible to MEV bots until it is securely executed and written to the block. Your trade execution is clean, un-sandwichable, and highly reliable.\n\n` +
 
-        `🎯 <b>3. DUAL-ENGINE AUTO-SNIPER</b>\n` +
-        `Sentry monitors both the Pump.fun bonding curve mempool (via gRPC Yellowstone) and Raydium new pool launches simultaneously. The moment a token launches — before it appears on any chart — your configured filters run: dev bag check, market cap range, anti-dead-coin shield, delay seconds. All in under 500ms.\n\n` +
+        `🐋 <b>3. MULTI-WALLET WHALE SIMULTANEOUS EXECUTION</b>\n` +
+        `• <b>The Problem:</b> Highly anticipated memecoin launches have tight purchase limits per wallet to prevent single whales from hoarding the supply. If you try to buy with multiple wallets manually, price impact scales up, and transaction delays cause you to buy at vastly different prices.\n` +
+        `• <b>Our Architecture:</b> Sentry lets you activate up to 5 sub-wallets. When you buy a token, Sentry fires 5 separate transactions from all 5 wallets in parallel inside the *same Jito block*. You secure a major, distributed whale position in the exact same millisecond at the exact same entry price, bypassing wallet limits seamlessly.\n\n` +
 
-        `🤖 <b>4. AI COIN CALLER ENGINE</b>\n` +
-        `Type <code>/caller</code> to arm Sentry's scanner. Every 15 seconds it pulls DexScreener, scores tokens 0-100 based on momentum, volume, age, and MEV risk, and DMs you only the ones that pass your thresholds with a one-click buy button. You stop hunting. The caller hunts for you.\n\n` +
+        `📅 <b>4. SOLANA TOKEN LAUNCH CALENDAR</b>\n` +
+        `• <b>The Problem:</b> Finding newly launched tokens requires you to jump between DexScreener, Telegram groups, and Twitter, wasting precious seconds while coins pump.\n` +
+        `• <b>Our Architecture:</b> Sentry features a background launch calendar that queries the blockchain every 30 minutes, filtering specifically for Solana tokens under 2 hours old, with active trading volume above $5,000, and verified social media links. Type <code>/calendar</code> to see a pristine, curated, spam-filtered list of live targets with a **1-Tap Snipe** button next to each.\n\n` +
 
-        `🛡️ <b>5. TRAILING GUARDS WITH TAKE PROFIT</b>\n` +
-        `Every buy automatically arms an in-memory trailing stop. As price rises, the guard follows it up. The moment it drops more than your set percentage from peak, Sentry auto-sells 100% via Jito — without you watching. You can also pair it with a take-profit target that fires first if price hits the upside target.\n\n` +
+        `🤖 <b>5. SCANNING & SCORING (AI COIN CALLER)</b>\n` +
+        `• <b>The Problem:</b> Standard alert groups call coins that are already rugged, have dead developer wallets, or are honeypots.\n` +
+        `• <b>Our Architecture:</b> The Coin Caller is a powerful in-memory scanner. Every 15 seconds it scores on-chain pairs from 0 to 100 based on transaction velocity, buy/sell ratios, liquidity depth, contract age, and MEV risk. If a token matches your parameters, Sentry DMs you a rich breakout report containing a direct sniper interface.\n\n` +
 
-        `👥 <b>6. COPY TRADING WITH GUARD PROTECTION</b>\n` +
-        `Mirror any whale wallet in real time via WebSocket. The moment the target buys, Sentry fires your configured size and instantly arms a trailing guard on that position. You are not just copying the entry — you are copying it with a built-in exit strategy.\n\n` +
+        `👥 <b>6. COPY TRADING WITH HELIUS WALLET AUDITING</b>\n` +
+        `• <b>The Problem:</b> Standard copy trading tools will blindly mirror any wallet you input. If that wallet belongs to a high-frequency MEV bot or arbitrage script, your bot will try to follow their sub-second trades, destroying your balance on gas and slippage.\n` +
+        `• <b>Our Architecture:</b> Before Sentry saves a wallet to your copy-trade list, it queries Helius RPC nodes to parse their last 20 transactions. It evaluates their transaction frequency and average holding time. If the wallet exhibits bot-like patterns, Sentry flags it, giving you a comprehensive risk score (0-100) before you proceed.\n\n` +
 
-        `⏳ <b>7. NATIVE DCA & LIMIT ORDERS</b>\n` +
-        `Set a token to accumulate every 60 minutes at 0.05 SOL per interval with a max budget of 2 SOL. Or set a limit order to buy a dip at a specific USD price. Both fire via Jito and automatically arm a guard on every fill. No third-party protocol needed.\n\n` +
+        `👀 <b>7. PERSISTENT WATCHLISTS & LIVE PRICE ALERTS</b>\n` +
+        `• <b>The Problem:</b> Standard bots use database-heavy one-shot alerts that delete themselves after triggering once, requiring constant re-entry.\n` +
+        `• <b>Our Architecture:</b> Sentry features a persistent watchlist backed by Redis in-memory hashing. Type <code>/watchlist</code> to view all your tracked targets, their added price, current price, and percentage changes. Our background poller evaluates these entries against live feeds, alerting you when targets are crossed while keeping the entry on your watchlist for continued tracking.\n\n` +
 
-        `🏰 <b>8. SENTRY GUILDS (COMMUNITY LOYALTY ENGINE)</b>\n` +
-        `KOLs and project devs can create a Guild. Members join via an invite link and Sentry tracks their on-chain trading volume in real time. The dev exports a verified CSV leaderboard of actual capital allocators — not Twitter bots — and sends bulk SOL airdrops or whitelist spots directly inside the bot. The KOL also earns 50% of every trade fee their community generates, permanently.\n\n` +
+        `🏰 <b>8. B2B LOYALTY CHANNELS (SENTRY GUILDS)</b>\n` +
+        `• <b>The Problem:</b> KOLs and project communities struggle with loyalty programs. Social media giveaways are flooded with fake Sybil accounts, and tracking actual buying support is nearly impossible.\n` +
+        `• <b>Our Architecture:</b> Sentry Guilds run on-chain loyalty tracking. When members join via a unique link, Sentry indexes their trading volume. The Guild owner can download a verified CSV ledger of actual trading contributors to reward with whitelist slots or SOL airdrops. The owner also receives a **50% split of all trading fees** generated by their members, creating a self-sustaining monetization loop.\n\n` +
 
-        `🧹 <b>9. RENT SWEEPER & CONSOLIDATOR</b>\n` +
-        `After trading you accumulate dozens of empty token accounts each holding ~0.002 SOL in locked rent. The sweeper closes up to 18 at once via Jito and returns the SOL to your wallet instantly. The consolidator sweeps SOL from all sub-wallets back to W1 in one transaction.\n\n` +
+        `🧹 <b>9. AUTO-CONSOLIDATION & RENT SWEEPER</b>\n` +
+        `• <b>The Problem:</b> For every token you buy, Solana locks up ~0.00203 SOL of your capital as "rent" to keep that token account open. After trading dozens of coins, you have significant capital locked up in empty accounts.\n` +
+        `• <b>Our Architecture:</b> Sentry's Rent Sweeper closes empty token accounts across your wallets in a single Jito block, returning that locked SOL back to your active balance instantly. The Consolidator lets you sweep all accumulated SOL from sub-wallets (W2-W5) back to W1 in one transaction, saving you from manual wallet transfers.\n\n` +
 
-        `💰 <b>10. PARTNERSHIP PROGRAM (50/50 SPLIT)</b>\n` +
-        `Share your link. Every recruit permanently pays 10% lower fees and you earn 50% of their trading fees forever. If they unlock the Dev Suite you receive 1 SOL instantly to your balance. The more active your recruits are, the more passive income you generate on-chain.\n\n` +
-
-        `<i>This is not a retail bot. This is infrastructure.</i>`;
+        `<i>Sentry is not just another retail bot. This is institutional-grade trading infrastructure.</i>`;
 
     await safeEditMessageText(ctx, guideText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
@@ -1147,67 +1154,83 @@ bot.action('btn_trade_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     
     const manualText = 
-        `📖 <b>SENTRY TERMINAL: HOW TO TRADE</b>\n\n` +
-        `<i>Every method below fires through Jito MEV protection automatically.</i>\n\n` +
+        `📖 <b>SENTRY TERMINAL — OPERATIONS MANUAL</b>\n\n` +
+        `<i>Welcome to your command console. Sentry’s background systems automatically wrap all your trades inside private Jito MEV bundles. Below is the complete step-by-step guide and command syntax to operate every module with precision:</i>\n\n` +
 
-        `👛 <b>STEP 1 — FUND YOUR VAULT</b>\n` +
-        `Copy your wallet address from the dashboard and send SOL to it from any exchange or wallet. Your balance updates in real time. If you want multi-wallet mode, go to <b>Vault & Keys</b>, activate up to 5 wallets, and fund each address separately.\n\n` +
+        `👛 <b>1. ACCOUNT FUNDING & WHALE DEPLOYMENTS</b>\n` +
+        `• <b>W1 Address:</b> Copy the primary deposit address displayed on your main dashboard and send SOL to it from any external wallet or exchange.\n` +
+        `• <b>Whale Mode (W2 - W5):</b> To activate simultaneous multi-wallet trading, go to <b>Vault & Keys</b>, select the number of active wallets (up to 5), and fund each address separately. Sentry will fire concurrent buys from all funded, active wallets simultaneously.\n` +
+        `• <b>Consolidation:</b> To sweep all SOL from W2-W5 back to your main W1 wallet, go to <b>Vault & Keys</b> and tap <b>Sweep All Sub-Wallets to W1</b>.\n\n` +
 
-        `⚡ <b>STEP 2 — INSTANT BUY (Fastest Method)</b>\n` +
-        `Paste any Solana token contract address directly into the chat. Sentry pulls the token info, runs a rug check, and shows you a confirm card. Tap <b>Confirm Buy</b> and the trade fires immediately.\n\n` +
-        `To set a specific size: paste <code>[CA] [AMOUNT]</code> together.\n` +
-        `Example: <code>7xKXtg... 0.5</code> — buys 0.5 SOL worth instantly.\n\n` +
+        `🚀 <b>2. THE SENTRY LAUNCHPAD (PUMP.FUN DEPLOYER)</b>\n` +
+        `Deploy a token securely onto Pump.fun with built-in insider stealth protection:\n` +
+        `1. Tap the **🚀 Token Launcher (Pump.fun)** button on the main dashboard.\n` +
+        `2. **Step 1:** Enter your Token Name (e.g., <code>Sentry Terminal Coin</code>).\n` +
+        `3. **Step 2:** Enter your Ticker Symbol (e.g., <code>SENTRY</code>).\n` +
+        `4. **Step 3:** Enter your Description (e.g., <code>The ultimate trading utility</code>).\n` +
+        `5. **Step 4 (Vanity CA):** Enter a 2-4 letter prefix you want your token address to start with (e.g., <code>SEN</code>), or type <code>NO</code> for random.\n` +
+        `6. **Step 5 (Dev Buy):** Enter the total SOL amount you want to buy for yourself on Block-0 (e.g., <code>1.5</code>).\n` +
+        `7. **Step 6 (Stealth Split):** Enter how many of your sub-wallets Sentry should split this buy across (e.g., <code>3</code>). This splits your 1.5 SOL buy into three 0.5 SOL buys across W1, W2, and W3 in the same millisecond, hiding your developer concentration.\n` +
+        `8. **Step 7 (Logo):** Upload and send a high-quality JPG or PNG image. Sentry will pin your logo and metadata to IPFS, build the bundle, and deploy!\n\n` +
 
-        `🎯 <b>STEP 3 — AUTO-SNIPER (Catch Launches)</b>\n` +
-        `Go to <b>Sniper Module</b> and set your parameters:\n` +
-        `• Amount per snipe (e.g. 0.05 SOL)\n` +
-        `• Max dev bag allowed (e.g. 10%)\n` +
-        `• Market cap range (e.g. $0 to $80k)\n` +
-        `• Snipe delay in seconds\n` +
-        `• Auto trailing stop and take profit\n` +
-        `• Mode: Pump.fun, Raydium, or Both\n\n` +
-        `Hit <b>ARM SNIPER ENGINE</b> and Sentry catches every qualifying launch automatically, 24 hours a day.\n\n` +
+        `⚡ <b>3. INSTANT SWAPS & QUICK SNIPING</b>\n` +
+        `• <b>Default Buy:</b> Paste any Solana token Contract Address (CA) into the chat. Sentry runs a pre-trade safety scan, pulls market data, and displays a buy card. Tapping <b>Confirm Buy</b> will execute the trade using your default buy size.\n` +
+        `• <b>Custom Size Snipe:</b> Paste the CA and your desired SOL size together in one message.\n` +
+        `  ├ <i>Syntax:</i> <code>[TOKEN_CA] [AMOUNT_SOL]</code>\n` +
+        `  └ <i>Example:</i> <code>7xKXtgH... 0.75</code> (This buys exactly 0.75 SOL worth instantly)\n\n` +
 
-        `🤖 <b>STEP 4 — AI COIN CALLER (Filtered Alpha)</b>\n` +
-        `Type <code>/caller</code>. Set your minimum score (e.g. 70/100), max token age, and momentum range. Turn it on. Every 15 seconds Sentry scans the market and DMs you only the tokens that pass — with a one-click buy button attached to each alert.\n\n` +
+        `📅 <b>4. SOLANA TOKEN LAUNCH CALENDAR</b>\n` +
+        `• <b>View Launches:</b> Type <code>/calendar</code>. Sentry will display the top 10 verified, trending listings under 2 hours old that have active social links and high volume.\n` +
+        `• <b>Instant Snipe:</b> Each listing has a <b>🎯 Snipe This</b> button. Clicking it instantly prepares your buy size and lets you execute a trailing guard exit directly on that token.\n\n` +
 
-        `🛡️ <b>STEP 5 — TRAILING GUARD (Protect Bags)</b>\n` +
-        `Go to <b>Trailing Stops</b> → <b>Deploy Trailing Guard</b>.\n` +
-        `Format: <code>[CA] [DROP%] [AMOUNT] [OPTIONAL TP%]</code>\n` +
-        `Example: <code>7xKXtg... 20 0.1 100</code>\n` +
-        `This buys 0.1 SOL worth, sets a -20% trailing stop, and auto-sells at +100% take profit.\n` +
-        `The guard follows the price upward automatically — it only triggers on a drop from peak.\n\n` +
+        `👀 <b>5. PERSISTENT WATCHLISTS & ALERTS</b>\n` +
+        `Sentry features a persistent watchlist stored in Redis memory that alerts you when price targets are crossed:\n` +
+        `• <b>Add Tracker:</b> <code>/watch [TOKEN_CA] [OPTIONAL_TARGET_PRICE_USD]</code>\n` +
+        `  ├ <i>Example 1 (Track only):</i> <code>/watch 7xKXtgH...</code>\n   (Sentry saves the coin, tracking its percentage gains from this exact entry point)\n` +
+        `  └ <i>Example 2 (Track + Alert):</i> <code>/watch 7xKXtgH... 0.005</code>\n   (Sentry tracks the coin and DMs you when the price crosses $0.005)\n` +
+        `• <b>Check Watchlist:</b> Type <code>/watchlist</code> to view your active list, live prices, and whether your copy-trade targets are buying those tokens.\n` +
+        `• <b>Remove Tracker:</b> Type <code>/unwatch [TOKEN_CA]</code>.\n` +
+        `• <b>Clear Entire Watchlist:</b> Type <code>/clearwatch</code>.\n\n` +
 
-        `👥 <b>STEP 6 — COPY TRADING (Mirror Whales)</b>\n` +
-        `Go to <b>Copy Trade</b> → <b>Add Custom Wallet</b>.\n` +
-        `Format: <code>[WALLET] [AMOUNT] [GUARD%] [OPTIONAL TP%]</code>\n` +
-        `Example: <code>3yFomLQ... 0.1 20 50</code>\n` +
-        `Every time the whale buys a token, Sentry fires your configured size and arms a guard automatically. Or browse the built-in Alpha Directory for curated whale wallets.\n\n` +
+        `🛡️ <b>6. TRAILING GUARDS & TAKE PROFITS</b>\n` +
+        `Set up automated, secure exits. As the price rises, the stop-loss follows the peak price, protecting your capital:\n` +
+        `• <b>Deploy Guard:</b> Tapping **Deploy Trailing Guard** in the menu or typing the command:\n` +
+        `  ├ <i>Syntax:</i> <code>[TOKEN_CA] [TRAILING_DROP_%] [AMOUNT_SOL] [OPTIONAL_TP_%]</code>\n` +
+        `  └ <i>Example:</i> <code>7xKXtgH... 15 0.1 100</code>\n` +
+        `  (This buys 0.1 SOL of the token. It deploys a -15% trailing stop-loss, and sets a +100% take-profit limit. If the price spikes and hits +100%, Sentry sells instantly. If the price goes up to +80% and then drops to +65% (a 15% drop from peak), Sentry exits 100% via Jito)\n\n` +
 
-        `⏳ <b>STEP 7 — DCA & LIMIT ORDERS</b>\n` +
-        `Go to <b>Limit / DCA Engine</b>.\n\n` +
-        `<b>Limit Order</b> — buys when a token hits your target price:\n` +
-        `<code>[CA] [TARGET_USD] [AMOUNT_SOL]</code>\n` +
-        `Example: <code>7xKXtg... 0.005 0.5</code>\n\n` +
-        `<b>DCA Schedule</b> — buys repeatedly on an interval:\n` +
-        `<code>[CA] [INTERVAL_MINS] [AMOUNT] [GUARD%] [TP%] [MAX_BUDGET]</code>\n` +
-        `Example: <code>7xKXtg... 60 0.05 20 50 2.0</code>\n` +
-        `Buys 0.05 SOL every 60 minutes with a -20% guard, +50% TP, stops after spending 2 SOL total.\n\n` +
+        `👥 <b>7. COPY TRADING (MEV BOT CHECKER)</b>\n` +
+        `Mirror profitable wallets in real time. Sentry checks their transactions via Helius to prevent you from copying rapid arbitrage bots:\n` +
+        `1. Go to <b>Copy Trade</b> -> **Add Custom Wallet**.\n` +
+        `2. Paste the parameters:\n` +
+        `  ├ <i>Syntax:</i> <code>[TARGET_WALLET] [AMOUNT_SOL] [TRAILING_DROP_GUARD_%] [OPTIONAL_TP_%]</code>\n` +
+        `  └ <i>Example:</i> <code>3yFomLQ... 0.1 20 50</code>\n` +
+        `3. Sentry will analyze their wallet history and present a rating (e.g. <code>92/100</code>). Confirm the prompt, and Sentry will automatically copy their buys and protect them with your configured guards.\n\n` +
 
-        `💼 <b>STEP 8 — MANAGE POSITIONS</b>\n` +
-        `Go to <b>Positions</b>. You see every token you hold across all wallets, its live USD value, and your PnL from entry price. Sell buttons let you exit 10%, 25%, 50%, 75%, or 100% of any position instantly via Jito. Partial sells automatically scale down your trailing guard proportionally.\n\n` +
+        `⏳ <b>8. NATIVE DCA SCHEDULES (TWAP)</b>\n` +
+        `Accumulate positions smoothly over time to average your entry price:\n` +
+        `• <b>Deploy DCA:</b> Go to <b>Limit / DCA Engine</b> and enter the parameters:\n` +
+        `  ├ <i>Syntax:</i> <code>[TOKEN_CA] [INTERVAL_MINS] [AMOUNT_SOL] [DROP_%] [OPTIONAL_TP_%] [OPTIONAL_MAX_BUDGET]</code>\n` +
+        `  └ <i>Example:</i> <code>7xKXtgH... 120 0.05 15 50 1.5</code>\n` +
+        `  (This buys 0.05 SOL of the token every 120 minutes. It automatically arms a -15% trailing stop on every purchase. If your total accumulated spend hits 1.5 SOL, Sentry shuts down the DCA automatically to preserve your capital)\n\n` +
 
-        `📤 <b>STEP 9 — WITHDRAW</b>\n` +
-        `Type <code>/withdraw [ADDRESS] [AMOUNT]</code> to send SOL to any wallet.\n` +
-        `Type <code>/withdraw [ADDRESS] ALL</code> to sweep your full balance minus gas.\n\n` +
+        `🎯 <b>9. LIMIT ORDERS</b>\n` +
+        `Automate buy orders for deep market dips:\n` +
+        `• <b>Deploy Limit Buy:</b> Go to <b>Limit / DCA Engine</b> and enter the parameters:\n` +
+        `  ├ <i>Syntax:</i> <code>[TOKEN_CA] [TARGET_PRICE_USD] [AMOUNT_SOL]</code>\n` +
+        `  └ <i>Example:</i> <code>7xKXtgH... 0.0025 0.5</code>\n` +
+        `  (Sentry monitors the price and executes a 0.5 SOL buy via Jito the exact moment the token's price drops to $0.0025)\n\n` +
 
-        `⚙️ <b>STEP 10 — SETTINGS</b>\n` +
-        `Go to <b>Settings</b> to configure:\n` +
-        `• <b>Slippage</b> — how much price movement you accept (20% recommended for memecoins)\n` +
-        `• <b>Speed</b> — Eco (0.0005 SOL tip), Fast (0.001), Turbo (0.005), or Custom\n\n` +
-        `Higher Jito tips = higher block priority = faster execution on competitive launches.\n\n` +
+        `🧹 <b>10. RENT SWEEPER & CONSOLIDATOR</b>\n` +
+        `• <b>Sweeper:</b> Every trade leaves an empty token account holding ~0.002 SOL of rent. If you have traded 20 coins, you have ~0.04 SOL locked up. Go to <b>Positions</b>. If empty accounts are found, Sentry will show a **Sweep** button. Click it to close up to 18 accounts at once and recover your SOL instantly.\n` +
+        `• <b>Consolidation:</b> To sweep all SOL from sub-wallets W2-W5 back to your main W1 address, go to <b>Vault & Keys</b> and click **Sweep All Sub-Wallets to W1**.\n\n` +
 
-        `<i>Type /cancel at any time to abort any pending action and return to the dashboard.</i>`;
+        `⚙️ <b>11. SLIPPAGE & PRIORITY BRIBERY</b>\n` +
+        `Go to **Settings** to fine-tune your parameters:\n` +
+        `• <b>Slippage (20% recommended):</b> This is the maximum price change you accept. High slippage guarantees your transaction processes on highly volatile launches. Low slippage (e.g. 5%) causes your transactions to fail during massive spikes.\n` +
+        `• <b>Jito Priority:</b> Select Eco (0.0005 SOL tip), Fast (0.001 SOL), Turbo (0.005 SOL), or Custom. Tipping validators higher rates guarantees your transaction lands in the very next block during heavy network congestion.\n\n` +
+
+        `<i>Type /cancel at any time to abort any active wizard and return safely to your dashboard.</i>`;
 
     await safeEditMessageText(ctx, manualText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
