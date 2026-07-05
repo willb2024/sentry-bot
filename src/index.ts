@@ -3331,6 +3331,7 @@ bot.on('photo', async (ctx) => {
             const photo = ctx.message.photo[ctx.message.photo.length - 1];
             const fileLink = await ctx.telegram.getFileLink(photo.file_id);
             // @ts-ignore
+// @ts-ignore
 const fetch = (await import('node-fetch')).default;
             const imageRes = await fetch(fileLink.href);
             const imageBuffer = Buffer.from(await imageRes.arrayBuffer());
