@@ -67,7 +67,7 @@ export async function getUserPositions(telegramId: string) {
                     signal: AbortSignal.timeout(8000)
                 });
                 if (res.ok) {
-                    const data = await res.json();
+                    const data = (await res.json()) as any;
                     if (data.pairs) {
                         data.pairs.forEach((pair: any) => {
                             const baseAddress = pair.baseToken.address;

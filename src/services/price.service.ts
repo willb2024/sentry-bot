@@ -68,7 +68,7 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
     try {
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, 
             { signal: AbortSignal.timeout(2000) });
-        const data = await res.json();
+            const data = (await res.json()) as any;
         return data.risks?.some((r: any) => r.name === 'Freeze Authority still enabled' || r.score > 500) ?? false;
     } catch (_) { return false; }
 }
