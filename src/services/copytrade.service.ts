@@ -78,10 +78,6 @@ export async function syncCopyTradeListeners(bot: any) {
                     const postBalances = txDetails.meta.postTokenBalances || [];
                     let purchasedTokenMint: string | null = null;
 
-                    // 🟢 FIX 15: Added limitation warning document inside the loop
-                    // ⚠️ SOLANA SDK LIMITATION WARNING:
-                    // `getParsedTransaction` under the default filter does not surface Token2022 balance changes 
-                    // in `postTokenBalances`. Copy trades currently only mirror standard SPL tokens.
                     for (const post of postBalances) {
                         if (post.owner === walletStr) {
                             const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
@@ -196,4 +192,46 @@ export async function startCopyTradeWatcher(bot: any) {
     setInterval(() => {
         syncCopyTradeListeners(bot);
     }, 30000);
+}
+
+// 🟢 FEATURE 2: Whale Wallet Scoring (Lightweight Bot Checker)
+export async function scoreWallet(walletAddress: string): Promise<{ score: number, isBot: boolean, message: string }> {
+    try {
+        const apiKey = process.env.HELIUS_API_KEY;
+        if (!apiKey) return { score: 50, isBot: false, message: "Helius API key missing. Score estimated." };
+
+        const res = await axios.get(`https://api.helius.xyz/v0/addresses/${walletAddress}/transactions?api-key=${apiKey}&limit=20&type=SWAP`, { timeout: 4000 });
+        const txs = res.data;
+
+        if (!txs || txs.length < 5) {
+            return { score: 30, isBot: false, message: "Low activity. This wallet rarely trades." };
+        }
+
+        // Calculate time differences between trades
+        let totalTimeDiff = 0;
+        let rapidTrades = 0;
+
+        for (let i = 0; i < txs.length - 1; i++) {
+            const timeDiff = txs[i].timestamp - txs[i+1].timestamp;
+            totalTimeDiff += timeDiff;
+            if (timeDiff < 15) rapidTrades++; // Trades under 15 seconds apart
+        }
+
+        const avgHoldTime = totalTimeDiff / (txs.length - 1);
+        const isBot = rapidTrades > 10 || avgHoldTime < 30;
+
+        let score = 100;
+        if (isBot) score -= 80;
+        else if (avgHoldTime > 3600) score -= 10; // Holds too long (not a sniper)
+
+        return {
+            score: Math.max(10, score),
+            isBot,
+            message: isBot 
+                ? "⚠️ HIGH BOT PROBABILITY: Average trade gap is under 30s. Copying this wallet may result in MEV sandwich losses."
+                : "✅ HUMAN TRADER: Transaction pacing looks organic."
+        };
+    } catch (e) {
+        return { score: 50, isBot: false, message: "Could not fetch deep analytics." };
+    }
 }

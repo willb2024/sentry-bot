@@ -1006,6 +1006,101 @@ bot.start(async (ctx: Context) => {
     }
 });
 
+// =========================================================
+// 🟢 FEATURES 3 & 4: WATCHLIST & CALENDAR COMMANDS
+// =========================================================
+
+bot.command('calendar', async (ctx) => {
+    const { redis } = await import('./lib/redis.js');
+    const raw = await redis.get('calendar:launches');
+    const launches = raw ? JSON.parse(raw) : [];
+
+    if (launches.length === 0) return ctx.replyWithHTML("<i>📅 No verified launches in the last 2 hours. Try again shortly.</i>");
+
+    for (const p of launches) {
+        const ageMins = Math.floor((Date.now() - p.pairCreatedAt) / 60000);
+        await ctx.replyWithHTML(
+            `🚀 <b>$${p.baseToken.symbol}</b>\n` +
+            `<code>${p.baseToken.address}</code>\n\n` +
+            `⏱️ <b>Age:</b> ${ageMins} mins\n` +
+            `💰 <b>Vol:</b> $${p.volume.h24.toLocaleString()}\n` +
+            `💦 <b>Liq:</b> $${p.liquidity.usd.toLocaleString()}`,
+            Markup.inlineKeyboard([
+                [Markup.button.callback('🎯 Snipe This', `caller_guard_${p.baseToken.address}`)],
+                [Markup.button.url('📊 Chart', p.url)]
+            ])
+        );
+    }
+});
+
+bot.hears(/^\/watch (.+)/i, async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const parts = ctx.match[1].trim().split(' ');
+    const ca = parts[0];
+    const targetPrice = parts.length > 1 ? parseFloat(parts[1]) : 0;
+
+    let currentPrice = 0;
+    try {
+        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${ca}`);
+        currentPrice = res.data?.data?.[ca]?.price || 0;
+    } catch (e) {}
+
+    const watchData = { addedPrice: currentPrice, targetPrice: targetPrice, addedAt: Date.now() };
+
+    const { redis } = await import('./lib/redis.js');
+    await redis.hset(`watchlist:${tgId}`, ca, JSON.stringify(watchData));
+    ctx.replyWithHTML(`👀 <b>Added to Persistent Watchlist!</b>\nToken: <code>${ca.substring(0,8)}...</code>\nAdded at Price: <b>$${currentPrice}</b>\nAlert Target: ${targetPrice > 0 ? `<b>$${targetPrice}</b>` : '<i>None</i>'}`);
+});
+
+bot.command('unwatch', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    const ca = ctx.message.text.split(' ')[1];
+    if (!tgId || !ca) return;
+    const { redis } = await import('./lib/redis.js');
+    await redis.hdel(`watchlist:${tgId}`, ca);
+    ctx.reply(`✅ Removed ${ca} from watchlist.`);
+});
+
+bot.command('clearwatch', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    const { redis } = await import('./lib/redis.js');
+    await redis.del(`watchlist:${tgId}`);
+    ctx.reply(`✅ Watchlist cleared.`);
+});
+
+bot.command('watchlist', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const { redis } = await import('./lib/redis.js');
+    const items = await redis.hgetall(`watchlist:${tgId}`);
+    const cas = Object.keys(items);
+    if (cas.length === 0) return ctx.reply("👀 Your watchlist is empty. Use /watch [CA] to add tokens.");
+
+    const loader = await ctx.reply("<i>⏳ Fetching live prices...</i>", { parse_mode: 'HTML' });
+    
+    let msg = `👀 <b>YOUR WATCHLIST</b>\n\n`;
+    for (const ca of cas) {
+        const data = JSON.parse(items[ca]);
+        let currentPrice = 0;
+        try {
+            const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${ca}`);
+            currentPrice = res.data?.data?.[ca]?.price || 0;
+        } catch (e) {}
+
+        const diff = data.addedPrice > 0 ? (((currentPrice - data.addedPrice) / data.addedPrice) * 100).toFixed(2) : '0.00';
+        msg += `• <code>${ca.substring(0,6)}...</code>\n`;
+        msg += `   Live: <b>$${currentPrice}</b> (${Number(diff) >= 0 ? '+' : ''}${diff}%)\n`;
+        if (data.targetPrice > 0) msg += `   Target Alert: <b>$${data.targetPrice}</b>\n`;
+        msg += `\n`;
+    }
+
+    await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { parse_mode: 'HTML' });
+});
+
 bot.action('btn_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){} 
     
@@ -4367,12 +4462,15 @@ app.get('/g/:guildCode', async (req, res) => {
     } catch (e) { res.status(500).send("Error loading leaderboard."); }
 });
 
+// =========================================================
+// 🌐 SECURE BOOT & EXPRESS WEBAPP
+// =========================================================
+
 async function bootEcosystem() {
     await warmDnsCache();
     await syncGuardsFromDb(); 
     // Start WebApp Express Server
     app.listen(3001, () => console.log('🟢 WebApp API Server listening on port 3001'));
-
 
     // Refresh guild rank caches every 60 seconds
     setInterval(async () => {
@@ -4384,10 +4482,10 @@ async function bootEcosystem() {
         } catch (e) {}
     }, 60_000);
 
-    // 🟢 HIGH BUG 28 FIX: Background sweep to cleanly demote expired VIPs every 10 minutes
- setInterval(async () => {
-    await sweepExpiredVips();
-}, 10 * 60 * 1000);
+    // Background sweep to cleanly demote expired VIPs every 10 minutes
+    setInterval(async () => {
+        await sweepExpiredVips();
+    }, 10 * 60 * 1000);
 
     console.log("⏳ Pinging Telegram Servers...");
     try {
@@ -4399,25 +4497,29 @@ async function bootEcosystem() {
         bot.launch({ dropPendingUpdates: true });
         console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
 
-        
         igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err.message));
         startDcaEngine(bot);
         startCopyTradeWatcher(bot); 
         startDepositWatcher(bot); 
         
         const adminId = process.env.ADMIN_TELEGRAM_ID || "8494722111"; // Your Telegram ID
-           // 🏰 Starts the new Guild KOL Leadgen
         
-        startCoinCaller(bot); // 🟢 ADDED CALLER ENGINE STARTUP
+        startCoinCaller(bot); // ADDED CALLER ENGINE STARTUP
         
-const { startGuildLeadScheduler } = await import('./services/leadgen_guild.service.js');
-startGuildLeadScheduler(bot, adminId);
-        
+        const { startGuildLeadScheduler } = await import('./services/leadgen_guild.service.js');
+        startGuildLeadScheduler(bot, adminId);
+
+        // 🟢 FEATURE 3: Initialize the Launch Calendar background updater
+        const { updateLaunchCalendar } = await import('./services/calendar.service.js');
+        await updateLaunchCalendar();
+        setInterval(updateLaunchCalendar, 30 * 60 * 1000); // Refreshes every 30 mins
+
     } catch (err: any) {
         console.error("🔴 TELEGRAM BOOT FAILED:", err.message);
         process.exit(1);
     }
-}
+} // 🟢 This closing bracket was missing!
+
 bootEcosystem();
 
 process.once('SIGINT', () => { try { if (bot.botInfo) bot.stop('SIGINT'); } catch(e){} prisma.$disconnect(); redis.quit(); });

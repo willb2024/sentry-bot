@@ -553,6 +553,9 @@ export async function executeSnipe(
         const vipStatus = await getVipStatus(telegramId);
         const badgeStr = vipStatus.badge ? `${vipStatus.badge} ` : '';
 
+        // 🟢 FEATURE 1: Start the trade execution timer
+        await redis.set(`trade_time:${telegramId}:${targetCA}`, Date.now().toString(), 'EX', 86400 * 7);
+
         return {
             success: true,
             signature: firstSignature,
@@ -731,7 +734,6 @@ export async function executeExit(
             }
         } catch (_) {}
 
-        // 🟢 BUG A FIX: Calculate exact realized PnL metrics
         const realizedPnlSol = totalFeeBase - volumeToRecord;
         const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
@@ -741,7 +743,6 @@ export async function executeExit(
             await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } });
         }
 
-        // 🟢 BUG A FIX: Persist profitPercent and realizedPnlSol to the Prisma database
         await prisma.trade.create({
             data: {
                 userId: user.id,
@@ -765,7 +766,7 @@ export async function executeExit(
         return {
             success: true,
             signature: firstSignature,
-            message: `${badgeStr}🟢 Exit Successful (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}\n⚡ <i>Trade Executed Successfully</i>`
+            message: `${badgeStr}🟢 Exit Successful (${sellPercentage}%).\nPnL: ${profitPercent >= 0 ? '+' : ''}${profitPercent.toFixed(2)}%\n📊 <b>Breakdown:</b> ${breakdown}\n⚡ <i>Trade Executed Successfully</i>`
         };
     } catch (error: any) {
         return { success: false, message: `🔴 Error: ${error.message}` };

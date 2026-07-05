@@ -176,7 +176,6 @@ async function checkAndTriggerGuard(
                 const jitoTip = 0.0015;
                 const solPnl = rawSolPnl - platformFee - jitoTip;
                 
-                // 🟢 GAP 2 FIX: Host the simulated image on Redis and build the dynamic OpenGraph sharing link
                 const imgId = crypto.randomBytes(8).toString('hex');
                 await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
                 
@@ -274,11 +273,23 @@ async function checkAndTriggerGuard(
                             await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
                             
                             const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
-                            const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
                             
+                            // 🟢 FEATURE 1: Dynamic Execution Time Tweet (Take Profit)
+                            const tradeStartRaw = await redis.get(`trade_time:${guard.telegramId}:${guard.tokenAddress}`);
+                            let timeString = "";
+                            if (tradeStartRaw) {
+                                const diffMs = Date.now() - parseInt(tradeStartRaw);
+                                const mins = Math.floor(diffMs / 60000);
+                                const secs = Math.floor((diffMs % 60000) / 1000);
+                                timeString = `in ${mins > 0 ? `${mins}m ` : ''}${secs}s`;
+                            }
+
                             const tweetText = encodeURIComponent(
-                                `Just secured a verified gain of +${profitPercent.toFixed(1)}% on $${guard.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\n` +
-                                `Verified details: ${shareUrl}`
+                                `Just exited $${guard.tokenAddress.substring(0,4).toUpperCase()} on Sentry Terminal ⚡\n` +
+                                `+${profitPercent.toFixed(1)}% ${timeString}\n` +
+                                `Jito MEV bundle — zero sandwich attacks\n` +
+                                `🔗 solscan.io/tx/${result.signature}\n` +
+                                `t.me/${process.env.BOT_USERNAME || 'SentryTerminalBot'}?start=${user?.referralCode || ''}`
                             );
                             const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
 
@@ -340,11 +351,23 @@ async function checkAndTriggerGuard(
                             await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
                             
                             const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
-                            const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
                             
+                            // 🟢 FEATURE 1: Dynamic Execution Time Tweet (Trailing Guard)
+                            const tradeStartRaw = await redis.get(`trade_time:${guard.telegramId}:${guard.tokenAddress}`);
+                            let timeString = "";
+                            if (tradeStartRaw) {
+                                const diffMs = Date.now() - parseInt(tradeStartRaw);
+                                const mins = Math.floor(diffMs / 60000);
+                                const secs = Math.floor((diffMs % 60000) / 1000);
+                                timeString = `in ${mins > 0 ? `${mins}m ` : ''}${secs}s`;
+                            }
+
                             const tweetText = encodeURIComponent(
-                                `Just secured a verified execution of ${totalPnlPercent >= 0 ? `+${totalPnlPercent.toFixed(1)}%` : `${totalPnlPercent.toFixed(1)}%`} on $${guard.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\n` +
-                                `Verified details: ${shareUrl}`
+                                `Just exited $${guard.tokenAddress.substring(0,4).toUpperCase()} on Sentry Terminal ⚡\n` +
+                                `${totalPnlPercent >= 0 ? '+' : ''}${totalPnlPercent.toFixed(1)}% ${timeString}\n` +
+                                `Jito MEV bundle — zero sandwich attacks\n` +
+                                `🔗 solscan.io/tx/${result.signature}\n` +
+                                `t.me/${process.env.BOT_USERNAME || 'SentryTerminalBot'}?start=${user?.referralCode || ''}`
                             );
                             const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share Guard to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
 
@@ -522,6 +545,36 @@ export function startUniversalGuardPoller(bot: any) {
                             }
                             lockedLimitOrders.delete(limit.id);
                         }).catch(() => lockedLimitOrders.delete(limit.id));
+                    }
+                }
+            }
+
+            // 🟢 FEATURE 4: Watchlist Background Poller
+            const keys = await redis.keys('watchlist:*');
+            for (const key of keys) {
+                const tgId = key.split(':')[1];
+                const watchedTokens = await redis.hgetall(key);
+                
+                for (const [ca, dataStr] of Object.entries(watchedTokens)) {
+                    const data = JSON.parse(dataStr);
+                    if (data.targetPrice > 0) {
+                        const currentPriceNative = livePricesNative[ca]?.price || 0;
+                        const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
+
+                        const cooldownKey = `alert_cooldown:${tgId}:${ca}`;
+                        const isOnCooldown = await redis.get(cooldownKey);
+
+                        if (!isOnCooldown && currentPriceUsd > 0 && currentPriceUsd >= data.targetPrice) {
+                            await redis.set(cooldownKey, '1', 'EX', 3600); // 1 hour cooldown per token alert
+                            
+                            try {
+                                await bot.telegram.sendMessage(
+                                    tgId,
+                                    `🔔 <b>WATCHLIST ALERT!</b>\n\nToken: <code>${ca}</code>\nhas crossed your target of <b>$${data.targetPrice}</b>.\nLive Price: <b>$${currentPriceUsd.toFixed(6)}</b>`,
+                                    { parse_mode: 'HTML' }
+                                );
+                            } catch (_) {}
+                        }
                     }
                 }
             }
@@ -809,7 +862,7 @@ function connectPumpPortalStream(bot: any) {
         } catch (_) {}
     });
 
-    // 🟢 FIX: Added error logging and a 30-second backoff to prevent 429 WebSocket IP bans
+    // 🟢 FIX: 30-Second Backoff for 429 Prevention
     ws.on('error', (err: any) => {
         console.warn(`⚠️ [PUMP WS] Error: ${err.message}`);
     });
