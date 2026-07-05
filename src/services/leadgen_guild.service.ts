@@ -11,7 +11,6 @@ const MAX_GUILD_LEADS_PER_SCAN  = 9999;
 const MIN_GUILD_FIT_SCORE       = 40;    
 const MIN_MEMBERS_FOR_GUILD     = 100;   // 🟢 HARD FLOOR: 100+ members only
 const DEDUP_TTL_SECONDS         = 7 * 24 * 60 * 60; // Don't message the same group within 7 days
-const DEEP_PARALLEL             = 20;
 const SLEEP                     = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 const USER_AGENTS = [
@@ -28,7 +27,7 @@ type PitchType = 'LAUNCH_KOL' | 'PROJECT_OWNER' | 'ALPHA_GROUP';
 
 interface GuildLead {
     url: string;
-    platform: 'telegram';
+    platform: 'discord';     // 🟢 CHANGED: Strictly focus on Discord platform
     memberCount: number;
     title: string;
     description: string;
@@ -37,8 +36,9 @@ interface GuildLead {
     source: string;
     hasToken: boolean;
     keywords: string[];
-    tokenAddress?: string;   // 🟢 NEW: Capture token contract address
-    creatorWallet?: string;  // 🟢 NEW: Capture creator/deployer wallet address
+    tokenAddress?: string;   
+    creatorWallet?: string;  
+    vol24h?: number;         // 🟢 NEW: 24-hour USD Volume
 }
 
 // ─── Redis dedup ──────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ function scoreGuildFit(memberCount: number, description: string, hasToken: boole
     else if (memberCount >= 2000)  score += 20;
     else if (memberCount >= 1000)  score += 15;
     else if (memberCount >= 300)   score += 10;
-    else if (memberCount >= 100)   score += 5; // Minimum viable community
+    else if (memberCount >= 100)   score += 5;
 
     for (const kw of SOLANA_KEYWORDS) {
         if (text.includes(kw)) { score += 4; foundKeywords.push(kw); break; }
@@ -101,63 +101,39 @@ function scoreGuildFit(memberCount: number, description: string, hasToken: boole
 
 // ─── SCRAPERS ─────────────────────────────────────────────────────────────────
 
-async function fetchKolChannelsFromDirectory(): Promise<GuildLead[]> {
-    const leads: GuildLead[] = [];
-    const searches = [
-        { url: 'https://tgstat.com/en/search?q=solana+alpha+calls',        label: 'tgstat-alpha-calls'   },
-        { url: 'https://tgstat.com/en/search?q=solana+gem+presale',        label: 'tgstat-gem-presale'   },
-        { url: 'https://tgstat.com/en/search?q=crypto+whitelist+wl',       label: 'tgstat-whitelist'     },
-        { url: 'https://tgstat.com/en/search?q=solana+kol+community',      label: 'tgstat-kol'           },
-        { url: 'https://tgstat.com/en/search?q=solana+airdrop+launch',     label: 'tgstat-launch'        },
-        { url: 'https://commbot.ru/en/search?q=solana+alpha',              label: 'commbot-alpha'        },
-    ];
-
-    for (const search of searches) {
-        try {
-            const res = await axios.get(search.url, { headers: { 'User-Agent': randomUA(), 'Accept-Language': 'en-US,en;q=0.9' }, timeout: 10000 });
-            const html: string = res.data;
-
-            const linkRegex   = /href="(https:\/\/t\.me\/[a-zA-Z0-9_]+)"/g;
-            const memberRegex = /(\d[\d\s,]+)\s*(members?|subscribers?)/gi;
-            const titleRegex  = /title="([^"]{3,80})"/g;
-            const descRegex   = /<p[^>]*class="[^"]*description[^"]*"[^>]*>([^<]{10,300})<\/p>/gi;
-
-            const links: string[] = [];
-            let m;
-            while ((m = linkRegex.exec(html)) !== null) {
-                if (!m[1].includes('/s/') && !m[1].includes('/+')) links.push(m[1]);
-            }
-
-            const memberCounts: number[] = [];
-            while ((m = memberRegex.exec(html)) !== null) memberCounts.push(parseInt(m[1].replace(/[\s,]/g, ''), 10));
-
-            const titles: string[] = [];
-            while ((m = titleRegex.exec(html)) !== null) titles.push(m[1]);
-
-            const descriptions: string[] = [];
-            while ((m = descRegex.exec(html)) !== null) descriptions.push(m[1]);
-
-            for (let i = 0; i < links.length; i++) {
-                const url         = links[i];
-                const memberCount = memberCounts[i] || 0;
-                const title       = titles[i] || url;
-                const description = descriptions[i] || title;
-
-                const { score, pitchType, keywords } = scoreGuildFit(memberCount, description, false);
-                if (score < MIN_GUILD_FIT_SCORE) continue;
-
-                leads.push({
-                    url, platform: 'telegram', memberCount, title, description,
-                    guildFitScore: score, pitchType, source: search.label,
-                    hasToken: false, keywords
-                });
-            }
-            await SLEEP(1500);
-        } catch (e: any) { }
-    }
-    return leads;
+// 🟢 NEW: Extract Discord Invite Code
+function extractDiscordInviteCode(url: string): string | null {
+    const match = url.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9-]+)/i);
+    return match ? match[1] : null;
 }
 
+// 🟢 NEW: Fetch Discord Member Count using Discord's open endpoints (100% rate-safe)
+async function fetchDiscordMemberCount(url: string): Promise<number> {
+    const code = extractDiscordInviteCode(url);
+    if (!code) return 0;
+    try {
+        const res = await axios.get(`https://discord.com/api/v9/invites/${code}?with_counts=true`, { 
+            headers: { 'User-Agent': randomUA() },
+            timeout: 3500 
+        });
+        return res.data?.approximate_member_count || 0;
+    } catch {
+        return 0;
+    }
+}
+
+// 🟢 NEW: Fetch 24-hour USD Volume via DexScreener pairs API
+async function fetchToken24hVolume(tokenAddress: string): Promise<number> {
+    try {
+        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { timeout: 3500 });
+        if (res.data?.pairs && res.data.pairs.length > 0) {
+            return res.data.pairs[0].volume?.h24 || 0;
+        }
+    } catch { }
+    return 0;
+}
+
+// 🟢 NEW: Fetch Discord-linked boosted tokens
 async function fetchBoostedTokenKols(): Promise<GuildLead[]> {
     const leads: GuildLead[] = [];
     try {
@@ -172,17 +148,30 @@ async function fetchBoostedTokenKols(): Promise<GuildLead[]> {
             const description = token.description || token.info?.description || '';
             const links: any[]= token.links || token.info?.links || [];
 
-            for (const link of links) {
-                const url: string = link.url || '';
-                if (!url || !url.includes('t.me/')) continue;
+            // Find valid Discord links
+            const discordLink = links.find((l: any) => 
+                l.type === 'discord' || 
+                l.url?.includes('discord.gg') || 
+                l.url?.includes('discord.com/invite')
+            );
 
-                const { score, pitchType, keywords } = scoreGuildFit(0, description + ' launch token presale solana', true);
-                leads.push({
-                    url, platform: 'telegram', memberCount: 0, title: `$${token.symbol || 'UNKNOWN'} (Boosted)`, description,
-                    guildFitScore: Math.min(100, score + 20), pitchType: 'PROJECT_OWNER', source: 'dexscreener-boost', hasToken: true, keywords: [...keywords, 'paid-boost'],
-                    tokenAddress: token.tokenAddress // 🟢 Capture contract address
-                });
-            }
+            if (!discordLink || !discordLink.url) continue; // 🟢 Strictly skip non-discord listings
+
+            const { score, pitchType, keywords } = scoreGuildFit(0, description + ' launch token presale solana', true);
+            
+            leads.push({
+                url: discordLink.url, 
+                platform: 'discord', 
+                memberCount: 0, 
+                title: `$${token.symbol || 'UNKNOWN'} Discord`, 
+                description,
+                guildFitScore: Math.min(100, score + 20), 
+                pitchType: 'PROJECT_OWNER', 
+                source: 'dexscreener-boost', 
+                hasToken: true, 
+                keywords: [...keywords, 'paid-boost'],
+                tokenAddress: token.tokenAddress
+            });
         }
     } catch (e: any) { }
     return leads;
@@ -190,28 +179,6 @@ async function fetchBoostedTokenKols(): Promise<GuildLead[]> {
 
 // ─── VERIFICATION ─────────────────────────────────────────────────────────────
 
-async function enrichMemberCount(lead: GuildLead): Promise<number> {
-    if (lead.memberCount > 0) return lead.memberCount;
-    try {
-        const res = await axios.get(lead.url, { headers: { 'User-Agent': randomUA() }, timeout: 6000 });
-        const html: string = res.data;
-
-        const memberMatch = html.match(/([\d\s,]+)\s+(members|subscribers)/i);
-        if (memberMatch?.[1]) {
-            const n = parseInt(memberMatch[1].replace(/[, ]/g, ''), 10);
-            if (n > 0) return n;
-        }
-
-        const onlineMatch = html.match(/([\d\s,]+)\s+online/i);
-        if (onlineMatch?.[1]) {
-            const n = parseInt(onlineMatch[1].replace(/[, ]/g, ''), 10);
-            if (n > 0) return n;
-        }
-    } catch { }
-    return 0;
-}
-
-// 🟢 NEW: Fetch pump.fun coin creator directly via HTTP (Zero RPC overhead to prevent 429s)
 async function fetchPumpCreator(mint: string): Promise<string | null> {
     try {
         const res = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, { timeout: 3500 });
@@ -221,15 +188,6 @@ async function fetchPumpCreator(mint: string): Promise<string | null> {
     }
 }
 
-async function qualifyLead(lead: GuildLead): Promise<{ qualifies: boolean; memberCount: number }> {
-    if (lead.guildFitScore < MIN_GUILD_FIT_SCORE) return { qualifies: false, memberCount: lead.memberCount };
-    const memberCount = await enrichMemberCount(lead);
-    
-    // 🟢 ENFORCES 100+ MEMBERS
-    if (memberCount < MIN_MEMBERS_FOR_GUILD) return { qualifies: false, memberCount };
-    return { qualifies: true, memberCount };
-}
-
 // ─── EXECUTION ────────────────────────────────────────────────────────────────
 
 export async function runGuildLeadScraper(bot: any, adminId: string): Promise<string> {
@@ -237,16 +195,12 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
     try {
         await redis.set(cancelKey, 'RUNNING', 'EX', 3600);
         
-        const [dirLeads, boostedLeads] = await Promise.all([
-            fetchKolChannelsFromDirectory(),
-            fetchBoostedTokenKols(),
-        ]);
+        // 🟢 Discord only: Telegram directories completely skipped
+        const boostedLeads = await fetchBoostedTokenKols();
 
-        const allLeads = [...dirLeads, ...boostedLeads];
         const seenUrls = new Set<string>();
-        const candidates = allLeads
+        const candidates = boostedLeads
             .filter(l => { if (seenUrls.has(l.url)) return false; seenUrls.add(l.url); return true; })
-            .filter(l => l.guildFitScore >= MIN_GUILD_FIT_SCORE)
             .sort((a, b) => b.guildFitScore - a.guildFitScore);
 
         let sent = 0;
@@ -255,14 +209,21 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
         for (const lead of candidates) {
             if (await isAlreadyContacted(lead.url)) continue;
 
-            const { qualifies, memberCount } = await qualifyLead(lead);
-
-            if (!qualifies) {
+            // 🟢 Discord live verification
+            const memberCount = await fetchDiscordMemberCount(lead.url);
+            if (memberCount < MIN_MEMBERS_FOR_GUILD) {
                 rejected++;
                 continue;
             }
 
-            // 🟢 NEW: If there is an associated token CA, query the developer/creator wallet
+            lead.memberCount = memberCount;
+
+            // Fetch live 24h volume
+            if (lead.tokenAddress) {
+                lead.vol24h = await fetchToken24hVolume(lead.tokenAddress);
+            }
+
+            // Fetch pump.fun creator wallet
             if (lead.tokenAddress && lead.tokenAddress.toLowerCase().endsWith('pump')) {
                 const creator = await fetchPumpCreator(lead.tokenAddress);
                 if (creator) {
@@ -273,33 +234,35 @@ export async function runGuildLeadScraper(bot: any, adminId: string): Promise<st
             await markContacted(lead.url);
             sent++;
             
-            // 🟢 NEW: Format a ready-to-copy customized pitch message with CA, Wallet & Text
+            // 🟢 Customized volume-based Discord pitch template
             let tokenAndPitchInfo = '';
             if (lead.tokenAddress) {
+                const formattedVol = lead.vol24h ? `$${lead.vol24h.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'N/A';
                 tokenAndPitchInfo = 
                     `🪙 <b>Token Address (CA):</b> <code>${lead.tokenAddress}</code>\n` +
+                    `📊 <b>24h Volume:</b> <code>${formattedVol}</code>\n` +
                     `🐋 <b>Creator Wallet:</b> <code>${lead.creatorWallet || 'Unable to fetch'}</code>\n\n` +
-                    `📢 <b>PITCH TEMPLATE (Ready to copy & send):</b>\n` +
-                    `<code>Hey! Just saw your project trending on DexScreener. I bought a bag at CA ${lead.tokenAddress} to show support. Would love to bring our Alpha Guild trading volume into your community. Let's run a leaderboard together to coordinate our buys!</code>\n\n`;
+                    `📢 <b>DISCORD PITCH TEMPLATE (Copy & Send):</b>\n` +
+                    `<code>Hey! Just saw your project trending on DexScreener with ${formattedVol} in 24h volume. I bought a bag at CA ${lead.tokenAddress} to support. Would love to bring our Alpha Guild trading volume into your community. Let's run a leaderboard together to coordinate our buys!</code>\n\n`;
             }
 
             const message = 
-                `🔥 <b>KOL FOUND #${sent}</b>\n\n` +
+                `🔥 <b>DISCORD FOUND #${sent}</b>\n\n` +
                 `<b>Target:</b> ${lead.title}\n` +
                 `<b>Members:</b> 👥 ${memberCount.toLocaleString()} verified\n` +
                 `<b>Source:</b> <code>${lead.source}</code>\n\n` +
                 `<b>Quality Score:</b> ${lead.guildFitScore}/100 ⭐\n` +
                 `<b>Type:</b> ${lead.pitchType}\n\n` +
                 tokenAndPitchInfo +
-                `🔗 <b>Link:</b> ${lead.url}`;
+                `🔗 <b>Invite Link:</b> ${lead.url}`;
 
             await bot.telegram.sendMessage(adminId, message, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }).catch(() => null);
             await SLEEP(300);
         }
 
-        if (sent === 0) return `🟡 Scan complete. No uncontacted groups with ${MIN_MEMBERS_FOR_GUILD}+ members found.`;
+        if (sent === 0) return `🟡 Scan complete. No uncontacted Discord guilds with ${MIN_MEMBERS_FOR_GUILD}+ members found.`;
         
-        return `✅ <b>KOL Finder Complete!</b>\nDelivered <b>${sent}</b> highly qualified groups (100+ members) to your DM.\n<i>Skipped ${rejected} groups that were too small.</i>`;
+        return `✅ <b>Discord Finder Complete!</b>\nDelivered <b>${sent}</b> highly qualified guilds (100+ members) to your DM.\n<i>Skipped ${rejected} guilds that were too small.</i>`;
     } catch (e: any) {
         return `🔴 Error: ${e.message}`;
     } finally {
@@ -312,7 +275,7 @@ export function startGuildLeadScheduler(bot: any, adminId: string) {
         const isRunning = await redis.get(`state:guild_lead_scraper:${adminId}`);
         if (isRunning === 'RUNNING') return;
         const result = await runGuildLeadScraper(bot, adminId);
-        await bot.telegram.sendMessage(adminId, `🏰 <b>Auto KOL Scan</b>\n${result}`, { parse_mode: 'HTML' }).catch(() => null);
+        await bot.telegram.sendMessage(adminId, `🏰 <b>Auto Discord Scan</b>\n${result}`, { parse_mode: 'HTML' }).catch(() => null);
     };
     runIfIdle();
     setInterval(runIfIdle, 45 * 60 * 1000); // Runs every 45 mins automatically
