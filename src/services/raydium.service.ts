@@ -5,7 +5,6 @@ import { connection } from '../lib/connection.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 
-// BUG 3 FIX: Use @ts-ignore instead of @ts-expect-error to avoid strict compiler build failures
 // @ts-ignore
 import BN from 'bn.js'; 
 
@@ -25,7 +24,7 @@ async function getRaydiumSdk(ownerKeypair: Keypair): Promise<Raydium> {
     });
     
     sdkCache.set(key, sdk);
-    setTimeout(() => sdkCache.delete(key), 120_000); // 2min TTL
+    setTimeout(() => sdkCache.delete(key), 120_000);
     return sdk;
 }
 
