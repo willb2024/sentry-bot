@@ -216,12 +216,14 @@
             <div class="flex items-center justify-between">
                 <button onclick="closeDexChart()" class="text-gray-400 hover:text-white text-sm font-semibold transition-colors"><i class="fa-solid fa-arrow-left mr-1"></i> Back</button>
                 <div class="flex gap-2">
+                    <!-- 🟢 TASK 1 FIX: Added required missing CA tracking node to resolve 'Cannot set properties of null' crash -->
+                    <span id="chart-token-ca" class="hidden"></span>
                     <button id="chart-copy-ca" class="glass-btn px-3 py-1.5 rounded-lg text-[11px] font-bold text-white"><i class="fa-solid fa-copy mr-1"></i> Copy CA</button>
                 </div>
             </div>
             
-            <!-- Huge Iframe Chart -->
-            <div class="card-flat rounded-xl overflow-hidden shadow-2xl h-[55vh] min-h-[400px] w-full border border-white/10 relative bg-[#0a0d14]">
+            <!-- Huge Iframe Chart (75vh Layout) -->
+            <div class="card-flat rounded-xl overflow-hidden shadow-2xl h-[75vh] min-h-[560px] w-full border border-white/10 relative bg-[#0a0d14]">
                 <div id="chart-loader" class="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0d14] z-10">
                     <i class="fa-solid fa-circle-notch fa-spin text-3xl text-neonBlue mb-3"></i>
                     <span class="text-xs text-gray-400 font-semibold tracking-widest">LOADING DEXSCREENER...</span>
@@ -250,23 +252,27 @@
                     </div>
                 </div>
 
-                <!-- Deep Trade History Table -->
-                <div class="card-flat lg:col-span-3 flex flex-col overflow-hidden h-[300px] border border-white/5">
+                <!-- Deep Trade History & Live Trades Tabbed Container -->
+                <div class="card-flat lg:col-span-3 flex flex-col overflow-hidden h-[420px] border border-white/5">
                     <div class="px-4 py-3 bg-[#0a0d14] border-b border-white/5 flex items-center justify-between">
                         <h3 class="text-xs font-bold tracking-wide text-white uppercase flex items-center gap-2">
-                            <i class="fa-solid fa-clock-rotate-left text-gray-500"></i> Your Order History
+                            <i class="fa-solid fa-users text-gray-500"></i> Activity <span id="live-trades-dot" class="h-1.5 w-1.5 rounded-full bg-jupGreen animate-pulse ml-1"></span>
                         </h3>
+                        <div class="flex gap-4 text-[10px] font-bold">
+                            <button onclick="setTradeTab('live')" id="tab-trades-live" class="text-white border-b-2 border-neonBlue pb-1 transition-all">LIVE TRADES</button>
+                            <button onclick="setTradeTab('mine')" id="tab-trades-mine" class="text-gray-500 hover:text-white transition-all">MY HISTORY</button>
+                        </div>
                     </div>
                     
                     <div class="dex-table-header grid grid-cols-12 gap-2 px-4 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-                        <div class="col-span-3">Date</div>
+                        <div class="col-span-3">Time / Date</div>
                         <div class="col-span-2">Type</div>
-                        <div class="col-span-4 text-right">Volume (SOL)</div>
+                        <div class="col-span-4">Wallet / Volume</div>
                         <div class="col-span-3 text-right">PnL / Txn</div>
                     </div>
                     
                     <div id="chart-trade-history" class="overflow-y-auto flex-1 no-scrollbar pb-2">
-                        <div class="text-center text-xs text-gray-500 py-10">No prior trades found for this token.</div>
+                        <div class="text-center text-xs text-gray-500 py-10">Loading feed...</div>
                     </div>
                 </div>
 
@@ -531,6 +537,55 @@
         }).join('');
     }
 
+    let liveTradesInterval = null;
+    let currentChartMint = null;
+    let tradeTab = 'live';
+
+    // 🟢 TASK 4 FIX: Tab routing for "LIVE TRADES" vs "MY HISTORY"
+    function setTradeTab(tab) {
+        if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+        tradeTab = tab;
+        document.getElementById('tab-trades-live').className = tab === 'live' ? 'text-white border-b-2 border-neonBlue pb-1' : 'text-gray-500 hover:text-white transition-colors';
+        document.getElementById('tab-trades-mine').className = tab === 'mine' ? 'text-white border-b-2 border-neonBlue pb-1' : 'text-gray-500 hover:text-white transition-colors';
+        if (tab === 'live') pollLiveTrades();
+        else renderTokenHistory(currentChartMint);
+    }
+
+    // 🟢 TASK 4 FIX: Live on-chain swaps polling from Helius
+    async function pollLiveTrades() {
+        if (!currentChartMint || tradeTab !== 'live') return;
+        try {
+            const res = await fetch(`/api/dex/trades/${currentChartMint}?initData=${encodeURIComponent(tg.initData || '')}`);
+            const trades = await res.json();
+            const container = document.getElementById('chart-trade-history');
+
+            if (tradeTab !== 'live') return; // Guard state changes
+
+            if (!trades || trades.length === 0) {
+                container.innerHTML = `<div class="text-center text-xs text-gray-500 py-10">No recent on-chain activity found.</div>`;
+                return;
+            }
+
+            container.innerHTML = trades.map(t => {
+                const dateStr = new Date(t.time).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+                const typeColor = t.isBuy ? 'text-dexGreen' : 'text-dexRed';
+                const typeLabel = t.isBuy ? 'BUY' : 'SELL';
+                const shortWallet = `${t.wallet.substring(0,4)}...${t.wallet.slice(-4)}`;
+                return `
+                <div class="dex-row grid grid-cols-12 gap-2 px-4 py-2.5 items-center text-xs">
+                    <div class="col-span-3 text-gray-400 font-mono">${dateStr}</div>
+                    <div class="col-span-2 font-bold ${typeColor}">${typeLabel}</div>
+                    <div class="col-span-4 text-gray-300 font-mono">${shortWallet}</div>
+                    <div class="col-span-3 text-right">
+                        <a href="https://solscan.io/tx/${t.signature}" target="_blank" class="text-gray-500 hover:text-white transition-colors">
+                            <i class="fa-solid fa-external-link-alt text-[10px]"></i>
+                        </a>
+                    </div>
+                </div>`;
+            }).join('');
+        } catch (e) {}
+    }
+
     function openDexChart(pairAddress, mintAddress, symbol, price, mcap) {
         if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
         
@@ -545,6 +600,9 @@
         // Button logic
         document.getElementById('chart-copy-ca').onclick = () => copyCA(mintAddress);
         
+        currentChartMint = mintAddress;
+        tradeTab = 'live';
+
         const snipeBtn = document.getElementById('btn-quick-snipe');
         snipeBtn.onclick = async () => {
             if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
@@ -566,7 +624,6 @@
                 const data = await response.json();
                 if (response.ok && data.success) {
                     showToast("🎯 Snipe Executed!");
-                    // Soft reload history to show new trade
                     setTimeout(() => fetchLiveData(), 2000); 
                 } else {
                     alert("🔴 Snipe Failed: " + (data.error || "Execution dropped."));
@@ -595,8 +652,10 @@
         
         iframe.src = `https://dexscreener.com/solana/${pairAddress}?embed=1&theme=dark&trades=0&info=0`;
 
-        // Load Trade History Overlay
-        renderTokenHistory(mintAddress);
+        // Start Live Swaps Polling loop
+        if (liveTradesInterval) clearInterval(liveTradesInterval);
+        pollLiveTrades();
+        liveTradesInterval = setInterval(pollLiveTrades, 5000);
     }
 
     function closeDexChart() {
@@ -604,6 +663,10 @@
         document.getElementById('dex-chart-view').classList.add('hidden-view');
         document.getElementById('dex-search-view').classList.remove('hidden-view');
         document.getElementById('dex-iframe').src = ""; 
+        if (liveTradesInterval) {
+            clearInterval(liveTradesInterval);
+            liveTradesInterval = null;
+        }
     }
 
     function renderTokenHistory(mintAddress) {
@@ -720,7 +783,7 @@
             }
         });
 
-        if (profitData.every(v => v === 0) && lossData.every(v=> v===0)) {
+        if (profitData.every(v === 0) && lossData.every(v === 0)) {
             for(let i=0; i<bucketCount; i++) {
                if(Math.random()>0.5) profitData[i] = Math.random() * 2;
                else lossData[i] = Math.random() * 2;
@@ -824,8 +887,13 @@
                 <div class="card-flat overflow-hidden">
                     <div onclick="toggleDrawer('${p.mint}')" class="p-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-colors">
                         <div class="flex items-center gap-4">
-                            <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">$${p.symbol.substring(0,4)}</div>
-                            <div><h4 class="font-bold text-[15px] text-white">${p.symbol}</h4><span class="text-[11px] text-gray-500 font-mono">${formatNumber(p.amount)} TKN</span></div>
+                            <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
+                                $${p.symbol.substring(0,4)}
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-[15px] text-white">${p.symbol}</h4>
+                                <span class="text-[11px] text-gray-500 font-mono">${formatNumber(p.amount)} TKN</span>
+                            </div>
                         </div>
                         <div class="text-right">
                             <span class="font-bold text-lg text-white">$${p.valueUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
@@ -1007,8 +1075,7 @@
         document.getElementById('stat-networth').innerText = '$' + stats.networth.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
         document.getElementById('stat-networth-sub').innerText = stats.networthSol;
         
-        const isGain = stats.pnlPercent >= 0; 
-        const pnlColorClass = isGain ? 'text-jupGreen' : 'text-neonRed';
+        const isGain = stats.pnlPercent >= 0; const pnlColorClass = isGain ? 'text-jupGreen' : 'text-neonRed';
         
         document.getElementById('stat-pnl').innerText = `${isGain && stats.pnlPercent !== 0 ? '+' : ''}${stats.pnlPercent}%`;
         document.getElementById('stat-pnl').className = `text-3xl sm:text-4xl font-bold mt-1 transition-colors ${pnlColorClass}`;
@@ -1068,15 +1135,9 @@
                     const simBalanceSol = parseFloat(simStats.balance) || 0;
                     const networthUsd = Math.max(totalValueUsd, simBalanceSol * 150); 
                     const networthSol = simBalanceSol.toFixed(4) + " SOL";
-                    
-                    const startingBalance = 12.4521; 
-                    const pnlSol = simBalanceSol - startingBalance; 
-                    const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00"; 
-                    const pnlUsd = pnlSol * 150;
-                    
+                    const startingBalance = 12.4521; const pnlSol = simBalanceSol - startingBalance; const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00"; const pnlUsd = pnlSol * 150;
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
-                    const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : ['No Active Positions']; 
-                    const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [100];
+                    const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : ['No Active Positions']; const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [100];
 
                     populateDashboard({ 
                         networth: networthUsd, 

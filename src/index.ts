@@ -168,6 +168,49 @@ app.post('/api/analytics', async (req, res) => {
     }
 });
 
+
+// =========================================================
+// 🟢 TASK 4 FIX: On-Chain Swaps Activity Poller via Helius
+// =========================================================
+app.get('/api/dex/trades/:mint', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.query.initData as string)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        
+        const mint = req.params.mint;
+        const cacheKey = `dex:trades:${mint}`;
+        
+        const cached = await redis.get(cacheKey);
+        if (cached) return res.json(JSON.parse(cached));
+
+        const heliusKey = process.env.HELIUS_API_KEY || "";
+        if (!heliusKey) return res.json([]);
+
+        const url = `https://api.helius.xyz/v0/addresses/${mint}/transactions?api-key=${heliusKey}&limit=30&type=SWAP`;
+        const heliusRes = await axios.get(url, { timeout: 6000 });
+
+        const trades = (heliusRes.data || []).map((tx: any) => {
+            const transfer = tx.tokenTransfers?.find((t: any) => t.mint === mint);
+            const isBuy = transfer && transfer.toUserAccount && transfer.tokenAmount > 0;
+            return {
+                wallet: transfer?.toUserAccount || transfer?.fromUserAccount || 'Unknown',
+                isBuy: !!isBuy,
+                amountToken: transfer?.tokenAmount || 0,
+                time: tx.timestamp * 1000,
+                signature: tx.signature
+            };
+        }).filter((t: any) => t.wallet !== 'Unknown');
+
+        // Cache swap details safely for 10 seconds to limit Helius rate utilization
+        await redis.set(cacheKey, JSON.stringify(trades), 'EX', 10);
+        res.json(trades);
+    } catch (e: any) {
+        console.error("🔴 [DEX TRADES POLLECTION EXCEPTION]:", e.message);
+        res.json([]);
+    }
+});
+
 // =========================================================
 // 🟢 TASK 9 & BUG 2 FIX: direct execution proxy endpoint
 // =========================================================
