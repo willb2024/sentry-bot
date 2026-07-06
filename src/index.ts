@@ -522,6 +522,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     `• Affiliate Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
     `<i>Forward a call here, paste a Token CA, or select a module below.</i>`;
 
+    // REPLACE WITH THIS (fixed keyboard):
     const UI = Markup.inlineKeyboard([
         [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
         [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
