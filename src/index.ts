@@ -505,7 +505,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 
     const vipStatus = await getVipStatus(telegramId); 
 
-    // 🟢 REMOVED THE SIMULATION BANNER SO IT LOOKS 100% REAL
     const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
     `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` + 
     `👛 <b>Primary Deposit Node:</b>\n` +
@@ -522,6 +521,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
     `• Affiliate Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
     `<i>Forward a call here, paste a Token CA, or select a module below.</i>`;
+
     const UI = Markup.inlineKeyboard([
         [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
         [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
@@ -530,7 +530,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         [Markup.button.callback('🛠️ Dev Suite (PRO)', 'menu_devsuite'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
         [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
         [Markup.button.callback('💎 Why We Are Best', 'btn_guide'), { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }],
-        // 🟢 FEATURE: New row wired in directly before Cancel All Automations
         [
             Markup.button.callback('🚀 Launch Token', 'action_launch_token_start'),
             Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu')
@@ -542,20 +541,23 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     else await ctx.replyWithHTML(layoutTxt, UI);
 }
 
+// 🟢 NEW: Route the dashboard clicks directly to Sentry's detailed Token Launcher Comparison Page and Guild switch page
+bot.action('action_launch_token_start', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    return bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_token_launcher' } } as any);
+});
+
+bot.action('action_guild_menu', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    return bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_switch_guilds' } } as any);
+});
+
 
 // =========================================================
 // 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
 // =========================================================
 
-// 🟢 NEW: Route the dashboard click directly to Sentry's detailed Token Launcher Comparison Page
-bot.action('action_launch_token_start', async (ctx) => {
-    return bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_token_launcher' } } as any);
-});
 
-// 🟢 NEW: Route the dashboard click directly to Sentry's Guild active community Switcher page
-bot.action('action_guild_menu', async (ctx) => {
-    return bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_switch_guilds' } } as any);
-});
 
 bot.command('sim', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
