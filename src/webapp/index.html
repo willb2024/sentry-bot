@@ -24,7 +24,9 @@
                         jupGreen: '#10b981',
                         neonRed: '#ef4444',
                         neonBlue: '#3b82f6',
-                        neonPurple: '#8b5cf6'
+                        neonPurple: '#8b5cf6',
+                        dexGreen: '#10b981', /* DexScreener Green */
+                        dexRed: '#f43f5e'    /* DexScreener Red */
                     },
                     animation: {
                         'shimmer': 'shimmer 2s infinite linear',
@@ -64,6 +66,11 @@
         .hidden-view { display: none !important; }
         .search-input::placeholder { color: #64748b; }
         .search-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 1px rgba(59,130,246,0.5); }
+        
+        /* DexScreener Table Styles */
+        .dex-table-header { position: sticky; top: 0; background-color: #0a0d14; z-index: 10; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .dex-row { transition: background-color 0.15s ease; border-bottom: 1px solid rgba(255,255,255,0.02); }
+        .dex-row:hover { background-color: rgba(255,255,255,0.03); }
     </style>
 </head>
 <body>
@@ -166,34 +173,41 @@
         </section>
     </main>
 
-    <!-- VIEW 2: MARKET EXPLORER (DEXSCREENER) -->
-    <main id="view-market" class="hidden-view max-w-5xl mx-auto px-4 sm:px-6">
+    <!-- 🟢 VIEW 2: MARKET EXPLORER (DEXSCREENER) -->
+    <main id="view-market" class="hidden-view max-w-7xl mx-auto px-4 sm:px-6">
         
         <!-- Search & Filter State -->
         <div id="dex-search-view">
             <!-- Search Bar -->
-            <div class="relative w-full mb-4">
+            <div class="relative w-full max-w-3xl mx-auto mb-4">
                 <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                     <i class="fa-solid fa-magnifying-glass text-gray-500"></i>
                 </div>
                 <input type="text" id="dex-search-input" class="search-input w-full bg-[#121826] border border-white/10 text-white text-sm rounded-xl pl-11 pr-4 py-4 focus:ring-0 transition-all shadow-lg" placeholder="Search tokens by symbol or paste Contract Address (CA)...">
-                <button id="dex-search-btn" class="absolute inset-y-2 right-2 bg-neonBlue hover:bg-blue-600 text-white text-xs font-bold rounded-lg px-4 transition-colors">Search</button>
+                <button id="dex-search-btn" class="absolute inset-y-2 right-2 bg-neonBlue hover:bg-blue-600 text-white text-xs font-bold rounded-lg px-6 transition-colors">Search</button>
             </div>
 
             <!-- Filter Chips -->
-            <div class="flex gap-2 overflow-x-auto no-scrollbar mb-6 pb-2">
+            <div class="flex justify-center gap-2 overflow-x-auto no-scrollbar mb-8 pb-2">
                 <button onclick="toggleDexFilter('liq10k')" id="filter-liq10k" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-droplet mr-1"></i> Liq > $10k</button>
                 <button onclick="toggleDexFilter('vol50k')" id="filter-vol50k" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-chart-simple mr-1"></i> Vol > $50k</button>
                 <button onclick="toggleDexFilter('age24h')" id="filter-age24h" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-baby mr-1"></i> Under 24h</button>
                 <button onclick="toggleDexFilter('pumpfun')" id="filter-pumpfun" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-capsules mr-1"></i> Pump.fun Only</button>
             </div>
 
-            <!-- Results List -->
-            <div id="dex-search-results" class="space-y-3">
-                <div class="text-center py-10 text-gray-600 flex flex-col items-center">
-                    <i class="fa-solid fa-chart-candlestick text-4xl mb-3 opacity-30"></i>
-                    <div class="text-sm font-semibold">Market Explorer</div>
-                    <span class="text-xs mt-1">Search for any Solana token to view charts and snipe instantly.</span>
+            <!-- Results List (Dense DexScreener Layout) -->
+            <div class="max-w-3xl mx-auto bg-[#121826] rounded-xl border border-white/5 overflow-hidden">
+                <div class="grid grid-cols-12 gap-2 px-4 py-3 bg-[#0a0d14] border-b border-white/5 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                    <div class="col-span-5">Token</div>
+                    <div class="col-span-3 text-right">Price</div>
+                    <div class="col-span-4 text-right">Liquidity / Vol</div>
+                </div>
+                <div id="dex-search-results" class="max-h-[60vh] overflow-y-auto no-scrollbar">
+                    <div class="text-center py-10 text-gray-600 flex flex-col items-center">
+                        <i class="fa-solid fa-chart-candlestick text-4xl mb-3 opacity-30"></i>
+                        <div class="text-sm font-semibold">Market Explorer</div>
+                        <span class="text-xs mt-1">Search for any Solana token to view charts and snipe instantly.</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -202,26 +216,14 @@
         <div id="dex-chart-view" class="hidden-view space-y-4">
             <!-- Header -->
             <div class="flex items-center justify-between">
-                <button onclick="closeDexChart()" class="text-gray-400 hover:text-white text-sm font-semibold transition-colors"><i class="fa-solid fa-arrow-left mr-1"></i> Back to Search</button>
+                <button onclick="closeDexChart()" class="text-gray-400 hover:text-white text-sm font-semibold transition-colors"><i class="fa-solid fa-arrow-left mr-1"></i> Back</button>
                 <div class="flex gap-2">
                     <button id="chart-copy-ca" class="glass-btn px-3 py-1.5 rounded-lg text-[11px] font-bold text-white"><i class="fa-solid fa-copy mr-1"></i> Copy CA</button>
                 </div>
             </div>
             
-            <!-- Token Info Header -->
-            <div class="card-flat p-4 flex justify-between items-center bg-gradient-to-r from-[#121826] to-[#0a0d14]">
-                <div>
-                    <h2 class="text-xl font-bold text-white" id="chart-token-name">$TOKEN</h2>
-                    <p class="text-xs text-gray-500 font-mono mt-1 truncate max-w-[200px] sm:max-w-xs" id="chart-token-ca">CA...</p>
-                </div>
-                <div class="text-right">
-                    <div class="text-lg font-bold text-jupGreen" id="chart-token-price">$0.00</div>
-                    <div class="text-xs text-gray-400 mt-1" id="chart-token-mcap">MC: $0</div>
-                </div>
-            </div>
-
-            <!-- Iframe Container -->
-            <div class="card-flat rounded-xl overflow-hidden shadow-2xl h-[450px] w-full border border-white/10 relative bg-[#0a0d14]">
+            <!-- Huge Iframe Chart -->
+            <div class="card-flat rounded-xl overflow-hidden shadow-2xl h-[55vh] min-h-[400px] w-full border border-white/10 relative bg-[#0a0d14]">
                 <div id="chart-loader" class="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0d14] z-10">
                     <i class="fa-solid fa-circle-notch fa-spin text-3xl text-neonBlue mb-3"></i>
                     <span class="text-xs text-gray-400 font-semibold tracking-widest">LOADING DEXSCREENER...</span>
@@ -229,26 +231,47 @@
                 <iframe id="dex-iframe" class="w-full h-full border-0" title="DexScreener Chart"></iframe>
             </div>
 
-            <!-- ACTION ROW: Quick Snipe & Trade History -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div class="card-flat p-5 flex flex-col justify-center bg-blue-900/10 border-blue-500/20">
-                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-2 text-center uppercase">Instant Execution</h3>
-                    <p class="text-[10px] text-gray-500 text-center mb-4">Executes a buy instantly via your secure Jito MEV connection.</p>
-                    <button id="btn-quick-snipe" class="w-full bg-neonBlue hover:bg-blue-600 text-white font-bold py-3 rounded-xl shadow-lg transition-transform active:scale-95 flex justify-center items-center gap-2">
-                        <i class="fa-solid fa-bolt"></i> Snipe 0.1 SOL
-                    </button>
-                </div>
-
-                <!-- Trade History Overlay -->
-                <div class="card-flat p-4 md:col-span-2">
-                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4 uppercase flex items-center gap-2">
-                        <i class="fa-solid fa-clock-rotate-left text-gray-500"></i> Your Trade History
-                    </h3>
-                    <div id="chart-trade-history" class="space-y-2 max-h-32 overflow-y-auto no-scrollbar">
-                        <!-- Populated by JS -->
-                        <div class="text-center text-xs text-gray-500 py-4">No prior trades found for this token.</div>
+            <!-- Trading Panel (Bottom) -->
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                
+                <!-- Quick Buy Panel -->
+                <div class="card-flat p-5 flex flex-col justify-between bg-gradient-to-b from-[#121826] to-[#0a0d14] border border-white/5">
+                    <div>
+                        <h2 class="text-xl font-bold text-white mb-1" id="chart-token-name">$TOKEN</h2>
+                        <div class="flex items-baseline gap-2 mb-4">
+                            <span class="text-lg font-bold text-dexGreen font-mono" id="chart-token-price">$0.00</span>
+                            <span class="text-xs text-gray-500 font-mono" id="chart-token-mcap">MC: $0</span>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <p class="text-[10px] text-gray-500 text-center mb-3">Secure Jito MEV Execution</p>
+                        <button id="btn-quick-snipe" class="w-full bg-neonBlue hover:bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg transition-transform active:scale-95 flex justify-center items-center gap-2">
+                            <i class="fa-solid fa-bolt"></i> Buy 0.1 SOL
+                        </button>
                     </div>
                 </div>
+
+                <!-- Deep Trade History Table -->
+                <div class="card-flat lg:col-span-3 flex flex-col overflow-hidden h-[300px] border border-white/5">
+                    <div class="px-4 py-3 bg-[#0a0d14] border-b border-white/5 flex items-center justify-between">
+                        <h3 class="text-xs font-bold tracking-wide text-white uppercase flex items-center gap-2">
+                            <i class="fa-solid fa-clock-rotate-left text-gray-500"></i> Your Order History
+                        </h3>
+                    </div>
+                    
+                    <div class="dex-table-header grid grid-cols-12 gap-2 px-4 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                        <div class="col-span-3">Date</div>
+                        <div class="col-span-2">Type</div>
+                        <div class="col-span-4 text-right">Volume (SOL)</div>
+                        <div class="col-span-3 text-right">PnL / Txn</div>
+                    </div>
+                    
+                    <div id="chart-trade-history" class="overflow-y-auto flex-1 no-scrollbar pb-2">
+                        <div class="text-center text-xs text-gray-500 py-10">No prior trades found for this token.</div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </main>
@@ -489,23 +512,22 @@
             const isPump = p.baseToken.address.endsWith('pump');
             const icon = isPump ? '<i class="fa-solid fa-capsules text-pink-400"></i>' : '<i class="fa-solid fa-bolt text-jupGreen"></i>';
 
+            // Dense DexScreener tabular row styling
             return `
-            <div onclick="openDexChart('${p.pairAddress}', '${p.baseToken.address}', '${p.baseToken.symbol}', ${p.priceUsd}, ${p.fdv})" class="card-flat p-3 flex justify-between items-center cursor-pointer hover:bg-white/[0.02] transition-colors">
-                <div class="flex items-center gap-3">
-                    <div class="h-10 w-10 bg-[#1e293b] rounded-xl flex items-center justify-center border border-white/5 text-lg">
-                        ${icon}
-                    </div>
-                    <div>
-                        <div class="font-bold text-white text-sm">$${p.baseToken.symbol} <span class="text-[10px] text-gray-500 font-normal ml-1">/ SOL</span></div>
-                        <div class="text-[10px] text-gray-400 font-mono mt-0.5">${p.baseToken.address.substring(0,6)}...${p.baseToken.address.slice(-4)}</div>
+            <div onclick="openDexChart('${p.pairAddress}', '${p.baseToken.address}', '${p.baseToken.symbol}', ${p.priceUsd}, ${p.fdv})" class="dex-row grid grid-cols-12 gap-2 px-4 py-3 cursor-pointer items-center">
+                <div class="col-span-5 flex items-center gap-2 overflow-hidden">
+                    <div class="text-sm">${icon}</div>
+                    <div class="truncate">
+                        <div class="font-bold text-white text-xs truncate">$${p.baseToken.symbol}</div>
+                        <div class="text-[10px] text-gray-500 font-mono truncate">${p.baseToken.address}</div>
                     </div>
                 </div>
-                <div class="text-right">
-                    <div class="font-bold text-jupGreen text-sm">$${parseFloat(p.priceUsd).toFixed(6)}</div>
-                    <div class="flex gap-2 text-[10px] text-gray-500 mt-1">
-                        <span>MC: $${formatNumber(p.fdv || 0)}</span>
-                        <span>Vol: $${formatNumber(p.volume?.h24 || 0)}</span>
-                    </div>
+                <div class="col-span-3 text-right">
+                    <div class="font-bold text-dexGreen text-xs font-mono">$${parseFloat(p.priceUsd).toFixed(6)}</div>
+                </div>
+                <div class="col-span-4 text-right">
+                    <div class="text-xs text-gray-300 font-mono">$${formatNumber(p.liquidity?.usd || 0)}</div>
+                    <div class="text-[10px] text-gray-500 font-mono">$${formatNumber(p.volume?.h24 || 0)}</div>
                 </div>
             </div>`;
         }).join('');
@@ -525,7 +547,6 @@
         // Button logic
         document.getElementById('chart-copy-ca').onclick = () => copyCA(mintAddress);
         
-        // BUG 2 FIX: Rewritten to execute as a background POST request. This bypasses the sendData limit.
         const snipeBtn = document.getElementById('btn-quick-snipe');
         snipeBtn.onclick = async () => {
             if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
@@ -547,7 +568,8 @@
                 const data = await response.json();
                 if (response.ok && data.success) {
                     showToast("🎯 Snipe Executed!");
-                    renderTokenHistory(mintAddress); // reload history instantly
+                    // Soft reload history to show new trade
+                    setTimeout(() => fetchLiveData(), 2000); 
                 } else {
                     alert("🔴 Snipe Failed: " + (data.error || "Execution dropped."));
                 }
@@ -555,7 +577,7 @@
                 alert("🔴 Snipe Connection Error.");
             } finally {
                 snipeBtn.disabled = false;
-                snipeBtn.innerHTML = `<i class="fa-solid fa-bolt mr-1"></i> Snipe 0.1 SOL`;
+                snipeBtn.innerHTML = `<i class="fa-solid fa-bolt mr-1"></i> Buy 0.1 SOL`;
             }
         };
 
@@ -565,8 +587,6 @@
         loader.classList.remove('hidden');
         
         iframe.onload = () => loader.classList.add('hidden');
-        
-        // BUG 1 FIX: Changed trades=1 to trades=0 to remove the busy DexScreener toolbar/tab interface.
         iframe.src = `https://dexscreener.com/solana/${pairAddress}?embed=1&theme=dark&trades=0&info=0`;
 
         // Load Trade History Overlay
@@ -582,41 +602,38 @@
 
     function renderTokenHistory(mintAddress) {
         const container = document.getElementById('chart-trade-history');
-        
         const history = userTrades.filter(t => t.tokenAddress === mintAddress);
 
         if (history.length === 0) {
-            container.innerHTML = `<div class="text-center text-xs text-gray-500 py-4 border border-dashed border-white/5 rounded-lg bg-black/20">No prior trades found for this token.</div>`;
+            container.innerHTML = `<div class="text-center text-xs text-gray-500 py-10">No prior trades found for this token.</div>`;
             return;
         }
 
+        // DexScreener tabular row formatting
         container.innerHTML = history.map(t => {
-            const dateStr = new Date(t.createdAt).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+            const dateStr = new Date(t.createdAt).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'});
             const isBuy = t.isBuy;
-            const typeClass = isBuy ? 'text-neonBlue bg-blue-500/10' : 'text-neonPurple bg-purple-500/10';
-            const typeIcon = isBuy ? 'fa-arrow-down' : 'fa-arrow-up';
+            
+            // DexScreener uses specific colors
+            const typeColor = isBuy ? 'text-dexGreen' : 'text-dexRed';
             const typeLabel = isBuy ? 'BUY' : 'SELL';
             
-            let pnlStr = '';
-            if (!isBuy && t.profitPercent !== undefined) {
-                const isGain = t.profitPercent >= 0;
-                pnlStr = `<div class="text-[10px] font-bold ${isGain ? 'text-jupGreen' : 'text-neonRed'} mt-0.5">${isGain?'+':''}${t.profitPercent.toFixed(2)}% PnL</div>`;
+            let pnlStr = '<span class="text-gray-600">-</span>';
+            if (!isBuy && t.profitPercent !== undefined && t.profitPercent !== 0) {
+                const isGain = t.profitPercent > 0;
+                pnlStr = `<span class="${isGain ? 'text-dexGreen' : 'text-dexRed'} font-mono">${isGain?'+':''}${t.profitPercent.toFixed(2)}%</span>`;
             }
 
             return `
-            <div class="flex justify-between items-center bg-[#0a0d14] p-3 rounded-lg border border-white/5">
-                <div class="flex items-center gap-3">
-                    <div class="h-8 w-8 rounded-full flex items-center justify-center text-xs border border-white/5 ${typeClass}">
-                        <i class="fa-solid ${typeIcon}"></i>
-                    </div>
-                    <div>
-                        <div class="font-bold text-white text-xs">${typeLabel} ${parseFloat(t.amountInSol).toFixed(3)} SOL</div>
-                        <div class="text-[10px] text-gray-500">${dateStr}</div>
-                    </div>
-                </div>
-                <div class="text-right">
-                    <a href="https://solscan.io/tx/${t.txSignature}" target="_blank" class="text-[10px] text-neonBlue hover:underline flex items-center justify-end gap-1">Receipt <i class="fa-solid fa-arrow-up-right-from-square text-[8px]"></i></a>
+            <div class="dex-row grid grid-cols-12 gap-2 px-4 py-2.5 items-center text-xs">
+                <div class="col-span-3 text-gray-400 font-mono tracking-tighter truncate">${dateStr}</div>
+                <div class="col-span-2 font-bold ${typeColor}">${typeLabel}</div>
+                <div class="col-span-4 text-right text-white font-mono">${parseFloat(t.amountInSol).toFixed(3)} SOL</div>
+                <div class="col-span-3 text-right flex items-center justify-end gap-2">
                     ${pnlStr}
+                    <a href="https://solscan.io/tx/${t.txSignature}" target="_blank" class="text-gray-500 hover:text-white transition-colors ml-1" title="View on Solscan">
+                        <i class="fa-solid fa-external-link-alt text-[10px]"></i>
+                    </a>
                 </div>
             </div>`;
         }).join('');
@@ -1164,7 +1181,12 @@
         }).catch(() => {
             if (document.getElementById('demo-toggle').checked) return;
             populateDashboard({ networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0, winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL" }, ['Offline'], [100], []);
-            document.getElementById('positions-container').innerHTML = `<div class="text-center py-10 card-flat text-neonRed flex flex-col items-center"><i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i><div class="text-sm font-bold">NODE DISCONNECTED</div><span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span></div>`;
+            document.getElementById('positions-container').innerHTML = `
+                <div class="text-center py-10 card-flat text-neonRed flex flex-col items-center">
+                    <i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i>
+                    <div class="text-sm font-bold">NODE DISCONNECTED</div>
+                    <span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span>
+                </div>`;
         });
 
         fetch('/api/my-leaderboard', { 
