@@ -156,12 +156,13 @@ app.post('/api/analytics', async (req, res) => {
             createdAt: t.createdAt,
             isBuy: t.isBuy,
             amountInSol: t.amountInSol,
-            // 🟢 FIX: Send actual realized data instead of hardcoded 0
             profitPercent: t.profitPercent || 0,
-            realizedPnlSol: t.realizedPnlSol || 0
+            realizedPnlSol: t.realizedPnlSol || 0,
+            tokenAddress: t.tokenAddress, // 🟢 WE NEED THIS FOR THE CHART OVERLAY
+            txSignature: t.txSignature    // 🟢 WE NEED THIS FOR RECEIPT LINKS
         }));
-        
         res.json(mappedTrades);
+        
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
