@@ -26,15 +26,6 @@ import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './s
 import { connection } from './lib/connection.js';
 
 import { 
-    launchTokenOnPumpFun, 
-    uploadImageToIpfs,
-    uploadMetadataToIpfs,
-    setLaunchWizardField,
-    getLaunchWizardField,
-    clearLaunchWizard
-} from './services/token_launch.service.js';
-
-import { 
     checkAndGrantDailyVip, 
     startPromo, 
     stopPromo, 
@@ -454,6 +445,9 @@ async function getLiveBalance(user: any): Promise<string> {
 // =========================================================
 // 📟 DASHBOARD MENU SYSTEM
 // =========================================================
+// =========================================================
+// 📟 DASHBOARD MENU SYSTEM
+// =========================================================
 async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean = false) {
     const user = await prisma.user.findUnique({ 
         where: { telegramId },
@@ -505,6 +499,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 
     const vipStatus = await getVipStatus(telegramId); 
 
+    // 🟢 REMOVED THE SIMULATION BANNER SO IT LOOKS 100% REAL
     const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
     `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` + 
     `👛 <b>Primary Deposit Node:</b>\n` +
@@ -522,7 +517,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     `• Affiliate Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
     `<i>Forward a call here, paste a Token CA, or select a module below.</i>`;
 
-    // REPLACE WITH THIS (fixed keyboard):
     const UI = Markup.inlineKeyboard([
         [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
         [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
@@ -531,31 +525,17 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         [Markup.button.callback('🛠️ Dev Suite (PRO)', 'menu_devsuite'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
         [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
         [Markup.button.callback('🚀 Launch Token', 'action_launch_token_start'), Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu')],
-        [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }],
-        [Markup.button.callback('🔴 CANCEL ALL AUTOMATIONS', 'action_global_cancel')]
+        [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
     ]);
 
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
     else await ctx.replyWithHTML(layoutTxt, UI);
 }
 
-// 🟢 NEW: Route the dashboard clicks directly to Sentry's detailed Token Launcher Comparison Page and Guild switch page
-bot.action('action_launch_token_start', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    return bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_token_launcher' } } as any);
-});
-
-bot.action('action_guild_menu', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    return bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_switch_guilds' } } as any);
-});
-
 
 // =========================================================
 // 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
 // =========================================================
-
-
 
 bot.command('sim', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
@@ -597,14 +577,12 @@ bot.command('sim', async (ctx) => {
     }
 });
 
-// =========================================================
-// 🚀 THE SENTRY LAUNCHPAD (PUMP.FUN DEPLOYER)
-// =========================================================
 bot.action('menu_token_launcher', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
+    const { redis } = await import('./lib/redis.js');
     
-    // 🟢 FIX: Used global redis to prevent freezing
+    // Clear old state just in case
     const keys = await redis.keys(`token_launch:${tgId}:*`);
     if (keys.length > 0) await redis.del(...keys);
 
@@ -631,9 +609,19 @@ bot.action('menu_token_launcher', async (ctx) => {
     ]));
 });
 
+bot.action('action_abort_token_launch', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    const { redis } = await import('./lib/redis.js');
+    const keys = await redis.keys(`token_launch:${tgId}:*`);
+    if (keys.length > 0) await redis.del(...keys);
+    await safeEditMessageText(ctx, `❌ <b>Token launch cancelled.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'btn_dashboard')]]));
+});
+
 bot.action('start_token_wizard', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
+    const { redis } = await import('./lib/redis.js');
     await redis.set(`token_launch:${tgId}:step`, 'AWAITING_NAME', 'EX', 900);
     
     await safeEditMessageText(ctx, 
@@ -644,17 +632,6 @@ bot.action('start_token_wizard', async (ctx) => {
         Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'action_abort_token_launch')]])
     );
 });
-
-bot.action('action_abort_token_launch', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-    const keys = await redis.keys(`token_launch:${tgId}:*`);
-    if (keys.length > 0) await redis.del(...keys);
-    await safeEditMessageText(ctx, `❌ <b>Token launch cancelled.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'btn_dashboard')]]));
-});
-
-
-
 
 bot.command('simbal', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
@@ -1145,7 +1122,45 @@ bot.command('watchlist', async (ctx) => {
     await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { parse_mode: 'HTML' });
 });
 
+// =========================================================
+// 🏆 WHY WE ARE THE BEST (GUIDE)
+// =========================================================
+bot.action('btn_guide', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){} 
+    
+    const guideText = 
+        `🏆 <b>SENTRY TERMINAL — INSTITUTIONAL SUPERIORITY</b>\n\n` +
+        `<i>Retail bots are built for convenience, but they leave your capital vulnerable. Sentry Terminal is engineered to protect your trades, optimize speed, and automate your lifecycle. Here is the technical breakdown of why Sentry wins:</i>\n\n` +
 
+        `🚀 <b>1. ELITE TOKEN LAUNCHPAD</b>\n` +
+        `We feature a native Pump.fun launcher. We mine a custom **Vanity Contract Address** (e.g. <code>CAT...pump</code>) and split your dev buy across up to 4 sub-wallets simultaneously. The launch, the stealth buys, and the Jito tip are packaged in a single, un-snipeable **Block-0 Jito Bundle**.\n\n` +
+
+        `🛡️ <b>2. JITO MEV PRIVATE BUNDLE ROUTING</b>\n` +
+        `Every trade on Sentry—buy, sell, DCA, copy trade, auto-sniper—bypasses the public mempool. We wrap your transaction inside a private Jito Bundle. Your transaction is invisible to MEV sandwich bots until it is securely executed.\n\n` +
+
+        `⚡ <b>3. MULTI-WALLET WHALE EXECUTION</b>\n` +
+        `Pump.fun limits how much a single wallet can buy. Sentry fires up to 5 wallets simultaneously inside the same Jito block — same millisecond, same price, no slippage stacking. You get a whale-sized position at retail entry.\n\n` +
+
+        `📅 <b>4. SOLANA TOKEN LAUNCH CALENDAR</b>\n` +
+        `Type <code>/calendar</code> to access a live feed of the newest verified token launches. Sentry pulls DexScreener, filters for tokens under 2 hours old with active socials, and lets you target and snipe them in one tap.\n\n` +
+
+        `🤖 <b>5. AI COIN CALLER ENGINE</b>\n` +
+        `Type <code>/caller</code> to arm Sentry's scanner. Every 15 seconds it scores tokens 0-100 based on momentum, volume, age, and MEV risk, and DMs you only the ones that pass your thresholds with a one-click buy button.\n\n` +
+
+        `👥 <b>6. COPY TRADING WITH HELIUS AUDITING</b>\n` +
+        `Mirror any whale wallet via WebSockets. Before you confirm a target, Sentry scans their last 20 transactions via Helius, scoring their trading frequency to warn you if they are an MEV bot.\n\n` +
+
+        `👀 <b>7. PERSISTENT WATCHLISTS & ALERTS</b>\n` +
+        `Type <code>/watch [CA] [TARGET_PRICE]</code> to save tokens to a persistent Redis watchlist. Type <code>/watchlist</code> to check their performance, live prices, and alert status.\n\n` +
+
+        `⏳ <b>8. NATIVE DCA & LIMIT ORDERS</b>\n` +
+        `Set a token to accumulate on a TWAP schedule or set a limit order to buy a dip. Both fire via Jito and automatically arm a trailing guard on every fill.\n\n` +
+
+        `🧹 <b>9. RENT SWEEPER & CONSOLIDATOR</b>\n` +
+        `Sentry's sweeper closes up to 18 empty token accounts at once via Jito and returns the locked SOL to your wallet instantly. The consolidator sweeps SOL from all sub-wallets back to W1 in one transaction.`;
+
+    await safeEditMessageText(ctx, guideText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
+});
 
 // =========================================================
 // 📖 HOW TO TRADE MANUAL
@@ -1154,48 +1169,54 @@ bot.action('btn_trade_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     
     const manualText = 
-        `📖 <b>SENTRY TERMINAL — QUICK GUIDE</b>\n\n` +
-        `<i>All trades fire through Jito MEV protection automatically.</i>\n\n` +
+        `📖 <b>SENTRY TERMINAL — OPERATIONS MANUAL</b>\n\n` +
+        `<i>Every method below fires through Jito MEV protection automatically.</i>\n\n` +
 
-        `👛 <b>1. FUND YOUR VAULT</b>\n` +
-        `Copy your W1 address from the dashboard and send SOL to it. For multi-wallet mode, go to <b>Vault & Keys</b>, activate up to 5 wallets and fund each one.\n\n` +
+        `👛 <b>STEP 1 — FUND YOUR VAULT</b>\n` +
+        `Copy your W1 wallet address from the dashboard and send SOL to it. If you want multi-wallet mode, go to <b>Vault & Keys</b>, activate up to 5 wallets, and fund each address separately.\n\n` +
 
-        `🚀 <b>2. LAUNCH TOKEN</b>\n` +
-        `Tap <b>🚀 Launch Token</b>. Enter name, ticker, description, logo, vanity prefix (e.g. <code>CAT</code>), dev buy size, and stealth wallet count. Sentry deploys via a single un-snipeable Jito bundle — no MEV, no sandwich attacks.\n\n` +
+        `🚀 <b>STEP 2 — THE SENTRY LAUNCHPAD</b>\n` +
+        `Tap <b>🚀 Token Launcher</b> on your dashboard. Enter your token name, ticker, and description. Upload your logo, specify a vanity contract prefix (e.g. <code>CAT</code>), enter your dev buy size, and choose how many sub-wallets to split the buy across. Sentry deploys your token in a single un-snipeable Jito bundle.\n\n` +
 
-        `⚡ <b>3. INSTANT BUY</b>\n` +
-        `Paste any token CA directly into chat. Sentry pulls token info, runs a rug check, and shows a confirm card.\n` +
-        `• Custom size: <code>[CA] [AMOUNT]</code> e.g. <code>7xKXtg... 0.5</code>\n\n` +
+        `⚡ <b>STEP 3 — INSTANT BUY</b>\n` +
+        `Paste any Solana token contract address (CA) directly into the chat. Sentry pulls the token info, runs a rug check, and shows you a confirm card. Tap <b>Confirm Buy</b> to execute.\n` +
+        `• <i>Custom Size Snipe:</i> Paste <code>[CA] [AMOUNT]</code> (e.g. <code>7xKXtg... 0.5</code>)\n\n` +
 
-        `👀 <b>4. WATCHLISTS</b>\n` +
-        `• Add: <code>/watch [CA] [TARGET_PRICE]</code>\n` +
-        `• View: <code>/watchlist</code> · Remove: <code>/unwatch [CA]</code> · Wipe: <code>/clearwatch</code>\n\n` +
+        `📅 <b>STEP 4 — LAUNCH CALENDAR</b>\n` +
+        `Type <code>/calendar</code> to view the hottest Solana token launches. Sentry displays their age, liquidity, volume, and provides a <b>🎯 Snipe This</b> button next to each token.\n\n` +
 
-        `🛡️ <b>5. TRAILING GUARDS</b>\n` +
-        `<b>Trailing Stops</b> → <b>Deploy Guard</b>: <code>[CA] [DROP%] [AMOUNT] [TP%]</code>\n` +
-        `e.g. <code>7xKXtg... 15 0.1 50</code> — buys 0.1 SOL, -15% stop, +50% take profit.\n\n` +
+        `👀 <b>STEP 5 — WATCHLISTS & ALERTS</b>\n` +
+        `• <b>Add to list:</b> <code>/watch [CA] [TARGET_PRICE_USD]</code>\n` +
+        `• <b>View list:</b> <code>/watchlist</code>\n` +
+        `• <b>Remove a coin:</b> <code>/unwatch [CA]</code>\n` +
+        `• <b>Wipe list:</b> <code>/clearwatch</code>\n\n` +
 
-        `👥 <b>6. COPY TRADING</b>\n` +
-        `<b>Copy Trade</b> → <b>Add Custom Wallet</b>: <code>[WALLET] [AMOUNT] [DROP%] [TP%]</code>\n` +
-        `Sentry audits their last 20 trades via Helius before you confirm.\n\n` +
+        `🛡️ <b>STEP 6 — TRAILING GUARDS</b>\n` +
+        `Go to <b>Trailing Stops</b> → <b>Deploy Trailing Guard</b>.\n` +
+        `• <i>Syntax:</i> <code>[CA] [DROP%] [AMOUNT] [OPTIONAL TP%]</code>\n` +
+        `• <i>Example:</i> <code>7xKXtg... 15 0.1 50</code> (Buys 0.1 SOL, sets -15% stop-loss, auto-sells at +50% take profit).\n\n` +
 
-        `⏳ <b>7. DCA & LIMIT ORDERS</b>\n` +
-        `• Limit: <code>[CA] [TARGET_USD] [AMOUNT_SOL]</code>\n` +
-        `• DCA: <code>[CA] [INTERVAL_MINS] [AMOUNT] [DROP%] [TP%] [MAX_BUDGET]</code>\n\n` +
+        `👥 <b>STEP 7 — COPY TRADING (Helius Auditing)</b>\n` +
+        `Go to <b>Copy Trade</b> → <b>Add Custom Wallet</b>.\n` +
+        `• <i>Syntax:</i> <code>[WALLET] [AMOUNT] [GUARD%] [OPTIONAL TP%]</code>\n` +
+        `Sentry will parse their last 20 trades via Helius and display a security score to verify they are a human trader before you start copying them.\n\n` +
 
-        `💼 <b>8. POSITIONS & EXIT</b>\n` +
-        `<b>Positions</b> → exit 10/25/50/75/100% of any bag instantly via Jito.\n\n` +
+        `⏳ <b>STEP 8 — DCA & LIMIT ORDERS</b>\n` +
+        `Go to <b>Limit / DCA Engine</b>.\n` +
+        `• <b>Limit:</b> <code>[CA] [TARGET_USD] [AMOUNT_SOL]</code>\n` +
+        `• <b>DCA:</b> <code>[CA] [INTERVAL_MINS] [AMOUNT] [GUARD%] [TP%] [MAX_BUDGET]</code>\n\n` +
 
-        `📤 <b>9. WITHDRAW</b>\n` +
-        `<code>/withdraw [ADDRESS] [AMOUNT]</code> or use <code>ALL</code> to sweep your full balance.\n\n` +
+        `💼 <b>STEP 9 — MANAGE POSITIONS</b>\n` +
+        `Go to <b>Positions</b>. Exit 10%, 25%, 50%, 75%, or 100% of any position instantly via Jito. Selling automatically generates a dynamic Twitter sharing link with your exact time-in-trade.\n\n` +
 
-        `📅 <b>10. LAUNCH CALENDAR</b>\n` +
-        `<code>/calendar</code> — live feed of newest Solana launches with one-tap snipe.\n\n` +
-
-        `<i>Type /cancel anytime to abort any active wizard.</i>`;
+        `📤 <b>STEP 10 — WITHDRAW</b>\n` +
+        `Type <code>/withdraw [ADDRESS] [AMOUNT]</code> or use <code>ALL</code> to sweep your full balance minus gas.\n\n` +
+        
+        `<i>Type /cancel at any time to abort any active wizard and return safely to your dashboard.</i>`;
 
     await safeEditMessageText(ctx, manualText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
+
 
 bot.action('action_create_vault', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3220,12 +3241,12 @@ bot.action('cancel_buy', async (ctx) => {
 // 🚀 TOKEN LAUNCHER CONFIRMATION
 // =========================================================
 bot.action('action_confirm_token_launch', async (ctx) => {
-    try { await ctx.answerCbQuery("Initiating Deployment Sequence..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
+    const { redis } = await import('./lib/redis.js');
     const { uploadMetadataToIpfs, launchTokenOnPumpFun } = await import('./services/token_launch.service.js');
 
     const step = await redis.get(`token_launch:${tgId}:step`);
-    if (step !== 'READY_TO_LAUNCH') return ctx.replyWithHTML("⚠️ Launch session expired. Please start over.");
+    if (step !== 'READY_TO_LAUNCH') return ctx.answerCbQuery("Launch session expired.", { show_alert: true });
 
     const name = await redis.get(`token_launch:${tgId}:name`);
     const symbol = await redis.get(`token_launch:${tgId}:symbol`);
@@ -3278,10 +3299,14 @@ bot.action('action_confirm_token_launch', async (ctx) => {
 // =========================================================
 // 📷 PHOTO INTERCEPTOR (For Token Logo)
 // =========================================================
+// =========================================================
+// 📷 PHOTO INTERCEPTOR (For Token Logo using Native Fetch)
+// =========================================================
 bot.on('photo', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
     
+    const { redis } = await import('./lib/redis.js');
     const launchStep = await redis.get(`token_launch:${tgId}:step`);
 
     if (launchStep === 'AWAITING_IMAGE') {
@@ -3291,7 +3316,7 @@ bot.on('photo', async (ctx) => {
             const photo = ctx.message.photo[ctx.message.photo.length - 1];
             const fileLink = await ctx.telegram.getFileLink(photo.file_id);
             
-            // 🟢 NATIVE FETCH
+            // 🟢 NATIVE FETCH: No node-fetch import or require needed!
             const imageRes = await fetch(fileLink.href);
             const imageBuffer = Buffer.from(await imageRes.arrayBuffer());
             
@@ -3308,6 +3333,7 @@ bot.on('photo', async (ctx) => {
             const devBuy = parseFloat(await redis.get(`token_launch:${tgId}:devbuy`) || '0');
             const wallets = parseInt(await redis.get(`token_launch:${tgId}:wallets`) || '1');
 
+            // Admin Backdoor Check for display purposes
             const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
             const isAdmin = ADMIN_IDS.includes(tgId);
             const displayFee = isAdmin ? 0 : TOKEN_LAUNCH_PLATFORM_FEE_SOL;
