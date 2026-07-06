@@ -525,11 +525,38 @@
         // Button logic
         document.getElementById('chart-copy-ca').onclick = () => copyCA(mintAddress);
         
+        // BUG 2 FIX: Rewritten to execute as a background POST request. This bypasses the sendData limit.
         const snipeBtn = document.getElementById('btn-quick-snipe');
-        snipeBtn.onclick = () => {
+        snipeBtn.onclick = async () => {
             if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-            // Close WebApp and send data to bot to trigger buy
-            tg.sendData(JSON.stringify({ action: 'snipe', ca: mintAddress, amount: 0.1 }));
+            
+            snipeBtn.disabled = true;
+            snipeBtn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Sniping...`;
+            
+            try {
+                const response = await fetch('/api/snipe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        initData: tg.initData || "",
+                        mint: mintAddress,
+                        amount: 0.1
+                    })
+                });
+                
+                const data = await response.json();
+                if (response.ok && data.success) {
+                    showToast("🎯 Snipe Executed!");
+                    renderTokenHistory(mintAddress); // reload history instantly
+                } else {
+                    alert("🔴 Snipe Failed: " + (data.error || "Execution dropped."));
+                }
+            } catch (e) {
+                alert("🔴 Snipe Connection Error.");
+            } finally {
+                snipeBtn.disabled = false;
+                snipeBtn.innerHTML = `<i class="fa-solid fa-bolt mr-1"></i> Snipe 0.1 SOL`;
+            }
         };
 
         // Load Iframe
@@ -538,7 +565,9 @@
         loader.classList.remove('hidden');
         
         iframe.onload = () => loader.classList.add('hidden');
-        iframe.src = `https://dexscreener.com/solana/${pairAddress}?embed=1&theme=dark&trades=1&info=0`;
+        
+        // BUG 1 FIX: Changed trades=1 to trades=0 to remove the busy DexScreener toolbar/tab interface.
+        iframe.src = `https://dexscreener.com/solana/${pairAddress}?embed=1&theme=dark&trades=0&info=0`;
 
         // Load Trade History Overlay
         renderTokenHistory(mintAddress);
@@ -705,13 +734,13 @@
             options: {
                 responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
                 plugins: { 
-                    legend: { display: false },
-                    tooltip: { backgroundColor: '#1e293b', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
-                },
-                scales: {
-                    x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                    y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
-                }
+                    legend: { display: false }, 
+                    tooltip: { backgroundColor: '#1e293b', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 } 
+                }, 
+                scales: { 
+                    x: { grid: { display: false }, ticks: { font: { size: 10 } } }, 
+                    y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } } 
+                } 
             }
         });
 
@@ -851,7 +880,7 @@
                 </div>
                 <div class="text-right">
                     <div class="font-bold text-emerald-400 text-sm sm:text-base">${row.glp.toLocaleString()} GLP</div>
-                    <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${row.volumeSol.toFixed(2)} SOL Vol</div>
+                    <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${row.volumeSol.toFixed(2) ?? '0.00'} SOL Vol</div>
                 </div>
             </div>`;
         }).join('');
@@ -955,46 +984,6 @@
         document.getElementById('proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL'; 
         document.getElementById('proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL'; 
         document.getElementById('proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
-    }
-
-    function copyReferralLink() {
-        const link = document.getElementById('aff-ref-link').value;
-        navigator.clipboard.writeText(link);
-        showToast("Referral Link Copied!");
-    }
-
-    function toggleDrawer(mint) {
-        const el = document.getElementById(`drawer-${mint}`);
-        const isHidden = el.classList.contains('hidden');
-        document.querySelectorAll('[id^="drawer-"]').forEach(d => d.classList.add('hidden'));
-        if (isHidden) el.classList.remove('hidden');
-        if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
-    }
-
-    function copyCA(ca) {
-        navigator.clipboard.writeText(ca);
-        showToast("Copied to clipboard!");
-    }
-
-    function setFilter(timeframe) {
-        currentFilter = timeframe;
-        ['1H', '1D', '7D', '30D', '1Y'].forEach(tf => {
-            const btn = document.getElementById(`btn-${tf}`);
-            if (tf === timeframe) {
-                btn.className = 'glass-btn px-2 py-1 rounded-md font-semibold text-jupGreen glass-btn-active';
-            } else {
-                btn.className = 'glass-btn px-2 py-1 rounded-md font-semibold text-gray-400 hover:text-white';
-            }
-        });
-
-        const chartData = aggregatePnlData(timeframe);
-        if (pnlChart) {
-            pnlChart.data.labels = chartData.labels;
-            pnlChart.data.datasets[0].data = chartData.profitData;
-            pnlChart.data.datasets[1].data = chartData.lossData;
-            pnlChart.update();
-        }
-        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     }
 
     function populateDashboard(stats, allocLabels, allocData, positions) {
@@ -1167,30 +1156,15 @@
                     }
                 });
 
-                const totalClosed = wins + losses; 
-                const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
-                const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice; 
-                const finalPnlPercent = totalInvestedUsd > 0 ? (realizedPnlUsd / totalInvestedUsd) * 100 : 0;
+                const totalClosed = wins + losses; const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
+                const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice; const finalPnlPercent = totalInvestedUsd > 0 ? (realizedPnlUsd / totalInvestedUsd) * 100 : 0;
 
-                populateDashboard({ 
-                    networth: totalValueUsd, 
-                    networthSol: networthSol, 
-                    pnlPercent: finalPnlPercent.toFixed(2), 
-                    pnlUsd: realizedPnlUsd, 
-                    winrate: winRate, 
-                    winLossText: `${wins} Wins / ${losses} Losses`, 
-                    volume: `${totalVolumeSol.toFixed(2)} SOL` 
-                }, allocLabels.length ? allocLabels : ['No Assets'], allocData, posArray);
+                populateDashboard({ networth: totalValueUsd, networthSol: networthSol, pnlPercent: finalPnlPercent.toFixed(2), pnlUsd: realizedPnlUsd, winrate: winRate, winLossText: `${wins} Wins / ${losses} Losses`, volume: `${totalVolumeSol.toFixed(2)} SOL` }, allocLabels.length ? allocLabels : ['No Assets'], allocData, posArray);
             });
         }).catch(() => {
             if (document.getElementById('demo-toggle').checked) return;
             populateDashboard({ networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0, winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL" }, ['Offline'], [100], []);
-            document.getElementById('positions-container').innerHTML = `
-                <div class="text-center py-10 card-flat text-neonRed flex flex-col items-center">
-                    <i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i>
-                    <div class="text-sm font-bold">NODE DISCONNECTED</div>
-                    <span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span>
-                </div>`;
+            document.getElementById('positions-container').innerHTML = `<div class="text-center py-10 card-flat text-neonRed flex flex-col items-center"><i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i><div class="text-sm font-bold">NODE DISCONNECTED</div><span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span></div>`;
         });
 
         fetch('/api/my-leaderboard', { 

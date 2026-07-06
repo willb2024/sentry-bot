@@ -162,9 +162,61 @@ app.post('/api/analytics', async (req, res) => {
             txSignature: t.txSignature    // 🟢 WE NEED THIS FOR RECEIPT LINKS
         }));
         res.json(mappedTrades);
-        
+
     } catch (e: any) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// =========================================================
+// 🟢 TASK 9 & BUG 2 FIX: direct execution proxy endpoint
+// =========================================================
+app.post('/api/snipe', async (req, res) => {
+    try {
+        const { initData, mint, amount } = req.body;
+        if (!initData || !mint || !amount) {
+            return res.status(400).json({ error: "Missing required fields" });
+        }
+        
+        if (!verifyTelegramAuth(initData)) {
+            return res.status(403).json({ error: "Unauthorized" });
+        }
+        
+        const telegramId = extractTelegramId(initData);
+        if (!telegramId) {
+            return res.status(403).json({ error: "Invalid Telegram User" });
+        }
+
+        const amountSol = parseFloat(amount);
+        if (isNaN(amountSol) || amountSol <= 0) {
+            return res.status(400).json({ error: "Invalid amount" });
+        }
+
+        // Standard execution logic (internally detects and supports simulation automatically)
+        const result = await executeSnipe(telegramId, mint, amountSol);
+        
+        if (result.success) {
+            // Push direct receipt notification payload into Telegram 
+            try {
+                const modeText = "Instant WebApp Snipe Engine";
+                await bot.telegram.sendMessage(
+                    telegramId,
+                    `🎯 <b>INSTANT WEBAPP SNIPE SUCCESSFUL!</b>\n\n` +
+                    `<b>Engine:</b> ${modeText}\n` +
+                    `<b>Token:</b> <code>${mint}</code>\n` +
+                    `<b>Invested:</b> <b>${amountSol.toFixed(4)} SOL</b>\n\n` +
+                    `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
+                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                );
+            } catch (_) {}
+            
+            return res.json({ success: true, signature: result.signature, message: result.message });
+        } else {
+            return res.status(400).json({ success: false, error: result.message });
+        }
+    } catch (e: any) {
+        console.error("🔴 [WEBAPP QUICK SNIPE FAULT]:", e.message);
+        return res.status(500).json({ error: e.message || "Server Error" });
     }
 });
 
