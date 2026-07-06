@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 
 // BUG 3 FIX: Use @ts-ignore instead of @ts-expect-error to avoid strict compiler build failures
 // @ts-ignore
-import BN from 'bn.js'; 
+import BN from 'bn.js';; 
 
 dotenv.config();
 
