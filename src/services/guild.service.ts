@@ -14,8 +14,6 @@ const prisma = new PrismaClient();
 
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
 
-export const GUILD_SETUP_PRICE_SOL = 2.0;
-
 export async function createGuild(
     telegramId: string, 
     name: string, 
@@ -28,6 +26,7 @@ export async function createGuild(
         if (!user.isDevSuiteUnlocked) return { success: false, message: "Dev Suite not unlocked." };
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
 
+        // TASK 3 FIX: Removed the 2.0 SOL silent charge. Guild creation is now genuinely free as advertised.
         const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
         const randomTwoDigit = Math.floor(10 + Math.random() * 90);
         const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
@@ -39,7 +38,7 @@ export async function createGuild(
                 name,
                 description,
                 rewardDescription,
-                feePaidSol: GUILD_SETUP_PRICE_SOL
+                feePaidSol: 0 // Fully Free
             }
         });
 
@@ -80,7 +79,6 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
     }
 }
 
-// BUG 7 FIX: Changed findMany to only update where isActive is true
 export async function awardGuildPoints(telegramId: string, volumeSol: number): Promise<void> {
     if (volumeSol <= 0) return;
     try {
@@ -111,7 +109,7 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
     }
 }
 
-// BUG 1 FIX: switchActiveGuild implemented properly
+// TASK 4 FIX: Implemented missing switchActiveGuild
 export async function switchActiveGuild(telegramId: string, membershipId: string): Promise<{ success: boolean; message: string; guildName?: string }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -141,6 +139,7 @@ export async function switchActiveGuild(telegramId: string, membershipId: string
     }
 }
 
+// TASK 8 FIX: N+1 queries eliminated. Now performs a single batched database query.
 export async function getLeaderboard(guildId: string, limit: number = 50) {
     try {
         const rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, limit - 1, 'WITHSCORES');
@@ -216,7 +215,7 @@ export async function exportLeaderboard(telegramId: string, guildId: string): Pr
     }
 }
 
-// BUG 1 FIX: executeTieredAirdrop implemented properly
+// TASK 4 FIX: Implemented missing executeTieredAirdrop
 export async function executeTieredAirdrop(
     telegramId: string, 
     guildId: string, 
@@ -310,7 +309,7 @@ export async function executeTieredAirdrop(
     }
 }
 
-// BUG 1 FIX: executeIndividualAirdrop implemented properly
+// TASK 4 FIX: Implemented missing executeIndividualAirdrop
 export async function executeIndividualAirdrop(
     telegramId: string,
     guildId: string,
@@ -372,7 +371,7 @@ export async function executeIndividualAirdrop(
     }
 }
 
-// BUG 1 FIX: executeGuildAirdrop implemented properly
+// TASK 4 FIX: Implemented missing executeGuildAirdrop
 export async function executeGuildAirdrop(telegramId: string, guildId: string, totalSol: number): Promise<{success: boolean, message: string, signature?: string}> {
     try {
         const guild = await prisma.guild.findFirst({ where: { id: guildId, owner: { telegramId } } });

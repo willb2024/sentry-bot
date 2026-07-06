@@ -4430,6 +4430,47 @@ app.post('/api/sim-stats', async (req, res) => {
     }
 });
 
+// =========================================================
+// 🟢 TASK 9: WEBAPP CHART & SEARCH PROXIES
+// =========================================================
+app.get('/api/dex/pair/:mint', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.query.initData as string)) return res.status(403).json({ error: 'Unauthorized' });
+        
+        const mint = req.params.mint;
+        const cached = await redis.get(`dex:pair:${mint}`);
+        if (cached) return res.json(JSON.parse(cached));
+        
+        const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 4000 });
+        const pair = dexRes.data?.pairs?.[0] || null;
+        
+        if (pair) await redis.set(`dex:pair:${mint}`, JSON.stringify(pair), 'EX', 15);
+        res.json(pair);
+    } catch (e) {
+        res.status(500).json({ error: "Failed to fetch pair" });
+    }
+});
+
+app.get('/api/dex/search', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.query.initData as string)) return res.status(403).json({ error: 'Unauthorized' });
+
+        const q = req.query.q as string;
+        if (!q) return res.json({ pairs: [] });
+        
+        const cached = await redis.get(`dex:search:${q}`);
+        if (cached) return res.json(JSON.parse(cached));
+
+        const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeout: 4000 });
+        const pairs = dexRes.data?.pairs || [];
+        
+        await redis.set(`dex:search:${q}`, JSON.stringify(pairs), 'EX', 30);
+        res.json(pairs);
+    } catch (e) {
+        res.status(500).json({ error: "Search failed" });
+    }
+});
+
 // 🟢 FEATURE 5: Public Guild Web Leaderboard
 app.get('/g/:guildCode', async (req, res) => {
     try {

@@ -1,9 +1,11 @@
 // src/services/token_launch.service.ts
 import { Keypair, VersionedTransaction, SystemProgram, TransactionMessage, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
-// @ts-ignore
-import fetch from 'node-fetch';
+
+// TASK 2 FIX: Removed node-fetch import entirely. 
+// Standard fetch natively available in Node 18+.
 import FormData from 'form-data';
+
 import { PrismaClient } from '@prisma/client';
 import { connection } from '../lib/connection.js';
 import { decryptKey, ensureWalletsExist } from './vault.service.js';
@@ -16,7 +18,6 @@ const prisma = new PrismaClient();
 
 export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.05;
 
-// BUG 2 FIX: Added missing wrapper functions to prevent import crash in index.ts
 export async function setLaunchWizardField(telegramId: string, field: string, value: string) {
     await redis.set(`token_launch:${telegramId}:${field}`, value, 'EX', 900);
 }
@@ -71,7 +72,6 @@ export async function uploadMetadataToIpfs(name: string, symbol: string, descrip
 }
 
 // 2. Vanity CA Miner
-// BUG 14 FIX: Make it async and yield to event loop using setImmediate
 export async function mineVanityKeypair(prefix: string): Promise<Keypair> {
     if (!prefix || prefix.toUpperCase() === 'NO') return Keypair.generate();
     
@@ -143,7 +143,6 @@ export async function launchTokenOnPumpFun(
         const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
         const bundledTxs: string[] = [];
 
-        // Transaction 1: Create Token + Buy from W1
         const response = await fetch('https://pumpportal.fun/api/create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -166,7 +165,6 @@ export async function launchTokenOnPumpFun(
 
         bundledTxs.push(Buffer.from(launchTx.serialize()).toString('base64'));
 
-        // Transactions 2-4: Stealth buys from W2, W3, W4
         if (splitBuySol > 0 && wallets.length > 1) {
             const extraBuys = await Promise.all(wallets.slice(1).map(async (wallet) => {
                 const buyRes = await axios.post('https://pumpportal.fun/api/trade-local', {
@@ -186,7 +184,6 @@ export async function launchTokenOnPumpFun(
             bundledTxs.push(...extraBuys);
         }
 
-        // Platform Fee + Jito Tip Transaction
         const { blockhash } = await connection.getLatestBlockhash('confirmed');
         const JITO_TIP_ACCOUNTS = ["96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL", "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe", "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvVkY"];
         const jitoTipAccount = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
@@ -209,7 +206,6 @@ export async function launchTokenOnPumpFun(
         feeTx.sign([wallets[0]]);
         bundledTxs.push(Buffer.from(feeTx.serialize()).toString('base64'));
 
-        // Send to Jito
         const jitoRes = await axios.post(`https://mainnet.block-engine.jito.wtf/api/v1/bundles`, {
             jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs]
         });

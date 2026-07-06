@@ -8,6 +8,7 @@ import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { awardGuildPoints } from './guild.service.js';
 import { getEffectiveFeePercent, getVipStatus } from './vip_promo.service.js'; 
+import { checkRecentMevActivity } from './price.service.js'; // TASK 7 FIX
 import { redis } from '../lib/redis.js'; 
 import dns from 'dns';
 import https from 'https';
@@ -119,7 +120,6 @@ setInterval(async () => {
 
 const keypairCache = new Map<string, Keypair>();
 
-// BUG 13 FIX: Function to clear cached keypair
 export function clearKeypairCache(walletAddress: string) {
     keypairCache.delete(walletAddress);
 }
@@ -141,7 +141,6 @@ async function getLatestBlockhashWithCache(): Promise<{ blockhash: string; lastV
     return await connection.getLatestBlockhash('confirmed');
 }
 
-// BUG 10 FIX: Adjust interval to 1500ms and maxRetries to 8
 async function pollSignatureConfirmation(signature: string, maxRetries = 8): Promise<boolean> {
     for (let i = 0; i < maxRetries; i++) {
         await new Promise(r => setTimeout(r, 1500));
@@ -324,7 +323,6 @@ async function buildTipAndFeeTransaction(
         const feeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
         const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
 
-        // BUG 6 FIX: Removed MASTER_TREASURY_WALLET split logic to prevent missing funds
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
 
         let tipLamports = 100_000;
@@ -376,6 +374,18 @@ export async function executeSnipe(
         return await simExecuteSnipe(telegramId, targetCA, amountSol);
     }
     
+    // TASK 7 FIX: Wire checkRecentMevActivity into the pre-buy safety checks
+    if (side === 'buy' && !isBumper) {
+        try {
+            const hasMev = await checkRecentMevActivity(targetCA);
+            if (hasMev) {
+                return { success: false, message: "🚨 High MEV Bot / Sandwich activity detected on this token recently. Snipe aborted by safety shields to protect your funds." };
+            }
+        } catch (e) {
+            // Ignore API faults to not block fast trading
+        }
+    }
+
     if (side === 'sell') {
         let percentage = 100;
         if (tokenAmount) {
@@ -518,10 +528,33 @@ export async function executeSnipe(
             affiliateCut = feeCharged * dynamicRate;
         }
 
+        // TASK 6 FIX: Compute Guild Owner 50% Revenue Share permanently
+        let guildOwnerCut = 0;
+        let guildOwnerId: string | null = null;
+        try {
+            const activeGuildMembership = await prisma.guildMembership.findFirst({
+                where: { userId: user.id, isActive: true },
+                include: { guild: true }
+            });
+
+            if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
+                guildOwnerId = activeGuildMembership.guild.ownerId;
+                guildOwnerCut = feeCharged * 0.50; // 50% of the platform fee goes to the guild owner
+            }
+        } catch (_) {}
+
         await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: totalVolume } } });
+        
+        // TASK 5 FIX: Award Guild Points guaranteed to run on every successful trade
         awardGuildPoints(user.telegramId, totalVolume).catch(() => {});
-        if (user.referredById) {
+        
+        if (user.referredById && affiliateCut > 0) {
             await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } });
+        }
+
+        // TASK 6 FIX: Deposit the 50% revenue share into the Guild Owner's withdrawable wallet
+        if (guildOwnerId && guildOwnerCut > 0 && guildOwnerId !== user.referredById) {
+            await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } });
         }
 
         await prisma.trade.create({
@@ -542,7 +575,7 @@ export async function executeSnipe(
         const badgeStr = vipStatus.badge ? `${vipStatus.badge} ` : '';
 
         await redis.set(`trade_time:${telegramId}:${targetCA}`, Date.now().toString(), 'EX', 86400 * 7);
-        await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); // Added marker for balance cache
+        await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); 
 
         return {
             success: true,
@@ -709,6 +742,21 @@ export async function executeExit(
             affiliateCut = feeCharged * dynamicRate;
         }
 
+        // TASK 6 FIX: Compute Guild Owner 50% Revenue Share permanently on Sells
+        let guildOwnerCut = 0;
+        let guildOwnerId: string | null = null;
+        try {
+            const activeGuildMembership = await prisma.guildMembership.findFirst({
+                where: { userId: user.id, isActive: true },
+                include: { guild: true }
+            });
+
+            if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
+                guildOwnerId = activeGuildMembership.guild.ownerId;
+                guildOwnerCut = feeCharged * 0.50; // 50% of the platform fee goes to the guild owner
+            }
+        } catch (_) {}
+
         let volumeToRecord = totalFeeBase; 
         try {
             const lastBuy = await prisma.trade.findFirst({
@@ -724,9 +772,17 @@ export async function executeExit(
         const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
         await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } });
+        
+        // TASK 5 FIX: Award Guild Points guaranteed to run on every successful trade
         awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
-        if (user.referredById) {
+        
+        if (user.referredById && affiliateCut > 0) {
             await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } });
+        }
+
+        // TASK 6 FIX: Deposit the 50% revenue share into the Guild Owner's withdrawable wallet
+        if (guildOwnerId && guildOwnerCut > 0 && guildOwnerId !== user.referredById) {
+            await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } });
         }
 
         await prisma.trade.create({

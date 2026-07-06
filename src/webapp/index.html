@@ -28,6 +28,7 @@
                     },
                     animation: {
                         'shimmer': 'shimmer 2s infinite linear',
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite'
                     },
                     keyframes: {
                         shimmer: {
@@ -40,73 +41,29 @@
         }
     </script>
     <style>
-        body {
-            background-color: #0a0d14;
-            color: #f8fafc;
-            overflow-x: hidden;
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        .grid-overlay {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1;
-            background-image: 
-                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-            background-size: 24px 24px;
-        }
-
+        body { background-color: #0a0d14; color: #f8fafc; overflow-x: hidden; -webkit-tap-highlight-color: transparent; }
+        .grid-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px); background-size: 24px 24px; }
         .content-wrapper { position: relative; z-index: 1; padding-bottom: 80px; }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
-        
         @keyframes marquee { 0% { transform: translateX(0%); } 100% { transform: translateX(-50%); } }
         .marquee-inner { display: flex; width: max-content; animation: marquee 25s linear infinite; }
         .marquee-inner:hover { animation-play-state: paused; }
-        
-        .card-flat {
-            background-color: #121826;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 1rem;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
-            transition: border-color 0.2s;
-        }
+        .card-flat { background-color: #121826; border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); transition: border-color 0.2s; }
         .card-flat:hover { border-color: rgba(255, 255, 255, 0.1); }
-
-        .glass-btn {
-            background: rgba(255, 255, 255, 0.03); 
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            transition: all 0.15s ease;
-        }
+        .glass-btn { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); transition: all 0.15s ease; }
         .glass-btn:active { transform: scale(0.95); }
-        .glass-btn-active {
-            background: rgba(16, 185, 129, 0.1); 
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            color: #10b981;
-        }
-
+        .glass-btn-active { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #10b981; }
         .toggle-checkbox:checked { right: 0; border-color: #10b981; }
         .toggle-checkbox:checked + .toggle-label { background-color: #10b981; }
-        
         .skeleton { background: #1e293b; position: relative; border-radius: 0.5rem; overflow: hidden; }
-        .skeleton::after {
-            content: ""; position: absolute; top: 0; right: 0; bottom: 0; left: 0;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
-            animation: shimmer 1.5s infinite;
-        }
-
-        #toast {
-            visibility: hidden; min-width: 250px; 
-            background: #1e293b; color: #f8fafc; text-align: center; 
-            border-radius: 8px; padding: 12px 20px;
-            position: fixed; z-index: 1000; left: 50%; bottom: 20px; 
-            transform: translateX(-50%); font-size: 14px; font-weight: 600; 
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5); 
-            opacity: 0; transition: opacity 0.3s, bottom 0.3s;
-        }
+        .skeleton::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent); animation: shimmer 1.5s infinite; }
+        #toast { visibility: hidden; min-width: 250px; background: #1e293b; color: #f8fafc; text-align: center; border-radius: 8px; padding: 12px 20px; position: fixed; z-index: 1000; left: 50%; bottom: 20px; transform: translateX(-50%); font-size: 14px; font-weight: 600; border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5); opacity: 0; transition: opacity 0.3s, bottom 0.3s; }
         #toast.show { visibility: visible; opacity: 1; bottom: 40px; }
         .hidden-view { display: none !important; }
+        .search-input::placeholder { color: #64748b; }
+        .search-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 1px rgba(59,130,246,0.5); }
     </style>
 </head>
 <body>
@@ -133,7 +90,6 @@
                         <span class="h-1.5 w-1.5 rounded-full bg-jupGreen animate-pulse"></span> LIVE
                     </span>
                 </div>
-                <!-- 🟢 FIX 1: Clean hidden container for simulation banner state -->
                 <div id="sim-mode-banner" class="hidden"></div>
             </div>
         </div>
@@ -147,51 +103,34 @@
     </header>
 
     <!-- Navigation Tabs -->
-    <div class="flex justify-center mb-4">
-        <div class="bg-[#121826] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
-            <button id="tab-dashboard" onclick="switchView('dashboard')" class="px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Terminal Dashboard</button>
-            <button id="tab-leaderboard" onclick="switchView('leaderboard')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
-            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
+    <div class="flex justify-center mb-4 px-2">
+        <div class="bg-[#121826] p-1 rounded-lg border border-white/5 flex shadow-lg overflow-x-auto w-full max-w-2xl no-scrollbar">
+            <button id="tab-dashboard" onclick="switchView('dashboard')" class="flex-1 px-4 py-2 rounded-md text-[11px] sm:text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Dashboard</button>
+            <button id="tab-market" onclick="switchView('market')" class="flex-1 px-4 py-2 rounded-md text-[11px] sm:text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Explorer</button>
+            <button id="tab-leaderboard" onclick="switchView('leaderboard')" class="flex-1 px-4 py-2 rounded-md text-[11px] sm:text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guilds</button>
+            <button id="tab-affiliates" onclick="switchView('affiliates')" class="flex-1 px-4 py-2 rounded-md text-[11px] sm:text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Partners</button>
         </div>
     </div>
 
     <!-- VIEW 1: DASHBOARD -->
     <main id="view-dashboard" class="max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-        <!-- Left Column: Stats & Holdings -->
         <section class="xl:col-span-2 space-y-6">
-            
             <div class="grid grid-cols-2 gap-3 sm:gap-4">
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-wallet text-gray-500"></i> Net Worth</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-white" id="stat-networth">$0.00</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-networth-sub">0.00 SOL</div>
-                    </div>
+                    <div class="mt-3"><span class="text-3xl sm:text-4xl font-bold text-white" id="stat-networth">$0.00</span><div class="text-xs font-mono text-gray-500 mt-1" id="stat-networth-sub">0.00 SOL</div></div>
                 </div>
-
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-money-bill-trend-up text-gray-500"></i> Realized PnL</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-gray-400" id="stat-pnl">+0.00%</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-pnl-sub">+$0.00 net profit</div>
-                    </div>
+                    <div class="mt-3"><span class="text-3xl sm:text-4xl font-bold text-gray-400" id="stat-pnl">+0.00%</span><div class="text-xs font-mono text-gray-500 mt-1" id="stat-pnl-sub">+$0.00 net profit</div></div>
                 </div>
-
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-bullseye text-gray-500"></i> Win Rate</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="stat-winrate">0.0%</span>
-                        <div class="text-xs text-gray-500 mt-1 font-mono" id="stat-winrate-sub">0 Wins / 0 Losses</div>
-                    </div>
+                    <div class="mt-3"><span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="stat-winrate">0.0%</span><div class="text-xs text-gray-500 mt-1 font-mono" id="stat-winrate-sub">0 Wins / 0 Losses</div></div>
                 </div>
-
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-bolt text-gray-500"></i> Trade Volume</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="stat-volume">0.00 SOL</span>
-                        <div class="text-[10px] text-jupGreen mt-1.5 font-mono bg-jupGreen/10 inline-block px-1.5 py-0.5 rounded border border-jupGreen/20">MEV Protected</div>
-                    </div>
+                    <div class="mt-3"><span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="stat-volume">0.00 SOL</span><div class="text-[10px] text-jupGreen mt-1.5 font-mono bg-jupGreen/10 inline-block px-1.5 py-0.5 rounded border border-jupGreen/20">MEV Protected</div></div>
                 </div>
             </div>
 
@@ -201,20 +140,15 @@
                     <span class="text-[10px] text-neonBlue bg-neonBlue/10 border border-neonBlue/20 px-3 py-1 rounded-full font-mono" id="positions-count">0 OPEN</span>
                 </div>
                 <div id="positions-container" class="space-y-3">
-                    <!-- Skeletons -->
+                    <div class="card-flat h-20 skeleton"></div><div class="card-flat h-20 skeleton"></div>
                 </div>
             </div>
-
         </section>
 
-        <!-- Right Column: Graphs -->
         <section class="space-y-6">
-            
             <div class="card-flat p-5">
                 <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">
-                        FLOW ANALYTICS <span id="sim-chart-label" class="hidden text-yellow-400 ml-1">🎮 SIM</span>
-                    </h3>
+                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">FLOW ANALYTICS <span id="sim-chart-label" class="hidden text-yellow-400 ml-1">🎮 SIM</span></h3>
                     <div class="flex gap-1 bg-black/50 p-1 rounded-lg border border-white/5 text-[10px]">
                         <button onclick="setFilter('1H')" id="btn-1H" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1H</button>
                         <button onclick="setFilter('1D')" id="btn-1D" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1D</button>
@@ -223,22 +157,103 @@
                         <button onclick="setFilter('1Y')" id="btn-1Y" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1Y</button>
                     </div>
                 </div>
-                <div class="h-64 relative w-full">
-                    <canvas id="pnlHistoryChart"></canvas>
-                </div>
+                <div class="h-64 relative w-full"><canvas id="pnlHistoryChart"></canvas></div>
             </div>
-
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">PORTFOLIO SPLIT</h3>
-                <div class="h-56 flex items-center justify-center relative">
-                    <canvas id="allocationChart"></canvas>
-                </div>
+                <div class="h-56 flex items-center justify-center relative"><canvas id="allocationChart"></canvas></div>
             </div>
-
         </section>
     </main>
 
-    <!-- VIEW 2: LEADERBOARD -->
+    <!-- VIEW 2: MARKET EXPLORER (DEXSCREENER) -->
+    <main id="view-market" class="hidden-view max-w-5xl mx-auto px-4 sm:px-6">
+        
+        <!-- Search & Filter State -->
+        <div id="dex-search-view">
+            <!-- Search Bar -->
+            <div class="relative w-full mb-4">
+                <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <i class="fa-solid fa-magnifying-glass text-gray-500"></i>
+                </div>
+                <input type="text" id="dex-search-input" class="search-input w-full bg-[#121826] border border-white/10 text-white text-sm rounded-xl pl-11 pr-4 py-4 focus:ring-0 transition-all shadow-lg" placeholder="Search tokens by symbol or paste Contract Address (CA)...">
+                <button id="dex-search-btn" class="absolute inset-y-2 right-2 bg-neonBlue hover:bg-blue-600 text-white text-xs font-bold rounded-lg px-4 transition-colors">Search</button>
+            </div>
+
+            <!-- Filter Chips -->
+            <div class="flex gap-2 overflow-x-auto no-scrollbar mb-6 pb-2">
+                <button onclick="toggleDexFilter('liq10k')" id="filter-liq10k" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-droplet mr-1"></i> Liq > $10k</button>
+                <button onclick="toggleDexFilter('vol50k')" id="filter-vol50k" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-chart-simple mr-1"></i> Vol > $50k</button>
+                <button onclick="toggleDexFilter('age24h')" id="filter-age24h" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-baby mr-1"></i> Under 24h</button>
+                <button onclick="toggleDexFilter('pumpfun')" id="filter-pumpfun" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-capsules mr-1"></i> Pump.fun Only</button>
+            </div>
+
+            <!-- Results List -->
+            <div id="dex-search-results" class="space-y-3">
+                <div class="text-center py-10 text-gray-600 flex flex-col items-center">
+                    <i class="fa-solid fa-chart-candlestick text-4xl mb-3 opacity-30"></i>
+                    <div class="text-sm font-semibold">Market Explorer</div>
+                    <span class="text-xs mt-1">Search for any Solana token to view charts and snipe instantly.</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chart State (Hidden until token clicked) -->
+        <div id="dex-chart-view" class="hidden-view space-y-4">
+            <!-- Header -->
+            <div class="flex items-center justify-between">
+                <button onclick="closeDexChart()" class="text-gray-400 hover:text-white text-sm font-semibold transition-colors"><i class="fa-solid fa-arrow-left mr-1"></i> Back to Search</button>
+                <div class="flex gap-2">
+                    <button id="chart-copy-ca" class="glass-btn px-3 py-1.5 rounded-lg text-[11px] font-bold text-white"><i class="fa-solid fa-copy mr-1"></i> Copy CA</button>
+                </div>
+            </div>
+            
+            <!-- Token Info Header -->
+            <div class="card-flat p-4 flex justify-between items-center bg-gradient-to-r from-[#121826] to-[#0a0d14]">
+                <div>
+                    <h2 class="text-xl font-bold text-white" id="chart-token-name">$TOKEN</h2>
+                    <p class="text-xs text-gray-500 font-mono mt-1 truncate max-w-[200px] sm:max-w-xs" id="chart-token-ca">CA...</p>
+                </div>
+                <div class="text-right">
+                    <div class="text-lg font-bold text-jupGreen" id="chart-token-price">$0.00</div>
+                    <div class="text-xs text-gray-400 mt-1" id="chart-token-mcap">MC: $0</div>
+                </div>
+            </div>
+
+            <!-- Iframe Container -->
+            <div class="card-flat rounded-xl overflow-hidden shadow-2xl h-[450px] w-full border border-white/10 relative bg-[#0a0d14]">
+                <div id="chart-loader" class="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0d14] z-10">
+                    <i class="fa-solid fa-circle-notch fa-spin text-3xl text-neonBlue mb-3"></i>
+                    <span class="text-xs text-gray-400 font-semibold tracking-widest">LOADING DEXSCREENER...</span>
+                </div>
+                <iframe id="dex-iframe" class="w-full h-full border-0" title="DexScreener Chart"></iframe>
+            </div>
+
+            <!-- ACTION ROW: Quick Snipe & Trade History -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="card-flat p-5 flex flex-col justify-center bg-blue-900/10 border-blue-500/20">
+                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-2 text-center uppercase">Instant Execution</h3>
+                    <p class="text-[10px] text-gray-500 text-center mb-4">Executes a buy instantly via your secure Jito MEV connection.</p>
+                    <button id="btn-quick-snipe" class="w-full bg-neonBlue hover:bg-blue-600 text-white font-bold py-3 rounded-xl shadow-lg transition-transform active:scale-95 flex justify-center items-center gap-2">
+                        <i class="fa-solid fa-bolt"></i> Snipe 0.1 SOL
+                    </button>
+                </div>
+
+                <!-- Trade History Overlay -->
+                <div class="card-flat p-4 md:col-span-2">
+                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4 uppercase flex items-center gap-2">
+                        <i class="fa-solid fa-clock-rotate-left text-gray-500"></i> Your Trade History
+                    </h3>
+                    <div id="chart-trade-history" class="space-y-2 max-h-32 overflow-y-auto no-scrollbar">
+                        <!-- Populated by JS -->
+                        <div class="text-center text-xs text-gray-500 py-4">No prior trades found for this token.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- VIEW 3: LEADERBOARD -->
     <main id="view-leaderboard" class="hidden-view max-w-3xl mx-auto px-4 sm:px-6">
         <div class="text-center mt-2 mb-6">
             <div class="inline-block bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-[10px] font-bold tracking-widest border border-emerald-500/20 mb-3" id="lb-badge">VERIFIED GUILD</div>
@@ -252,98 +267,52 @@
                 <span>Loyalty Stats</span>
             </div>
             <div id="leaderboard-container" class="space-y-3">
-                <!-- Data injected here -->
-                <div class="card-flat h-16 skeleton"></div>
-                <div class="card-flat h-16 skeleton"></div>
                 <div class="card-flat h-16 skeleton"></div>
             </div>
         </div>
     </main>
 
-    <!-- VIEW 3: AFFILIATES -->
+    <!-- VIEW 4: AFFILIATES -->
     <main id="view-affiliates" class="hidden-view max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <!-- Left Column -->
         <section class="xl:col-span-2 space-y-6">
-            <!-- Section 1: Partner Stats -->
             <div class="grid grid-cols-2 gap-3 sm:gap-4">
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-user-plus text-gray-500"></i> Total Recruits</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-jupGreen" id="aff-stat-recruits">0</span>
-                    </div>
+                    <div class="mt-3"><span class="text-3xl sm:text-4xl font-bold text-jupGreen" id="aff-stat-recruits">0</span></div>
                 </div>
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-coins text-gray-500"></i> Pending Yield</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="aff-stat-pending">0.0000</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1">SOL</div>
-                    </div>
+                    <div class="mt-3"><span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="aff-stat-pending">0.0000</span><div class="text-xs font-mono text-gray-500 mt-1">SOL</div></div>
                 </div>
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-chart-line text-gray-500"></i> Lifetime Earned</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="aff-stat-lifetime">0.0000</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1">SOL</div>
-                    </div>
+                    <div class="mt-3"><span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="aff-stat-lifetime">0.0000</span><div class="text-xs font-mono text-gray-500 mt-1">SOL</div></div>
                 </div>
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-trophy text-gray-500"></i> Your Tier</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-amber-500" id="aff-stat-tier">Bronze (40%)</span>
-                    </div>
+                    <div class="mt-3"><span class="text-3xl sm:text-4xl font-bold text-amber-500" id="aff-stat-tier">Bronze (40%)</span></div>
                 </div>
             </div>
-
-            <!-- Section 2: Referral Link Card -->
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4">YOUR INVITE LINK</h3>
                 <div class="flex items-center gap-3">
                     <input type="text" id="aff-ref-link" readonly class="w-full bg-[#0a0d14] text-gray-300 font-mono text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
                     <button onclick="copyReferralLink()" class="glass-btn px-4 py-3 rounded-lg text-sm font-bold text-white whitespace-nowrap"><i class="fa-solid fa-copy mr-1"></i> Copy Link</button>
                 </div>
-                <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn up to 70% of their trading fees for life.</p>
             </div>
-
-            <!-- Section 3: Recruits Feed -->
             <div class="space-y-3">
                 <div class="flex items-center justify-between px-1 pt-2 pb-2">
                     <h3 class="text-sm text-gray-300 font-semibold tracking-wide">ACTIVE RECRUITS</h3>
                 </div>
                 <div id="recruits-container" class="space-y-3">
-                    <!-- Skeletons -->
+                    <div class="card-flat h-16 skeleton"></div>
                 </div>
             </div>
         </section>
-
-        <!-- Right Column -->
         <section class="space-y-6">
-            <!-- Section 4: Earnings Chart -->
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">AFFILIATE REVENUE</h3>
-                <div class="h-64 relative w-full">
-                    <canvas id="affiliateChart"></canvas>
-                </div>
-            </div>
-
-            <!-- Section 5: Projected Earnings -->
-            <div class="card-flat p-5">
-                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4 uppercase">Projected Earnings</h3>
-                <p class="text-xs text-gray-400 mb-4">If your recruits maintain current volume:</p>
-                
-                <div class="space-y-4">
-                    <div class="flex justify-between items-center bg-[#0a0d14] p-3 rounded-lg border border-white/5">
-                        <span class="text-sm text-gray-400">7 Days</span>
-                        <span class="text-sm font-bold text-jupGreen font-mono" id="proj-7d">0.00 SOL</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-[#0a0d14] p-3 rounded-lg border border-white/5">
-                        <span class="text-sm text-gray-400">30 Days</span>
-                        <span class="text-sm font-bold text-jupGreen font-mono" id="proj-30d">0.00 SOL</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-[#0a0d14] p-3 rounded-lg border border-white/5">
-                        <span class="text-sm text-gray-400">1 Year</span>
-                        <span class="text-sm font-bold text-jupGreen font-mono" id="proj-1y">0.00 SOL</span>
-                    </div>
-                </div>
+                <div class="h-64 relative w-full"><canvas id="affiliateChart"></canvas></div>
             </div>
         </section>
     </main>
@@ -353,40 +322,36 @@
 <!-- Simple Toast -->
 <div id="toast"><i class="fa-solid fa-check text-jupGreen mr-2"></i> <span id="toast-msg">Copied!</span></div>
 
+<!-- ============================================== -->
+<!-- 🟢 MAIN JAVASCRIPT LOGIC 🟢 -->
+<!-- ============================================== -->
 <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
 
+    // =====================================
     // VIEW TOGGLE LOGIC
+    // =====================================
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
         
-        const dashView = document.getElementById('view-dashboard');
-        const lbView = document.getElementById('view-leaderboard');
-        const affView = document.getElementById('view-affiliates');
-        const tabDash = document.getElementById('tab-dashboard');
-        const tabLb = document.getElementById('tab-leaderboard');
-        const tabAff = document.getElementById('tab-affiliates');
+        const views = ['dashboard', 'market', 'leaderboard', 'affiliates'];
+        
+        views.forEach(v => {
+            const el = document.getElementById(`view-${v}`);
+            const tab = document.getElementById(`tab-${v}`);
+            if(el) el.classList.add('hidden-view');
+            if(tab) tab.className = "flex-1 px-4 py-2 rounded-md text-[11px] sm:text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap";
+        });
 
-        dashView.classList.add('hidden-view');
-        lbView.classList.add('hidden-view');
-        affView.classList.add('hidden-view');
-        tabDash.className = "px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap";
-        tabLb.className = "px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap";
-        tabAff.className = "px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap";
+        const activeView = document.getElementById(`view-${view}`);
+        const activeTab = document.getElementById(`tab-${view}`);
+        
+        if (activeView) activeView.classList.remove('hidden-view');
+        if (activeTab) activeTab.className = "flex-1 px-4 py-2 rounded-md text-[11px] sm:text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap";
 
-        if (view === 'dashboard') {
-            dashView.classList.remove('hidden-view');
-            tabDash.className = "px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap";
-        } else if (view === 'leaderboard') {
-            lbView.classList.remove('hidden-view');
-            tabLb.className = "px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap";
-            renderLeaderboard();
-        } else if (view === 'affiliates') {
-            affView.classList.remove('hidden-view');
-            tabAff.className = "px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap";
-            renderAffiliates();
-        }
+        if (view === 'leaderboard') renderLeaderboard();
+        if (view === 'affiliates') renderAffiliates();
     }
 
     function showToast(msg) {
@@ -401,55 +366,33 @@
         document.getElementById('username-display').innerText = `@${tg.initDataUnsafe.user.username || tg.initDataUnsafe.user.first_name}`;
     }
 
-    let pnlChart = null;
-    let allocChart = null;
+    // =====================================
+    // STATE VARIABLES
+    // =====================================
+    let pnlChart = null; 
+    let allocChart = null; 
     let affChart = null;
     let tickerPrices = { SOL: 158.42, WIF: 3.12, BONK: 0.00002814, JUP: 1.08, POPCAT: 0.45, TREMP: 0.85 };
-    
     let userTrades = []; 
     let currentFilter = '30D'; 
     let livePositionsForSynth = [];
     
-    // 🟢 States
-    let liveLeaderboardData = { guild: null, members: [] };
-    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
+    // Market Explorer State
+    let rawDexResults = [];
+    let dexFilters = { liq10k: false, vol50k: false, age24h: false, pumpfun: false };
 
-    // 🟢 Demo Data Arrays
+    // Dashboard States
+    let liveLeaderboardData = { guild: null, members: [] };
+    let liveAffiliateData = { 
+        recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", 
+        totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], 
+        dailyEarnings: Array(30).fill(0) 
+    };
+
     const demoPositions = [
         { mint: "So11111111111111111111111111111111111111112", symbol: "SOL", amount: 145.2, priceUsd: 158.42, valueUsd: 23002.58, entryPrice: 130.50 },
-        { mint: "EKpQGSJfe9992...pump", symbol: "WIF", amount: 5240.20, priceUsd: 3.12, valueUsd: 16349.42, entryPrice: 1.10 },
-        { mint: "JUPyiwrY1PI...pump", symbol: "JUP", amount: 8100.00, priceUsd: 1.08, valueUsd: 8748.00, entryPrice: 1.25 },
-        { mint: "DezXAZ...pump", symbol: "BONK", amount: 125000000, priceUsd: 0.000028, valueUsd: 3500.00, entryPrice: 0.000015 }
+        { mint: "EKpQGSJfe9992...pump", symbol: "WIF", amount: 5240.20, priceUsd: 3.12, valueUsd: 16349.42, entryPrice: 1.10 }
     ];
-
-    const demoLeaderboard = {
-        guild: { name: "Alpha Wolves Community", reward: "Top 5 wallets get guaranteed whitelist allocation", code: "GUILD-ALPHA-99" },
-        members: [
-            { rank: 1, username: "Oracle_01", walletAddress: "3yFomLQyHj3Y2bWmK1XG9p5uBEwF6PQcaQSkeBpn782T", glp: 14520.50, volumeSol: 145.2, airdropsReceived: 5.5 },
-            { rank: 2, username: "DeFi_Chad", walletAddress: "7kPxoM4TzVU4EoHEpgzq1VV7AbicfhtW4xC9iMCe6TQq", glp: 9840.00, volumeSol: 98.4, airdropsReceived: 2.0 },
-            { rank: 3, username: "SniperPro", walletAddress: "5Q544fKrFoe6tsEbD7S8EmxjnzVU4EoHEpgzq1VV7Abic", glp: 7120.25, volumeSol: 71.2, airdropsReceived: 1.0 },
-            { rank: 4, username: "Anon_8271", walletAddress: "A1foGxGHK3nasjjnr7jxW14VNCe6TQqeHC9p8KetsN6J", glp: 4500.00, volumeSol: 45.0, airdropsReceived: 0.5 },
-            { rank: 5, username: "WhaleWallet", walletAddress: "9xZzYv8N7v8N7v8N7v8N7v8N7v8N7v8N7v8N7v8N", glp: 3100.00, volumeSol: 31.0, airdropsReceived: 0.0 }
-        ]
-    };
-
-    const demoAffiliates = {
-        recruits: 7,
-        pendingYieldSol: 0.21,
-        lifetimeEarnedSol: 1.45,
-        referralLink: "https://t.me/SentryBot?start=REF-DEMO123",
-        totalPoints: 64000,
-        currentTier: "Silver",
-        currentRate: 0.50,
-        recruitList: [
-            { username: "whale_hunter", volumeSol: 145.2, yourEarningSol: 0.726, lastActiveDaysAgo: 0 },
-            { username: "degen_chad", volumeSol: 82.4, yourEarningSol: 0.412, lastActiveDaysAgo: 1 },
-            { username: "anon_992", volumeSol: 45.0, yourEarningSol: 0.225, lastActiveDaysAgo: 5 },
-            { username: "sniper_god", volumeSol: 12.1, yourEarningSol: 0.060, lastActiveDaysAgo: 12 },
-            { username: "3yFomLQy...", volumeSol: 5.5, yourEarningSol: 0.027, lastActiveDaysAgo: 20 },
-        ],
-        dailyEarnings: Array.from({length: 30}, () => Math.random() * 0.05)
-    };
 
     function formatNumber(num) {
         if (num >= 1000000000) return (num / 1000000000).toFixed(2) + 'B';
@@ -458,6 +401,7 @@
         return num.toLocaleString(undefined, {maximumFractionDigits: 2});
     }
 
+    // Ticker Background Loop
     setInterval(() => {
         let stripHTML = "";
         for(let i=0; i<3; i++){
@@ -472,6 +416,187 @@
         document.getElementById('ticker-strip').innerHTML = stripHTML;
     }, 2500);
 
+    // ==========================================
+    // 🟢 MARKET EXPLORER (DEXSCREENER) LOGIC
+    // ==========================================
+
+    document.getElementById('dex-search-btn').addEventListener('click', executeDexSearch);
+    document.getElementById('dex-search-input').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') executeDexSearch();
+    });
+
+    async function executeDexSearch() {
+        const query = document.getElementById('dex-search-input').value.trim();
+        if (!query) return;
+
+        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+        
+        const container = document.getElementById('dex-search-results');
+        container.innerHTML = `
+            <div class="flex flex-col items-center justify-center py-10">
+                <i class="fa-solid fa-circle-notch fa-spin text-3xl text-neonBlue mb-3"></i>
+                <span class="text-xs text-gray-400">Scanning liquidity pools...</span>
+            </div>
+        `;
+
+        try {
+            const res = await fetch(`/api/dex/search?q=${encodeURIComponent(query)}&initData=${encodeURIComponent(tg.initData || '')}`);
+            if (!res.ok) throw new Error("Search failed");
+            
+            rawDexResults = await res.json();
+            applyDexFiltersAndRender();
+        } catch (e) {
+            container.innerHTML = `<div class="text-center py-8 text-neonRed font-semibold text-sm"><i class="fa-solid fa-triangle-exclamation mr-2"></i> Error fetching results. Please try again.</div>`;
+        }
+    }
+
+    function toggleDexFilter(filter) {
+        if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+        dexFilters[filter] = !dexFilters[filter];
+        
+        const btn = document.getElementById(`filter-${filter}`);
+        if (dexFilters[filter]) {
+            btn.classList.add('glass-btn-active');
+            btn.classList.remove('text-gray-400');
+        } else {
+            btn.classList.remove('glass-btn-active');
+            btn.classList.add('text-gray-400');
+        }
+        
+        applyDexFiltersAndRender();
+    }
+
+    function applyDexFiltersAndRender() {
+        const container = document.getElementById('dex-search-results');
+        
+        // Ensure strictly Solana chain
+        let filtered = rawDexResults.filter(p => p.chainId === 'solana');
+
+        if (dexFilters.liq10k) filtered = filtered.filter(p => p.liquidity?.usd >= 10000);
+        if (dexFilters.vol50k) filtered = filtered.filter(p => p.volume?.h24 >= 50000);
+        if (dexFilters.age24h) {
+            const now = Date.now();
+            filtered = filtered.filter(p => p.pairCreatedAt && (now - p.pairCreatedAt) < 86400000);
+        }
+        if (dexFilters.pumpfun) filtered = filtered.filter(p => p.dexId === 'raydium' && p.baseToken?.address?.endsWith('pump'));
+
+        if (filtered.length === 0) {
+            container.innerHTML = `<div class="text-center py-8 text-gray-500 font-semibold text-sm">No pairs matched your filters.</div>`;
+            return;
+        }
+
+        container.innerHTML = filtered.map(p => {
+            const isPump = p.baseToken.address.endsWith('pump');
+            const icon = isPump ? '<i class="fa-solid fa-capsules text-pink-400"></i>' : '<i class="fa-solid fa-bolt text-jupGreen"></i>';
+
+            return `
+            <div onclick="openDexChart('${p.pairAddress}', '${p.baseToken.address}', '${p.baseToken.symbol}', ${p.priceUsd}, ${p.fdv})" class="card-flat p-3 flex justify-between items-center cursor-pointer hover:bg-white/[0.02] transition-colors">
+                <div class="flex items-center gap-3">
+                    <div class="h-10 w-10 bg-[#1e293b] rounded-xl flex items-center justify-center border border-white/5 text-lg">
+                        ${icon}
+                    </div>
+                    <div>
+                        <div class="font-bold text-white text-sm">$${p.baseToken.symbol} <span class="text-[10px] text-gray-500 font-normal ml-1">/ SOL</span></div>
+                        <div class="text-[10px] text-gray-400 font-mono mt-0.5">${p.baseToken.address.substring(0,6)}...${p.baseToken.address.slice(-4)}</div>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <div class="font-bold text-jupGreen text-sm">$${parseFloat(p.priceUsd).toFixed(6)}</div>
+                    <div class="flex gap-2 text-[10px] text-gray-500 mt-1">
+                        <span>MC: $${formatNumber(p.fdv || 0)}</span>
+                        <span>Vol: $${formatNumber(p.volume?.h24 || 0)}</span>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    function openDexChart(pairAddress, mintAddress, symbol, price, mcap) {
+        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+        
+        document.getElementById('dex-search-view').classList.add('hidden-view');
+        document.getElementById('dex-chart-view').classList.remove('hidden-view');
+        
+        document.getElementById('chart-token-name').innerText = `$${symbol}`;
+        document.getElementById('chart-token-ca').innerText = mintAddress;
+        document.getElementById('chart-token-price').innerText = `$${parseFloat(price).toFixed(6)}`;
+        document.getElementById('chart-token-mcap').innerText = `MC: $${formatNumber(mcap || 0)}`;
+
+        // Button logic
+        document.getElementById('chart-copy-ca').onclick = () => copyCA(mintAddress);
+        
+        const snipeBtn = document.getElementById('btn-quick-snipe');
+        snipeBtn.onclick = () => {
+            if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+            // Close WebApp and send data to bot to trigger buy
+            tg.sendData(JSON.stringify({ action: 'snipe', ca: mintAddress, amount: 0.1 }));
+        };
+
+        // Load Iframe
+        const iframe = document.getElementById('dex-iframe');
+        const loader = document.getElementById('chart-loader');
+        loader.classList.remove('hidden');
+        
+        iframe.onload = () => loader.classList.add('hidden');
+        iframe.src = `https://dexscreener.com/solana/${pairAddress}?embed=1&theme=dark&trades=1&info=0`;
+
+        // Load Trade History Overlay
+        renderTokenHistory(mintAddress);
+    }
+
+    function closeDexChart() {
+        if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+        document.getElementById('dex-chart-view').classList.add('hidden-view');
+        document.getElementById('dex-search-view').classList.remove('hidden-view');
+        document.getElementById('dex-iframe').src = ""; 
+    }
+
+    function renderTokenHistory(mintAddress) {
+        const container = document.getElementById('chart-trade-history');
+        
+        const history = userTrades.filter(t => t.tokenAddress === mintAddress);
+
+        if (history.length === 0) {
+            container.innerHTML = `<div class="text-center text-xs text-gray-500 py-4 border border-dashed border-white/5 rounded-lg bg-black/20">No prior trades found for this token.</div>`;
+            return;
+        }
+
+        container.innerHTML = history.map(t => {
+            const dateStr = new Date(t.createdAt).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+            const isBuy = t.isBuy;
+            const typeClass = isBuy ? 'text-neonBlue bg-blue-500/10' : 'text-neonPurple bg-purple-500/10';
+            const typeIcon = isBuy ? 'fa-arrow-down' : 'fa-arrow-up';
+            const typeLabel = isBuy ? 'BUY' : 'SELL';
+            
+            let pnlStr = '';
+            if (!isBuy && t.profitPercent !== undefined) {
+                const isGain = t.profitPercent >= 0;
+                pnlStr = `<div class="text-[10px] font-bold ${isGain ? 'text-jupGreen' : 'text-neonRed'} mt-0.5">${isGain?'+':''}${t.profitPercent.toFixed(2)}% PnL</div>`;
+            }
+
+            return `
+            <div class="flex justify-between items-center bg-[#0a0d14] p-3 rounded-lg border border-white/5">
+                <div class="flex items-center gap-3">
+                    <div class="h-8 w-8 rounded-full flex items-center justify-center text-xs border border-white/5 ${typeClass}">
+                        <i class="fa-solid ${typeIcon}"></i>
+                    </div>
+                    <div>
+                        <div class="font-bold text-white text-xs">${typeLabel} ${parseFloat(t.amountInSol).toFixed(3)} SOL</div>
+                        <div class="text-[10px] text-gray-500">${dateStr}</div>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <a href="https://solscan.io/tx/${t.txSignature}" target="_blank" class="text-[10px] text-neonBlue hover:underline flex items-center justify-end gap-1">Receipt <i class="fa-solid fa-arrow-up-right-from-square text-[8px]"></i></a>
+                    ${pnlStr}
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+
+    // =====================================
+    // 🟢 DASHBOARD HELPERS & CHARTS
+    // =====================================
     function synthesizeTradesFromPositions(positions) {
         if(!positions || positions.length === 0) return [];
         const synth = [];
@@ -496,21 +621,31 @@
         const now = new Date();
         let cutoff, bucketSizeMs, bucketCount, formatLabel;
 
-        if (timeframe === '1H') {
-            cutoff = new Date(now.getTime() - 60 * 60 * 1000); bucketSizeMs = 10 * 60 * 1000; bucketCount = 6;
-            formatLabel = (d) => d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-        } else if (timeframe === '1D') {
-            cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000); bucketSizeMs = 2 * 60 * 60 * 1000; bucketCount = 12;
-            formatLabel = (d) => d.toLocaleTimeString([], {hour: '2-digit'});
-        } else if (timeframe === '7D') {
-            cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); bucketSizeMs = 24 * 60 * 60 * 1000; bucketCount = 7;
-            formatLabel = (d) => d.toLocaleDateString([], {weekday: 'short'});
-        } else if (timeframe === '30D') {
-            cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); bucketSizeMs = 2 * 24 * 60 * 60 * 1000; bucketCount = 15;
-            formatLabel = (d) => d.toLocaleDateString([], {month: 'short', day: 'numeric'});
-        } else if (timeframe === '1Y') {
-            cutoff = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000); bucketSizeMs = 30 * 24 * 60 * 60 * 1000; bucketCount = 12;
-            formatLabel = (d) => d.toLocaleDateString([], {month: 'short', year: '2-digit'});
+        if (timeframe === '1H') { 
+            cutoff = new Date(now.getTime() - 60 * 60 * 1000); 
+            bucketSizeMs = 10 * 60 * 1000; 
+            bucketCount = 6; 
+            formatLabel = (d) => d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); 
+        } else if (timeframe === '1D') { 
+            cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000); 
+            bucketSizeMs = 2 * 60 * 60 * 1000; 
+            bucketCount = 12; 
+            formatLabel = (d) => d.toLocaleTimeString([], {hour: '2-digit'}); 
+        } else if (timeframe === '7D') { 
+            cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); 
+            bucketSizeMs = 24 * 60 * 60 * 1000; 
+            bucketCount = 7; 
+            formatLabel = (d) => d.toLocaleDateString([], {weekday: 'short'}); 
+        } else if (timeframe === '30D') { 
+            cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); 
+            bucketSizeMs = 2 * 24 * 60 * 60 * 1000; 
+            bucketCount = 15; 
+            formatLabel = (d) => d.toLocaleDateString([], {month: 'short', day: 'numeric'}); 
+        } else if (timeframe === '1Y') { 
+            cutoff = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000); 
+            bucketSizeMs = 30 * 24 * 60 * 60 * 1000; 
+            bucketCount = 12; 
+            formatLabel = (d) => d.toLocaleDateString([], {month: 'short', year: '2-digit'}); 
         }
 
         const labels = [], profitData = [], lossData = [];
@@ -623,12 +758,15 @@
         container.innerHTML = positions.map((p) => {
             const entry = p.entryPrice || 0;
             let pnlVal = 0;
-            if (entry > 0) pnlVal = (((p.priceUsd - entry) / entry) * 100);
-            else if (p.profitPercent) pnlVal = p.profitPercent;
+            if (entry > 0) {
+                pnlVal = (((p.priceUsd - entry) / entry) * 100);
+            } else if (p.profitPercent) {
+                pnlVal = p.profitPercent;
+            }
             
-            const isGain = pnlVal >= 0;
-            const pnlClass = isGain ? 'text-jupGreen' : 'text-neonRed';
-            const pnlIcon = isGain ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down';
+            const isGain = pnlVal >= 0; 
+            const pnlClass = isGain ? 'text-jupGreen' : 'text-neonRed'; 
+            const pnlIcon = isGain ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down'; 
             const pnlStr = pnlVal !== 0 ? `${isGain ? '+' : ''}${pnlVal.toFixed(2)}%` : 'ACTIVE';
 
             return `
@@ -672,13 +810,13 @@
     function renderLeaderboard() {
         const isDemo = document.getElementById('demo-toggle').checked;
         const data = isDemo ? demoLeaderboard : liveLeaderboardData;
-        
         const container = document.getElementById('leaderboard-container');
         
         if (!data.guild) {
-            document.getElementById('lb-title').innerText = "Join a Guild";
-            document.getElementById('lb-desc').innerText = "Trade via Sentry to start earning GLP and climb the ranks.";
+            document.getElementById('lb-title').innerText = "Join a Guild"; 
+            document.getElementById('lb-desc').innerText = "Trade via Sentry to start earning GLP and climb the ranks."; 
             document.getElementById('lb-badge').innerText = "NO ACTIVE GUILD";
+            
             container.innerHTML = `
                 <div class="text-center py-10 text-gray-500 flex flex-col items-center">
                     <i class="fa-solid fa-users-slash text-3xl mb-3 opacity-50"></i>
@@ -688,19 +826,18 @@
             return;
         }
 
-        document.getElementById('lb-title').innerText = data.guild.name;
-        document.getElementById('lb-desc').innerText = `"${data.guild.reward}"`;
+        document.getElementById('lb-title').innerText = data.guild.name; 
+        document.getElementById('lb-desc').innerText = `"${data.guild.reward}"`; 
         document.getElementById('lb-badge').innerText = `GUILD CODE: ${data.guild.code}`;
 
-        if (!data.members || data.members.length === 0) {
-            container.innerHTML = `<div class="text-center text-gray-500 py-4">No trading data yet. Be the first to rank!</div>`;
-            return;
+        if (!data.members || data.members.length === 0) { 
+            container.innerHTML = `<div class="text-center text-gray-500 py-4">No trading data yet. Be the first to rank!</div>`; 
+            return; 
         }
 
         container.innerHTML = data.members.map((row, i) => {
             const medal = i === 0 ? '<span class="text-2xl">🥇</span>' : i === 1 ? '<span class="text-2xl">🥈</span>' : i === 2 ? '<span class="text-2xl">🥉</span>' : `<span class="text-gray-500 text-lg">#${i+1}</span>`;
             const airdropTag = row.airdropsReceived > 0 ? `<div class="text-[10px] text-jupGreen bg-jupGreen/10 border border-jupGreen/20 px-2 py-0.5 rounded ml-2 inline-block"><i class="fa-solid fa-gift"></i> ${row.airdropsReceived.toFixed(2)} SOL</div>` : '';
-            
             return `
             <div class="flex justify-between items-center bg-[#1a2235] p-4 rounded-xl border border-white/5 transition-transform hover:scale-[1.01]">
                 <div class="flex items-center gap-3 sm:gap-4">
@@ -725,38 +862,23 @@
         const isDemo = document.getElementById('demo-toggle').checked;
         const data = isDemo ? demoAffiliates : liveAffiliateData;
         
-        document.getElementById('aff-stat-recruits').innerText = data.recruits;
-        document.getElementById('aff-stat-pending').innerText = data.pendingYieldSol.toFixed(4);
+        document.getElementById('aff-stat-recruits').innerText = data.recruits; 
+        document.getElementById('aff-stat-pending').innerText = data.pendingYieldSol.toFixed(4); 
         document.getElementById('aff-stat-lifetime').innerText = data.lifetimeEarnedSol.toFixed(4);
         
-        let tier = data.currentTier || "Bronze";
-        let tierRate = ((data.currentRate || 0.40) * 100).toFixed(0) + "%";
-        let tierColor = "text-amber-500";
+        let tier = data.currentTier || "Bronze"; 
+        let tierRate = ((data.currentRate || 0.40) * 100).toFixed(0) + "%"; 
+        let tierColor = "text-amber-500"; 
         let nextTier = "Silver (50k PTS)";
-
-        const pts = data.totalPoints || 0;
-        if (pts >= 1000000) {
-            tierColor = "text-cyan-400";
-            nextTier = "Max Tier Unlocked!";
-            tier = "Diamond";
-            tierRate = "70%";
-        } else if (pts >= 250000) {
-            tierColor = "text-yellow-400";
-            nextTier = "Diamond (1M PTS)";
-            tier = "Gold";
-            tierRate = "60%";
-        } else if (pts >= 50000) {
-            tierColor = "text-gray-300";
-            nextTier = "Gold (250k PTS)";
-            tier = "Silver";
-            tierRate = "50%";
-        } else {
-            tier = "Bronze";
-            tierRate = "40%";
-        }
         
-        const tierEl = document.getElementById('aff-stat-tier');
-        tierEl.innerText = `${tier} (${tierRate})`;
+        const pts = data.totalPoints || 0;
+        if (pts >= 1000000) { tierColor = "text-cyan-400"; nextTier = "Max Tier Unlocked!"; tier = "Diamond"; tierRate = "70%"; } 
+        else if (pts >= 250000) { tierColor = "text-yellow-400"; nextTier = "Diamond (1M PTS)"; tier = "Gold"; tierRate = "60%"; } 
+        else if (pts >= 50000) { tierColor = "text-gray-300"; nextTier = "Gold (250k PTS)"; tier = "Silver"; tierRate = "50%"; } 
+        else { tier = "Bronze"; tierRate = "40%"; }
+        
+        const tierEl = document.getElementById('aff-stat-tier'); 
+        tierEl.innerText = `${tier} (${tierRate})`; 
         tierEl.className = `text-3xl sm:text-4xl font-bold ${tierColor}`;
         
         document.getElementById('aff-ref-link').value = data.referralLink || "Link not generated";
@@ -771,7 +893,7 @@
                 </div>`;
         } else {
             container.innerHTML = data.recruitList.map(r => {
-                const isActive = r.lastActiveDaysAgo < 7;
+                const isActive = r.lastActiveDaysAgo < 7; 
                 const dotColor = isActive ? 'bg-jupGreen' : 'bg-gray-600';
                 return `
                 <div class="card-flat overflow-hidden p-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
@@ -789,56 +911,49 @@
                     </div>
                     <div class="text-right">
                         <span class="font-bold text-lg text-jupGreen">+${r.yourEarningSol.toFixed(4)}</span>
-                        <div class="text-[12px] font-semibold text-gray-500 mt-0.5">
-                            SOL Earned
-                        </div>
+                        <div class="text-[12px] font-semibold text-gray-500 mt-0.5">SOL Earned</div>
                     </div>
-                </div>
-                `;
+                </div>`;
             }).join('');
         }
         
-        // Render Chart
         const affCtx = document.getElementById('affiliateChart').getContext('2d');
-        const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
+        const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300); 
         gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.3)'); 
         gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
-
+        
         if (affChart) affChart.destroy();
         
-        const labels = Array.from({length: 30}, (_, i) => {
-            const d = new Date();
-            d.setDate(d.getDate() - (29 - i));
-            return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+        const labels = Array.from({length: 30}, (_, i) => { 
+            const d = new Date(); d.setDate(d.getDate() - (29 - i)); 
+            return d.toLocaleDateString([], {month: 'short', day: 'numeric'}); 
         });
-
-        affChart = new Chart(affCtx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [
-                    { label: 'SOL Earned', data: data.dailyEarnings, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5 }
-                ]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-                plugins: { 
-                    legend: { display: false },
-                    tooltip: { backgroundColor: '#1e293b', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
-                },
-                scales: {
-                    x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                    y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
-                }
-            }
-        });
-
-        // Calculate Projections
-        const last7dEarnings = data.dailyEarnings.slice(23).reduce((a, b) => a + b, 0);
-        const dailyAvg = last7dEarnings / 7;
         
-        document.getElementById('proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
-        document.getElementById('proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
+        affChart = new Chart(affCtx, { 
+            type: 'line', 
+            data: { 
+                labels: labels, 
+                datasets: [ 
+                    { label: 'SOL Earned', data: data.dailyEarnings, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5 } 
+                ] 
+            }, 
+            options: { 
+                responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, 
+                plugins: { 
+                    legend: { display: false }, 
+                    tooltip: { backgroundColor: '#1e293b', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 } 
+                }, 
+                scales: { 
+                    x: { grid: { display: false }, ticks: { font: { size: 10 } } }, 
+                    y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } } 
+                } 
+            } 
+        });
+
+        const last7dEarnings = data.dailyEarnings.slice(23).reduce((a, b) => a + b, 0); 
+        const dailyAvg = last7dEarnings / 7;
+        document.getElementById('proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL'; 
+        document.getElementById('proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL'; 
         document.getElementById('proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
     }
 
@@ -886,15 +1001,15 @@
         document.getElementById('stat-networth').innerText = '$' + stats.networth.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
         document.getElementById('stat-networth-sub').innerText = stats.networthSol;
         
-        const isGain = stats.pnlPercent >= 0;
+        const isGain = stats.pnlPercent >= 0; 
         const pnlColorClass = isGain ? 'text-jupGreen' : 'text-neonRed';
         
         document.getElementById('stat-pnl').innerText = `${isGain && stats.pnlPercent !== 0 ? '+' : ''}${stats.pnlPercent}%`;
         document.getElementById('stat-pnl').className = `text-3xl sm:text-4xl font-bold mt-1 transition-colors ${pnlColorClass}`;
         document.getElementById('stat-pnl-sub').innerText = `${isGain && stats.pnlUsd !== 0 ? '+' : '-'}$${Math.abs(stats.pnlUsd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits:2})} net profit`;
         
-        document.getElementById('stat-winrate').innerText = stats.winrate + '%';
-        document.getElementById('stat-winrate-sub').innerText = stats.winLossText;
+        document.getElementById('stat-winrate').innerText = stats.winrate + '%'; 
+        document.getElementById('stat-winrate-sub').innerText = stats.winLossText; 
         document.getElementById('stat-volume').innerText = stats.volume;
 
         const chartData = aggregatePnlData(currentFilter);
@@ -906,202 +1021,170 @@
     async function fetchLiveData() {
         if (document.getElementById('demo-toggle').checked) return;
 
-        // 🎮 SIMULATION CHECK FIRST — must run before any real data fetch
         try {
-            const simRes = await fetch('/api/sim-stats', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
+            const simRes = await fetch('/api/sim-stats', { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ initData: tg.initData || "" }) 
             });
 
             if (simRes.ok) {
                 const simStats = await simRes.json();
-
                 if (simStats.isActive) {
-                    document.getElementById('sim-mode-banner').classList.add('hidden');
+                    document.getElementById('sim-mode-banner').classList.add('hidden'); 
                     document.getElementById('sim-chart-label').classList.remove('hidden');
 
-                    const simPositions = (simStats.positions || []).map(p => ({
-                        mint: p.mint,
-                        symbol: p.symbol,
-                        amount: p.amount,
-                        priceUsd: p.priceUsd || (p.entryPriceUsd * 150),
-                        valueUsd: p.valueUsd || (p.amountInSol * 150),
-                        entryPrice: p.entryPriceUsd || p.entryPrice
+                    const simPositions = (simStats.positions || []).map(p => ({ 
+                        mint: p.mint, 
+                        symbol: p.symbol, 
+                        amount: p.amount, 
+                        priceUsd: p.priceUsd || (p.entryPriceUsd * 150), 
+                        valueUsd: p.valueUsd || (p.amountInSol * 150), 
+                        entryPrice: p.entryPriceUsd || p.entryPrice 
                     }));
 
-                    userTrades = (simStats.trades || []).map(t => ({
-                        createdAt: t.createdAt,
-                        isBuy: t.isBuy,
-                        amountInSol: t.amountInSol,
-                        profitPercent: t.profitPercent || 0
+                    userTrades = (simStats.trades || []).map(t => ({ 
+                        createdAt: t.createdAt, 
+                        isBuy: t.isBuy, 
+                        amountInSol: t.amountInSol, 
+                        profitPercent: t.profitPercent || 0, 
+                        tokenAddress: t.tokenAddress || p.mint, 
+                        txSignature: t.txSignature || 'sim' 
                     }));
 
                     livePositionsForSynth = simPositions;
 
-                    let wins = simStats.wins || 0;
-                    let losses = simStats.losses || 0;
+                    let wins = simStats.wins || 0; 
+                    let losses = simStats.losses || 0; 
                     let totalVolumeSol = simStats.volume || 0;
-
-                    const totalValueUsd = simPositions.reduce((sum, p) => sum + (p.valueUsd || 0), 0);
+                    
+                    const totalValueUsd = simPositions.reduce((sum, p) => sum + (p.valueUsd || 0), 0); 
                     const simBalanceSol = parseFloat(simStats.balance) || 0;
-                    const networthUsd = Math.max(totalValueUsd, simBalanceSol * 150);
+                    const networthUsd = Math.max(totalValueUsd, simBalanceSol * 150); 
                     const networthSol = simBalanceSol.toFixed(4) + " SOL";
-
-                    const startingBalance = 12.4521;
-                    const pnlSol = simBalanceSol - startingBalance;
-                    const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00";
+                    
+                    const startingBalance = 12.4521; 
+                    const pnlSol = simBalanceSol - startingBalance; 
+                    const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00"; 
                     const pnlUsd = pnlSol * 150;
+                    
+                    const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
+                    const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : ['No Active Positions']; 
+                    const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [100];
 
-                    const winRate = (wins + losses) > 0
-                        ? ((wins / (wins + losses)) * 100).toFixed(1)
-                        : "0.0";
-
-                    const allocLabels = simPositions.length
-                        ? simPositions.map(p => p.symbol)
-                        : ['No Active Positions'];
-                    const allocData = simPositions.length
-                        ? simPositions.map(p => p.valueUsd || 1)
-                        : [100];
-
-                    populateDashboard({
-                        networth: networthUsd,
-                        networthSol: networthSol,
-                        pnlPercent: pnlPercent,
-                        pnlUsd: pnlUsd,
-                        winrate: winRate,
-                        winLossText: `${wins} Wins / ${losses} Losses`,
-                        volume: totalVolumeSol.toFixed(4) + " SOL"
+                    populateDashboard({ 
+                        networth: networthUsd, 
+                        networthSol: networthSol, 
+                        pnlPercent: pnlPercent, 
+                        pnlUsd: pnlUsd, 
+                        winrate: winRate, 
+                        winLossText: `${wins} Wins / ${losses} Losses`, 
+                        volume: totalVolumeSol.toFixed(4) + " SOL" 
                     }, allocLabels, allocData, simPositions);
-
+                    
                     setFilter(currentFilter);
-
-                    if (simPositions.length === 0) {
-                        document.getElementById('positions-container').innerHTML = `
-                            <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                                <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                                <div class="text-sm font-semibold">No Active Deployments</div>
-                                <span class="text-xs font-mono mt-1">Awaiting target.</span>
-                            </div>`;
-                    } else {
-                        renderPositions(simPositions);
-                    }
-
-                    fetch('/api/my-leaderboard', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ initData: tg.initData || "" })
-                    }).then(r => r.ok ? r.json() : { guild: null, members: [] })
-                      .then(data => { liveLeaderboardData = data; }).catch(() => {});
-
-                    fetch('/api/affiliate-stats', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ initData: tg.initData || "" })
-                    }).then(r => r.ok ? r.json() : null)
-                      .then(data => { if (data) liveAffiliateData = data; }).catch(() => {});
-
-                    setTimeout(() => {
-                        if (!document.getElementById('demo-toggle').checked) fetchLiveData();
-                    }, 4000);
-
+                    
+                    fetch('/api/my-leaderboard', { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ initData: tg.initData || "" }) 
+                    }).then(r => r.ok ? r.json() : { guild: null, members: [] }).then(data => { liveLeaderboardData = data; }).catch(() => {});
+                    
+                    fetch('/api/affiliate-stats', { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ initData: tg.initData || "" }) 
+                    }).then(r => r.ok ? r.json() : null).then(data => { if (data) liveAffiliateData = data; }).catch(() => {});
+                    
+                    setTimeout(() => { if (!document.getElementById('demo-toggle').checked) fetchLiveData(); }, 4000);
                     return; 
                 }
             }
         } catch (_) {}
 
-        document.getElementById('sim-chart-label').classList.add('hidden');
+        document.getElementById('sim-chart-label').classList.add('hidden'); 
         document.getElementById('sim-mode-banner').classList.add('hidden');
-
         document.getElementById('positions-container').innerHTML = `
             <div class="space-y-3">
                 <div class="card-flat h-20 skeleton"></div>
                 <div class="card-flat h-20 skeleton"></div>
             </div>`;
 
-        fetch('/api/positions', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
+        fetch('/api/positions', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ initData: tg.initData || "" }) 
         })
-        .then(r => r.ok ? r.json() : [])
-        .catch(() => [])
+        .then(r => r.ok ? r.json() : []).catch(() => [])
         .then(positions => {
-            fetch('/api/analytics', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
+            fetch('/api/analytics', { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ initData: tg.initData || "" }) 
             })
-            .then(res => res.ok ? res.json() : [])
-            .catch(() => [])
+            .then(res => res.ok ? res.json() : []).catch(() => [])
             .then(async trades => {
                 if (document.getElementById('demo-toggle').checked) return;
-
-                userTrades = trades || [];
-                const posArray = positions || [];
+                
+                userTrades = trades || []; 
+                const posArray = positions || []; 
                 livePositionsForSynth = posArray;
 
-                const solRes = await fetch('/api/sol-price', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ initData: tg.initData })
+                const solRes = await fetch('/api/sol-price', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ initData: tg.initData }) 
                 }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
-
+                
                 if (document.getElementById('demo-toggle').checked) return;
 
                 const currentSolPrice = solRes.price || 160;
                 let totalValueUsd = 0, totalInvestedUsd = 0, allocLabels = [], allocData = [];
 
                 posArray.forEach(p => {
-                    totalValueUsd += p.valueUsd || 0;
-                    allocLabels.push(p.symbol);
+                    totalValueUsd += p.valueUsd || 0; 
+                    allocLabels.push(p.symbol); 
                     allocData.push(p.valueUsd || 0);
-                    if (p.entryPrice && p.amount) totalInvestedUsd += (p.amount * p.entryPrice);
-                    else totalInvestedUsd += (p.valueUsd || 0);
+                    
+                    if (p.entryPrice && p.amount) {
+                        totalInvestedUsd += (p.amount * p.entryPrice);
+                    } else {
+                        totalInvestedUsd += (p.valueUsd || 0);
+                    }
                 });
 
                 const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
-
-                // 🟢 FIX: Realized PnL Calculation
-                let wins = 0, losses = 0, totalVolumeSol = 0;
+                let wins = 0, losses = 0, totalVolumeSol = 0; 
                 let totalRealizedPnlSol = 0; 
                 let tradesForStats = userTrades.length > 0 ? userTrades : synthesizeTradesFromPositions(posArray);
 
                 tradesForStats.forEach(t => {
                     totalVolumeSol += parseFloat(t.amountInSol || 0);
                     if (!t.isBuy) {
-                        // 🟢 FIX: Tighten win/loss logic for real numbers
-                        if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) {
-                            wins++;
-                        } else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) {
-                            losses++;
-                        }
-                        
-                        // 🟢 FIX: Sum actual realized PnL
+                        if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) wins++;
+                        else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) losses++;
                         totalRealizedPnlSol += (t.realizedPnlSol || 0);
                     }
                 });
 
-                const totalClosed = wins + losses;
+                const totalClosed = wins + losses; 
                 const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
-                
-                // 🟢 FIX: Push realized USD into the display
-                const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
+                const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice; 
                 const finalPnlPercent = totalInvestedUsd > 0 ? (realizedPnlUsd / totalInvestedUsd) * 100 : 0;
 
-                populateDashboard({
-                    networth: totalValueUsd,
-                    networthSol: networthSol,
-                    pnlPercent: finalPnlPercent.toFixed(2),
+                populateDashboard({ 
+                    networth: totalValueUsd, 
+                    networthSol: networthSol, 
+                    pnlPercent: finalPnlPercent.toFixed(2), 
                     pnlUsd: realizedPnlUsd, 
-                    winrate: winRate,
-                    winLossText: `${wins} Wins / ${losses} Losses`,
-                    volume: `${totalVolumeSol.toFixed(2)} SOL`
+                    winrate: winRate, 
+                    winLossText: `${wins} Wins / ${losses} Losses`, 
+                    volume: `${totalVolumeSol.toFixed(2)} SOL` 
                 }, allocLabels.length ? allocLabels : ['No Assets'], allocData, posArray);
             });
-        })
-        .catch(() => {
+        }).catch(() => {
             if (document.getElementById('demo-toggle').checked) return;
-            populateDashboard({
-                networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0,
-                winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL"
-            }, ['Offline'], [100], []);
-
+            populateDashboard({ networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0, winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL" }, ['Offline'], [100], []);
             document.getElementById('positions-container').innerHTML = `
                 <div class="text-center py-10 card-flat text-neonRed flex flex-col items-center">
                     <i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i>
@@ -1110,28 +1193,24 @@
                 </div>`;
         });
 
-        fetch('/api/my-leaderboard', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
-        })
-        .then(r => r.ok ? r.json() : { guild: null, members: [] })
-        .then(data => {
+        fetch('/api/my-leaderboard', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ initData: tg.initData || "" }) 
+        }).then(r => r.ok ? r.json() : { guild: null, members: [] }).then(data => {
             liveLeaderboardData = data;
-            if (!document.getElementById('demo-toggle').checked &&
-                !document.getElementById('view-leaderboard').classList.contains('hidden-view')) {
+            if (!document.getElementById('demo-toggle').checked && !document.getElementById('view-leaderboard').classList.contains('hidden-view')) {
                 renderLeaderboard();
             }
         }).catch(() => {});
 
-        fetch('/api/affiliate-stats', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
-        })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
+        fetch('/api/affiliate-stats', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ initData: tg.initData || "" }) 
+        }).then(r => r.ok ? r.json() : null).then(data => {
             if (data) liveAffiliateData = data;
-            if (!document.getElementById('demo-toggle').checked &&
-                !document.getElementById('view-affiliates').classList.contains('hidden-view')) {
+            if (!document.getElementById('demo-toggle').checked && !document.getElementById('view-affiliates').classList.contains('hidden-view')) {
                 renderAffiliates();
             }
         }).catch(() => {});
@@ -1147,24 +1226,26 @@
                 if(!t.isBuy) { if(t.profitPercent>0) tWins++; else tLoss++; }
             });
             
-            populateDashboard({
-                networth: 53256.88, networthSol: "336.18 SOL",
-                pnlPercent: 242.60, pnlUsd: 37083.50,
-                winrate: ((tWins/(tWins+tLoss))*100).toFixed(1) || 75.5,
-                winLossText: `${tWins} Wins / ${tLoss} Losses`,
-                volume: `${tVol.toFixed(2)} SOL`
+            populateDashboard({ 
+                networth: 53256.88, networthSol: "336.18 SOL", 
+                pnlPercent: 242.60, pnlUsd: 37083.50, 
+                winrate: ((tWins/(tWins+tLoss))*100).toFixed(1) || 75.5, 
+                winLossText: `${tWins} Wins / ${tLoss} Losses`, 
+                volume: `${tVol.toFixed(2)} SOL` 
             }, demoPositions.map(p=>p.symbol), demoPositions.map(p=>p.valueUsd), demoPositions);
             
-            setFilter('30D');
-            renderLeaderboard();
+            setFilter('30D'); 
+            renderLeaderboard(); 
             renderAffiliates();
         } else {
             userTrades = []; 
             document.getElementById('leaderboard-container').innerHTML = `
-                <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
+                <div class="card-flat h-16 skeleton"></div>
+                <div class="card-flat h-16 skeleton"></div>
             `;
             document.getElementById('recruits-container').innerHTML = `
-                <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
+                <div class="card-flat h-16 skeleton"></div>
+                <div class="card-flat h-16 skeleton"></div>
             `;
             fetchLiveData();
         }
