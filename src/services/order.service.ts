@@ -5,6 +5,14 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+// BUG 8 FIX: Export ORDER_TYPES constant and use it across the service
+export const ORDER_TYPES = {
+    DCA: 'DCA',
+    LIMIT: 'LIMIT',
+    GUARD: 'GUARD',
+    ALERT: 'ALERT'
+};
+
 export interface TrailingOrder {
     id: string;
     telegramId: string;
@@ -20,7 +28,7 @@ export async function syncGuardsFromDb() {
     console.log("🔄 [DB] Restoring active Trailing Guards into RAM...");
     try {
         const dbGuards = await prisma.activeOrder.findMany({ 
-            where: { orderType: 'GUARD', isActive: true }, 
+            where: { orderType: ORDER_TYPES.GUARD, isActive: true }, 
             include: { user: true } 
         });
         
@@ -90,13 +98,12 @@ export async function addTrailingStopToMemory(
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
-            // 🟢 FIX 22 Follow-up: Removed upsert workaround and used clean create
             await prisma.activeOrder.create({
                 data: {
                     id: orderId,
                     userId: user.id,
                     tokenAddress,
-                    orderType: 'GUARD',
+                    orderType: ORDER_TYPES.GUARD,
                     amountSol: amountInSol,
                     trailingPercent,
                     takeProfitPercent: takeProfitPercent || null,
@@ -145,7 +152,7 @@ export async function removeOrderFromMemory(orderId: string, telegramId: string,
         await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, orderId);
 
         await prisma.activeOrder.updateMany({
-            where: { id: orderId, orderType: 'GUARD' },
+            where: { id: orderId, orderType: ORDER_TYPES.GUARD },
             data: { isActive: false }
         });
     } catch (e: any) {

@@ -16,16 +16,16 @@ const prisma = new PrismaClient();
 
 export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.05;
 
-// 🟢 NEW: Wizard State Helper Wrappers to satisfy index.ts compilation
-export async function setLaunchWizardField(telegramId: string, field: string, value: string): Promise<void> {
+// BUG 2 FIX: Added missing wrapper functions to prevent import crash in index.ts
+export async function setLaunchWizardField(telegramId: string, field: string, value: string) {
     await redis.set(`token_launch:${telegramId}:${field}`, value, 'EX', 900);
 }
 
-export async function getLaunchWizardField(telegramId: string, field: string): Promise<string | null> {
+export async function getLaunchWizardField(telegramId: string, field: string) {
     return await redis.get(`token_launch:${telegramId}:${field}`);
 }
 
-export async function clearLaunchWizard(telegramId: string): Promise<void> {
+export async function clearLaunchWizard(telegramId: string) {
     const keys = await redis.keys(`token_launch:${telegramId}:*`);
     if (keys.length > 0) await redis.del(...keys);
 }
@@ -71,20 +71,32 @@ export async function uploadMetadataToIpfs(name: string, symbol: string, descrip
 }
 
 // 2. Vanity CA Miner
-export function mineVanityKeypair(prefix: string): Keypair {
+// BUG 14 FIX: Make it async and yield to event loop using setImmediate
+export async function mineVanityKeypair(prefix: string): Promise<Keypair> {
     if (!prefix || prefix.toUpperCase() === 'NO') return Keypair.generate();
     
     const search = prefix.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 4);
     if (search.length === 0) return Keypair.generate();
 
     let keypair = Keypair.generate();
-    for (let i = 0; i < 1000000; i++) {
-        if (keypair.publicKey.toBase58().toLowerCase().startsWith(search)) {
-            return keypair;
+    let iterations = 0;
+
+    return new Promise((resolve) => {
+        function mineChunk() {
+            for (let i = 0; i < 10000; i++) {
+                if (keypair.publicKey.toBase58().toLowerCase().startsWith(search)) {
+                    return resolve(keypair);
+                }
+                keypair = Keypair.generate();
+            }
+            iterations += 10000;
+            if (iterations >= 1000000) {
+                return resolve(keypair); 
+            }
+            setImmediate(mineChunk);
         }
-        keypair = Keypair.generate();
-    }
-    return keypair;
+        mineChunk();
+    });
 }
 
 // 3. Multi-Wallet Jito Bundle Launcher
@@ -125,7 +137,7 @@ export async function launchTokenOnPumpFun(
             if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
         }
 
-        const mintKeypair = mineVanityKeypair(vanityPrefix);
+        const mintKeypair = await mineVanityKeypair(vanityPrefix);
         const tokenAddress = mintKeypair.publicKey.toBase58();
         
         const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;

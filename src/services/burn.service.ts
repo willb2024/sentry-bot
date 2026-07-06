@@ -47,7 +47,8 @@ export async function getEmptyTokenAccounts(walletAddress: string): Promise<Arra
     }
 }
 
-export async function executeRentSweep(telegramId: string): Promise<{ success: boolean, reclaimedSol: number, signature?: string, message: string }> {
+// BUG 12 FIX: Added usedPublicFallback tracking and messaging
+export async function executeRentSweep(telegramId: string): Promise<{ success: boolean, reclaimedSol: number, signature?: string, message: string, usedPublicFallback?: boolean }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, reclaimedSol: 0, message: "No active Vault found." };
@@ -113,10 +114,12 @@ export async function executeRentSweep(telegramId: string): Promise<{ success: b
             console.warn("⚠️ [RENT SWEEP] Jito API timeout.");
         }
 
+        let usedPublicFallback = false;
         if (!jitoSuccess) {
             console.warn("⚠️ [RENT SWEEP] Jito routing rejected. Falling back to public RPC...");
             try {
                 await connection.sendRawTransaction(txBuffer, { skipPreflight: true });
+                usedPublicFallback = true;
             } catch (e: any) {
                 return { success: false, reclaimedSol: 0, message: `Public RPC Fallback failed: ${e.message}` };
             }
@@ -139,11 +142,17 @@ export async function executeRentSweep(telegramId: string): Promise<{ success: b
         const jitoTipSol = TIP_LAMPORTS / 1_000_000_000;
         const netReclaimedSol = Math.max(0, grossReclaimedSol - jitoTipSol);
 
+        let msg = `🧹 Swept ${targets.length} empty accounts.\n\n💰 <b>Gross Reclaimed:</b> +${grossReclaimedSol.toFixed(4)} SOL\n⛽ <b>Jito Validator Tip:</b> -${jitoTipSol.toFixed(4)} SOL\n💳 <b>Net Reclaimed:</b> +${netReclaimedSol.toFixed(4)} SOL!`;
+        if (usedPublicFallback) {
+            msg += `\n\n⚠️ <i>Note: Executed via public RPC fallback.</i>`;
+        }
+
         return {
             success: true, 
             reclaimedSol: netReclaimedSol, 
             signature,
-            message: `🧹 Swept ${targets.length} empty accounts.\n\n💰 <b>Gross Reclaimed:</b> +${grossReclaimedSol.toFixed(4)} SOL\n⛽ <b>Jito Validator Tip:</b> -${jitoTipSol.toFixed(4)} SOL\n💳 <b>Net Reclaimed:</b> +${netReclaimedSol.toFixed(4)} SOL!`
+            usedPublicFallback,
+            message: msg
         };
 
     } catch (e: any) {

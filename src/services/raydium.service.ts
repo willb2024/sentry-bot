@@ -5,7 +5,8 @@ import { connection } from '../lib/connection.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 
-// @ts-expect-error - Implicit any type bypass for missing bn.js declarations
+// BUG 3 FIX: Use @ts-ignore instead of @ts-expect-error to avoid strict compiler build failures
+// @ts-ignore
 import BN from 'bn.js'; 
 
 dotenv.config();
@@ -42,7 +43,6 @@ export async function buildDirectRaydiumSwap(
             poolId: poolId
         });
 
-        // Graceful fallback to Jupiter if CPMM or pool not loaded
         if (!poolInfo) {
             console.warn(`[RAYDIUM DIRECT] Pool ${poolId} not found on-chain yet.`);
             return null;

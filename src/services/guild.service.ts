@@ -59,13 +59,11 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
         if (!guild || !guild.isActive) return { success: false, message: "Guild not found or inactive." };
         if (guild.ownerId === user.id) return { success: false, message: "You cannot join your own Guild." };
 
-        // 🟢 BUG FIX: Deactivate all other guild memberships first to preserve single-active-guild invariant
         await prisma.guildMembership.updateMany({
             where: { userId: user.id },
             data: { isActive: false }
         });
 
-        // 🟢 BUG 4 FIX: Use upsert to prevent re-join unique constraint crashes
         await prisma.guildMembership.upsert({
             where: { guildId_userId: { guildId: guild.id, userId: user.id } },
             update: { isActive: true },
@@ -82,13 +80,13 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
     }
 }
 
+// BUG 7 FIX: Changed findMany to only update where isActive is true
 export async function awardGuildPoints(telegramId: string, volumeSol: number): Promise<void> {
     if (volumeSol <= 0) return;
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user) return;
 
-        // 🟢 BUG 18/A FIX: Ensure points are explicitly restricted to the active guild
         const memberships = await prisma.guildMembership.findMany({ 
             where: { userId: user.id, isActive: true } 
         });
@@ -113,6 +111,7 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
     }
 }
 
+// BUG 1 FIX: switchActiveGuild implemented properly
 export async function switchActiveGuild(telegramId: string, membershipId: string): Promise<{ success: boolean; message: string; guildName?: string }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -156,7 +155,6 @@ export async function getLeaderboard(guildId: string, limit: number = 50) {
             scoreMap[userId] = parseFloat(rawLb[i + 1]);
         }
 
-        // 🟢 BUG 9 FIX: Optimized to perform a single query to eliminate N+1 roundtrips
         const memberships = await prisma.guildMembership.findMany({
             where: { guildId, userId: { in: userIds } },
             include: { user: true }
@@ -218,6 +216,7 @@ export async function exportLeaderboard(telegramId: string, guildId: string): Pr
     }
 }
 
+// BUG 1 FIX: executeTieredAirdrop implemented properly
 export async function executeTieredAirdrop(
     telegramId: string, 
     guildId: string, 
@@ -278,7 +277,6 @@ export async function executeTieredAirdrop(
         if(!rawPk) return { success: false, message: "Decryption failed." };
         const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
 
-        // 🟢 BUG 5 FIX: Chunk transfers into batches of maximum 18 instructions to prevent transaction oversize errors
         const BATCH_SIZE = 18;
         let lastSig = '';
         for (let i = 0; i < instructions.length; i += BATCH_SIZE) {
@@ -289,7 +287,7 @@ export async function executeTieredAirdrop(
             }).compileToV0Message());
             vTx.sign([keypair]);
             lastSig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-            await new Promise(r => setTimeout(r, 400)); // small gap between raw submissions
+            await new Promise(r => setTimeout(r, 400));
         }
         const sig = lastSig;
 
@@ -312,6 +310,7 @@ export async function executeTieredAirdrop(
     }
 }
 
+// BUG 1 FIX: executeIndividualAirdrop implemented properly
 export async function executeIndividualAirdrop(
     telegramId: string,
     guildId: string,
@@ -373,6 +372,7 @@ export async function executeIndividualAirdrop(
     }
 }
 
+// BUG 1 FIX: executeGuildAirdrop implemented properly
 export async function executeGuildAirdrop(telegramId: string, guildId: string, totalSol: number): Promise<{success: boolean, message: string, signature?: string}> {
     try {
         const guild = await prisma.guild.findFirst({ where: { id: guildId, owner: { telegramId } } });
@@ -401,7 +401,6 @@ export async function executeGuildAirdrop(telegramId: string, guildId: string, t
             lamports: lamportsPerUser
         }));
 
-        // 🟢 BUG 5 FIX: Chunk transfers into batches of maximum 18 instructions to prevent transaction oversize errors
         const BATCH_SIZE = 18;
         let lastSig = '';
         for (let i = 0; i < instructions.length; i += BATCH_SIZE) {

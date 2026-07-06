@@ -119,6 +119,11 @@ setInterval(async () => {
 
 const keypairCache = new Map<string, Keypair>();
 
+// BUG 13 FIX: Function to clear cached keypair
+export function clearKeypairCache(walletAddress: string) {
+    keypairCache.delete(walletAddress);
+}
+
 function getCachedKeypair(walletAddress: string, pkEncrypted: string): Keypair | null {
     if (keypairCache.has(walletAddress)) return keypairCache.get(walletAddress)!;
     const rawPk = decryptKey(pkEncrypted);
@@ -136,9 +141,10 @@ async function getLatestBlockhashWithCache(): Promise<{ blockhash: string; lastV
     return await connection.getLatestBlockhash('confirmed');
 }
 
-async function pollSignatureConfirmation(signature: string, maxRetries = 20): Promise<boolean> {
+// BUG 10 FIX: Adjust interval to 1500ms and maxRetries to 8
+async function pollSignatureConfirmation(signature: string, maxRetries = 8): Promise<boolean> {
     for (let i = 0; i < maxRetries; i++) {
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise(r => setTimeout(r, 1500));
         const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
         if (status?.value) {
             if (status.value.err) return false;
@@ -318,11 +324,8 @@ async function buildTipAndFeeTransaction(
         const feeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
         const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
 
-        const PARTNER_SPLIT = parseFloat(process.env.PARTNER_FEE_SPLIT || '0.5');
-        const YOUR_CUT = 1 - PARTNER_SPLIT;
-
+        // BUG 6 FIX: Removed MASTER_TREASURY_WALLET split logic to prevent missing funds
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
-        const yourWallet = process.env.MASTER_TREASURY_WALLET;
 
         let tipLamports = 100_000;
         if (!isBumper) {
@@ -333,24 +336,11 @@ async function buildTipAndFeeTransaction(
         const instructions = [];
 
         if (partnerWallet && feeLamports > 0n) {
-            const partnerLamports = BigInt(Math.floor(Number(feeLamports) * PARTNER_SPLIT));
-            const yourLamports = BigInt(Math.floor(Number(feeLamports) * YOUR_CUT));
-            
-            if (partnerLamports > 0n) {
-                instructions.push(SystemProgram.transfer({
-                    fromPubkey: payer.publicKey,
-                    toPubkey: new PublicKey(partnerWallet),
-                    lamports: Number(partnerLamports)
-                }));
-            }
-            
-            if (yourWallet && yourLamports > 0n) {
-                instructions.push(SystemProgram.transfer({
-                    fromPubkey: payer.publicKey,
-                    toPubkey: new PublicKey(yourWallet),
-                    lamports: Number(yourLamports)
-                }));
-            }
+            instructions.push(SystemProgram.transfer({
+                fromPubkey: payer.publicKey,
+                toPubkey: new PublicKey(partnerWallet),
+                lamports: Number(feeLamports)
+            }));
         }
 
         instructions.push(SystemProgram.transfer({
@@ -381,12 +371,10 @@ export async function executeSnipe(
     raydiumPoolId?: string
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
-    // SIMULATION INTERCEPT
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
         return await simExecuteSnipe(telegramId, targetCA, amountSol);
     }
-    // END SIMULATION INTERCEPT
     
     if (side === 'sell') {
         let percentage = 100;
@@ -553,8 +541,8 @@ export async function executeSnipe(
         const vipStatus = await getVipStatus(telegramId);
         const badgeStr = vipStatus.badge ? `${vipStatus.badge} ` : '';
 
-        // 🟢 FEATURE 1: Start the trade execution timer
         await redis.set(`trade_time:${telegramId}:${targetCA}`, Date.now().toString(), 'EX', 86400 * 7);
+        await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); // Added marker for balance cache
 
         return {
             success: true,
@@ -574,12 +562,10 @@ export async function executeExit(
     isBumper: boolean = false
 ): Promise<{ success: boolean; signature?: string; message: string }> {
 
-    // SIMULATION INTERCEPT
     const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
         return await simExecuteExit(telegramId, targetCA, sellPercentage);
     }
-    // END SIMULATION INTERCEPT
     
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -762,6 +748,8 @@ export async function executeExit(
         const breakdown = walletReport.filter(r => !r.includes("Empty")).join(" | ");
         const vipStatus = await getVipStatus(telegramId);
         const badgeStr = vipStatus.badge ? `${vipStatus.badge} ` : '';
+
+        await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10);
 
         return {
             success: true,

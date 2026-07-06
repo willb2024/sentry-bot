@@ -12,10 +12,19 @@ export async function startDepositWatcher(bot: any) {
 
     setInterval(async () => {
         try {
-            // Fetch all users with a vault regardless of 7-day update activity
+            // BUG 11 FIX: Used select to prevent full table scans and memory overload
             const activeUsers = await prisma.user.findMany({
                 where: {
                     vaultAddress: { not: null }
+                },
+                select: {
+                    telegramId: true,
+                    vaultAddress: true,
+                    vault2: true,
+                    vault3: true,
+                    vault4: true,
+                    vault5: true,
+                    activeWallets: true
                 }
             });
 
