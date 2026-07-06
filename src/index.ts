@@ -531,8 +531,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
         [Markup.button.callback('💎 Why We Are Best', 'btn_guide')],
         [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }],
-        [Markup.button.callback('🚀 Launch Token', 'action_launch_token_start'), Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu')],
-        [Markup.button.callback('🔴 CANCEL ALL AUTOMATIONS', 'action_global_cancel')]
+        [Markup.button.callback('🚀 Launch Token', 'action_launch_token_start'), Markup.button.callback('🔴 CANCEL AUTOMATIONS', 'action_global_cancel')],
     ]);
 
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
