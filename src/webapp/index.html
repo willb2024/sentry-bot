@@ -25,8 +25,8 @@
                         neonRed: '#ef4444',
                         neonBlue: '#3b82f6',
                         neonPurple: '#8b5cf6',
-                        dexGreen: '#10b981', /* DexScreener Green */
-                        dexRed: '#f43f5e'    /* DexScreener Red */
+                        dexGreen: '#10b981',
+                        dexRed: '#f43f5e'
                     },
                     animation: {
                         'shimmer': 'shimmer 2s infinite linear',
@@ -66,8 +66,6 @@
         .hidden-view { display: none !important; }
         .search-input::placeholder { color: #64748b; }
         .search-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 1px rgba(59,130,246,0.5); }
-        
-        /* DexScreener Table Styles */
         .dex-table-header { position: sticky; top: 0; background-color: #0a0d14; z-index: 10; border-bottom: 1px solid rgba(255,255,255,0.05); }
         .dex-row { transition: background-color 0.15s ease; border-bottom: 1px solid rgba(255,255,255,0.02); }
         .dex-row:hover { background-color: rgba(255,255,255,0.03); }
@@ -173,7 +171,7 @@
         </section>
     </main>
 
-    <!-- 🟢 VIEW 2: MARKET EXPLORER (DEXSCREENER) -->
+    <!-- VIEW 2: MARKET EXPLORER (DEXSCREENER) -->
     <main id="view-market" class="hidden-view max-w-7xl mx-auto px-4 sm:px-6">
         
         <!-- Search & Filter State -->
@@ -584,9 +582,17 @@
         // Load Iframe
         const iframe = document.getElementById('dex-iframe');
         const loader = document.getElementById('chart-loader');
-        loader.classList.remove('hidden');
         
-        iframe.onload = () => loader.classList.add('hidden');
+        loader.classList.remove('hidden-view');
+        
+        iframe.onload = () => {
+            loader.classList.add('hidden-view');
+        };
+        
+        setTimeout(() => {
+            loader.classList.add('hidden-view');
+        }, 4000);
+        
         iframe.src = `https://dexscreener.com/solana/${pairAddress}?embed=1&theme=dark&trades=0&info=0`;
 
         // Load Trade History Overlay
@@ -614,7 +620,6 @@
             const dateStr = new Date(t.createdAt).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'});
             const isBuy = t.isBuy;
             
-            // DexScreener uses specific colors
             const typeColor = isBuy ? 'text-dexGreen' : 'text-dexRed';
             const typeLabel = isBuy ? 'BUY' : 'SELL';
             
@@ -819,13 +824,8 @@
                 <div class="card-flat overflow-hidden">
                     <div onclick="toggleDrawer('${p.mint}')" class="p-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-colors">
                         <div class="flex items-center gap-4">
-                            <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
-                                $${p.symbol.substring(0,4)}
-                            </div>
-                            <div>
-                                <h4 class="font-bold text-[15px] text-white">${p.symbol}</h4>
-                                <span class="text-[11px] text-gray-500 font-mono">${formatNumber(p.amount)} TKN</span>
-                            </div>
+                            <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">$${p.symbol.substring(0,4)}</div>
+                            <div><h4 class="font-bold text-[15px] text-white">${p.symbol}</h4><span class="text-[11px] text-gray-500 font-mono">${formatNumber(p.amount)} TKN</span></div>
                         </div>
                         <div class="text-right">
                             <span class="font-bold text-lg text-white">$${p.valueUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
@@ -1181,12 +1181,7 @@
         }).catch(() => {
             if (document.getElementById('demo-toggle').checked) return;
             populateDashboard({ networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0, winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL" }, ['Offline'], [100], []);
-            document.getElementById('positions-container').innerHTML = `
-                <div class="text-center py-10 card-flat text-neonRed flex flex-col items-center">
-                    <i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i>
-                    <div class="text-sm font-bold">NODE DISCONNECTED</div>
-                    <span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span>
-                </div>`;
+            document.getElementById('positions-container').innerHTML = `<div class="text-center py-10 card-flat text-neonRed flex flex-col items-center"><i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i><div class="text-sm font-bold">NODE DISCONNECTED</div><span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span></div>`;
         });
 
         fetch('/api/my-leaderboard', { 
