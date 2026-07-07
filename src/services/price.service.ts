@@ -72,3 +72,26 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         return data.risks?.some((r: any) => r.name === 'Freeze Authority still enabled' || r.score > 500) ?? false;
     } catch (_) { return false; }
 }
+
+export async function fetchDexScreenerCandles(
+    tokenMint: string
+): Promise<Array<{ time: number; open: number; high: number; low: number; close: number }>> {
+    try {
+        const res = await fetch(
+            `https://io.dexscreener.com/dex/chart/amm/v3/solana/${tokenMint}?res=1&cb=1`,
+            { signal: AbortSignal.timeout(5000) }
+        );
+        if (!res.ok) return [];
+        // Change this line:
+        const data = (await res.json()) as any;
+        return (data?.bars || []).slice(-60).map((b: any) => ({
+            time: b.t,
+            open: b.o,
+            high: b.h,
+            low: b.l,
+            close: b.c
+        }));
+    } catch {
+        return [];
+    }
+}

@@ -7,7 +7,8 @@ import axios from 'axios';
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { awardGuildPoints } from './guild.service.js';
-import { getEffectiveFeePercent, getVipStatus } from './vip_promo.service.js'; 
+import { getPlatformFeeRate } from './vip.service.js';
+import { getVipStatus } from './vip_promo.service.js';
 import { checkRecentMevActivity } from './price.service.js'; // TASK 7 FIX
 import { redis } from '../lib/redis.js'; 
 import dns from 'dns';
@@ -320,8 +321,9 @@ async function buildTipAndFeeTransaction(
 ): Promise<VersionedTransaction | null> {
     try {
         const baseFeeRate = getDynamicFeeRate(expectedSolVolume, hasDiscount);
-        const feeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
-        const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
+       // REPLACE WITH THIS:
+       const feeRate = await getPlatformFeeRate(telegramId);
+       const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
 
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
 
@@ -518,8 +520,7 @@ export async function executeSnipe(
             return { success: false, message: `🔴 <b>Snipe Aborted:</b>\n<code>${lastError || "Transaction failed on-chain or expired."}</code>` };
         }
 
-        const baseFeeRate = getDynamicFeeRate(user.totalVolumeSol, user.hasReferralDiscount);
-        const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
+        const effectiveFeeRate = await getPlatformFeeRate(user.telegramId);
 
         const feeCharged = totalVolume * effectiveFeeRate;
         let affiliateCut = 0;
@@ -732,9 +733,8 @@ export async function executeExit(
             return { success: false, message: `🔴 <b>Exit Aborted:</b>\n<code>${lastError || "Transaction failed on-chain or expired."}</code>` };
         }
 
-        const baseFeeRate = getDynamicFeeRate(user.totalVolumeSol, user.hasReferralDiscount);
-        const effectiveFeeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
-
+        // REPLACE WITH THIS:
+        const effectiveFeeRate = await getPlatformFeeRate(user.telegramId);
         const feeCharged = totalFeeBase * effectiveFeeRate;
         let affiliateCut = 0;
         if (user.referredById) {

@@ -96,6 +96,68 @@ setInterval(async () => {
     }
 }, 20_000);
 
+// =========================================================
+// 📸 PRICE ALERT WITH CHART SNAPSHOT
+// =========================================================
+async function sendPriceAlertWithChart(
+    telegramId: string,
+    tokenMint: string,
+    symbol: string,
+    currentPrice: number,
+    targetPrice: number,
+    entryPrice: number,
+    bot: any
+) {
+    try {
+        const { fetchDexScreenerCandles } = await import('./price.service.js');
+        const { generatePriceAlertChart } = await import('./image.service.js');
+
+        const candles = await fetchDexScreenerCandles(tokenMint);
+        const pnlVsEntry = entryPrice > 0
+            ? (((currentPrice - entryPrice) / entryPrice) * 100).toFixed(2)
+            : null;
+
+        const caption =
+            `🎯 <b>PRICE ALERT TRIGGERED</b>\n\n` +
+            `🪙 Token: <b>${symbol}</b>\n` +
+            `💰 Current: <b>$${currentPrice.toFixed(8)}</b>\n` +
+            `🎯 Your Target: <b>$${targetPrice.toFixed(8)}</b>\n` +
+            (pnlVsEntry ? `📈 vs Entry: <b>${parseFloat(pnlVsEntry) >= 0 ? '+' : ''}${pnlVsEntry}%</b>\n` : '') +
+            `\n<i>Chart shows last 60 minutes of price action.</i>`;
+
+        // We import Markup locally to avoid breaking grpc service imports
+        const { Markup } = await import('telegraf');
+        const keyboard = Markup.inlineKeyboard([
+            [Markup.button.callback(`⚡ Buy Now`, `quick_buy_${tokenMint}`)],
+            [Markup.button.callback(`👀 Add to Watchlist`, `watch_add_${tokenMint}`),
+             Markup.button.callback(`❌ Remove Alert`, `watch_remove_${tokenMint}`)]
+        ]);
+
+        if (candles.length > 0) {
+            const chartBuffer = await generatePriceAlertChart(
+                symbol, candles, targetPrice, currentPrice
+            );
+            await bot.telegram.sendPhoto(
+                telegramId,
+                { source: chartBuffer },
+                { caption, parse_mode: 'HTML', ...keyboard }
+            );
+        } else {
+            await bot.telegram.sendMessage(
+                telegramId, caption,
+                { parse_mode: 'HTML', ...keyboard }
+            );
+        }
+    } catch (e: any) {
+        console.error('[PRICE ALERT] Chart send failed:', e.message);
+        await bot.telegram.sendMessage(
+            telegramId,
+            `🎯 <b>${symbol}</b> hit your target of $${targetPrice.toFixed(8)}! Current: $${currentPrice.toFixed(8)}`,
+            { parse_mode: 'HTML' }
+        );
+    }
+}
+
 async function fetchFreshGuard(guardId: string): Promise<TrailingOrder | null> {
     try {
         const raw = await redis.get(`order:trail:${guardId}`);
@@ -568,10 +630,14 @@ export function startUniversalGuardPoller(bot: any) {
                             await redis.set(cooldownKey, '1', 'EX', 3600); // 1 hour cooldown per token alert
                             
                             try {
-                                await bot.telegram.sendMessage(
+                                await sendPriceAlertWithChart(
                                     tgId,
-                                    `🔔 <b>WATCHLIST ALERT!</b>\n\nToken: <code>${ca}</code>\nhas crossed your target of <b>$${data.targetPrice}</b>.\nLive Price: <b>$${currentPriceUsd.toFixed(6)}</b>`,
-                                    { parse_mode: 'HTML' }
+                                    ca,
+                                    "Watched Token", // The actual symbol can be fetched if needed
+                                    currentPriceUsd,
+                                    data.targetPrice,
+                                    data.addedPrice || 0,
+                                    bot
                                 );
                             } catch (_) {}
                         }

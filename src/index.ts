@@ -24,7 +24,9 @@ import { startDepositWatcher } from './services/deposit.service.js';
 import { syncGuardsFromDb } from './services/order.service.js';
 import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './services/caller.service.js';
 import { connection } from './lib/connection.js';
-
+import cron from 'node-cron';
+import { sendWeeklyReportsToAll, computeWeeklyStats, formatWeeklyReport } from './services/weekly_report.service.js';
+import { VIP_TIERS, VipTierKey, checkVipStatus, grantVip, verifyVipPayment, getPlatformFeeRate, formatVipStatus } from './services/vip.service.js';
 import { 
     checkAndGrantDailyVip, 
     startPromo, 
@@ -499,6 +501,12 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 
     const vipStatus = await getVipStatus(telegramId); 
 
+    // ADD THIS RIGHT BELOW IT:
+    const newVipStatus = await checkVipStatus(user.telegramId);
+    const vipBadge = newVipStatus.isVip
+        ? `\n👑 <b>${VIP_TIERS[newVipStatus.tier!].label}</b> · ${newVipStatus.tier === 'lifetime' ? '♾️ Lifetime' : `${newVipStatus.daysRemaining}d remaining`}\n`
+        : '';
+
     // 🟢 REMOVED THE SIMULATION BANNER SO IT LOOKS 100% REAL
     const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
     `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` + 
@@ -524,7 +532,8 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
         [Markup.button.callback('🛠️ Dev Suite (PRO)', 'menu_devsuite'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
         [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
-        [Markup.button.callback('🚀 Launch Token', 'action_launch_token_start'), Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu')],
+        [Markup.button.callback('👑 VIP Status', 'menu_vip'), Markup.button.callback('🚀 Launch Token', 'action_launch_token_start')],
+        [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('🏆 Sentry Guide', 'btn_guide')],
         [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
     ]);
 
@@ -574,6 +583,165 @@ bot.command('sim', async (ctx) => {
         );
     } catch (e: any) {
         await ctx.replyWithHTML(`🔴 <b>SIM ERROR:</b> ${e.message}`);
+    }
+});
+
+// =========================================================
+// 👑 VIP MENU SYSTEM
+// =========================================================
+bot.command('vipstatus', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+    const status = await checkVipStatus(tgId);
+    const msg = formatVipStatus(status);
+    await ctx.replyWithHTML(msg, buildVipMenuKeyboard(status.isVip));
+});
+
+bot.action('menu_vip', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+    const status = await checkVipStatus(tgId);
+    const msg = formatVipStatus(status);
+    await safeEditMessageText(ctx, msg, buildVipMenuKeyboard(status.isVip));
+});
+
+function buildVipMenuKeyboard(isVip: boolean) {
+    if (isVip) {
+        return Markup.inlineKeyboard([
+            [Markup.button.callback('🔄 Extend / Upgrade Plan', 'vip_upgrade_menu')],
+            [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+        ]);
+    }
+    return Markup.inlineKeyboard([
+        [Markup.button.callback('🟡 Trial — 0.1 SOL / 7 Days', 'vip_select_trial')],
+        [Markup.button.callback('🟢 Standard — 0.3 SOL / 30 Days', 'vip_select_standard')],
+        [Markup.button.callback('🔵 Pro — 1.0 SOL / 90 Days', 'vip_select_pro')],
+        [Markup.button.callback('💎 Lifetime — 3.0 SOL', 'vip_select_lifetime')],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
+}
+
+bot.action('vip_upgrade_menu', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx,
+        `🔄 <b>UPGRADE OR EXTEND YOUR VIP</b>\n\nSelect a new plan. Your existing time will be replaced with the new plan starting now.`,
+        Markup.inlineKeyboard([
+            [Markup.button.callback('🟡 Trial — 0.1 SOL / 7 Days', 'vip_select_trial')],
+            [Markup.button.callback('🟢 Standard — 0.3 SOL / 30 Days', 'vip_select_standard')],
+            [Markup.button.callback('🔵 Pro — 1.0 SOL / 90 Days', 'vip_select_pro')],
+            [Markup.button.callback('💎 Lifetime — 3.0 SOL', 'vip_select_lifetime')],
+            [Markup.button.callback('⬅️ Back', 'menu_vip')]
+        ])
+    );
+});
+
+async function showVipPaymentInstructions(ctx: any, tier: VipTierKey) {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const tierDef = VIP_TIERS[tier];
+    const treasury = process.env.TREASURY_WALLET_ADDRESS!;
+
+    await redis.set(
+        `vip:pending:${tgId}`,
+        JSON.stringify({ tier, priceSol: tierDef.priceSol, initiatedAt: Date.now() }),
+        'EX', 600
+    );
+
+    const msg =
+        `${tierDef.label}\n\n` +
+        `📋 <b>PAYMENT INSTRUCTIONS</b>\n\n` +
+        `Send exactly <b>${tierDef.priceSol} SOL</b> to:\n` +
+        `<code>${treasury}</code>\n\n` +
+        `⏱️ You have <b>10 minutes</b> to complete the payment.\n\n` +
+        `After sending, tap <b>✅ I've Paid</b> and paste your transaction signature.\n\n` +
+        `<i>Your W1 wallet address must be the sender. The bot will verify on-chain automatically.</i>\n\n` +
+        `🔒 Payment is non-refundable once VIP is activated.`;
+
+    await safeEditMessageText(ctx, msg,
+        Markup.inlineKeyboard([
+            [Markup.button.callback('✅ I\'ve Paid — Submit TX', `vip_submit_tx_${tier}`)],
+            [Markup.button.callback('❌ Cancel', 'menu_vip')]
+        ])
+    );
+}
+
+bot.action('vip_select_trial', async (ctx) => { try { await ctx.answerCbQuery(); } catch(e){} await showVipPaymentInstructions(ctx, 'trial'); });
+bot.action('vip_select_standard', async (ctx) => { try { await ctx.answerCbQuery(); } catch(e){} await showVipPaymentInstructions(ctx, 'standard'); });
+bot.action('vip_select_pro', async (ctx) => { try { await ctx.answerCbQuery(); } catch(e){} await showVipPaymentInstructions(ctx, 'pro'); });
+bot.action('vip_select_lifetime', async (ctx) => { try { await ctx.answerCbQuery(); } catch(e){} await showVipPaymentInstructions(ctx, 'lifetime'); });
+
+bot.action(/^vip_submit_tx_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tier = ctx.match[1] as VipTierKey;
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    await redis.set(`vip:awaiting_tx:${tgId}`, tier, 'EX', 600);
+
+    await safeEditMessageText(ctx,
+        `✅ <b>SUBMIT TRANSACTION SIGNATURE</b>\n\n` +
+        `Paste your transaction signature below.\n\n` +
+        `You can find it in your wallet's transaction history or on Solscan.\n\n` +
+        `<i>Example: 5KtP9x...abc123</i>`,
+        Markup.inlineKeyboard([
+            [Markup.button.callback('❌ Cancel', 'menu_vip')]
+        ])
+    );
+});
+
+bot.command('adminvip', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(',').concat(process.env.ADMIN_TELEGRAM_ID || "").filter(Boolean);
+    if (!tgId || !ADMIN_IDS.includes(tgId)) return;
+
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 3) {
+        await ctx.replyWithHTML(`Usage: <code>/adminvip [telegramId] [tier]</code>\nTiers: trial | standard | pro | lifetime`);
+        return;
+    }
+
+    const targetId = parts[1];
+    const tier = parts[2] as VipTierKey;
+
+    if (!VIP_TIERS[tier]) return ctx.replyWithHTML(`❌ Invalid tier.`);
+
+    await grantVip(targetId, tier, 'admin');
+    await ctx.replyWithHTML(`✅ Granted <b>${VIP_TIERS[tier].label}</b> to user <code>${targetId}</code>`);
+    try { await bot.telegram.sendMessage(targetId, `👑 <b>VIP ACTIVATED BY ADMIN</b>\n\n${VIP_TIERS[tier].label} has been granted to your account.`, { parse_mode: 'HTML' }); } catch(e) {}
+});
+
+// QUICK ACTIONS
+bot.action(/^quick_buy_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery('⚡ Loading token...'); } catch(e){}
+    const mint = ctx.match[1];
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId || !mint) return;
+    // Route to confirmation menu
+    bot.handleUpdate({ ...ctx.update, message: { text: mint, chat: { id: parseInt(tgId) }, from: { id: parseInt(tgId) } } } as any);
+});
+
+bot.action(/^watch_remove_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery('❌ Alert removed'); } catch(e){}
+    const mint = ctx.match[1];
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+    await redis.hdel(`watchlist:${tgId}`, mint);
+    await ctx.replyWithHTML(`✅ Alert removed for <code>${mint}</code>`);
+});
+
+bot.command('stats', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+    try {
+        await ctx.replyWithHTML('⏳ Computing your stats...');
+        const stats = await computeWeeklyStats(tgId);
+        if (!stats) return ctx.replyWithHTML('❌ No account found. Use /start first.');
+        const msg = formatWeeklyReport(stats);
+        await ctx.replyWithHTML(msg);
+    } catch (e: any) {
+        await ctx.replyWithHTML('❌ Error fetching stats. Try again.');
     }
 });
 
@@ -1271,13 +1439,6 @@ bot.action('onboard_step3', async (ctx) => {
 // 📡 PRIVATE KOL FINDER & LEADERBOARD
 // =========================================================
 
-// 🟢 NEW: Listens for the main dashboard button click to open the Coin Caller menu
-bot.action('menu_caller', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    await sendCallerMenu(ctx, tgId, true); // Smoothly edits the dashboard into the caller settings
-});
 
 // 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
 bot.action('trigger_caller_scan', async (ctx) => {
@@ -2371,6 +2532,31 @@ bot.action('menu_positions', async (ctx) => {
     }).catch(()=>{});
 });
 
+// =========================================================
+// 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
+// =========================================================
+
+bot.action('action_guild_menu', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const text = 
+        `🏰 <b>SENTRY GUILDS</b>\n\n` +
+        `Trade together, climb leaderboards, and earn revenue shares or WL spots from top KOLs.\n\n` +
+        `<i>Select an option below to manage your Guilds:</i>`;
+
+    const UI = Markup.inlineKeyboard([
+        [Markup.button.callback('📊 View My Active Guild Status', 'menu_guild_status')],
+        [Markup.button.callback('👥 Switch Active Guild', 'menu_switch_guilds')],
+        [Markup.button.callback('🛠️ Create / Manage My Own Guild', 'action_manage_guild')],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
+
+    await safeEditMessageText(ctx, text, UI);
+});
+
+
 bot.action('menu_caller', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -2379,19 +2565,6 @@ bot.action('menu_caller', async (ctx) => {
 });
 
 
-bot.action('sim_regen_wallets', async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    if (tgId !== process.env.ADMIN_TELEGRAM_ID) return;
-    
-    const { generateSimWallets } = await import('./services/simulation.service.js');
-    await redis.set(`sim:wallets:${tgId}`, JSON.stringify(generateSimWallets()));
-    
-    try { await ctx.answerCbQuery('🔄 Wallets regenerated!'); } catch(e) {}
-    bot.handleUpdate({ 
-        ...ctx.update, 
-        callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_vault' } 
-    } as any);
-});
 
 // 🟢 PUBLIC VIP STATUS
 bot.command('vipstatus', async (ctx) => {
@@ -2480,6 +2653,21 @@ bot.command('stoppromo', async (ctx) => {
         await ctx.replyWithHTML(`🛑 <b>VIP PROMO DEACTIVATED</b>\n\nNo new VIP passes will be granted. Run /startpromo to reactivate.`);
     } catch (e: any) {
         await ctx.reply(`🔴 Error stopping promo: ${e.message}`);
+    }
+});
+
+
+bot.command('stats', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+    try {
+        await ctx.replyWithHTML('⏳ Computing your stats...');
+        const stats = await computeWeeklyStats(tgId);
+        if (!stats) return ctx.replyWithHTML('❌ No account found. Use /start first.');
+        const msg = formatWeeklyReport(stats);
+        await ctx.replyWithHTML(msg);
+    } catch (e: any) {
+        await ctx.replyWithHTML('❌ Error fetching stats. Try again.');
     }
 });
 
@@ -4522,6 +4710,42 @@ async function bootEcosystem() {
         
         startCoinCaller(bot); // ADDED CALLER ENGINE STARTUP
         
+// =========================================================
+    // 📬 WEEKLY REPORT SCHEDULER — Every Monday 8:00 AM UTC
+    // =========================================================
+    cron.schedule('0 8 * * 1', async () => {
+        console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
+        await sendWeeklyReportsToAll(bot);
+    }, {
+        timezone: 'UTC'
+    });
+    console.log('📬 Weekly report scheduler armed — fires every Monday 8AM UTC');
+
+    // =========================================================
+    // 👑 VIP EXPIRY SCHEDULER — Every Day 9:00 AM UTC
+    // =========================================================
+    cron.schedule('0 9 * * *', async () => {
+        const expiringUsers = await prisma.user.findMany({
+            where: {
+                isVip: true,
+                vipTier: { not: 'lifetime' },
+                vipExpiresAt: { gte: new Date(), lte: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) }
+            }
+        });
+
+        for (const u of expiringUsers) {
+            const daysLeft = Math.ceil((u.vipExpiresAt!.getTime() - Date.now()) / 86400000);
+            try {
+                await bot.telegram.sendMessage(u.telegramId,
+                    `⚠️ <b>VIP EXPIRING SOON</b>\n\nYour ${u.vipTier} VIP expires in <b>${daysLeft} day${daysLeft !== 1 ? 's' : ''}</b>.\nRenew now to keep your 0% fees.`,
+                    { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('👑 Renew VIP', 'menu_vip')]]) }
+                );
+                await new Promise(r => setTimeout(r, 100));
+            } catch(e) {}
+        }
+    }, { timezone: 'UTC' });
+
+console.log('📬 Weekly report scheduler armed — fires every Monday 8AM UTC');
 
         // 🟢 FEATURE 3: Initialize the Launch Calendar background updater
         const { updateLaunchCalendar } = await import('./services/calendar.service.js');
