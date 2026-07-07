@@ -174,7 +174,9 @@
     <!-- VIEW 2: MARKET EXPLORER (DEXSCREENER) -->
     <main id="view-market" class="hidden-view max-w-7xl mx-auto px-4 sm:px-6">
         
+        <!-- Search & Filter State -->
         <div id="dex-search-view">
+            <!-- Search Bar -->
             <div class="relative w-full max-w-3xl mx-auto mb-4">
                 <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                     <i class="fa-solid fa-magnifying-glass text-gray-500"></i>
@@ -183,6 +185,7 @@
                 <button id="dex-search-btn" class="absolute inset-y-2 right-2 bg-neonBlue hover:bg-blue-600 text-white text-xs font-bold rounded-lg px-6 transition-colors">Search</button>
             </div>
 
+            <!-- Filter Chips -->
             <div class="flex justify-center gap-2 overflow-x-auto no-scrollbar mb-8 pb-2">
                 <button onclick="toggleDexFilter('liq10k')" id="filter-liq10k" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-droplet mr-1"></i> Liq > $10k</button>
                 <button onclick="toggleDexFilter('vol50k')" id="filter-vol50k" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-chart-simple mr-1"></i> Vol > $50k</button>
@@ -190,6 +193,7 @@
                 <button onclick="toggleDexFilter('pumpfun')" id="filter-pumpfun" class="glass-btn px-3 py-1.5 rounded-full text-[11px] font-semibold text-gray-400 whitespace-nowrap"><i class="fa-solid fa-capsules mr-1"></i> Pump.fun Only</button>
             </div>
 
+            <!-- Results List (Dense DexScreener Layout) -->
             <div class="max-w-3xl mx-auto bg-[#121826] rounded-xl border border-white/5 overflow-hidden">
                 <div class="grid grid-cols-12 gap-2 px-4 py-3 bg-[#0a0d14] border-b border-white/5 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
                     <div class="col-span-5">Token</div>
@@ -206,7 +210,9 @@
             </div>
         </div>
 
+        <!-- Chart State (Hidden until token clicked) -->
         <div id="dex-chart-view" class="hidden-view space-y-4">
+            <!-- Header -->
             <div class="flex items-center justify-between">
                 <button onclick="closeDexChart()" class="text-gray-400 hover:text-white text-sm font-semibold transition-colors"><i class="fa-solid fa-arrow-left mr-1"></i> Back</button>
                 <div class="flex gap-2">
@@ -215,6 +221,7 @@
                 </div>
             </div>
             
+            <!-- Huge Iframe Chart (75vh Layout) -->
             <div class="card-flat rounded-xl overflow-hidden shadow-2xl h-[75vh] min-h-[560px] w-full border border-white/10 relative bg-[#0a0d14]">
                 <div id="chart-loader" class="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0d14] z-10">
                     <i class="fa-solid fa-circle-notch fa-spin text-3xl text-neonBlue mb-3"></i>
@@ -223,7 +230,10 @@
                 <iframe id="dex-iframe" class="w-full h-full border-0" title="DexScreener Chart"></iframe>
             </div>
 
+            <!-- Trading Panel (Bottom) -->
             <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                
+                <!-- Quick Buy Panel -->
                 <div class="card-flat p-5 flex flex-col justify-between bg-gradient-to-b from-[#121826] to-[#0a0d14] border border-white/5">
                     <div>
                         <h2 class="text-xl font-bold text-white mb-1" id="chart-token-name">$TOKEN</h2>
@@ -232,6 +242,7 @@
                             <span class="text-xs text-gray-500 font-mono" id="chart-token-mcap">MC: $0</span>
                         </div>
                     </div>
+                    
                     <div>
                         <p class="text-[10px] text-gray-500 text-center mb-3">Secure Jito MEV Execution</p>
                         <button id="btn-quick-snipe" class="w-full bg-neonBlue hover:bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg transition-transform active:scale-95 flex justify-center items-center gap-2">
@@ -240,6 +251,7 @@
                     </div>
                 </div>
 
+                <!-- Deep Trade History & Live Trades Tabbed Container -->
                 <div class="card-flat lg:col-span-3 flex flex-col overflow-hidden h-[420px] border border-white/5">
                     <div class="px-4 py-3 bg-[#0a0d14] border-b border-white/5 flex items-center justify-between">
                         <h3 class="text-xs font-bold tracking-wide text-white uppercase flex items-center gap-2">
@@ -262,6 +274,7 @@
                         <div class="text-center text-xs text-gray-500 py-10">Loading feed...</div>
                     </div>
                 </div>
+
             </div>
         </div>
     </main>
@@ -335,23 +348,34 @@
 <!-- Simple Toast -->
 <div id="toast"><i class="fa-solid fa-check text-jupGreen mr-2"></i> <span id="toast-msg">Copied!</span></div>
 
+<!-- ============================================== -->
+<!-- 🟢 MAIN JAVASCRIPT LOGIC 🟢 -->
+<!-- ============================================== -->
 <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
 
+    // =====================================
+    // VIEW TOGGLE LOGIC
+    // =====================================
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+        
         const views = ['dashboard', 'market', 'leaderboard', 'affiliates'];
+        
         views.forEach(v => {
             const el = document.getElementById(`view-${v}`);
             const tab = document.getElementById(`tab-${v}`);
             if(el) el.classList.add('hidden-view');
             if(tab) tab.className = "flex-1 px-4 py-2 rounded-md text-[11px] sm:text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap";
         });
+
         const activeView = document.getElementById(`view-${view}`);
         const activeTab = document.getElementById(`tab-${view}`);
+        
         if (activeView) activeView.classList.remove('hidden-view');
         if (activeTab) activeTab.className = "flex-1 px-4 py-2 rounded-md text-[11px] sm:text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap";
+
         if (view === 'leaderboard') renderLeaderboard();
         if (view === 'affiliates') renderAffiliates();
     }
@@ -368,18 +392,27 @@
         document.getElementById('username-display').innerText = `@${tg.initDataUnsafe.user.username || tg.initDataUnsafe.user.first_name}`;
     }
 
-    let pnlChart = null, allocChart = null, affChart = null;
+    // =====================================
+    // STATE VARIABLES
+    // =====================================
+    let pnlChart = null; 
+    let allocChart = null; 
+    let affChart = null;
     let tickerPrices = { SOL: 158.42, WIF: 3.12, BONK: 0.00002814, JUP: 1.08, POPCAT: 0.45, TREMP: 0.85 };
-    let userTrades = [];
-    let currentFilter = '30D';
+    let userTrades = []; 
+    let currentFilter = '30D'; 
     let livePositionsForSynth = [];
+    
+    // Market Explorer State
     let rawDexResults = [];
     let dexFilters = { liq10k: false, vol50k: false, age24h: false, pumpfun: false };
+
+    // Dashboard States
     let liveLeaderboardData = { guild: null, members: [] };
-    let liveAffiliateData = {
-        recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "",
-        totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [],
-        dailyEarnings: Array(30).fill(0)
+    let liveAffiliateData = { 
+        recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", 
+        totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], 
+        dailyEarnings: Array(30).fill(0) 
     };
 
     const demoPositions = [
@@ -414,6 +447,7 @@
         return num.toLocaleString(undefined, {maximumFractionDigits: 2});
     }
 
+    // Ticker Background Loop
     setInterval(() => {
         let stripHTML = "";
         for(let i=0; i<3; i++){
@@ -428,7 +462,10 @@
         document.getElementById('ticker-strip').innerHTML = stripHTML;
     }, 2500);
 
-    // ========== MARKET EXPLORER ==========
+    // ==========================================
+    // 🟢 MARKET EXPLORER (DEXSCREENER) LOGIC
+    // ==========================================
+
     document.getElementById('dex-search-btn').addEventListener('click', executeDexSearch);
     document.getElementById('dex-search-input').addEventListener('keypress', function(e) {
         if (e.key === 'Enter') executeDexSearch();
@@ -437,12 +474,21 @@
     async function executeDexSearch() {
         const query = document.getElementById('dex-search-input').value.trim();
         if (!query) return;
+
         if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+        
         const container = document.getElementById('dex-search-results');
-        container.innerHTML = `<div class="flex flex-col items-center justify-center py-10"><i class="fa-solid fa-circle-notch fa-spin text-3xl text-neonBlue mb-3"></i><span class="text-xs text-gray-400">Scanning liquidity pools...</span></div>`;
+        container.innerHTML = `
+            <div class="flex flex-col items-center justify-center py-10">
+                <i class="fa-solid fa-circle-notch fa-spin text-3xl text-neonBlue mb-3"></i>
+                <span class="text-xs text-gray-400">Scanning liquidity pools...</span>
+            </div>
+        `;
+
         try {
             const res = await fetch(`/api/dex/search?q=${encodeURIComponent(query)}&initData=${encodeURIComponent(tg.initData || '')}`);
             if (!res.ok) throw new Error("Search failed");
+            
             rawDexResults = await res.json();
             applyDexFiltersAndRender();
         } catch (e) {
@@ -453,27 +499,42 @@
     function toggleDexFilter(filter) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
         dexFilters[filter] = !dexFilters[filter];
+        
         const btn = document.getElementById(`filter-${filter}`);
-        if (dexFilters[filter]) { btn.classList.add('glass-btn-active'); btn.classList.remove('text-gray-400'); }
-        else { btn.classList.remove('glass-btn-active'); btn.classList.add('text-gray-400'); }
+        if (dexFilters[filter]) {
+            btn.classList.add('glass-btn-active');
+            btn.classList.remove('text-gray-400');
+        } else {
+            btn.classList.remove('glass-btn-active');
+            btn.classList.add('text-gray-400');
+        }
+        
         applyDexFiltersAndRender();
     }
 
     function applyDexFiltersAndRender() {
         const container = document.getElementById('dex-search-results');
+        
+        // Ensure strictly Solana chain
         let filtered = rawDexResults.filter(p => p.chainId === 'solana');
+
         if (dexFilters.liq10k) filtered = filtered.filter(p => p.liquidity?.usd >= 10000);
         if (dexFilters.vol50k) filtered = filtered.filter(p => p.volume?.h24 >= 50000);
-        if (dexFilters.age24h) { const now = Date.now(); filtered = filtered.filter(p => p.pairCreatedAt && (now - p.pairCreatedAt) < 86400000); }
+        if (dexFilters.age24h) {
+            const now = Date.now();
+            filtered = filtered.filter(p => p.pairCreatedAt && (now - p.pairCreatedAt) < 86400000);
+        }
         if (dexFilters.pumpfun) filtered = filtered.filter(p => p.dexId === 'raydium' && p.baseToken?.address?.endsWith('pump'));
 
         if (filtered.length === 0) {
             container.innerHTML = `<div class="text-center py-8 text-gray-500 font-semibold text-sm">No pairs matched your filters.</div>`;
             return;
         }
+
         container.innerHTML = filtered.map(p => {
             const isPump = p.baseToken.address.endsWith('pump');
             const icon = isPump ? '<i class="fa-solid fa-capsules text-pink-400"></i>' : '<i class="fa-solid fa-bolt text-jupGreen"></i>';
+
             return `
             <div onclick="openDexChart('${p.pairAddress}', '${p.baseToken.address}', '${p.baseToken.symbol}', ${p.priceUsd}, ${p.fdv})" class="dex-row grid grid-cols-12 gap-2 px-4 py-3 cursor-pointer items-center">
                 <div class="col-span-5 flex items-center gap-2 overflow-hidden">
@@ -483,7 +544,9 @@
                         <div class="text-[10px] text-gray-500 font-mono truncate">${p.baseToken.address}</div>
                     </div>
                 </div>
-                <div class="col-span-3 text-right"><div class="font-bold text-dexGreen text-xs font-mono">$${parseFloat(p.priceUsd).toFixed(6)}</div></div>
+                <div class="col-span-3 text-right">
+                    <div class="font-bold text-dexGreen text-xs font-mono">$${parseFloat(p.priceUsd).toFixed(6)}</div>
+                </div>
                 <div class="col-span-4 text-right">
                     <div class="text-xs text-gray-300 font-mono">$${formatNumber(p.liquidity?.usd || 0)}</div>
                     <div class="text-[10px] text-gray-500 font-mono">$${formatNumber(p.volume?.h24 || 0)}</div>
@@ -511,21 +574,26 @@
             const res = await fetch(`/api/dex/trades/${currentChartMint}?initData=${encodeURIComponent(tg.initData || '')}`);
             const trades = await res.json();
             const container = document.getElementById('chart-trade-history');
-            if (tradeTab !== 'live') return;
+
+            if (tradeTab !== 'live') return; 
+
             if (!trades || trades.length === 0) {
                 container.innerHTML = `<div class="text-center text-xs text-gray-500 py-10">No recent on-chain activity found.</div>`;
                 return;
             }
+
             container.innerHTML = trades.map(t => {
                 const dateStr = new Date(t.time).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
                 const typeColor = t.isBuy ? 'text-dexGreen' : 'text-dexRed';
                 const typeLabel = t.isBuy ? 'BUY' : 'SELL';
                 const shortWallet = `${t.wallet.substring(0,4)}...${t.wallet.slice(-4)}`;
+                const amountDisplay = formatNumber(t.amountToken);
+
                 return `
                 <div class="dex-row grid grid-cols-12 gap-2 px-4 py-2.5 items-center text-xs">
                     <div class="col-span-3 text-gray-400 font-mono">${dateStr}</div>
                     <div class="col-span-2 font-bold ${typeColor}">${typeLabel}</div>
-                    <div class="col-span-4 text-gray-300 font-mono">${shortWallet}</div>
+                    <div class="col-span-4 text-gray-300 font-mono">${shortWallet} <span class="text-[10px] text-gray-500 block">${amountDisplay}</span></div>
                     <div class="col-span-3 text-right">
                         <a href="https://solscan.io/tx/${t.signature}" target="_blank" class="text-gray-500 hover:text-white transition-colors">
                             <i class="fa-solid fa-external-link-alt text-[10px]"></i>
@@ -538,8 +606,10 @@
 
     function openDexChart(pairAddress, mintAddress, symbol, price, mcap) {
         if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+        
         document.getElementById('dex-search-view').classList.add('hidden-view');
         document.getElementById('dex-chart-view').classList.remove('hidden-view');
+        
         document.getElementById('chart-token-name').innerText = `$${symbol}`;
         
         const caSpan = document.getElementById('chart-token-ca');
@@ -547,24 +617,34 @@
         
         document.getElementById('chart-token-price').innerText = `$${parseFloat(price).toFixed(6)}`;
         document.getElementById('chart-token-mcap').innerText = `MC: $${formatNumber(mcap || 0)}`;
+
         document.getElementById('chart-copy-ca').onclick = () => copyCA(mintAddress);
+        
         currentChartMint = mintAddress;
         tradeTab = 'live';
 
         const snipeBtn = document.getElementById('btn-quick-snipe');
         snipeBtn.onclick = async () => {
             if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+            
             snipeBtn.disabled = true;
             snipeBtn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Sniping...`;
+            
             try {
                 const response = await fetch('/api/snipe', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ initData: tg.initData || "", mint: mintAddress, amount: 0.1 })
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        initData: tg.initData || "",
+                        mint: mintAddress,
+                        amount: 0.1
+                    })
                 });
+                
                 const data = await response.json();
                 if (response.ok && data.success) {
                     showToast("🎯 Snipe Executed!");
-                    setTimeout(() => fetchLiveData(), 2000);
+                    setTimeout(() => fetchLiveData(), 2000); 
                 } else {
                     alert("🔴 Snipe Failed: " + (data.error || "Execution dropped."));
                 }
@@ -578,9 +658,17 @@
 
         const iframe = document.getElementById('dex-iframe');
         const loader = document.getElementById('chart-loader');
+        
         loader.classList.remove('hidden-view');
-        iframe.onload = () => loader.classList.add('hidden-view');
-        setTimeout(() => loader.classList.add('hidden-view'), 4000);
+        
+        iframe.onload = () => {
+            loader.classList.add('hidden-view');
+        };
+        
+        setTimeout(() => {
+            loader.classList.add('hidden-view');
+        }, 4000);
+        
         iframe.src = `https://dexscreener.com/solana/${pairAddress}?embed=1&theme=dark&trades=0&info=0`;
 
         if (liveTradesInterval) clearInterval(liveTradesInterval);
@@ -592,32 +680,40 @@
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
         document.getElementById('dex-chart-view').classList.add('hidden-view');
         document.getElementById('dex-search-view').classList.remove('hidden-view');
-        document.getElementById('dex-iframe').src = "";
-        if (liveTradesInterval) { clearInterval(liveTradesInterval); liveTradesInterval = null; }
+        document.getElementById('dex-iframe').src = ""; 
+        if (liveTradesInterval) {
+            clearInterval(liveTradesInterval);
+            liveTradesInterval = null;
+        }
     }
 
     function renderTokenHistory(mintAddress) {
         const container = document.getElementById('chart-trade-history');
         const history = userTrades.filter(t => t.tokenAddress === mintAddress);
+
         if (history.length === 0) {
             container.innerHTML = `<div class="text-center text-xs text-gray-500 py-10">No prior trades found for this token.</div>`;
             return;
         }
+
         container.innerHTML = history.map(t => {
             const dateStr = new Date(t.createdAt).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'});
             const isBuy = t.isBuy;
+            
             const typeColor = isBuy ? 'text-dexGreen' : 'text-dexRed';
             const typeLabel = isBuy ? 'BUY' : 'SELL';
+            
             let pnlStr = '<span class="text-gray-600">-</span>';
             if (!isBuy && typeof t.profitPercent === 'number' && t.profitPercent !== 0) {
                 const isGain = t.profitPercent > 0;
                 pnlStr = `<span class="${isGain ? 'text-dexGreen' : 'text-dexRed'} font-mono">${isGain?'+':''}${t.profitPercent.toFixed(2)}%</span>`;
             }
+
             return `
             <div class="dex-row grid grid-cols-12 gap-2 px-4 py-2.5 items-center text-xs">
-                <div class="col-span-3 text-gray-400 font-mono tracking-tighter truncate">${dateStr}</div>
+                <div class="col-span-4 text-gray-400 font-mono tracking-tighter truncate">${dateStr}</div>
                 <div class="col-span-2 font-bold ${typeColor}">${typeLabel}</div>
-                <div class="col-span-4 text-right text-white font-mono">${parseFloat(t.amountInSol).toFixed(3)} SOL</div>
+                <div class="col-span-3 text-right text-white font-mono">${parseFloat(t.amountInSol).toFixed(3)} SOL</div>
                 <div class="col-span-3 text-right flex items-center justify-end gap-2">
                     ${pnlStr}
                     <a href="https://solscan.io/tx/${t.txSignature}" target="_blank" class="text-gray-500 hover:text-white transition-colors ml-1" title="View on Solscan">
@@ -808,29 +904,41 @@
                     document.getElementById('sim-mode-banner').classList.add('hidden');
                     document.getElementById('sim-chart-label').classList.remove('hidden');
 
-                    const simPositions = (simStats.positions || []).map(p => ({
+                    const simPositions = Array.isArray(simStats.positions) ? simStats.positions.map(p => ({
                         mint: p.mint, symbol: p.symbol, amount: p.amount,
                         priceUsd: p.priceUsd || (p.entryPriceUsd * 150),
                         valueUsd: p.valueUsd || (p.amountInSol * 150),
                         entryPrice: p.entryPriceUsd || p.entryPrice
-                    }));
+                    })) : [];
 
-                    userTrades = (simStats.trades || []).map(t => ({
+                    userTrades = Array.isArray(simStats.trades) ? simStats.trades.map(t => ({
                         createdAt: t.createdAt, isBuy: t.isBuy, amountInSol: t.amountInSol,
                         profitPercent: t.profitPercent || 0,
                         tokenAddress: t.tokenAddress, txSignature: t.txSignature || 'sim'
-                    }));
+                    })) : [];
 
                     livePositionsForSynth = simPositions;
-                    let wins = simStats.wins || 0, losses = simStats.losses || 0, totalVolumeSol = simStats.volume || 0;
+                    let wins = 0, losses = 0, totalVolumeSol = simStats.volume || 0;
+                    
                     const totalValueUsd = simPositions.reduce((sum, p) => sum + (p.valueUsd || 0), 0);
                     const simBalanceSol = parseFloat(simStats.balance) || 0;
                     const networthUsd = Math.max(totalValueUsd, simBalanceSol * 150);
                     const networthSol = simBalanceSol.toFixed(4) + " SOL";
+                    
                     const startingBalance = 12.4521;
                     const pnlSol = simBalanceSol - startingBalance;
                     const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00";
                     const pnlUsd = pnlSol * 150;
+
+                    let totalRealizedPnlSol = 0;
+                    userTrades.forEach(t => {
+                        if (!t.isBuy) {
+                            if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) wins++;
+                            else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) losses++;
+                            totalRealizedPnlSol += (t.realizedPnlSol || 0);
+                        }
+                    });
+
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
                     const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : ['No Active Positions'];
                     const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [100];
@@ -858,7 +966,10 @@
 
         document.getElementById('sim-chart-label').classList.add('hidden');
         document.getElementById('sim-mode-banner').classList.add('hidden');
-        document.getElementById('positions-container').innerHTML = `<div class="space-y-3"><div class="card-flat h-20 skeleton"></div><div class="card-flat h-20 skeleton"></div></div>`;
+        
+        if(document.getElementById('positions-container')) {
+            document.getElementById('positions-container').innerHTML = `<div class="space-y-3"><div class="card-flat h-20 skeleton"></div><div class="card-flat h-20 skeleton"></div></div>`;
+        }
 
         try {
             const [positions, trades, solRes, lb, aff] = await Promise.all([
@@ -876,8 +987,8 @@
             if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard();
             if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates();
 
-            userTrades = trades || [];
-            const posArray = positions || [];
+            userTrades = Array.isArray(trades) ? trades : [];
+            const posArray = Array.isArray(positions) ? positions : [];
             livePositionsForSynth = posArray;
             const currentSolPrice = solRes.price || 160;
 
@@ -916,7 +1027,9 @@
         } catch (e) {
             if (document.getElementById('demo-toggle').checked) return;
             populateDashboard({ networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0, winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL" }, ['Offline'], [100], []);
-            document.getElementById('positions-container').innerHTML = `<div class="text-center py-10 card-flat text-neonRed flex flex-col items-center"><i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i><div class="text-sm font-bold">NODE DISCONNECTED</div><span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span></div>`;
+            if(document.getElementById('positions-container')) {
+                document.getElementById('positions-container').innerHTML = `<div class="text-center py-10 card-flat text-neonRed flex flex-col items-center"><i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i><div class="text-sm font-bold">NODE DISCONNECTED</div><span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span></div>`;
+            }
         }
     }
 

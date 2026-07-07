@@ -187,23 +187,34 @@ app.get('/api/dex/trades/:mint', async (req, res) => {
         const heliusKey = process.env.HELIUS_API_KEY || "";
         if (!heliusKey) return res.json([]);
 
-        const url = `https://api.helius.xyz/v0/addresses/${mint}/transactions?api-key=${heliusKey}&limit=30&type=SWAP`;
+        // 🟢 FIX: Removed &type=SWAP because Pump.fun and Raydium V4 are often parsed as generic transactions
+        const url = `https://api.helius.xyz/v0/addresses/${mint}/transactions?api-key=${heliusKey}&limit=40`;
         const heliusRes = await axios.get(url, { timeout: 6000 });
 
         const trades = (heliusRes.data || []).map((tx: any) => {
-            const transfer = tx.tokenTransfers?.find((t: any) => t.mint === mint);
-            const isBuy = transfer && transfer.toUserAccount && transfer.tokenAmount > 0;
+            const transfers = tx.tokenTransfers || [];
+            
+            // Find the specific transfer of the token being charted
+            const tokenTx = transfers.find((t: any) => t.mint === mint);
+            if (!tokenTx) return null;
+
+            // The fee payer is almost always the human wallet executing the swap
+            const traderWallet = tx.feePayer;
+            
+            // If the human's wallet received the token, it was a BUY. If they sent it, it was a SELL.
+            const isBuy = tokenTx.toUserAccount === traderWallet;
+
             return {
-                wallet: transfer?.toUserAccount || transfer?.fromUserAccount || 'Unknown',
-                isBuy: !!isBuy,
-                amountToken: transfer?.tokenAmount || 0,
+                wallet: traderWallet || 'Unknown',
+                isBuy: isBuy,
+                amountToken: tokenTx.tokenAmount || 0,
                 time: tx.timestamp * 1000,
                 signature: tx.signature
             };
-        }).filter((t: any) => t.wallet !== 'Unknown');
+        }).filter((t: any) => t !== null && t.wallet !== 'Unknown');
 
-        // Cache swap details safely for 10 seconds to limit Helius rate utilization
-        await redis.set(cacheKey, JSON.stringify(trades), 'EX', 10);
+        // Cache swap details safely for 5 seconds
+        await redis.set(cacheKey, JSON.stringify(trades), 'EX', 5);
         res.json(trades);
     } catch (e: any) {
         console.error("🔴 [DEX TRADES POLLECTION EXCEPTION]:", e.message);
@@ -4462,10 +4473,6 @@ app.post('/api/sim-trades', async (req, res) => {
             new URLSearchParams(req.body.initData).get('user')!
         ).id.toString();
 
-        // Strict security: Only the admin can access simulated trades
-        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
-            return res.status(403).json({ error: 'Admin only' });
-
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (!await isSimulationActive(telegramId))
             return res.json([]);
@@ -4487,10 +4494,6 @@ app.post('/api/sim-stats', async (req, res) => {
         const telegramId = JSON.parse(
             new URLSearchParams(req.body.initData).get('user')!
         ).id.toString();
-
-        // Strict security: Only the admin can access simulated statistics
-        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
-            return res.status(403).json({ error: 'Admin only' });
 
         const { isSimulationActive, getSimBalance, getSimVolume } = 
             await import('./services/simulation.service.js');
