@@ -645,15 +645,7 @@ bot.command('simbal', async (ctx) => {
     await redis.set(`sim:balance:${tgId}`, amount.toFixed(4));
     await ctx.replyWithHTML(`🎮 Sim balance set to <b>${amount.toFixed(4)} SOL</b>`);
 });
-bot.command('findkols', async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id.toString())) return;
-    
-    const { runGuildLeadScraper } = await import('./services/leadgen_guild.service.js');
-    
-    ctx.reply("🔍 Scanning for high-quality KOLs (>100 members)... This takes 10-15 seconds.");
-    const result = await runGuildLeadScraper(bot, ctx.from.id.toString());
-    ctx.reply(`🏁 Scan Finished:\n${result}`, { parse_mode: 'HTML' });
-});
+
 
 bot.action('action_create_guild_prompt', async (ctx) => {
     const msg = `🏰 <b>CREATE YOUR GUILD</b>\n\n` +
@@ -4530,8 +4522,6 @@ async function bootEcosystem() {
         
         startCoinCaller(bot); // ADDED CALLER ENGINE STARTUP
         
-        const { startGuildLeadScheduler } = await import('./services/leadgen_guild.service.js');
-        startGuildLeadScheduler(bot, adminId);
 
         // 🟢 FEATURE 3: Initialize the Launch Calendar background updater
         const { updateLaunchCalendar } = await import('./services/calendar.service.js');
