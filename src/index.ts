@@ -156,121 +156,14 @@ app.post('/api/analytics', async (req, res) => {
             createdAt: t.createdAt,
             isBuy: t.isBuy,
             amountInSol: t.amountInSol,
+            // 🟢 FIX: Send actual realized data instead of hardcoded 0
             profitPercent: t.profitPercent || 0,
-            realizedPnlSol: t.realizedPnlSol || 0,
-            tokenAddress: t.tokenAddress, // 🟢 WE NEED THIS FOR THE CHART OVERLAY
-            txSignature: t.txSignature    // 🟢 WE NEED THIS FOR RECEIPT LINKS
+            realizedPnlSol: t.realizedPnlSol || 0
         }));
+        
         res.json(mappedTrades);
-
     } catch (e: any) {
         res.status(500).json({ error: e.message });
-    }
-});
-
-
-// =========================================================
-// 🟢 TASK 4 FIX: On-Chain Swaps Activity Poller via Helius
-// =========================================================
-app.get('/api/dex/trades/:mint', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.query.initData as string)) {
-            return res.status(403).json({ error: 'Unauthorized' });
-        }
-        
-        const mint = req.params.mint;
-        const cacheKey = `dex:trades:${mint}`;
-        
-        const cached = await redis.get(cacheKey);
-        if (cached) return res.json(JSON.parse(cached));
-
-        const heliusKey = process.env.HELIUS_API_KEY || "";
-        if (!heliusKey) return res.json([]);
-
-        // 🟢 FIX: Removed &type=SWAP because Pump.fun and Raydium V4 are often parsed as generic transactions
-        const url = `https://api.helius.xyz/v0/addresses/${mint}/transactions?api-key=${heliusKey}&limit=40`;
-        const heliusRes = await axios.get(url, { timeout: 6000 });
-
-        const trades = (heliusRes.data || []).map((tx: any) => {
-            const transfers = tx.tokenTransfers || [];
-            
-            // Find the specific transfer of the token being charted
-            const tokenTx = transfers.find((t: any) => t.mint === mint);
-            if (!tokenTx) return null;
-
-            // The fee payer is almost always the human wallet executing the swap
-            const traderWallet = tx.feePayer;
-            
-            // If the human's wallet received the token, it was a BUY. If they sent it, it was a SELL.
-            const isBuy = tokenTx.toUserAccount === traderWallet;
-
-            return {
-                wallet: traderWallet || 'Unknown',
-                isBuy: isBuy,
-                amountToken: tokenTx.tokenAmount || 0,
-                time: tx.timestamp * 1000,
-                signature: tx.signature
-            };
-        }).filter((t: any) => t !== null && t.wallet !== 'Unknown');
-
-        // Cache swap details safely for 5 seconds
-        await redis.set(cacheKey, JSON.stringify(trades), 'EX', 5);
-        res.json(trades);
-    } catch (e: any) {
-        console.error("🔴 [DEX TRADES POLLECTION EXCEPTION]:", e.message);
-        res.json([]);
-    }
-});
-
-// =========================================================
-// 🟢 TASK 9 & BUG 2 FIX: direct execution proxy endpoint
-// =========================================================
-app.post('/api/snipe', async (req, res) => {
-    try {
-        const { initData, mint, amount } = req.body;
-        if (!initData || !mint || !amount) {
-            return res.status(400).json({ error: "Missing required fields" });
-        }
-        
-        if (!verifyTelegramAuth(initData)) {
-            return res.status(403).json({ error: "Unauthorized" });
-        }
-        
-        const telegramId = extractTelegramId(initData);
-        if (!telegramId) {
-            return res.status(403).json({ error: "Invalid Telegram User" });
-        }
-
-        const amountSol = parseFloat(amount);
-        if (isNaN(amountSol) || amountSol <= 0) {
-            return res.status(400).json({ error: "Invalid amount" });
-        }
-
-        // Standard execution logic (internally detects and supports simulation automatically)
-        const result = await executeSnipe(telegramId, mint, amountSol);
-        
-        if (result.success) {
-            // Push direct receipt notification payload into Telegram 
-            try {
-                const modeText = "Instant WebApp Snipe Engine";
-                await bot.telegram.sendMessage(
-                    telegramId,
-                    `🎯 <b>INSTANT WEBAPP SNIPE SUCCESSFUL!</b>\n\n` +
-                    `<b>Engine:</b> ${modeText}\n` +
-                    `<b>Token:</b> <code>${mint}</code>\n` +
-                    `<b>Invested:</b> <b>${amountSol.toFixed(4)} SOL</b>\n\n` +
-                    `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
-                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                );
-            } catch (_) {}
-            
-            return res.json({ success: true, signature: result.signature, message: result.message });
-        } else {
-            return res.status(400).json({ success: false, error: result.message });
-        }
-    } catch (e: any) {
-        console.error("🔴 [WEBAPP QUICK SNIPE FAULT]:", e.message);
-        return res.status(500).json({ error: e.message || "Server Error" });
     }
 });
 
@@ -337,8 +230,79 @@ app.get('/share/:imgId', async (req, res) => {
     }
 });
 
+// 🎮 SIMULATION INTERCEPT: Fetch simulated trades for Flow Analytics
+app.post('/api/sim-trades', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData))
+            return res.status(403).json({ error: 'Unauthorized' });
 
+        const telegramId = JSON.parse(
+            new URLSearchParams(req.body.initData).get('user')!
+        ).id.toString();
 
+        // Strict security: Only the admin can access simulated trades
+        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
+            return res.status(403).json({ error: 'Admin only' });
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        if (!await isSimulationActive(telegramId))
+            return res.json([]);
+
+        const raw = await redis.get(`sim:trades:${telegramId}`);
+        const trades = raw ? JSON.parse(raw) : [];
+        res.json(trades);
+    } catch (e: any) {
+        res.status(500).json([]);
+    }
+});
+
+// 🎮 SIMULATION INTERCEPT: Fetch simulated balance, volume, positions, and win/loss rates
+app.post('/api/sim-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData))
+            return res.status(403).json({ error: 'Unauthorized' });
+
+        const telegramId = JSON.parse(
+            new URLSearchParams(req.body.initData).get('user')!
+        ).id.toString();
+
+        // Strict security: Only the admin can access simulated statistics
+        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
+            return res.status(403).json({ error: 'Admin only' });
+
+        const { isSimulationActive, getSimBalance, getSimVolume } = 
+            await import('./services/simulation.service.js');
+
+        if (!await isSimulationActive(telegramId))
+            return res.json({ isActive: false });
+
+        const balance = await getSimBalance(telegramId);
+        const volume = await getSimVolume(telegramId);
+        const posRaw = await redis.get(`sim:positions:${telegramId}`);
+        const positions = posRaw ? JSON.parse(posRaw) : [];
+        const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
+        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+
+        let wins = 0, losses = 0;
+        trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
+            if (t.profitPercent > 0) wins++;
+            else losses++;
+        });
+
+        res.json({
+            isActive: true,
+            balance: parseFloat(balance),
+            volume,
+            positions,
+            trades,
+            wins,
+            losses,
+            winRate: (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0"
+        });
+    } catch (e: any) {
+        res.status(500).json({ isActive: false });
+    }
+});
 
 app.post('/api/positions', async (req, res) => {
     try {
@@ -444,9 +408,13 @@ app.post('/api/affiliate-stats', async (req, res) => {
         res.status(500).json({ error: 'Server Error' });
     }
 });
-// BUG 9 FIX: Update `getLiveBalance` in index.ts to check if there was a recent trade to reduce TTL.
+
+// =========================================================
+// ⚡ UTILITIES: MULTI-WALLET BALANCE AGGREGATOR
+// =========================================================
 async function getLiveBalance(user: any): Promise<string> {
-    const { getSimBalance, isSimulationActive } = await import('./services/simulation.service.js');
+    // SIMULATION INTERCEPT
+    const { getSimBalance } = await import('./services/simulation.service.js');
     if (await isSimulationActive(user.telegramId)) {
         return await getSimBalance(user.telegramId);
     }
@@ -469,16 +437,14 @@ async function getLiveBalance(user: any): Promise<string> {
         balances.forEach((bal: any) => totalLamports += bal);
 
         const finalBalance = (totalLamports / LAMPORTS_PER_SOL).toFixed(4);
-        
-        // TTL is 10s if user just traded, otherwise 30s
-        const isRecentTrade = await redis.exists(`recent_trade:${user.telegramId}`);
-        const ttl = isRecentTrade ? 10 : 30;
-        await redis.set(cacheKey, finalBalance, 'EX', ttl);
-        
+        await redis.set(cacheKey, finalBalance, 'EX', 15);
         return finalBalance;
     } catch (e) { return "0.0000"; }
 }
 
+// =========================================================
+// 📟 DASHBOARD MENU SYSTEM
+// =========================================================
 // =========================================================
 // 📟 DASHBOARD MENU SYSTEM
 // =========================================================
@@ -1197,134 +1163,60 @@ bot.action('btn_guide', async (ctx) => {
 });
 
 // =========================================================
-// 📖 HOW TO TRADE MANUAL - PAGE 1
+// 📖 HOW TO TRADE MANUAL
 // =========================================================
 bot.action('btn_trade_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    await showGuideP1(ctx, true);
+    
+    const manualText = 
+        `📖 <b>SENTRY TERMINAL — OPERATIONS MANUAL</b>\n\n` +
+        `<i>Every method below fires through Jito MEV protection automatically.</i>\n\n` +
+
+        `👛 <b>STEP 1 — FUND YOUR VAULT</b>\n` +
+        `Copy your W1 wallet address from the dashboard and send SOL to it. If you want multi-wallet mode, go to <b>Vault & Keys</b>, activate up to 5 wallets, and fund each address separately.\n\n` +
+
+        `🚀 <b>STEP 2 — THE SENTRY LAUNCHPAD</b>\n` +
+        `Tap <b>🚀 Token Launcher</b> on your dashboard. Enter your token name, ticker, and description. Upload your logo, specify a vanity contract prefix (e.g. <code>CAT</code>), enter your dev buy size, and choose how many sub-wallets to split the buy across. Sentry deploys your token in a single un-snipeable Jito bundle.\n\n` +
+
+        `⚡ <b>STEP 3 — INSTANT BUY</b>\n` +
+        `Paste any Solana token contract address (CA) directly into the chat. Sentry pulls the token info, runs a rug check, and shows you a confirm card. Tap <b>Confirm Buy</b> to execute.\n` +
+        `• <i>Custom Size Snipe:</i> Paste <code>[CA] [AMOUNT]</code> (e.g. <code>7xKXtg... 0.5</code>)\n\n` +
+
+        `📅 <b>STEP 4 — LAUNCH CALENDAR</b>\n` +
+        `Type <code>/calendar</code> to view the hottest Solana token launches. Sentry displays their age, liquidity, volume, and provides a <b>🎯 Snipe This</b> button next to each token.\n\n` +
+
+        `👀 <b>STEP 5 — WATCHLISTS & ALERTS</b>\n` +
+        `• <b>Add to list:</b> <code>/watch [CA] [TARGET_PRICE_USD]</code>\n` +
+        `• <b>View list:</b> <code>/watchlist</code>\n` +
+        `• <b>Remove a coin:</b> <code>/unwatch [CA]</code>\n` +
+        `• <b>Wipe list:</b> <code>/clearwatch</code>\n\n` +
+
+        `🛡️ <b>STEP 6 — TRAILING GUARDS</b>\n` +
+        `Go to <b>Trailing Stops</b> → <b>Deploy Trailing Guard</b>.\n` +
+        `• <i>Syntax:</i> <code>[CA] [DROP%] [AMOUNT] [OPTIONAL TP%]</code>\n` +
+        `• <i>Example:</i> <code>7xKXtg... 15 0.1 50</code> (Buys 0.1 SOL, sets -15% stop-loss, auto-sells at +50% take profit).\n\n` +
+
+        `👥 <b>STEP 7 — COPY TRADING (Helius Auditing)</b>\n` +
+        `Go to <b>Copy Trade</b> → <b>Add Custom Wallet</b>.\n` +
+        `• <i>Syntax:</i> <code>[WALLET] [AMOUNT] [GUARD%] [OPTIONAL TP%]</code>\n` +
+        `Sentry will parse their last 20 trades via Helius and display a security score to verify they are a human trader before you start copying them.\n\n` +
+
+        `⏳ <b>STEP 8 — DCA & LIMIT ORDERS</b>\n` +
+        `Go to <b>Limit / DCA Engine</b>.\n` +
+        `• <b>Limit:</b> <code>[CA] [TARGET_USD] [AMOUNT_SOL]</code>\n` +
+        `• <b>DCA:</b> <code>[CA] [INTERVAL_MINS] [AMOUNT] [GUARD%] [TP%] [MAX_BUDGET]</code>\n\n` +
+
+        `💼 <b>STEP 9 — MANAGE POSITIONS</b>\n` +
+        `Go to <b>Positions</b>. Exit 10%, 25%, 50%, 75%, or 100% of any position instantly via Jito. Selling automatically generates a dynamic Twitter sharing link with your exact time-in-trade.\n\n` +
+
+        `📤 <b>STEP 10 — WITHDRAW</b>\n` +
+        `Type <code>/withdraw [ADDRESS] [AMOUNT]</code> or use <code>ALL</code> to sweep your full balance minus gas.\n\n` +
+        
+        `<i>Type /cancel at any time to abort any active wizard and return safely to your dashboard.</i>`;
+
+    await safeEditMessageText(ctx, manualText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
 
-bot.action('guide_page_2', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await showGuideP2(ctx, true);
-});
-
-bot.action('guide_page_1', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await showGuideP1(ctx, true);
-});
-
-async function showGuideP1(ctx: any, isEdit: boolean) {
-    const text =
-        `📖 <b>SENTRY TERMINAL — OPERATIONS MANUAL (1/2)</b>\n\n` +
-        `<i>All trades route through private Jito MEV bundles. No public mempool exposure.</i>\n\n` +
-
-        `👛 <b>1. FUND YOUR VAULT</b>\n` +
-        `Copy your W1 address from the dashboard and send SOL. For Whale Mode go to <b>Vault & Keys</b>, activate up to 5 wallets and fund each one separately.\n\n` +
-
-        `🚀 <b>2. LAUNCH TOKEN (PUMP.FUN)</b>\n` +
-        `Tap <b>🚀 Launch Token</b>. Sentry deploys via a private Block-0 Jito Bundle — snipers cannot front-run your launch.\n` +
-        `Steps: Name → Ticker → Description → Vanity CA prefix (e.g. <code>CAT</code> or type <code>NO</code>) → Dev Buy SOL → Stealth wallets (1-4) → Send logo image.\n` +
-        `Fee: 0.05 SOL + Pump.fun gas. Your dev buy splits across all chosen wallets simultaneously.\n\n` +
-
-        `⚡ <b>3. INSTANT BUY</b>\n` +
-        `Paste any token CA into chat. Sentry runs a rug check and shows a confirm card.\n` +
-        `• Custom size: <code>[CA] [AMOUNT]</code> e.g. <code>7xKXtg...pump 0.5</code>\n` +
-        `• Override rug warning: tap the force buy button on the security alert.\n\n` +
-
-        `🔍 <b>4. TOKEN X-RAY SCANNER</b>\n` +
-        `<code>/scan [CA]</code> or <code>/xray [CA]</code>\n` +
-        `Returns: live price, market cap, liquidity, 24h volume, 5m and 1h momentum, pool age, RugCheck verdict (freeze authority, honeypot), and social links.\n\n` +
-
-        `📅 <b>5. LAUNCH CALENDAR</b>\n` +
-        `<code>/calendar</code> — live feed of newest Solana launches under 2 hours old with verified socials and 5k+ USD volume. Tap <b>Snipe This</b> for instant execution.\n\n` +
-
-        `👀 <b>6. WATCHLISTS & ALERTS</b>\n` +
-        `• Add: <code>/watch [CA] [TARGET_PRICE]</code>\n` +
-        `• View live prices: <code>/watchlist</code>\n` +
-        `• Remove: <code>/unwatch [CA]</code> · Wipe: <code>/clearwatch</code>\n\n` +
-
-        `🛡️ <b>7. TRAILING GUARDS & TAKE PROFIT</b>\n` +
-        `<b>Trailing Stops</b> → <b>Deploy Guard</b>\n` +
-        `Syntax: <code>[CA] [DROP%] [AMOUNT SOL] [TP%]</code>\n` +
-        `Example: <code>7xKXtg...pump 15 0.1 50</code>\n` +
-        `Buys 0.1 SOL, sets -15% trailing stop that follows price up, auto-sells at +50%. Guard syncs to DB for restart survival.\n\n` +
-
-        `🤖 <b>8. AI COIN CALLER</b>\n` +
-        `<b>AI Coin Caller</b> or <code>/caller</code> — scans DexScreener every 15s scoring tokens 0-100 on momentum, volume, age, and MEV risk. DMs you matches with a one-tap buy button.\n` +
-        `Filters: Min Score, Max Age, Momentum % Range, MEV Block toggle.\n` +
-        `Tap <b>Scan Mainnet Now</b> for an instant on-demand scan.`;
-
-    const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('➡️ Page 2 of 2', 'guide_page_2')],
-        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-    ]);
-
-    if (isEdit) await safeEditMessageText(ctx, text, UI);
-    else await ctx.replyWithHTML(text, UI);
-}
-
-async function showGuideP2(ctx: any, isEdit: boolean) {
-    const text =
-        `📖 <b>SENTRY TERMINAL — OPERATIONS MANUAL (2/2)</b>\n\n` +
-
-        `👥 <b>9. COPY TRADING</b>\n` +
-        `<b>Copy Trade</b> → <b>Add Custom Wallet</b>\n` +
-        `Syntax: <code>[WALLET] [AMOUNT SOL] [DROP%] [TP%]</code>\n` +
-        `Sentry audits the target via Helius (last 20 trades) and scores them 0-100. Warns you if they are an MEV bot. Fires automatically via WebSocket when the whale buys.\n` +
-        `Tap <b>View Alpha Directory</b> for our curated high win-rate whale wallets.\n\n` +
-
-        `⏳ <b>10. DCA & LIMIT ORDERS</b>\n` +
-        `<b>Limit</b> — buys when token hits a target price:\n` +
-        `<code>[CA] [TARGET_USD] [AMOUNT_SOL]</code>\n\n` +
-        `<b>DCA</b> — buys on a fixed interval:\n` +
-        `<code>[CA] [INTERVAL_MINS] [AMOUNT] [DROP%] [TP%] [MAX_BUDGET]</code>\n` +
-        `Example: <code>JUPyiw... 60 0.05 10 50 2.0</code>\n` +
-        `Buys 0.05 SOL every 60 mins, -10% guard, +50% TP, stops at 2.0 SOL total. Every fill auto-arms a trailing guard.\n\n` +
-
-        `💼 <b>11. POSITIONS & EXIT</b>\n` +
-        `<b>Positions</b> — shows all tokens across all wallets with USD values and unrealized PnL. Exit 10/25/50/75/100% of any bag instantly.\n` +
-        `If empty token accounts are detected, a <b>🧹 Sweep</b> button appears showing reclaimable SOL rent — tap to reclaim instantly.\n\n` +
-
-        `📤 <b>12. WITHDRAW</b>\n` +
-        `<code>/withdraw [ADDRESS] [AMOUNT]</code> or use <code>ALL</code> to sweep full balance.\n` +
-        `Sweeps across all active wallets sequentially, confirms each on-chain before the next.\n\n` +
-
-        `🔑 <b>13. VAULT & KEYS</b>\n` +
-        `• Activate 1-5 wallets for Whale Mode simultaneous execution\n` +
-        `• Export private keys (auto-deletes from chat after 60s)\n` +
-        `• Import a Phantom/Solflare wallet via Base58 private key\n` +
-        `• Sweep all sub-wallet SOL back to W1 in one transaction\n\n` +
-
-        `⚙️ <b>14. SETTINGS</b>\n` +
-        `• <b>Slippage:</b> 20% recommended. Low = failed trades. High = guaranteed fills.\n` +
-        `• <b>Eco 🍃</b> 0.0005 SOL · <b>Fast 🐎</b> 0.001 SOL · <b>Turbo ⚡</b> 0.005 SOL · <b>Custom ⚙️</b> your own tip\n\n` +
-
-        `👑 <b>15. VIP STATUS</b>\n` +
-        `<code>/vipstatus</code> — check your tier.\n` +
-        `VIP benefits: <b>0% trading fees</b>, Turbo Jito priority, custom leaderboard badge, Whale Alpha Directory access.\n` +
-        `• <b>Promo VIP:</b> first 10 users to join via any referral link on active promo days get a free 10-day pass\n` +
-        `• <b>Permanent VIP:</b> granted by admin to KOLs and partners\n\n` +
-
-        `💸 <b>16. AFFILIATES & EARNINGS</b>\n` +
-        `Go to <b>Affiliates</b> for your referral link, recruit stats, and pending yield.\n` +
-        `Revenue share tiers by Sentry Points (1 SOL traded = 10k pts, 1 recruit = 2k pts):\n` +
-        `• 🥉 Bronze 0-49k pts: <b>40%</b> of recruit fees\n` +
-        `• 🥈 Silver 50k-249k pts: <b>50%</b> of recruit fees\n` +
-        `• 🥇 Gold 250k-999k pts: <b>60%</b> + private alpha\n` +
-        `• 💎 Diamond 1M+ pts: <b>70%</b> + lifetime 0% fee VIP\n` +
-        `Dev Suite unlock by any recruit = instant <b>+1.0 SOL</b> to your balance.\n` +
-        `Min payout 0.1 SOL — tap <b>Claim Payout</b> anytime.\n\n` +
-        `<i>Type /cancel anytime to abort any active wizard.</i>`;
-
-    const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('⬅️ Page 1 of 2', 'guide_page_1')],
-        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-    ]);
-
-    if (isEdit) await safeEditMessageText(ctx, text, UI);
-    else await ctx.replyWithHTML(text, UI);
-}
 
 bot.action('action_create_vault', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -2487,6 +2379,12 @@ bot.action('menu_positions', async (ctx) => {
     }).catch(()=>{});
 });
 
+bot.action('menu_caller', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await sendCallerMenu(ctx, tgId, true); 
+});
 
 
 bot.action('sim_regen_wallets', async (ctx) => {
@@ -2952,7 +2850,6 @@ bot.action('confirm_export_key', async (ctx) => {
     }
 });
 
-// BUG 13 FIX: Update `action_import_key` handler in index.ts to clear keypairCache
 bot.action('action_import_key', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -2960,7 +2857,6 @@ bot.action('action_import_key', async (ctx) => {
     await redis.set(`state:import_key:${tgId}`, 'AWAITING', 'EX', 120);
     await ctx.replyWithHTML(`📥 <b>IMPORT EXISTING WALLET</b>\n\nReply to this message with your Phantom/Solflare <b>Private Key (Base58 string)</b>.\n\n<i>⚠️ NOTE: This will permanently overwrite your current Sentry Vault. Make sure you have exported and saved your current Sentry key first if it holds funds!</i>\n\n<i>Type /cancel to abort.</i>`);
 });
-
 
 bot.action(/^set_wallets_([1-5])$/, async (ctx) => {
     try { await ctx.answerCbQuery("⏳ Configuring Wallets..."); } catch(e){}
@@ -4168,6 +4064,7 @@ bot.on("text", async (ctx, next) => {
                 const communityName = setupState.name;
                 const rewardDescription = text.trim();
                 
+                // Store final params back to Redis before confirmation
                 await redis.hmset(`guild_setup:${telegramId}`, { step: '3', reward: rewardDescription });
                 
                 await ctx.replyWithHTML(
@@ -4185,23 +4082,14 @@ bot.on("text", async (ctx, next) => {
             }
         }
 
-        // 🟢 BUG 13 FIX: IMPORT KEY - Clear old keypair from engine memory immediately
+        // IMPORT KEY
         if (await redis.get(`state:import_key:${telegramId}`)) {
             await redis.del(`state:import_key:${telegramId}`);
             try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){}
             const loader = await ctx.replyWithHTML("<i>⏳ Verifying and encrypting imported key...</i>");
 
-            const { importPrivateKey } = await import('./services/vault.service.js');
             const success = await importPrivateKey(telegramId, text.trim());
             if (success) {
-                const { clearKeypairCache } = await import('./services/engine.service.js');
-                const user = await prisma.user.findUnique({ where: { telegramId } });
-                
-                // Clear the engine memory so next trade uses the newly imported key
-                if (user?.vaultAddress) {
-                    clearKeypairCache(user.vaultAddress);
-                }
-                
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>Wallet Imported Successfully!</b>\nYour Sentry terminal is now linked to your new encrypted address.`, { parse_mode: 'HTML' });
                 await sendOrEditDashboard(ctx, telegramId, false);
             } else {
@@ -4266,6 +4154,7 @@ bot.on("text", async (ctx, next) => {
             }
         } catch (e) {} 
 
+        // 🟢 FIX: Typecast DexScreener result to "any" to prevent compiler errors
         const dexRes = (await fetch(
             `https://api.dexscreener.com/latest/dex/tokens/${possibleCA}`
         ).then(r => r.json()).catch(() => null)) as any;
@@ -4313,6 +4202,7 @@ bot.on("text", async (ctx, next) => {
 
     return next();
 });
+
 // 🟢 GAP 3 FIX: Seamlessly route the user from the "Watch Price" button directly into the Guard Flow
 bot.action(/^confirm_watch_(.+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -4473,7 +4363,9 @@ app.post('/api/sim-trades', async (req, res) => {
             new URLSearchParams(req.body.initData).get('user')!
         ).id.toString();
 
-        // 🟢 FIX 1 & 2: Removed the Admin-only restriction check here
+        // Strict security: Only the admin can access simulated trades
+        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
+            return res.status(403).json({ error: 'Admin only' });
 
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (!await isSimulationActive(telegramId))
@@ -4497,7 +4389,9 @@ app.post('/api/sim-stats', async (req, res) => {
             new URLSearchParams(req.body.initData).get('user')!
         ).id.toString();
 
-        // 🟢 FIX 1 & 2: Removed the Admin-only restriction check here
+        // Strict security: Only the admin can access simulated statistics
+        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
+            return res.status(403).json({ error: 'Admin only' });
 
         const { isSimulationActive, getSimBalance, getSimVolume } = 
             await import('./services/simulation.service.js');
@@ -4530,47 +4424,6 @@ app.post('/api/sim-stats', async (req, res) => {
         });
     } catch (e: any) {
         res.status(500).json({ isActive: false });
-    }
-});
-
-// =========================================================
-// 🟢 TASK 9: WEBAPP CHART & SEARCH PROXIES
-// =========================================================
-app.get('/api/dex/pair/:mint', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.query.initData as string)) return res.status(403).json({ error: 'Unauthorized' });
-        
-        const mint = req.params.mint;
-        const cached = await redis.get(`dex:pair:${mint}`);
-        if (cached) return res.json(JSON.parse(cached));
-        
-        const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 4000 });
-        const pair = dexRes.data?.pairs?.[0] || null;
-        
-        if (pair) await redis.set(`dex:pair:${mint}`, JSON.stringify(pair), 'EX', 15);
-        res.json(pair);
-    } catch (e) {
-        res.status(500).json({ error: "Failed to fetch pair" });
-    }
-});
-
-app.get('/api/dex/search', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.query.initData as string)) return res.status(403).json({ error: 'Unauthorized' });
-
-        const q = req.query.q as string;
-        if (!q) return res.json({ pairs: [] });
-        
-        const cached = await redis.get(`dex:search:${q}`);
-        if (cached) return res.json(JSON.parse(cached));
-
-        const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeout: 4000 });
-        const pairs = dexRes.data?.pairs || [];
-        
-        await redis.set(`dex:search:${q}`, JSON.stringify(pairs), 'EX', 30);
-        res.json(pairs);
-    } catch (e) {
-        res.status(500).json({ error: "Search failed" });
     }
 });
 
@@ -4632,28 +4485,24 @@ app.get('/g/:guildCode', async (req, res) => {
         res.send(html);
     } catch (e) { res.status(500).send("Error loading leaderboard."); }
 });
+
 // =========================================================
-// 🌐 SECURE BOOT & SYSTEM INITIALIZATION
+// 🌐 SECURE BOOT & EXPRESS WEBAPP
 // =========================================================
 
 async function bootEcosystem() {
     await warmDnsCache();
     await syncGuardsFromDb(); 
-    
     // Start WebApp Express Server
     app.listen(3001, () => console.log('🟢 WebApp API Server listening on port 3001'));
 
-    // 🟢 BUG 15 FIX: Stagger the guild rank cache updates to prevent database blocking
+    // Refresh guild rank caches every 60 seconds
     setInterval(async () => {
         try {
             const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
-            const { updateRankCache } = await import('./services/guild.service.js');
-            guilds.forEach((g, index) => {
-                // Stagger each guild by 1 second
-                setTimeout(async () => {
-                    await updateRankCache(g.id);
-                }, index * 1000); 
-            });
+            for (const g of guilds) {
+                await updateRankCache(g.id);
+            }
         } catch (e) {}
     }, 60_000);
 
@@ -4677,14 +4526,14 @@ async function bootEcosystem() {
         startCopyTradeWatcher(bot); 
         startDepositWatcher(bot); 
         
-        const adminId = process.env.ADMIN_TELEGRAM_ID || "8494722111"; // Default fallback
+        const adminId = process.env.ADMIN_TELEGRAM_ID || "8494722111"; // Your Telegram ID
         
-        startCoinCaller(bot);
+        startCoinCaller(bot); // ADDED CALLER ENGINE STARTUP
         
         const { startGuildLeadScheduler } = await import('./services/leadgen_guild.service.js');
         startGuildLeadScheduler(bot, adminId);
 
-        // Initialize the Launch Calendar background updater
+        // 🟢 FEATURE 3: Initialize the Launch Calendar background updater
         const { updateLaunchCalendar } = await import('./services/calendar.service.js');
         await updateLaunchCalendar();
         setInterval(updateLaunchCalendar, 30 * 60 * 1000); // Refreshes every 30 mins
@@ -4693,7 +4542,7 @@ async function bootEcosystem() {
         console.error("🔴 TELEGRAM BOOT FAILED:", err.message);
         process.exit(1);
     }
-}
+} // 🟢 This closing bracket was missing!
 
 bootEcosystem();
 
