@@ -785,6 +785,7 @@ export async function executeExit(
             await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } });
         }
 
+       // 🟢 FIX 4: Write realizedPnlSol correctly when recording exits
         await prisma.trade.create({
             data: {
                 userId: user.id,
@@ -797,7 +798,7 @@ export async function executeExit(
                 txSignature: firstSignature,
                 status: 'CONFIRMED',
                 profitPercent: parseFloat(profitPercent.toFixed(2)),
-                realizedPnlSol: parseFloat(realizedPnlSol.toFixed(6))
+                realizedPnlSol: volumeToRecord * (profitPercent / 100) // ADDED THIS LINE
             }
         }).catch(() => {});
 

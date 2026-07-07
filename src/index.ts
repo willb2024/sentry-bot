@@ -4473,6 +4473,8 @@ app.post('/api/sim-trades', async (req, res) => {
             new URLSearchParams(req.body.initData).get('user')!
         ).id.toString();
 
+        // 🟢 FIX 1 & 2: Removed the Admin-only restriction check here
+
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (!await isSimulationActive(telegramId))
             return res.json([]);
@@ -4494,6 +4496,8 @@ app.post('/api/sim-stats', async (req, res) => {
         const telegramId = JSON.parse(
             new URLSearchParams(req.body.initData).get('user')!
         ).id.toString();
+
+        // 🟢 FIX 1 & 2: Removed the Admin-only restriction check here
 
         const { isSimulationActive, getSimBalance, getSimVolume } = 
             await import('./services/simulation.service.js');
