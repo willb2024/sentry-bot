@@ -14,7 +14,7 @@ import bs58 from 'bs58';
 import crypto from 'crypto';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
-import FormData from 'form-data'; // 🟢 FIX: Static import for form-data, used with native fetch
+import FormData from 'form-data'; 
 
 dotenv.config();
 const prisma = new PrismaClient();
@@ -166,7 +166,6 @@ function isBondingCurveGraduated(data: Buffer): boolean {
     return data.length > 2 && data[2] === 1;
 }
 
-// 🟢 FIX: Implemented fast cached price lookup
 async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     try {
         const price = await getCachedTokenPrice(tokenAddress);
@@ -258,7 +257,6 @@ async function checkAndTriggerGuard(
                             `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                             `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
                 
-                // 🟢 FIX: Uses native fetch and form-data, safely avoiding node-fetch crashing
                 const form = new FormData();
                 form.append('chat_id', guardSnapshot.telegramId);
                 form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
@@ -358,7 +356,6 @@ async function checkAndTriggerGuard(
                                 `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                                 `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            // 🟢 FIX: Uses native fetch and form-data, safely avoiding node-fetch crashing
                             const form = new FormData();
                             form.append('chat_id', guard.telegramId);
                             form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
@@ -440,7 +437,6 @@ async function checkAndTriggerGuard(
                                 `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                                 `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            // 🟢 FIX: Uses native fetch and form-data, safely avoiding node-fetch crashing
                             const form = new FormData();
                             form.append('chat_id', guard.telegramId);
                             form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
@@ -608,39 +604,6 @@ export function startUniversalGuardPoller(bot: any) {
                 }
             }
 
-            const keys = await redis.keys('watchlist:*');
-            for (const key of keys) {
-                const tgId = key.split(':')[1];
-                const watchedTokens = await redis.hgetall(key);
-                
-                for (const [ca, dataStr] of Object.entries(watchedTokens)) {
-                    const data = JSON.parse(dataStr);
-                    if (data.targetPrice > 0) {
-                        const currentPriceNative = livePricesNative[ca]?.price || 0;
-                        const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
-
-                        const cooldownKey = `alert_cooldown:${tgId}:${ca}`;
-                        const isOnCooldown = await redis.get(cooldownKey);
-
-                        if (!isOnCooldown && currentPriceUsd > 0 && currentPriceUsd >= data.targetPrice) {
-                            await redis.set(cooldownKey, '1', 'EX', 3600); // 1 hour cooldown per token alert
-                            
-                            try {
-                                await sendPriceAlertWithChart(
-                                    tgId,
-                                    ca,
-                                    "Watched Token", 
-                                    currentPriceUsd,
-                                    data.targetPrice,
-                                    data.addedPrice || 0,
-                                    bot
-                                );
-                            } catch (_) {}
-                        }
-                    }
-                }
-            }
-
             const pendingRpcGuards: Array<{ guard: TrailingOrder; curvePda: string }> = [];
 
             await Promise.all(activeGuards.map(async (guard) => {
@@ -735,6 +698,81 @@ export function startUniversalGuardPoller(bot: any) {
             isPolling = false;
         }
     }, 1000); 
+
+    // 🟢 OPTIMIZATION: Moving O(N) Redis watchlists key scan off the critical 1-second interval loop 
+    // to a dedicated, slower 10-second non-blocking loop, freeing valuable RPC threads.
+    setInterval(async () => {
+        try {
+            const keys = await redis.keys('watchlist:*');
+            const assumedSolUsdPrice = cachedSolUsdPrice;
+
+            // Gather all token addresses to fetch in bulk
+            const allWatchedMints = new Set<string>();
+            const userWatchlists: Record<string, any> = {};
+
+            for (const key of keys) {
+                const tgId = key.split(':')[1];
+                const watchedTokens = await redis.hgetall(key);
+                userWatchlists[tgId] = watchedTokens;
+                Object.keys(watchedTokens).forEach(ca => allWatchedMints.add(ca));
+            }
+
+            if (allWatchedMints.size === 0) return;
+
+            const livePricesNative: Record<string, number> = {};
+            const uniqueMints = [...allWatchedMints];
+            
+            const chunks: string[] = [];
+            for (let i = 0; i < uniqueMints.length; i += 100) {
+                chunks.push(uniqueMints.slice(i, i + 100).join(','));
+            }
+
+            await Promise.all(chunks.map(async (chunk) => {
+                try {
+                    const res = await axios.get(
+                        `https://lite-api.jup.ag/price/v2?ids=${chunk}&vsToken=${WSOL_MINT}`,
+                        { timeout: 3000 }
+                    );
+                    if (res.data?.data) {
+                        for (const [mint, info] of Object.entries(res.data.data as Record<string, any>)) {
+                            livePricesNative[mint] = parseFloat((info as any).price) || 0;
+                        }
+                    }
+                } catch (_) {}
+            }));
+
+            for (const [tgId, watchedTokens] of Object.entries(userWatchlists)) {
+                for (const [ca, dataStr] of Object.entries(watchedTokens as Record<string, string>)) {
+                    const data = JSON.parse(dataStr);
+                    if (data.targetPrice > 0) {
+                        const currentPriceNative = livePricesNative[ca] || 0;
+                        const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
+
+                        const cooldownKey = `alert_cooldown:${tgId}:${ca}`;
+                        const isOnCooldown = await redis.get(cooldownKey);
+
+                        if (!isOnCooldown && currentPriceUsd > 0 && currentPriceUsd >= data.targetPrice) {
+                            await redis.set(cooldownKey, '1', 'EX', 3600); // 1-hour cooldown
+                            
+                            try {
+                                await sendPriceAlertWithChart(
+                                    tgId,
+                                    ca,
+                                    "Watched Token",
+                                    currentPriceUsd,
+                                    data.targetPrice,
+                                    data.addedPrice || 0,
+                                    bot
+                                );
+                            } catch (_) {}
+                        }
+                    }
+                }
+            }
+        } catch (e: any) {
+            console.error("⚠️ [WATCHLIST SCAN FAULT]:", e.message);
+        }
+    }, 10000); // 10-second polling frequency
 }
 
 async function triggerAutoSnipes(
@@ -924,7 +962,6 @@ function connectPumpPortalStream(bot: any) {
         } catch (_) {}
     });
 
-    // 🟢 FIX: 30-Second Backoff for 429 Prevention
     ws.on('error', (err: any) => {
         console.warn(`⚠️ [PUMP WS] Error: ${err.message}`);
     });

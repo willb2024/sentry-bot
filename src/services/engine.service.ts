@@ -7,7 +7,7 @@ import axios from 'axios';
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { awardGuildPoints } from './guild.service.js';
-import { getEffectiveFeePercent } from './vip_promo.service.js'; // 🟢 FIX: Uses reconciled VIP module to bypass fees
+import { getEffectiveFeePercent } from './vip_promo.service.js'; 
 import { checkRecentMevActivity } from './price.service.js'; 
 import { redis } from '../lib/redis.js'; 
 import dns from 'dns';
@@ -114,9 +114,11 @@ const JITO_TIP_ACCOUNTS = [
 
 let cachedBlockhash: { blockhash: string; lastValidBlockHeight: number } | null = null;
 connection.getLatestBlockhash('confirmed').then(b => { cachedBlockhash = b; }).catch(() => {});
+
+// 🟢 OPTIMIZATION: Bushed refresh timer to 15s. A blockhash is valid for ~90 seconds. 1s is excessive overhead.
 setInterval(async () => {
     try { cachedBlockhash = await connection.getLatestBlockhash('confirmed'); } catch (_) {}
-}, 1000);
+}, 15000);
 
 const keypairCache = new Map<string, Keypair>();
 
@@ -155,7 +157,6 @@ async function pollSignatureConfirmation(signature: string, maxRetries = 8): Pro
     return false;
 }
 
-// 🟢 FIX: Added universal fast short-TTL price cache to stop rate-limiting errors
 export async function getCachedTokenPrice(mint: string): Promise<number> {
     const cached = await redis.get(`price_cache:${mint}`);
     if (cached) return parseFloat(cached);
@@ -164,14 +165,13 @@ export async function getCachedTokenPrice(mint: string): Promise<number> {
         const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${mint}`);
         const price = res.data?.data?.[mint]?.price;
         if (price) {
-            await redis.set(`price_cache:${mint}`, price, 'EX', 5); // 5 sec cache
+            await redis.set(`price_cache:${mint}`, price, 'EX', 5); 
             return parseFloat(price);
         }
     } catch (_) {}
     return 0;
 }
 
-// 🟢 FIX: Added cache for MEV checks to remove serial delays during execution
 export async function checkRecentMevActivityCached(tokenMint: string): Promise<boolean> {
     try {
         const cached = await redis.get(`mev_check:${tokenMint}`);
@@ -304,7 +304,6 @@ async function fetchApiTransaction(
             const jupiterPriorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
 
             try {
-                // 🟢 FIX: Return Jupiter quote to avoid a second redundant network trip later
                 const quoteRes = await axios.get(
                     `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
                     { httpsAgent: activeAgent, headers: API_HEADERS, timeout: 8000 }
@@ -356,7 +355,6 @@ async function buildTipAndFeeTransaction(
 ): Promise<VersionedTransaction | null> {
     try {
         const baseFeeRate = getDynamicFeeRate(expectedSolVolume, hasDiscount);
-        // 🟢 FIX: Uses reconciled VIP module to bypass fees correctly
         const feeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
         const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
 
@@ -474,8 +472,10 @@ export async function executeSnipe(
         let successCount = 0;
         let totalVolume = 0;
         let firstSignature = "";
-        let lastError = "";
+        
+        // 🟢 FIX: Map error reasons per-wallet individually to avoid lastError overwrites
         const walletReport: string[] = [];
+        const walletErrors: string[] = [];
 
         const latestBlockhash = await getLatestBlockhashWithCache();
 
@@ -492,20 +492,20 @@ export async function executeSnipe(
             const requiredBuffer = jitoTipSol + platformFeeSol + gasSol;
 
             if (balanceSol < amountSol + requiredBuffer) {
-                lastError = `Insufficient Funds (need ~${(amountSol + requiredBuffer).toFixed(4)} SOL, have ${balanceSol.toFixed(4)} SOL)`;
+                walletErrors[index] = `Insufficient Funds (need ~${(amountSol + requiredBuffer).toFixed(4)} SOL, have ${balanceSol.toFixed(4)} SOL)`;
                 walletReport[index] = `W${index + 1}: 🔴 Gas`;
                 return;
             }
 
             const apiRes = await fetchApiTransaction('buy', targetCA, w.pub, amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, w.pk, raydiumPoolId);
             if (!apiRes.buffer) {
-                lastError = `API Route Failed: ${apiRes.errorLog}`;
+                walletErrors[index] = `API Route Failed: ${apiRes.errorLog}`;
                 walletReport[index] = `W${index + 1}: 🔴 API Reject`;
                 return;
             }
 
             const keypair = getCachedKeypair(w.pub, w.pk);
-            if (!keypair) { lastError = "Decryption Fault."; walletReport[index] = `W${index + 1}: 🔴 Auth`; return; }
+            if (!keypair) { walletErrors[index] = "Decryption Fault."; walletReport[index] = `W${index + 1}: 🔴 Auth`; return; }
 
             const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             swapTx.sign([keypair]);
@@ -523,7 +523,7 @@ export async function executeSnipe(
 
             if (!confirmed) {
                 if (slippage > 25.0) {
-                    lastError = "Jito Bundle dropped. Aborted public fallback to prevent MEV Sandwich Attack on high slippage.";
+                    walletErrors[index] = "Jito Bundle dropped. Aborted public fallback to prevent MEV Sandwich Attack on high slippage.";
                     walletReport[index] = `W${index + 1}: 🔴 Jito Drop`;
                 } else {
                     console.warn("⚠️ [JITO FALLBACK TRIGGERED] Sending trade + fee directly to the blockchain...");
@@ -533,7 +533,7 @@ export async function executeSnipe(
                         await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => null);
                         confirmed = await pollSignatureConfirmation(directSig);
                     } catch (e: any) {
-                        lastError = `Direct Send Failed: ${e.message}`;
+                        walletErrors[index] = `Direct Send Failed: ${e.message}`;
                     }
                 }
             }
@@ -551,10 +551,10 @@ export async function executeSnipe(
         await Promise.allSettled(executionPromises);
 
         if (successCount === 0) {
-            return { success: false, message: `🔴 <b>Snipe Aborted:</b>\n<code>${lastError || "Transaction failed on-chain or expired."}</code>` };
+            const finalError = walletErrors.filter(Boolean).join(" | ") || "Transaction failed on-chain or expired.";
+            return { success: false, message: `🔴 <b>Snipe Aborted:</b>\n<code>${finalError}</code>` };
         }
 
-        // 🟢 FIX: Replaced VIP fee bypass
         const baseFeeRate = getDynamicFeeRate(totalVolume, user.hasReferralDiscount);
         const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
         const feeCharged = totalVolume * effectiveFeeRate;
@@ -654,8 +654,10 @@ export async function executeExit(
         let successCount = 0;
         let totalFeeBase = 0;
         let firstSignature = "";
-        let lastError = "";
+        
+        // 🟢 FIX: Map error reasons per-wallet individually to avoid lastError overwrites
         const walletReport: string[] = [];
+        const walletErrors: string[] = [];
 
         const latestBlockhash = await getLatestBlockhashWithCache();
         const balances = await Promise.all(wallets.map(w => connection.getBalance(new PublicKey(w.pub)).catch(() => 0)));
@@ -663,10 +665,10 @@ export async function executeExit(
         const executionPromises = wallets.map(async (w, index) => {
             const vaultPubkey = new PublicKey(w.pub);
             const keypair = getCachedKeypair(w.pub, w.pk);
-            if (!keypair) { lastError = "Decryption Fault."; walletReport[index] = `W${index + 1}: 🔴 Auth`; return; }
+            if (!keypair) { walletErrors[index] = "Decryption Fault."; walletReport[index] = `W${index + 1}: 🔴 Auth`; return; }
 
             if (balances[index] < 1_500_000) {
-                lastError = `Insufficient Gas.`;
+                walletErrors[index] = `Insufficient Gas.`;
                 walletReport[index] = `W${index + 1}: 🔴 Gas`;
                 return;
             }
@@ -686,16 +688,15 @@ export async function executeExit(
             const uiTokensToSell = Number((Number(tokensToSellRaw) / (10 ** decimals)).toFixed(decimals));
 
             const apiRes = await fetchApiTransaction('sell', targetCA, w.pub, 0, uiTokensToSell, tokensToSellRaw.toString(), sellPercentage, slippage, priorityLevel, customPriorityFee, w.pk);
-            if (!apiRes.buffer) { lastError = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
+            if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
 
-            // 🟢 FIX: Use pre-estimated output from fetchApiTransaction instead of wasting an RPC call
             const dynamicFeeBase = apiRes.estimatedOutput && apiRes.estimatedOutput > 0 ? apiRes.estimatedOutput : 0.01;
             
             const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             swapTx.sign([keypair]);
 
             const tipTx = await buildTipAndFeeTransaction(keypair, telegramId, dynamicFeeBase, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash, user.hasReferralDiscount);
-            if (!tipTx) { lastError = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; return; }
+            if (!tipTx) { walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; return; }
 
             let confirmed = false;
             let txSig = bs58.encode(swapTx.signatures[0]);
@@ -706,9 +707,8 @@ export async function executeExit(
             }
 
             if (!confirmed) {
-                // 🟢 FIX: Allow public fallback for 100% exits to ensure stop-losses don't fail silently
                 if (slippage > 25.0 && sellPercentage !== 100) {
-                    lastError = "Jito Bundle dropped. Aborted public fallback to prevent MEV Sandwich Attack on high slippage.";
+                    walletErrors[index] = "Jito Bundle dropped. Aborted public fallback to prevent MEV Sandwich Attack on high slippage.";
                     walletReport[index] = `W${index + 1}: 🔴 Jito Drop`;
                 } else {
                     console.warn("⚠️ [JITO FALLBACK TRIGGERED] Sending standard transaction directly to the blockchain...");
@@ -718,7 +718,7 @@ export async function executeExit(
                         await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => null);
                         confirmed = await pollSignatureConfirmation(directSig);
                     } catch (e: any) {
-                        lastError = `Direct Send Failed: ${e.message}`;
+                        walletErrors[index] = `Direct Send Failed: ${e.message}`;
                     }
                 }
             }
@@ -755,10 +755,10 @@ export async function executeExit(
         await Promise.allSettled(executionPromises);
 
         if (successCount === 0) {
-            return { success: false, message: `🔴 <b>Exit Aborted:</b>\n<code>${lastError || "Transaction failed on-chain or expired."}</code>` };
+            const finalError = walletErrors.filter(Boolean).join(" | ") || "Transaction failed on-chain or expired.";
+            return { success: false, message: `🔴 <b>Exit Aborted:</b>\n<code>${finalError}</code>` };
         }
 
-        // 🟢 FIX: Replaced VIP fee bypass
         const baseFeeRate = getDynamicFeeRate(totalFeeBase, user.hasReferralDiscount);
         const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
         const feeCharged = totalFeeBase * effectiveFeeRate;
