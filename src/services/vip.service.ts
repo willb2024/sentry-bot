@@ -7,34 +7,34 @@ import { connection } from '../lib/connection.js';
 const prisma = new PrismaClient();
 
 // =========================================================
-// VIP TIER DEFINITIONS
+// 🟢 VIP TIER DEFINITIONS (PRICES OPTIMIZED)
 // =========================================================
 export const VIP_TIERS = {
     trial: {
         label: '🟡 Trial VIP',
         durationDays: 7,
-        priceSol: 0.1,
+        priceSol: 0.05, // Reduced from 0.1
         description: '7-day trial — 0% fees, Turbo Jito priority',
         features: ['0% trading fees', 'Turbo Jito on all trades', 'VIP badge on leaderboard']
     },
     standard: {
         label: '🟢 Standard VIP',
         durationDays: 30,
-        priceSol: 0.3,
+        priceSol: 0.15, // Reduced from 0.3
         description: '30-day membership — 0% fees + Alpha Directory access',
         features: ['0% trading fees', 'Turbo Jito on all trades', 'VIP badge', 'Whale Alpha Directory']
     },
     pro: {
         label: '🔵 Pro VIP',
         durationDays: 90,
-        priceSol: 1.0,
+        priceSol: 0.49, // Reduced from 1.0
         description: '90-day membership — everything + Dev Suite free',
         features: ['0% trading fees', 'Turbo Jito', 'VIP badge', 'Alpha Directory', 'Dev Suite unlocked free', 'Priority support']
     },
     lifetime: {
         label: '💎 Lifetime VIP',
-        durationDays: 36500, // 100 years = effectively lifetime
-        priceSol: 3.0,
+        durationDays: 36500,
+        priceSol: 0.99, // Reduced from 3.0
         description: 'Lifetime membership — everything forever',
         features: ['0% trading fees forever', 'Turbo Jito forever', 'Permanent VIP badge', 'Alpha Directory', 'Dev Suite free', 'Name permanently on leaderboard', 'Priority support']
     }

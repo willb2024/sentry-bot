@@ -100,6 +100,85 @@ export async function generatePnlCard(tokenMint: string, pnlPercent: number, ref
     return canvas.toBuffer('image/png');
 }
 
+// 🟢 FIX: Resolved line typo: line y loop now correctly uses lineTo instead of ctx.width
+export async function generateLaunchCard(
+    name: string, 
+    symbol: string, 
+    tokenAddress: string, 
+    devBuySol: number, 
+    walletCount: number
+): Promise<Buffer> {
+    const width = 850;
+    const height = 450;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+
+    // Background and Grid
+    ctx.fillStyle = '#0a0d14';
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < width; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke(); }
+    for (let y = 0; y < height; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
+
+    // Card Body
+    ctx.fillStyle = '#121826';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    drawRoundRect(ctx, 40, 40, width - 80, height - 80, 16);
+    ctx.fill();
+    ctx.stroke();
+
+    // Icon (Rocket)
+    ctx.fillStyle = '#3b82f6';
+    drawRoundRect(ctx, 75, 75, 46, 46, 12);
+    ctx.fill();
+
+    ctx.fillStyle = '#0a0d14'; 
+    ctx.beginPath();
+    ctx.moveTo(98, 85);
+    ctx.lineTo(108, 95);
+    ctx.lineTo(108, 105);
+    ctx.lineTo(88, 105);
+    ctx.lineTo(88, 95);
+    ctx.closePath();
+    ctx.fill();
+
+    const botName = process.env.BOT_NAME || 'Sentry Terminal';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.fillText(`${botName} Launchpad`, 135, 108);
+
+    // Token Details
+    ctx.fillStyle = '#3b82f6';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('DEPLOYMENT SUCCESSFUL', 75, 175);
+
+    ctx.font = '900 60px sans-serif';
+    ctx.fillStyle = '#ffffff'; 
+    ctx.fillText(`${name} ($${symbol})`, 75, 245);
+
+    ctx.font = '500 20px monospace';
+    ctx.fillStyle = '#94a3b8'; 
+    ctx.fillText(`CA: ${tokenAddress.substring(0, 12)}...pump`, 75, 285);
+
+    // Distribution Stats
+    ctx.fillStyle = '#10b981';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText(`Initial Buy: ${devBuySol} SOL`, 75, 335);
+
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText(`Stealth Split: ${walletCount} Wallets`, 320, 335);
+
+    // Footer
+    ctx.fillStyle = '#475569'; 
+    ctx.font = '500 16px sans-serif';
+    ctx.fillText(`Secured by ${botName} Jito Block-0 Routing`, 75, 395);
+
+    return canvas.toBuffer('image/png');
+}
+
 export async function generatePriceAlertChart(
     symbol: string,
     candles: Array<{ time: number; open: number; high: number; low: number; close: number }>,

@@ -3,7 +3,7 @@ import { redis } from '../lib/redis.js';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { generatePnlCard } from './image.service.js';
-import FormData from 'form-data'; // 🟢 FIX: Static import for form-data, native fetch used below
+import FormData from 'form-data'; 
 
 const prisma = new PrismaClient();
 
@@ -77,7 +77,7 @@ export async function recordSimTrade(telegramId: string, isBuy: boolean, amountI
         amountInSol,
         profitPercent
     });
-    await redis.set(key, JSON.stringify(existing.slice(0, 100)), 'EX', 86400); // 24-hour TTL
+    await redis.set(key, JSON.stringify(existing.slice(0, 100)), 'EX', 86400); 
     await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
 
@@ -300,7 +300,7 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         const telegramBotToken = process.env.BOT_TOKEN!;
         const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
         
-        // 🟢 FIX: Uses native fetch and global form-data
+        // 🟢 FIX: Static FormData with native fetch cleanly prevents dynamic dynamic node-fetch exceptions
         const form = new FormData();
         form.append('chat_id', telegramId);
         form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });

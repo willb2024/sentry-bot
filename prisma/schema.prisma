@@ -49,7 +49,6 @@ model User {
 
   pendingRewardsSol   Float    @default(0.0) 
   
-  // 🟢 VIP ENGINE FIELDS (FIXED)
   isVip               Boolean   @default(false)
   vipTier             String?
   vipExpiresAt        DateTime? 
@@ -62,12 +61,33 @@ model User {
   trades              Trade[]
   activeOrders        ActiveOrder[] 
   copyTrades          CopyTradeConfig[] 
+  launchedTokens      LaunchedToken[] // 🟢 NEW: Tracks user's launches
 
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
   @@index([telegramId])
   @@index([referralCode])
+}
+
+// 🟢 NEW: Launch Portfolio Model
+model LaunchedToken {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields:[userId], references: [id])
+  
+  tokenAddress      String   @unique
+  name              String
+  symbol            String
+  
+  launchedAt        DateTime @default(now())
+  devBuySol         Float
+  walletCount       Int
+  
+  totalVolumeBumped Float    @default(0.0)
+  isActive          Boolean  @default(true)
+  
+  @@index([userId])
 }
 
 model Trade {
