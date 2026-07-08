@@ -548,6 +548,53 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     else await ctx.replyWithHTML(layoutTxt, UI);
 }
 
+
+// =========================================================
+// 🚀 THE SENTRY LAUNCHPAD HANDLERS (FIXED SHADOWING & PITCH)
+// =========================================================
+const handleLaunchPadMenu = async (ctx: any) => {
+    try {
+        try { await ctx.answerCbQuery(); } catch(e){}
+        const tgId = ctx.from?.id.toString()!;
+        
+        // Use global redis directly to avoid local shadowing collisions
+        const keys = await redis.keys(`token_launch:${tgId}:*`);
+        if (keys.length > 0) {
+            await redis.del(...keys);
+        }
+
+        const msg = `🚀 <b>SENTRY LAUNCHPAD vs. PUMP.FUN DIRECT</b> 🚀\n\n` +
+                    `<i>Why are institutional developers deploying their tokens through Sentry Terminal instead of launching directly on the Pump.fun website?</i>\n\n` +
+                    
+                    `🔴 <b>Pump.fun Direct (The Retail Way):</b>\n` +
+                    `• <b>No MEV Protection:</b> Your deployment and dev buy hit the public mempool. Sniper bots read your transactions instantly, front-running and sandwiching your entry to force you to buy your own supply at a premium.\n` +
+                    `• <b>Ugly Holder Profiles:</b> Attempting to split your dev buy manually across multiple wallets takes minutes. Snipers and bots jump in between, leaving your initial chart looking top-heavy and unprofessional.\n` +
+                    `• <b>100% Downside Exposure:</b> If sniper bots dump on your launch, you lose your entire initial allocation capital with zero protection.\n\n` +
+                    
+                    `🟢 <b>Sentry Terminal (The Elite Way):</b>\n` +
+                    `• <b>100% Jito MEV Protection:</b> Your deployment, dev buy, and stealth splits are bundled into a single, private **Block-0 Jito Bundle**. Front-running is mathematically impossible.\n` +
+                    `• <b>Simultaneous Stealth Splits:</b> Split your dev buy across up to 4 separate sub-wallets instantly inside the same Solana block for a flawless, organic holder profile.\n` +
+                    `• <b>Auto-Guard Risk Management:</b> Set an automatic stop-loss on your dev buy. Sentry will auto-execute pre-signed Jito bundles to rescue your capital if snipers dump.\n` +
+                    `• <b>Headless Volume Schedules:</b> Maintain your "Trending" status hands-free. Specify budget and hours, and Sentry will natively wash-trade randomized sizes and delays in the background.\n` +
+                    `• <b>One-Tap Holder Audits:</b> Scan your top-15 holder distribution instantly using Helius telemetry to verify stealth success.\n\n` +
+                    
+                    `💳 <b>Platform Fee:</b> 0.05 SOL (+ Standard Pump Fee)\n` +
+                    `<i>The 0.03 SOL premium directly funds the Jito Block-0 bundle engineering that secures your deploy capital.</i>`;
+
+        await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 START LAUNCH WIZARD', 'start_token_wizard')],
+            [Markup.button.callback('📂 MY LAUNCH PORTFOLIO', 'menu_my_launches')],
+            [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+        ]));
+    } catch (err: any) {
+        console.error("🔴 [LAUNCHPAD MENU CRASH]:", err.message);
+    }
+};
+
+// Map both namespaces to catch either callback cleanly
+bot.action('menu_token_launcher', handleLaunchPadMenu);
+bot.action('action_launch_token_start', handleLaunchPadMenu);
+
 // 🟢 NEW: Separate Vault Menu renderer to prevent fake bot.handleUpdate latency
 async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
