@@ -462,7 +462,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         include: { _count: { select: { recruits: true } } } 
     });
     
-    // 🟢 FIX: Parallelize remote database lookups
+    // Parallelize remote database lookups
     const [user, vipStatus, isSimMode] = await Promise.all([
         userPromise,
         getVipStatus(telegramId),
@@ -470,7 +470,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     ]);
     if (!user) return; 
 
-    // 🟢 FIX: Parallelize user-dependent lookups
+    // Parallelize user-dependent lookups
     const [liveBalance, userGuilds, newVipStatus] = await Promise.all([
         getLiveBalance(user),
         prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } }),
@@ -535,9 +535,13 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
         [Markup.button.callback('🛠️ Dev Suite (PRO)', 'menu_devsuite'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
         [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
-        [Markup.button.callback('👑 VIP Status', 'menu_vip'), Markup.button.callback('🚀 Launch Token', 'action_launch_token_start')],
-        [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu')],
-        [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
+        // 🟢 FIX: Changed callback data to 'menu_token_launcher' so it actually opens the menu
+        [Markup.button.callback('👑 VIP Status', 'menu_vip'), Markup.button.callback('🚀 Launch Token', 'menu_token_launcher')],
+        // 🟢 FIX: Combined Guilds and Track Trades into a single array (row)
+        [
+            Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), 
+            { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }
+        ]
     ]);
 
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
