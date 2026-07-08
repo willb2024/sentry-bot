@@ -444,11 +444,24 @@ async function getLiveBalance(user: any): Promise<string> {
         if (user.activeWallets >= 4 && user.vault4) pubkeys.push(new PublicKey(user.vault4));
         if (user.activeWallets >= 5 && user.vault5) pubkeys.push(new PublicKey(user.vault5));
 
-        const balances = await Promise.all(pubkeys.map(pk => connection.getBalance(pk).catch(() => 0)));
+        // 🟢 FIX: Wrap RPC calls in a strict 2.5-second timeout.
+        // If the RPC throws a 429 Rate Limit and hangs, the bot will bypass it instead of crashing.
+        const balances = await Promise.all(pubkeys.map(pk => {
+            return Promise.race([
+                connection.getBalance(pk),
+                new Promise<number>((_, reject) => setTimeout(() => reject(new Error("RPC Timeout")), 2500))
+            ]).catch(() => 0);
+        }));
+
         balances.forEach((bal: any) => totalLamports += bal);
 
         const finalBalance = (totalLamports / LAMPORTS_PER_SOL).toFixed(4);
-        await redis.set(cacheKey, finalBalance, 'EX', 15);
+        
+        // Only cache if we actually got a real balance (didn't time out completely)
+        if (totalLamports > 0 || balances.length === 0) {
+            await redis.set(cacheKey, finalBalance, 'EX', 15);
+        }
+        
         return finalBalance;
     } catch (e) { return "0.0000"; }
 }
