@@ -1,6 +1,6 @@
 // src/services/grpc.service.ts
 import Client from '@triton-one/yellowstone-grpc';
-import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle } from './engine.service.js';
+import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, getCachedTokenPrice } from './engine.service.js';
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
@@ -14,6 +14,7 @@ import bs58 from 'bs58';
 import crypto from 'crypto';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
+import FormData from 'form-data'; // 🟢 FIX: Static import for form-data, used with native fetch
 
 dotenv.config();
 const prisma = new PrismaClient();
@@ -96,9 +97,6 @@ setInterval(async () => {
     }
 }, 20_000);
 
-// =========================================================
-// 📸 PRICE ALERT WITH CHART SNAPSHOT
-// =========================================================
 async function sendPriceAlertWithChart(
     telegramId: string,
     tokenMint: string,
@@ -125,7 +123,6 @@ async function sendPriceAlertWithChart(
             (pnlVsEntry ? `📈 vs Entry: <b>${parseFloat(pnlVsEntry) >= 0 ? '+' : ''}${pnlVsEntry}%</b>\n` : '') +
             `\n<i>Chart shows last 60 minutes of price action.</i>`;
 
-        // We import Markup locally to avoid breaking grpc service imports
         const { Markup } = await import('telegraf');
         const keyboard = Markup.inlineKeyboard([
             [Markup.button.callback(`⚡ Buy Now`, `quick_buy_${tokenMint}`)],
@@ -169,11 +166,11 @@ function isBondingCurveGraduated(data: Buffer): boolean {
     return data.length > 2 && data[2] === 1;
 }
 
+// 🟢 FIX: Implemented fast cached price lookup
 async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     try {
-        const priceRes = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${tokenAddress}`, { timeout: 4000 });
-        const price = priceRes?.data?.data?.[tokenAddress]?.price;
-        if (price && parseFloat(price) > 0) return parseFloat(price);
+        const price = await getCachedTokenPrice(tokenAddress);
+        if (price > 0) return price;
     } catch (_) {}
 
     if (tokenAddress.toLowerCase().endsWith("pump")) {
@@ -231,7 +228,7 @@ async function checkAndTriggerGuard(
             
             try {
                 const user = await prisma.user.findUnique({ where: { telegramId: guardSnapshot.telegramId } });
-                const imageBuffer = await generatePnlCard(guardSnapshot.tokenAddress, pnlPercent, user?.referralCode);
+                const imageBuffer = await generatePnlCard(guardSnapshot.tokenAddress, pnlPercent, user?.referralCode ?? undefined);
 
                 const rawSolPnl = guardSnapshot.amountInSol * (pnlPercent / 100);
                 const platformFee = (guardSnapshot.amountInSol * (1 + pnlPercent / 100)) * 0.01;
@@ -239,7 +236,7 @@ async function checkAndTriggerGuard(
                 const solPnl = rawSolPnl - platformFee - jitoTip;
                 
                 const imgId = crypto.randomBytes(8).toString('hex');
-                await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
+                await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); 
                 
                 const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
                 const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
@@ -261,11 +258,7 @@ async function checkAndTriggerGuard(
                             `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                             `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
                 
-                // @ts-ignore
-                const fetch = (await import('node-fetch')).default;
-                // @ts-ignore
-                const FormData = (await import('form-data')).default;
-                
+                // 🟢 FIX: Uses native fetch and form-data, safely avoiding node-fetch crashing
                 const form = new FormData();
                 form.append('chat_id', guardSnapshot.telegramId);
                 form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
@@ -273,10 +266,16 @@ async function checkAndTriggerGuard(
                 form.append('parse_mode', 'HTML');
                 form.append('reply_markup', JSON.stringify(twitterBtn));
                 
-                await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form });
+                await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { 
+                    method: 'POST', 
+                    body: form as any,
+                    headers: form.getHeaders()
+                });
                 
                 await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
-            } catch (_) {}
+            } catch (e: any) {
+                console.error("Simulation image send failed:", e.message);
+            }
             
             setTimeout(() => lockedGuards.delete(guardSnapshot.id), 15_000);
         }
@@ -331,12 +330,9 @@ async function checkAndTriggerGuard(
                             const profitSol  = (guard.amountInSol * (profitPercent / 100)) * multiplier;
                             
                             const imgId = crypto.randomBytes(8).toString('hex');
-                            const imageBuffer = await generatePnlCard(guard.tokenAddress, profitPercent, user?.referralCode);
-                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
+                            const imageBuffer = await generatePnlCard(guard.tokenAddress, profitPercent, user?.referralCode ?? undefined);
+                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); 
                             
-                            const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
-                            
-                            // 🟢 FEATURE 1: Dynamic Execution Time Tweet (Take Profit)
                             const tradeStartRaw = await redis.get(`trade_time:${guard.telegramId}:${guard.tokenAddress}`);
                             let timeString = "";
                             if (tradeStartRaw) {
@@ -362,11 +358,7 @@ async function checkAndTriggerGuard(
                                 `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                                 `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            // @ts-ignore
-                            const fetch = (await import('node-fetch')).default;
-                            // @ts-ignore
-                            const FormData = (await import('form-data')).default;
-                            
+                            // 🟢 FIX: Uses native fetch and form-data, safely avoiding node-fetch crashing
                             const form = new FormData();
                             form.append('chat_id', guard.telegramId);
                             form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
@@ -374,8 +366,14 @@ async function checkAndTriggerGuard(
                             form.append('parse_mode', 'HTML');
                             form.append('reply_markup', JSON.stringify(twitterBtn));
                             
-                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form });
-                        } catch (_) {}
+                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { 
+                                method: 'POST', 
+                                body: form as any,
+                                headers: form.getHeaders()
+                            });
+                        } catch (e: any) {
+                            console.error("Take profit image send failed:", e.message);
+                        }
                     }
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 } else {
@@ -409,12 +407,9 @@ async function checkAndTriggerGuard(
                             const pnlSol        = (guard.amountInSol * (Math.abs(totalPnlPercent) / 100)) * multiplier;
 
                             const imgId = crypto.randomBytes(8).toString('hex');
-                            const imageBuffer = await generatePnlCard(guard.tokenAddress, totalPnlPercent, user?.referralCode);
-                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); // 3-day expiry
+                            const imageBuffer = await generatePnlCard(guard.tokenAddress, totalPnlPercent, user?.referralCode ?? undefined);
+                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); 
                             
-                            const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
-                            
-                            // 🟢 FEATURE 1: Dynamic Execution Time Tweet (Trailing Guard)
                             const tradeStartRaw = await redis.get(`trade_time:${guard.telegramId}:${guard.tokenAddress}`);
                             let timeString = "";
                             if (tradeStartRaw) {
@@ -445,11 +440,7 @@ async function checkAndTriggerGuard(
                                 `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
                                 `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            // @ts-ignore
-                            const fetch = (await import('node-fetch')).default;
-                            // @ts-ignore
-                            const FormData = (await import('form-data')).default;
-                            
+                            // 🟢 FIX: Uses native fetch and form-data, safely avoiding node-fetch crashing
                             const form = new FormData();
                             form.append('chat_id', guard.telegramId);
                             form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
@@ -457,8 +448,14 @@ async function checkAndTriggerGuard(
                             form.append('parse_mode', 'HTML');
                             form.append('reply_markup', JSON.stringify(twitterBtn));
                             
-                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form });
-                        } catch (_) {}
+                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { 
+                                method: 'POST', 
+                                body: form as any,
+                                headers: form.getHeaders()
+                            });
+                        } catch (e: any) {
+                            console.error("Stop loss image send failed:", e.message);
+                        }
                     }
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 } else {
@@ -611,7 +608,6 @@ export function startUniversalGuardPoller(bot: any) {
                 }
             }
 
-            // 🟢 FEATURE 4: Watchlist Background Poller
             const keys = await redis.keys('watchlist:*');
             for (const key of keys) {
                 const tgId = key.split(':')[1];
@@ -633,7 +629,7 @@ export function startUniversalGuardPoller(bot: any) {
                                 await sendPriceAlertWithChart(
                                     tgId,
                                     ca,
-                                    "Watched Token", // The actual symbol can be fetched if needed
+                                    "Watched Token", 
                                     currentPriceUsd,
                                     data.targetPrice,
                                     data.addedPrice || 0,

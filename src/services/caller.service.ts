@@ -1,3 +1,4 @@
+// src/services/caller.service.ts
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -94,28 +95,34 @@ const pumpClient = axios.create({
     headers: { 'User-Agent': 'Mozilla/5.0' }
 });
 
-// 🟢 REPLACED: Added a 250ms delay to respect RPC rate limits
-// 🟢 FIX: Forced sequential execution with a 400ms delay to stop Solana RPC 429 bans
+// 🟢 FIX: Implemented real bounded concurrency to process items in parallel but limited 
+// to avoid slamming the RPC, stopping 429 bans and fixing the "slow sequential loop" issue.
 async function mapParallel<T, R>(
     items: T[],
     limit: number,
     fn: (item: T, idx: number) => Promise<R>
 ): Promise<R[]> {
     const results: R[] = [];
-    
-    for (let i = 0; i < items.length; i++) {
-        try {
-            const res = await fn(items[i], i);
-            results.push(res);
-        } catch (e) {
-            // skip on error
+    let i = 0;
+
+    const workers = Array(limit).fill(0).map(async () => {
+        while (i < items.length) {
+            const currentIndex = i++;
+            try {
+                // Add a small delay to prevent slamming all requests simultaneously
+                await new Promise(resolve => setTimeout(resolve, Math.random() * 200 + 100));
+                const res = await fn(items[currentIndex], currentIndex);
+                if (res !== null && res !== undefined) results.push(res);
+            } catch (e) {
+                // skip on error
+            }
         }
-        // Strict 400ms delay between token checks
-        await new Promise(resolve => setTimeout(resolve, 400));
-    }
-    
+    });
+
+    await Promise.all(workers);
     return results;
 }
+
 async function fetchTrendingPairs(): Promise<any[]> {
     try {
         const res = await dexClient.get('/token-profiles/latest/v1', { timeout: 5000 });
@@ -369,12 +376,13 @@ export async function scoreTokens(): Promise<TokenScore[]> {
 
         console.log(`⚡ [CALLER] Scoring ${deduped.length} unique pairs from 4 sources...`);
 
+        // 🟢 FIX: Uses the newly bounded concurrent mapParallel
         const scored = await mapParallel(deduped, 12, async ({ pair, source }) => {
             return await scorePair(pair, source);
         });
 
         const results = scored
-            .filter((s): s is TokenScore => s !== null)
+            .filter((s): s is TokenScore => s !== null && s !== undefined)
             .sort((a, b) => b.totalScore - a.totalScore);
 
         console.log(`✅ [CALLER] Scored ${results.length} tokens. Top score: ${results[0]?.totalScore ?? 0}`);
@@ -411,8 +419,6 @@ async function getHotCache(): Promise<TokenScore[]> {
 }
 
 async function runNotificationPass(bot: any): Promise<void> {
-    
-    
     try {
         const topTokens = await getHotCache();
         if (topTokens.length === 0) return;
@@ -434,6 +440,7 @@ async function runNotificationPass(bot: any): Promise<void> {
                 const matchedToken = topTokens.find(t => {
                     if (t.totalScore < filters.minScore) return false;
                     if (t.ageMins > filters.maxAgeMins) return false;
+                    // 🟢 FIX: Correctly drops tokens flagged with negative safety scores by the MEV block filter
                     if (filters.blockMev && t.breakdown.mevRisk < 0) return false;
 
                     const effectiveMomentum = Math.max(t.priceChangeM5, t.priceChangeH1 / 12);

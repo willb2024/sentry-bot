@@ -1,10 +1,9 @@
 // src/services/dca.service.ts
 import { PrismaClient } from '@prisma/client';
-import { executeSnipe } from './engine.service.js';
+import { executeSnipe, getCachedTokenPrice } from './engine.service.js'; // 🟢 FIX: Import cached price helper
 import { addTrailingStopToMemory } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { PublicKey } from '@solana/web3.js';
-import axios from 'axios';
 import dotenv from 'dotenv';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
@@ -60,8 +59,6 @@ export function startDcaEngine(bot: any) {
 
                     const intendedSpend = order.amountSol * order.user.activeWallets;
 
-                    // 🟢 CRITICAL BUG 6 FIX: Track inflight pre-allocations in Redis to prevent race conditions 
-                    // during slow Jito confirmations where parallel ticks might read stale totalSpentSol database values.
                     const allocKey = `dca_allocated:${order.id}`;
                     const rawAllocated = await redis.get(allocKey);
                     const currentAllocated = rawAllocated ? parseFloat(rawAllocated) : 0;
@@ -81,7 +78,6 @@ export function startDcaEngine(bot: any) {
                         continue;
                     }
 
-                    // Log inflight allocation in memory before firing async trade
                     await redis.set(allocKey, (currentAllocated + intendedSpend).toString(), 'EX', 120);
 
                     const idx = cachedDcaOrders.findIndex(o => o.id === order.id);
@@ -96,7 +92,6 @@ export function startDcaEngine(bot: any) {
                     const capturedTpPercent = order.takeProfitPercent || undefined;
 
                     executeSnipe(capturedTelegramId, capturedTokenAddress, capturedAmountSol).then(async (result) => {
-                        // Clean up inflight allocation memory block
                         const activeAlloc = parseFloat(await redis.get(allocKey) || '0');
                         await redis.set(allocKey, Math.max(0, activeAlloc - intendedSpend).toString(), 'EX', 120);
 
@@ -113,10 +108,8 @@ export function startDcaEngine(bot: any) {
 
                             let initialPriceNative = 0;
                             try {
-                                const priceRes = await axios.get(
-                                    `https://lite-api.jup.ag/price/v2?ids=${capturedTokenAddress}`
-                                ).catch(() => null);
-                                initialPriceNative = priceRes?.data?.data?.[capturedTokenAddress]?.price || 0;
+                                // 🟢 FIX: Used fast cache instead of raw blocking API call
+                                initialPriceNative = await getCachedTokenPrice(capturedTokenAddress);
 
                                 if (initialPriceNative === 0 && capturedTokenAddress.toLowerCase().endsWith("pump")) {
                                     const curvePda = getBondingCurveAddress(capturedTokenAddress);
@@ -160,7 +153,6 @@ export function startDcaEngine(bot: any) {
                             } catch (_) {}
                         }
                     }).catch(async (e: any) => {
-                        // Safe rollback of pre-allocation if execution crashes
                         const activeAlloc = parseFloat(await redis.get(allocKey) || '0');
                         await redis.set(allocKey, Math.max(0, activeAlloc - intendedSpend).toString(), 'EX', 120);
                         console.error("🔴 DCA Snipe Exception:", e.message);

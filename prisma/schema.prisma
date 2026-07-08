@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -25,8 +27,8 @@ model User {
   vault5              String?  @unique
   pk5                 String?  @unique
 
-  priorityLevel       String   @default("FAST") 
-  customPriorityFee   Float    @default(0.001) 
+  priorityLevel       String   @default("FAST") // "ECO" | "FAST" | "TURBO" | "CUSTOM"
+  customPriorityFee   Float    @default(0.001) // In SOL
 
   ownedGuild       Guild?            @relation("GuildOwner")
   guildMemberships GuildMembership[] @relation("GuildMemberships")
@@ -47,13 +49,13 @@ model User {
 
   pendingRewardsSol   Float    @default(0.0) 
   
-  // 🟢 NEW: COMPREHENSIVE VIP ENGINE FIELDS
+  // 🟢 VIP ENGINE FIELDS (FIXED)
   isVip               Boolean   @default(false)
+  vipTier             String?
   vipExpiresAt        DateTime? 
-  vipTier             String?   
   vipSource           String?   
-  vipTxSignature      String?   
-  vipPurchasedAt      DateTime? 
+  vipTxSignature      String?
+  vipPurchasedAt      DateTime?
 
   isDevSuiteUnlocked  Boolean  @default(false)
 
@@ -91,7 +93,7 @@ model Trade {
 
   @@index([userId])
   @@index([tokenAddress])
-  @@index([txSignature]) 
+  @@index([txSignature])  
 }
 
 model ActiveOrder {

@@ -3,6 +3,7 @@ import { redis } from '../lib/redis.js';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { generatePnlCard } from './image.service.js';
+import FormData from 'form-data'; // 🟢 FIX: Static import for form-data, native fetch used below
 
 const prisma = new PrismaClient();
 
@@ -67,7 +68,6 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     return wallets;
 }
 
-// 🟢 BUG A FIX: Expanded recordSimTrade to write profitPercent correctly with 24h TTL
 export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number, profitPercent: number = 0) {
     const key = `sim:trades:${telegramId}`;
     const existing = JSON.parse(await redis.get(key) || '[]');
@@ -116,7 +116,6 @@ export async function simExecuteSnipe(
     });
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
     
-    // 🟢 Record simulated Buy trade correctly (profitPercent = 0)
     await recordSimTrade(telegramId, true, amountSol, 0);
 
     return {
@@ -158,7 +157,6 @@ export async function simExecuteExit(
             await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
         }
         
-        // 🟢 BUG A FIX: Record simulated Sell trade with actual profit/loss percentage
         await recordSimTrade(telegramId, false, soldSol, pnlPercent);
     }
 
@@ -182,82 +180,6 @@ export function generateSimCallerAlert(): { mint: string, symbol: string, score:
     };
 }
 
-// Fires a realistic guard/TP notification after a delay — identical to the real grpc.service output
-async function scheduleSimGuardTrigger(
-    telegramId: string,
-    tokenAddress: string,
-    orderId: string,
-    amountInSol: number,
-    entryPrice: number,
-    symbol: string,
-    delayMs: number
-) {
-    setTimeout(async () => {
-        try {
-            // Check the guard still exists (user may have sold manually)
-            const guardRaw = await redis.get(`sim:guard:${tokenAddress}:${telegramId}`);
-            if (!guardRaw) return;
-
-            // 70% chance profit, 30% chance loss — weighted toward profit for demo
-            const isProfit = Math.random() > 0.3;
-            const pnlPercent = isProfit
-                ? parseFloat((Math.random() * 280 + 20).toFixed(2))   // +20% to +300%
-                : -parseFloat((Math.random() * 25 + 5).toFixed(2));   // 🟢 Fixed type compiler error
-
-            const exitSig = generateSimSignature();
-            const pnlSol = (amountInSol * Math.abs(pnlPercent / 100));
-
-            const pnlMessage = isProfit
-                ? `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
-                : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
-
-            const isTP = isProfit && Math.random() > 0.5;
-
-            const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
-                `Token: <code>${tokenAddress.substring(0,8)}...</code>\n` +
-                `Exit Price: <b>${(entryPrice * (1 + pnlPercent / 100)).toFixed(9)} SOL</b>\n` +
-                `${!isProfit ? `📉 <b>Peak Drop: -${pnlPercent.toFixed(1)}%</b>\n` : ''}` +
-                `${pnlMessage}\n` +
-                `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
-                `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
-
-            const user = await prisma.user.findUnique({ where: { telegramId } });
-            const telegramBotToken = process.env.BOT_TOKEN!;
-            const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
-            
-            // @ts-ignore
-            const fetch = (await import('node-fetch')).default;
-            // @ts-ignore
-            const FormData = (await import('form-data')).default;
-            
-            const form = new FormData();
-            form.append('chat_id', telegramId);
-            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
-            form.append('caption', captionText);
-            form.append('parse_mode', 'HTML');
-            
-            await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
-                method: 'POST', body: form
-            });
-
-            // 🟢 BUG A FIX: Record closed simulated guard exit trade correctly
-            await recordSimTrade(telegramId, false, amountInSol, pnlPercent);
-
-            // Update sim balance
-            const currentBal = parseFloat(await getSimBalance(telegramId));
-            const returnSol = amountInSol + pnlSol;
-            await redis.set(`sim:balance:${telegramId}`, Math.max(0, currentBal + returnSol).toFixed(4));
-
-            // Remove position
-            const posKey = `sim:positions:${telegramId}`;
-            const positions = JSON.parse(await redis.get(posKey) || '[]');
-            const updated = positions.filter((p: any) => p.mint !== tokenAddress);
-            await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
-            await redis.del(`sim:guard:${tokenAddress}:${telegramId}`);
-        } catch (_) {}
-    }, delayMs);
-}
-
 function shuffleArray<T>(array: T[]): T[] {
     const arr = [...array];
     for (let i = arr.length - 1; i > 0; i--) {
@@ -266,8 +188,6 @@ function shuffleArray<T>(array: T[]): T[] {
     }
     return arr;
 }
-
-// ─── 🟢 SIMULATED AUTO SNIPE LOOP ──────────────────────────────
 
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
     const key = `sim:autosnipe:${telegramId}`;
@@ -282,16 +202,8 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
 }
 
 async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
-    // 3 loss, 1 win, 2 win, 2 losses, 1 win, 1 loss, 2 losses, 2 win (14 items)
     const baseSequence = [
-        false, false, false, 
-        true,                
-        true, true,          
-        false, false,        
-        true,                
-        false,               
-        false, false,        
-        true, true           
+        false, false, false, true, true, true, false, false, true, false, false, false, true, true           
     ];
 
     let sequence = shuffleArray(baseSequence);
@@ -388,11 +300,7 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         const telegramBotToken = process.env.BOT_TOKEN!;
         const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
         
-        // @ts-ignore
-        const fetch = (await import('node-fetch')).default;
-        // @ts-ignore
-        const FormData = (await import('form-data')).default;
-        
+        // 🟢 FIX: Uses native fetch and global form-data
         const form = new FormData();
         form.append('chat_id', telegramId);
         form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
@@ -400,9 +308,13 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         form.append('parse_mode', 'HTML');
         
         await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
-            method: 'POST', body: form
+            method: 'POST', 
+            body: form as any,
+            headers: form.getHeaders()
         });
-    } catch (_) {}
+    } catch (e: any) {
+        console.error("Simulation image send failed:", e.message);
+    }
 }
 
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard'): Promise<boolean> {

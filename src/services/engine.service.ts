@@ -7,9 +7,8 @@ import axios from 'axios';
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { awardGuildPoints } from './guild.service.js';
-import { getPlatformFeeRate } from './vip.service.js';
-import { getVipStatus } from './vip_promo.service.js';
-import { checkRecentMevActivity } from './price.service.js'; // TASK 7 FIX
+import { getEffectiveFeePercent } from './vip_promo.service.js'; // 🟢 FIX: Uses reconciled VIP module to bypass fees
+import { checkRecentMevActivity } from './price.service.js'; 
 import { redis } from '../lib/redis.js'; 
 import dns from 'dns';
 import https from 'https';
@@ -156,6 +155,35 @@ async function pollSignatureConfirmation(signature: string, maxRetries = 8): Pro
     return false;
 }
 
+// 🟢 FIX: Added universal fast short-TTL price cache to stop rate-limiting errors
+export async function getCachedTokenPrice(mint: string): Promise<number> {
+    const cached = await redis.get(`price_cache:${mint}`);
+    if (cached) return parseFloat(cached);
+
+    try {
+        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${mint}`);
+        const price = res.data?.data?.[mint]?.price;
+        if (price) {
+            await redis.set(`price_cache:${mint}`, price, 'EX', 5); // 5 sec cache
+            return parseFloat(price);
+        }
+    } catch (_) {}
+    return 0;
+}
+
+// 🟢 FIX: Added cache for MEV checks to remove serial delays during execution
+export async function checkRecentMevActivityCached(tokenMint: string): Promise<boolean> {
+    try {
+        const cached = await redis.get(`mev_check:${tokenMint}`);
+        if (cached) return cached === 'true';
+        const hasMev = await checkRecentMevActivity(tokenMint);
+        await redis.set(`mev_check:${tokenMint}`, hasMev ? 'true' : 'false', 'EX', 10);
+        return hasMev;
+    } catch (_) {
+        return false;
+    }
+}
+
 async function getDynamicPriorityFee(priorityLevel: string, customPriorityFee: number): Promise<number> {
     if (priorityLevel === 'ECO') return 500_000;
     if (priorityLevel === 'CUSTOM') return Math.floor(customPriorityFee * 1_000_000_000);
@@ -210,7 +238,7 @@ async function fetchApiTransaction(
     customPriorityFee: number = 0.001,
     pkEncrypted?: string,
     raydiumPoolId?: string
-): Promise<{ buffer: Buffer | null, errorLog: string }> {
+): Promise<{ buffer: Buffer | null, errorLog: string, estimatedOutput?: number }> {
     let globalErrorLog = "";
     try {
         const isPumpToken = mint.toLowerCase().endsWith("pump");
@@ -276,10 +304,17 @@ async function fetchApiTransaction(
             const jupiterPriorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
 
             try {
+                // 🟢 FIX: Return Jupiter quote to avoid a second redundant network trip later
                 const quoteRes = await axios.get(
                     `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
                     { httpsAgent: activeAgent, headers: API_HEADERS, timeout: 8000 }
                 );
+                
+                let estimatedOutput = 0;
+                if (action === 'sell' && quoteRes.data?.outAmount) {
+                    estimatedOutput = Number(quoteRes.data.outAmount) / 1_000_000_000;
+                }
+
                 const swapRes = await axios.post(
                     'https://lite-api.jup.ag/swap/v1/swap',
                     {
@@ -294,7 +329,7 @@ async function fetchApiTransaction(
 
                 if (swapRes.data?.swapTransaction) {
                     apiBuffer = Buffer.from(swapRes.data.swapTransaction, 'base64');
-                    return { buffer: apiBuffer, errorLog: "" };
+                    return { buffer: apiBuffer, errorLog: "", estimatedOutput };
                 }
                 globalErrorLog += `[Jupiter: No swapTransaction in response] `;
             } catch (e: any) {
@@ -321,9 +356,9 @@ async function buildTipAndFeeTransaction(
 ): Promise<VersionedTransaction | null> {
     try {
         const baseFeeRate = getDynamicFeeRate(expectedSolVolume, hasDiscount);
-       // REPLACE WITH THIS:
-       const feeRate = await getPlatformFeeRate(telegramId);
-       const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
+        // 🟢 FIX: Uses reconciled VIP module to bypass fees correctly
+        const feeRate = await getEffectiveFeePercent(telegramId, baseFeeRate);
+        const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
 
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
 
@@ -376,10 +411,9 @@ export async function executeSnipe(
         return await simExecuteSnipe(telegramId, targetCA, amountSol);
     }
     
-    // TASK 7 FIX: Wire checkRecentMevActivity into the pre-buy safety checks
     if (side === 'buy' && !isBumper) {
         try {
-            const hasMev = await checkRecentMevActivity(targetCA);
+            const hasMev = await checkRecentMevActivityCached(targetCA);
             if (hasMev) {
                 return { success: false, message: "🚨 High MEV Bot / Sandwich activity detected on this token recently. Snipe aborted by safety shields to protect your funds." };
             }
@@ -520,16 +554,17 @@ export async function executeSnipe(
             return { success: false, message: `🔴 <b>Snipe Aborted:</b>\n<code>${lastError || "Transaction failed on-chain or expired."}</code>` };
         }
 
-        const effectiveFeeRate = await getPlatformFeeRate(user.telegramId);
-
+        // 🟢 FIX: Replaced VIP fee bypass
+        const baseFeeRate = getDynamicFeeRate(totalVolume, user.hasReferralDiscount);
+        const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
         const feeCharged = totalVolume * effectiveFeeRate;
+
         let affiliateCut = 0;
         if (user.referredById) {
             const dynamicRate = await getDynamicAffiliateRate(user.referredById);
             affiliateCut = feeCharged * dynamicRate;
         }
 
-        // TASK 6 FIX: Compute Guild Owner 50% Revenue Share permanently
         let guildOwnerCut = 0;
         let guildOwnerId: string | null = null;
         try {
@@ -540,20 +575,17 @@ export async function executeSnipe(
 
             if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
                 guildOwnerId = activeGuildMembership.guild.ownerId;
-                guildOwnerCut = feeCharged * 0.50; // 50% of the platform fee goes to the guild owner
+                guildOwnerCut = feeCharged * 0.50; 
             }
         } catch (_) {}
 
         await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: totalVolume } } });
-        
-        // TASK 5 FIX: Award Guild Points guaranteed to run on every successful trade
         awardGuildPoints(user.telegramId, totalVolume).catch(() => {});
         
         if (user.referredById && affiliateCut > 0) {
             await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } });
         }
 
-        // TASK 6 FIX: Deposit the 50% revenue share into the Guild Owner's withdrawable wallet
         if (guildOwnerId && guildOwnerCut > 0 && guildOwnerId !== user.referredById) {
             await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } });
         }
@@ -572,6 +604,7 @@ export async function executeSnipe(
             }
         }).catch(() => {});
 
+        const { getVipStatus } = await import('./vip_promo.service.js');
         const vipStatus = await getVipStatus(telegramId);
         const badgeStr = vipStatus.badge ? `${vipStatus.badge} ` : '';
 
@@ -625,12 +658,10 @@ export async function executeExit(
         const walletReport: string[] = [];
 
         const latestBlockhash = await getLatestBlockhashWithCache();
-
         const balances = await Promise.all(wallets.map(w => connection.getBalance(new PublicKey(w.pub)).catch(() => 0)));
 
         const executionPromises = wallets.map(async (w, index) => {
             const vaultPubkey = new PublicKey(w.pub);
-
             const keypair = getCachedKeypair(w.pub, w.pk);
             if (!keypair) { lastError = "Decryption Fault."; walletReport[index] = `W${index + 1}: 🔴 Auth`; return; }
 
@@ -657,16 +688,9 @@ export async function executeExit(
             const apiRes = await fetchApiTransaction('sell', targetCA, w.pub, 0, uiTokensToSell, tokensToSellRaw.toString(), sellPercentage, slippage, priorityLevel, customPriorityFee, w.pk);
             if (!apiRes.buffer) { lastError = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
 
-            let estimatedSolOutput = 0;
-            try {
-                const quoteRes = await axios.get(
-                    `https://lite-api.jup.ag/swap/v1/quote?inputMint=${targetCA}&outputMint=So11111111111111111111111111111111111111112&amount=${tokensToSellRaw.toString()}`,
-                    { httpsAgent: activeAgent, headers: API_HEADERS, timeout: 8000 }
-                );
-                if (quoteRes.data) estimatedSolOutput = Number(quoteRes.data.outAmount) / 1_000_000_000;
-            } catch (_) {}
-
-            const dynamicFeeBase = estimatedSolOutput > 0 ? estimatedSolOutput : 0.01;
+            // 🟢 FIX: Use pre-estimated output from fetchApiTransaction instead of wasting an RPC call
+            const dynamicFeeBase = apiRes.estimatedOutput && apiRes.estimatedOutput > 0 ? apiRes.estimatedOutput : 0.01;
+            
             const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             swapTx.sign([keypair]);
 
@@ -682,7 +706,8 @@ export async function executeExit(
             }
 
             if (!confirmed) {
-                if (slippage > 25.0) {
+                // 🟢 FIX: Allow public fallback for 100% exits to ensure stop-losses don't fail silently
+                if (slippage > 25.0 && sellPercentage !== 100) {
                     lastError = "Jito Bundle dropped. Aborted public fallback to prevent MEV Sandwich Attack on high slippage.";
                     walletReport[index] = `W${index + 1}: 🔴 Jito Drop`;
                 } else {
@@ -733,16 +758,17 @@ export async function executeExit(
             return { success: false, message: `🔴 <b>Exit Aborted:</b>\n<code>${lastError || "Transaction failed on-chain or expired."}</code>` };
         }
 
-        // REPLACE WITH THIS:
-        const effectiveFeeRate = await getPlatformFeeRate(user.telegramId);
+        // 🟢 FIX: Replaced VIP fee bypass
+        const baseFeeRate = getDynamicFeeRate(totalFeeBase, user.hasReferralDiscount);
+        const effectiveFeeRate = await getEffectiveFeePercent(user.telegramId, baseFeeRate);
         const feeCharged = totalFeeBase * effectiveFeeRate;
+        
         let affiliateCut = 0;
         if (user.referredById) {
             const dynamicRate = await getDynamicAffiliateRate(user.referredById);
             affiliateCut = feeCharged * dynamicRate;
         }
 
-        // TASK 6 FIX: Compute Guild Owner 50% Revenue Share permanently on Sells
         let guildOwnerCut = 0;
         let guildOwnerId: string | null = null;
         try {
@@ -753,7 +779,7 @@ export async function executeExit(
 
             if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
                 guildOwnerId = activeGuildMembership.guild.ownerId;
-                guildOwnerCut = feeCharged * 0.50; // 50% of the platform fee goes to the guild owner
+                guildOwnerCut = feeCharged * 0.50; 
             }
         } catch (_) {}
 
@@ -772,20 +798,16 @@ export async function executeExit(
         const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
         await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } });
-        
-        // TASK 5 FIX: Award Guild Points guaranteed to run on every successful trade
         awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
         
         if (user.referredById && affiliateCut > 0) {
             await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } });
         }
 
-        // TASK 6 FIX: Deposit the 50% revenue share into the Guild Owner's withdrawable wallet
         if (guildOwnerId && guildOwnerCut > 0 && guildOwnerId !== user.referredById) {
             await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } });
         }
 
-       // 🟢 FIX 4: Write realizedPnlSol correctly when recording exits
         await prisma.trade.create({
             data: {
                 userId: user.id,
@@ -798,11 +820,12 @@ export async function executeExit(
                 txSignature: firstSignature,
                 status: 'CONFIRMED',
                 profitPercent: parseFloat(profitPercent.toFixed(2)),
-                realizedPnlSol: volumeToRecord * (profitPercent / 100) // ADDED THIS LINE
+                realizedPnlSol: volumeToRecord * (profitPercent / 100)
             }
         }).catch(() => {});
 
         const breakdown = walletReport.filter(r => !r.includes("Empty")).join(" | ");
+        const { getVipStatus } = await import('./vip_promo.service.js');
         const vipStatus = await getVipStatus(telegramId);
         const badgeStr = vipStatus.badge ? `${vipStatus.badge} ` : '';
 

@@ -2,7 +2,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
 import { PrismaClient } from '@prisma/client';
-import { executeSnipe } from './engine.service.js';
+import { executeSnipe, getCachedTokenPrice } from './engine.service.js'; // 🟢 FIX: Import cached price helper
 import { addTrailingStopToMemory } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { redis } from '../lib/redis.js';
@@ -25,15 +25,12 @@ export function shutdownCopyTradeWatchers() {
 }
 
 async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
+    // 🟢 FIX: Use fast redis cached lookup instead of raw Jupiter API calls
     try {
-        const priceRes = await axios.get(
-            `https://lite-api.jup.ag/price/v2?ids=${tokenAddress}`,
-            { timeout: 5000 }
-        );
-        const price = priceRes?.data?.data?.[tokenAddress]?.price;
-        if (price && parseFloat(price) > 0) return parseFloat(price);
+        const cachedPrice = await getCachedTokenPrice(tokenAddress);
+        if (cachedPrice > 0) return cachedPrice;
     } catch (e: any) {
-        console.warn(`⚠️ [COPY-TRADE] Jupiter price fetch failed for ${tokenAddress}: ${e.message}`);
+        console.warn(`⚠️ [COPY-TRADE] Cached price fetch failed for ${tokenAddress}: ${e.message}`);
     }
 
     if (tokenAddress.toLowerCase().endsWith("pump")) {
@@ -194,7 +191,6 @@ export async function startCopyTradeWatcher(bot: any) {
     }, 30000);
 }
 
-// 🟢 FEATURE 2: Whale Wallet Scoring (Lightweight Bot Checker)
 export async function scoreWallet(walletAddress: string): Promise<{ score: number, isBot: boolean, message: string }> {
     try {
         const apiKey = process.env.HELIUS_API_KEY;
@@ -207,14 +203,13 @@ export async function scoreWallet(walletAddress: string): Promise<{ score: numbe
             return { score: 30, isBot: false, message: "Low activity. This wallet rarely trades." };
         }
 
-        // Calculate time differences between trades
         let totalTimeDiff = 0;
         let rapidTrades = 0;
 
         for (let i = 0; i < txs.length - 1; i++) {
             const timeDiff = txs[i].timestamp - txs[i+1].timestamp;
             totalTimeDiff += timeDiff;
-            if (timeDiff < 15) rapidTrades++; // Trades under 15 seconds apart
+            if (timeDiff < 15) rapidTrades++; 
         }
 
         const avgHoldTime = totalTimeDiff / (txs.length - 1);
@@ -222,7 +217,7 @@ export async function scoreWallet(walletAddress: string): Promise<{ score: numbe
 
         let score = 100;
         if (isBot) score -= 80;
-        else if (avgHoldTime > 3600) score -= 10; // Holds too long (not a sniper)
+        else if (avgHoldTime > 3600) score -= 10;
 
         return {
             score: Math.max(10, score),
