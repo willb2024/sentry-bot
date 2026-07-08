@@ -533,7 +533,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         [Markup.button.callback('🛠️ Dev Suite (PRO)', 'menu_devsuite'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
         [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
         [Markup.button.callback('👑 VIP Status', 'menu_vip'), Markup.button.callback('🚀 Launch Token', 'action_launch_token_start')],
-        [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('🏆 Sentry Guide', 'btn_guide')],
+        [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu')], // 🟢 Sentry Guide Button Removed
         [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
     ]);
 
@@ -845,49 +845,7 @@ bot.command('createguild', async (ctx) => {
     await ctx.replyWithHTML(`🏰 <b>GUILD SETUP [Step 1/2]</b>\n\nWhat is the name of your community?\n<i>(e.g., Alpha Wolves Community)</i>\n\nReply to this message with the name. (Type /cancel to abort)`);
 });
 
-bot.command('guild', async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    
-    // 🟢 Fetch ONLY the active guild membership
-    const memberships = await prisma.guildMembership.findMany({ 
-        where: { user: { telegramId: tgId }, isActive: true }, 
-        include: { guild: true } 
-    });
 
-    if (memberships.length === 0) {
-        return ctx.replyWithHTML(
-            `🏰 <b>You are not in any active Guilds.</b>\n\n` +
-            `Use a KOL's invite link to join one, or look at your joined list to activate one!`,
-            Markup.inlineKeyboard([
-                [Markup.button.callback('👥 My Joined Guilds', 'menu_switch_guilds')]
-            ])
-        );
-    }
-
-    const m = memberships[0];
-    const lb = await getLeaderboard(m.guildId, 3);
-    
-    let text = 
-        `🏰 <b>YOUR GUILD STATUS</b>\n\n` +
-        `<b>Guild:</b> ${m.guild.name} [<code>${m.guild.guildCode}</code>]\n` +
-        `<b>Reward:</b> "${m.guild.rewardDescription || 'Top wallets get rewards'}"\n\n` +
-        `<b>Your Active Rank:</b> ${m.rank ? `#${m.rank}` : 'Unranked'}\n` +
-        `<b>Your GLP:</b> ${m.loyaltyPoints.toLocaleString()} pts\n` +
-        `<b>Your Guild Volume:</b> ${m.totalVolumeSol.toFixed(2)} SOL\n\n` +
-        `📈 <b>Top 3 Right Now:</b>\n`;
-
-    lb.forEach(row => {
-        text += `#${row.rank} @${row.username} — ${row.glp.toLocaleString()} GLP\n`;
-    });
-
-    const inviteLink = `https://t.me/${ctx.botInfo?.username}?start=guild_${m.guild.guildCode}`;
-
-    await ctx.replyWithHTML(text, Markup.inlineKeyboard([
-        [Markup.button.callback('👥 Switch Active Guild', 'menu_switch_guilds')],
-        [{ text: '🔗 Share My Guild Link', url: `https://t.me/share/url?url=${inviteLink}&text=Join%20my%20Sentry%20Guild%20and%20earn%20WL` }]
-    ]));
-});
 
 // 🟢 NEW: Displays the list of all joined guilds
 bot.action('menu_switch_guilds', async (ctx) => {
@@ -2556,6 +2514,67 @@ bot.action('action_guild_menu', async (ctx) => {
     await safeEditMessageText(ctx, text, UI);
 });
 
+
+// 🟢 Unified Guild Status Display Logic
+async function showGuildStatus(ctx: any, isEdit: boolean = false) {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    
+    // Fetch ONLY the active guild membership
+    const memberships = await prisma.guildMembership.findMany({ 
+        where: { user: { telegramId: tgId }, isActive: true }, 
+        include: { guild: true } 
+    });
+
+    if (memberships.length === 0) {
+        const emptyMsg = `🏰 <b>You are not in any active Guilds.</b>\n\nUse a KOL's invite link to join one, or look at your joined list to activate one!`;
+        const emptyKeyboard = Markup.inlineKeyboard([
+            [Markup.button.callback('👥 My Joined Guilds', 'menu_switch_guilds')],
+            [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
+        ]);
+        
+        if (isEdit) return await safeEditMessageText(ctx, emptyMsg, emptyKeyboard);
+        return await ctx.replyWithHTML(emptyMsg, emptyKeyboard);
+    }
+
+    const m = memberships[0];
+    const lb = await getLeaderboard(m.guildId, 3);
+    
+    let text = 
+        `🏰 <b>YOUR GUILD STATUS</b>\n\n` +
+        `<b>Guild:</b> ${m.guild.name} [<code>${m.guild.guildCode}</code>]\n` +
+        `<b>Reward:</b> "${m.guild.rewardDescription || 'Top wallets get rewards'}"\n\n` +
+        `<b>Your Active Rank:</b> ${m.rank ? `#${m.rank}` : 'Unranked'}\n` +
+        `<b>Your GLP:</b> ${m.loyaltyPoints.toLocaleString()} pts\n` +
+        `<b>Your Guild Volume:</b> ${m.totalVolumeSol.toFixed(2)} SOL\n\n` +
+        `📈 <b>Top 3 Right Now:</b>\n`;
+
+    lb.forEach((row: any) => {
+        text += `#${row.rank} @${row.username} — ${row.glp.toLocaleString()} GLP\n`;
+    });
+
+    const inviteLink = `https://t.me/${ctx.botInfo?.username}?start=guild_${m.guild.guildCode}`;
+
+    const activeKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('👥 Switch Active Guild', 'menu_switch_guilds')],
+        [{ text: '🔗 Share My Guild Link', url: `https://t.me/share/url?url=${inviteLink}&text=Join%20my%20Sentry%20Guild%20and%20earn%20WL` }],
+        [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
+    ]);
+
+    if (isEdit) await safeEditMessageText(ctx, text, activeKeyboard);
+    else await ctx.replyWithHTML(text, activeKeyboard);
+}
+
+// 🟢 Triggers when a user types /guild
+bot.command('guild', async (ctx) => {
+    await showGuildStatus(ctx, false);
+});
+
+// 🟢 Triggers when a user clicks the "View My Active Guild Status" button
+bot.action('menu_guild_status', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await showGuildStatus(ctx, true);
+});
 
 bot.action('menu_caller', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
