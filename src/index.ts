@@ -11,6 +11,7 @@ import { redis } from './lib/redis.js';
 import { isSimulationActive } from './services/simulation.service.js';
 import axios from 'axios';
 import { igniteYellowstoneStream } from './services/grpc.service.js';
+import FormData from 'form-data';
 import { sweepExpiredVips } from './services/vip_promo.service.js';
 import { addTrailingStopToMemory, cancelAllUserGuards, cancelAllGuardsForToken, updateGuardSize } from './services/order.service.js';
 import { generateSecureVault, exportPrivateKey, importPrivateKey, ensureWalletsExist, decryptKey } from './services/vault.service.js';
@@ -511,10 +512,11 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         ? `\n👑 <b>${VIP_TIERS[newVipStatus.tier!].label}</b> · ${newVipStatus.tier === 'lifetime' ? '♾️ Lifetime' : `${newVipStatus.daysRemaining}d remaining`}\n`
         : '';
 
-    const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
-    `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}\n` + 
-    `👛 <b>Primary Deposit Node:</b>\n` +
-    `<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
+        const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
+        `${vipStatus.badgeLine ? `\n${vipStatus.badgeLine}\n` : ''}` + 
+        `${vipBadge}` + // 🟢 FIX: Injects the active paid VIP tier badge lines properly
+        `👛 <b>Primary Deposit Node:</b>\n` +
+        `<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
     `💰 <b>Total Balance:</b> <code>${liveBalance} SOL</code>\n` +
     `${whaleModeText}\n\n` +
     `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
@@ -3536,19 +3538,38 @@ bot.action('action_confirm_token_launch', async (ctx) => {
 
     const result = await launchTokenOnPumpFun(tgId, name, symbol, description!, metadataUri, devBuy, vanity!, wallets);
 
-    if (result.success) {
-        // 🟢 NEW: Arm the Auto-Guard if requested
+    if (result.success && result.tokenAddress) {
+        // 🟢 FIX 1: Generate LaunchedToken row in DB so they populate on My Launches portfolio
+        const launchUser = await prisma.user.findUnique({ where: { telegramId: tgId } });
+        if (launchUser) {
+            await prisma.launchedToken.create({
+                data: {
+                    userId: launchUser.id,
+                    tokenAddress: result.tokenAddress,
+                    name,
+                    symbol,
+                    devBuySol: devBuy,
+                    walletCount: wallets
+                }
+            }).catch((e) => console.error("🔴 Failed to save launched token to DB:", e.message));
+        }
+
+        // 🟢 FIX 2: Dynamic initial price curve lookup instead of hardcoded 0.00000003
         let guardArmed = false;
         if (devBuy > 0 && guard > 0) {
             try {
-                // Approximate starting price (pump.fun curve start)
-                const entryPrice = 0.00000003; 
-                await addTrailingStopToMemory(tgId, result.tokenAddress!, guard, devBuy, entryPrice, undefined);
+                let entryPrice = 0.00000003; // Fallback
+                const curvePda = getBondingCurveAddress(result.tokenAddress);
+                const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
+                if (accInfo?.data) {
+                    entryPrice = decodePumpCurvePrice(accInfo.data.toString('base64'));
+                }
+                await addTrailingStopToMemory(tgId, result.tokenAddress, guard, devBuy, entryPrice, undefined);
                 guardArmed = true;
             } catch (e) {}
         }
 
-        // 🟢 NEW: Schedule the Volume Bumper if requested
+        // 🟢 FIX 3: Schedule the Volume Bumper inside the optimized O(1) Redis set
         if (bumpHours > 0 && bumpBudget > 0) {
             const expiresAt = Date.now() + (bumpHours * 60 * 60 * 1000);
             await redis.set(`scheduled_bump:${tgId}:${result.tokenAddress}`, JSON.stringify({
@@ -3557,12 +3578,12 @@ bot.action('action_confirm_token_launch', async (ctx) => {
                 expiresAt,
                 isBuyNext: true
             }));
+            await redis.sadd('active_scheduled_bumps', `${tgId}:${result.tokenAddress}`);
         }
 
-        // 🟢 NEW: Generate the Shareable Launch Card
         try {
             const { generateLaunchCard } = await import('./services/image.service.js');
-            const imageBuffer = await generateLaunchCard(name, symbol, result.tokenAddress!, devBuy, wallets);
+            const imageBuffer = await generateLaunchCard(name, symbol, result.tokenAddress, devBuy, wallets);
             const imgId = crypto.randomBytes(8).toString('hex');
             await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
             
@@ -3580,7 +3601,6 @@ bot.action('action_confirm_token_launch', async (ctx) => {
                 `🔗 <a href="https://solscan.io/tx/${result.signature}">View Receipt on Solscan</a>\n\n` +
                 `<i>Check "My Launches" to manage your token.</i>`;
 
-            const FormData = (await import('form-data')).default;
             const form = new FormData();
             form.append('chat_id', tgId);
             form.append('photo', imageBuffer, { filename: 'launch.png', contentType: 'image/png' });
@@ -3599,7 +3619,6 @@ bot.action('action_confirm_token_launch', async (ctx) => {
             });
             await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
         } catch (e) {
-            // Fallback text-only if image generation fails
             await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
                 `✅ <b>TOKEN LAUNCHED SUCCESSFULLY!</b> 🚀\n\n` +
                 `• <b>Contract (CA):</b> <code>${result.tokenAddress}</code>\n` +
@@ -3666,35 +3685,6 @@ bot.action(/^manage_launch_(.+)$/, async (ctx) => {
     await safeEditMessageText(ctx, text, Markup.inlineKeyboard(buttons));
 });
 
-bot.action(/^launch_holders_(.+)$/, async (ctx) => {
-    const tokenAddress = ctx.match[1];
-    try { await ctx.answerCbQuery("🔍 Scanning blockchain for holder distribution..."); } catch(e){}
-
-    const loader = await ctx.reply("<i>⏳ Fetching largest token accounts via RPC...</i>", { parse_mode: 'HTML' });
-
-    try {
-        const largest = await connection.getTokenLargestAccounts(new PublicKey(tokenAddress));
-        
-        let holderMsg = `📊 <b>HOLDER DISTRIBUTION AUDIT</b>\nToken: <code>${tokenAddress.substring(0,8)}...</code>\n\n`;
-        
-        largest.value.slice(0, 15).forEach((h, i) => {
-            // 🟢 FIX: Converts h.address (PublicKey) to a base58 string before substringing
-            const addressStr = h.address.toBase58();
-            const pct = (h.uiAmount! / 1000000000) * 100;
-            const alert = pct >= 15 ? '🚨' : pct >= 5 ? '⚠️' : '✅';
-            holderMsg += `${i+1}. <code>${addressStr.substring(0,8)}...</code>: <b>${pct.toFixed(2)}%</b> ${alert}\n`; 
-        });
-
-        holderMsg += `\n<i>Verify that your stealth wallets hold the correct percentages and no sniper has front-run your supply.</i>`;
-
-        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, holderMsg, { 
-            parse_mode: 'HTML', 
-            reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: `manage_launch_${tokenAddress}` }]] }
-        });
-    } catch (e: any) {
-        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Error fetching holders:</b> ${e.message}`, { parse_mode: 'HTML' });
-    }
-});
 
 bot.action(/^launch_vol_(.+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -4734,79 +4724,7 @@ app.post('/api/my-leaderboard', async (req, res) => {
     } catch (e) { res.status(500).json({ guild: null, members: [] }); }
 });
 
-// 🎮 SIMULATION INTERCEPT: Fetch simulated trades for Flow Analytics
-app.post('/api/sim-trades', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData))
-            return res.status(403).json({ error: 'Unauthorized' });
 
-        const telegramId = JSON.parse(
-            new URLSearchParams(req.body.initData).get('user')!
-        ).id.toString();
-
-        // Strict security: Only the admin can access simulated trades
-        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
-            return res.status(403).json({ error: 'Admin only' });
-
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        if (!await isSimulationActive(telegramId))
-            return res.json([]);
-
-        const raw = await redis.get(`sim:trades:${telegramId}`);
-        const trades = raw ? JSON.parse(raw) : [];
-        res.json(trades);
-    } catch (e: any) {
-        res.status(500).json([]);
-    }
-});
-
-// 🎮 SIMULATION INTERCEPT: Fetch simulated balance, volume, positions, and win/loss rates
-app.post('/api/sim-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData))
-            return res.status(403).json({ error: 'Unauthorized' });
-
-        const telegramId = JSON.parse(
-            new URLSearchParams(req.body.initData).get('user')!
-        ).id.toString();
-
-        // Strict security: Only the admin can access simulated statistics
-        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
-            return res.status(403).json({ error: 'Admin only' });
-
-        const { isSimulationActive, getSimBalance, getSimVolume } = 
-            await import('./services/simulation.service.js');
-
-        if (!await isSimulationActive(telegramId))
-            return res.json({ isActive: false });
-
-        const balance = await getSimBalance(telegramId);
-        const volume = await getSimVolume(telegramId);
-        const posRaw = await redis.get(`sim:positions:${telegramId}`);
-        const positions = posRaw ? JSON.parse(posRaw) : [];
-        const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
-        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
-
-        let wins = 0, losses = 0;
-        trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
-            if (t.profitPercent > 0) wins++;
-            else losses++;
-        });
-
-        res.json({
-            isActive: true,
-            balance: parseFloat(balance),
-            volume,
-            positions,
-            trades,
-            wins,
-            losses,
-            winRate: (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0"
-        });
-    } catch (e: any) {
-        res.status(500).json({ isActive: false });
-    }
-});
 
 // 🟢 FEATURE 5: Public Guild Web Leaderboard
 app.get('/g/:guildCode', async (req, res) => {
@@ -4891,6 +4809,19 @@ async function bootEcosystem() {
     setInterval(async () => {
         await sweepExpiredVips();
     }, 10 * 60 * 1000);
+
+    // Inside your async function bootEcosystem(), find the 60s interval block and replace it:
+    // 🟢 OPTIMIZATION: Stagger rank cache updates 1.5 seconds apart to avoid blocking database transactions
+    setInterval(async () => {
+        try {
+            const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
+            for (let i = 0; i < guilds.length; i++) {
+                setTimeout(async () => {
+                    await updateRankCache(guilds[i].id);
+                }, i * 1500); // 1.5 second stagger
+            }
+        } catch (e) {}
+    }, 60000);
 
 // 🟢 NEW: Headless Scheduled Volume Bumper Loop
 setInterval(async () => {

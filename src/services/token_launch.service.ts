@@ -1,11 +1,7 @@
 // src/services/token_launch.service.ts
 import { Keypair, VersionedTransaction, SystemProgram, TransactionMessage, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
-
-// TASK 2 FIX: Removed node-fetch import entirely. 
-// Standard fetch natively available in Node 18+.
 import FormData from 'form-data';
-
 import { PrismaClient } from '@prisma/client';
 import { connection } from '../lib/connection.js';
 import { decryptKey, ensureWalletsExist } from './vault.service.js';
@@ -31,7 +27,6 @@ export async function clearLaunchWizard(telegramId: string) {
     if (keys.length > 0) await redis.del(...keys);
 }
 
-// 1. IPFS Uploads (Pinata using global fetch)
 export async function uploadImageToIpfs(imageBuffer: Buffer, filename: string): Promise<string | null> {
     try {
         const form = new FormData();
@@ -71,7 +66,6 @@ export async function uploadMetadataToIpfs(name: string, symbol: string, descrip
     }
 }
 
-// 2. Vanity CA Miner
 export async function mineVanityKeypair(prefix: string): Promise<Keypair> {
     if (!prefix || prefix.toUpperCase() === 'NO') return Keypair.generate();
     
@@ -99,7 +93,6 @@ export async function mineVanityKeypair(prefix: string): Promise<Keypair> {
     });
 }
 
-// 3. Multi-Wallet Jito Bundle Launcher
 export async function launchTokenOnPumpFun(
     telegramId: string, name: string, symbol: string, description: string, metadataUri: string, 
     devBuySol: number, vanityPrefix: string, walletCount: number
