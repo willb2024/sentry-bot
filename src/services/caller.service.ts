@@ -58,7 +58,6 @@ export async function getUserCallerFilters(telegramId: string): Promise<CallerFi
         if (!raw) return DEFAULT_FILTERS;
         return { ...DEFAULT_FILTERS, ...JSON.parse(raw) };
     } catch (e: any) {
-        console.error(`⚠️ [CALLER] Failed to read filters for ${telegramId}: ${e.message}`);
         return DEFAULT_FILTERS;
     }
 }
@@ -73,7 +72,6 @@ export async function setUserCallerFilters(
         await redis.set(`caller_filters:${telegramId}`, JSON.stringify(updated));
         return updated;
     } catch (e: any) {
-        console.error(`⚠️ [CALLER] Failed to write filters for ${telegramId}: ${e.message}`);
         return DEFAULT_FILTERS;
     }
 }
@@ -95,8 +93,7 @@ const pumpClient = axios.create({
     headers: { 'User-Agent': 'Mozilla/5.0' }
 });
 
-// 🟢 FIX: Implemented real bounded concurrency to process items in parallel but limited 
-// to avoid slamming the RPC, stopping 429 bans and fixing the "slow sequential loop" issue.
+// 🟢 PERF: Bounded Concurrency Executor
 async function mapParallel<T, R>(
     items: T[],
     limit: number,
@@ -109,12 +106,11 @@ async function mapParallel<T, R>(
         while (i < items.length) {
             const currentIndex = i++;
             try {
-                // Add a small delay to prevent slamming all requests simultaneously
                 await new Promise(resolve => setTimeout(resolve, Math.random() * 200 + 100));
                 const res = await fn(items[currentIndex], currentIndex);
                 if (res !== null && res !== undefined) results.push(res);
             } catch (e) {
-                // skip on error
+                // skip
             }
         }
     });
@@ -135,10 +131,7 @@ async function fetchTrendingPairs(): Promise<any[]> {
 
         if (solanaMints.length === 0) return [];
 
-        const pairRes = await dexClient.get(
-            `/latest/dex/tokens/${solanaMints.join(',')}`,
-            { timeout: 6000 }
-        );
+        const pairRes = await dexClient.get(`/latest/dex/tokens/${solanaMints.join(',')}`, { timeout: 6000 });
         return (pairRes.data?.pairs || []).filter((p: any) => p.chainId === 'solana');
     } catch (_) { return []; }
 }
@@ -153,24 +146,14 @@ async function fetchNewSolanaPairs(): Promise<any[]> {
 
 async function fetchPumpKothPairs(): Promise<any[]> {
     try {
-        const res = await pumpClient.get(
-            '/coins/king-of-the-hill?offset=0&limit=20&includeNsfw=false',
-            { timeout: 5000 }
-        );
+        const res = await pumpClient.get('/coins/king-of-the-hill?offset=0&limit=20&includeNsfw=false', { timeout: 5000 });
         const coins: any[] = Array.isArray(res.data) ? res.data : [];
         if (coins.length === 0) return [];
 
-        const mints = coins
-            .filter(c => c.mint)
-            .slice(0, 20)
-            .map(c => c.mint);
-
+        const mints = coins.filter(c => c.mint).slice(0, 20).map(c => c.mint);
         if (mints.length === 0) return [];
 
-        const pairRes = await dexClient.get(
-            `/latest/dex/tokens/${mints.join(',')}`,
-            { timeout: 6000 }
-        );
+        const pairRes = await dexClient.get(`/latest/dex/tokens/${mints.join(',')}`, { timeout: 6000 });
         return (pairRes.data?.pairs || []).filter((p: any) => p.chainId === 'solana');
     } catch (_) { return []; }
 }
@@ -178,22 +161,16 @@ async function fetchPumpKothPairs(): Promise<any[]> {
 async function fetchBoostedPairs(): Promise<any[]> {
     try {
         const res = await dexClient.get('/token-boosts/top/v1', { timeout: 5000 });
-        const profiles: any[] = (Array.isArray(res.data) ? res.data : [])
-            .filter((p: any) => p.chainId === 'solana');
+        const profiles: any[] = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.chainId === 'solana');
         if (profiles.length === 0) return [];
 
         const mints = profiles.slice(0, 25).map((p: any) => p.tokenAddress).filter(Boolean);
-        const pairRes = await dexClient.get(
-            `/latest/dex/tokens/${mints.join(',')}`,
-            { timeout: 6000 }
-        );
+        const pairRes = await dexClient.get(`/latest/dex/tokens/${mints.join(',')}`, { timeout: 6000 });
         return (pairRes.data?.pairs || []).filter((p: any) => p.chainId === 'solana');
     } catch (_) { return []; }
 }
 
-async function getCachedCurveProgress(
-    mint: string
-): Promise<{ progress: number; curveScore: number; reason: string | null }> {
+async function getCachedCurveProgress(mint: string): Promise<{ progress: number; curveScore: number; reason: string | null }> {
     const key = `curve_progress:${mint}`;
     try {
         const cached = await redis.get(key);
@@ -206,22 +183,17 @@ async function getCachedCurveProgress(
         let result = { progress: 0, curveScore: 0, reason: null as string | null };
 
         if (accInfo?.data) {
-            const buf               = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+            const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
             const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
-            const progress          = Math.min(100, (virtualSolReserves / 85) * 100);
+            const progress = Math.min(100, (virtualSolReserves / 85) * 100);
 
-            if (progress > 80) {
-                result = { progress, curveScore: 20, reason: `🔥 Curve ${progress.toFixed(0)}% to graduation` };
-            } else if (progress > 50) {
-                result = { progress, curveScore: 10, reason: null };
-            }
+            if (progress > 80) result = { progress, curveScore: 20, reason: `🔥 Curve ${progress.toFixed(0)}% to graduation` };
+            else if (progress > 50) result = { progress, curveScore: 10, reason: null };
         }
 
         await redis.set(key, JSON.stringify(result), 'EX', CURVE_PROGRESS_TTL);
         return result;
-    } catch (_) {
-        return { progress: 0, curveScore: 0, reason: null };
-    }
+    } catch (_) { return { progress: 0, curveScore: 0, reason: null }; }
 }
 
 async function getCachedRugStatus(mint: string): Promise<boolean> {
@@ -246,9 +218,7 @@ async function scorePair(pair: any, source: string): Promise<TokenScore | null> 
         const reasons:  string[] = [];
         const warnings: string[] = [];
 
-        const ageMins = pair.pairCreatedAt
-            ? (Date.now() - pair.pairCreatedAt) / 60000
-            : 999;
+        const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
 
         let ageScore = 0;
         if      (ageMins < 10)  { ageScore = 25; reasons.push(`🆕 Ultra fresh (${ageMins.toFixed(0)}m old)`); }
@@ -266,13 +236,9 @@ async function scorePair(pair: any, source: string): Promise<TokenScore | null> 
         } else if (bestMomentum > 50) {
             momentumBonus = 12;
             reasons.push(`📈 Strong momentum (+${priceChangeM5.toFixed(0)}% 5m)`);
-        } else if (bestMomentum > 20) {
-            momentumBonus = 6;
-        }
+        } else if (bestMomentum > 20) { momentumBonus = 6; }
 
-        if (priceChangeM5 < -20 || priceChangeH1 < -30) {
-            warnings.push(`📉 Negative price action (${priceChangeM5.toFixed(0)}% 5m)`);
-        }
+        if (priceChangeM5 < -20 || priceChangeH1 < -30) warnings.push(`📉 Negative price action (${priceChangeM5.toFixed(0)}% 5m)`);
 
         const vol5m       = pair.volume?.m5  || 0;
         const vol1h       = pair.volume?.h1  || 0.1;
@@ -286,13 +252,9 @@ async function scorePair(pair: any, source: string): Promise<TokenScore | null> 
         } else if (spikeRatio > 2.0) {
             volumeSpike = 15;
             reasons.push(`📊 High vol spike (${(spikeRatio).toFixed(1)}x)`);
-        } else if (spikeRatio > 1.2) {
-            volumeSpike = 8;
-        }
+        } else if (spikeRatio > 1.2) { volumeSpike = 8; }
 
-        if (vol24h > 0) {
-            reasons.push(`💹 24h Vol: $${vol24h.toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
-        }
+        if (vol24h > 0) reasons.push(`💹 24h Vol: $${vol24h.toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
 
         const buys    = pair.txns?.h1?.buys  || pair.txns?.m5?.buys  || 0;
         const sells   = pair.txns?.h1?.sells || pair.txns?.m5?.sells || 0;
@@ -345,18 +307,13 @@ async function scorePair(pair: any, source: string): Promise<TokenScore | null> 
             breakdown: { volumeSpike, buySellRatio, liquidityDepth, ageScore, mevRisk: safetyScore, curveProgress, momentumBonus },
             reasons, warnings, source
         };
-    } catch (_) {
-        return null;
-    }
+    } catch (_) { return null; }
 }
 
 export async function scoreTokens(): Promise<TokenScore[]> {
     try {
         const [trendingPairs, newPairs, kothPairs, boostedPairs] = await Promise.all([
-            fetchTrendingPairs(),
-            fetchNewSolanaPairs(),
-            fetchPumpKothPairs(),
-            fetchBoostedPairs(),
+            fetchTrendingPairs(), fetchNewSolanaPairs(), fetchPumpKothPairs(), fetchBoostedPairs()
         ]);
 
         const tagged: Array<{ pair: any; source: string }> = [
@@ -374,40 +331,23 @@ export async function scoreTokens(): Promise<TokenScore[]> {
             return true;
         });
 
-        console.log(`⚡ [CALLER] Scoring ${deduped.length} unique pairs from 4 sources...`);
-
-        // 🟢 FIX: Uses the newly bounded concurrent mapParallel
         const scored = await mapParallel(deduped, 12, async ({ pair, source }) => {
             return await scorePair(pair, source);
         });
 
-        const results = scored
-            .filter((s): s is TokenScore => s !== null && s !== undefined)
-            .sort((a, b) => b.totalScore - a.totalScore);
-
-        console.log(`✅ [CALLER] Scored ${results.length} tokens. Top score: ${results[0]?.totalScore ?? 0}`);
-        return results;
-    } catch (e: any) {
-        console.error(`🔴 [CALLER] scoreTokens exception: ${e.message}`);
-        return [];
-    }
+        return scored.filter((s): s is TokenScore => s !== null && s !== undefined).sort((a, b) => b.totalScore - a.totalScore);
+    } catch (_) { return []; }
 }
 
 let hotCacheRefreshing = false;
-
 async function refreshHotCache(): Promise<void> {
     if (hotCacheRefreshing) return; 
     hotCacheRefreshing = true;
     try {
         const tokens = await scoreTokens();
-        if (tokens.length > 0) {
-            await redis.set(HOT_CACHE_KEY, JSON.stringify(tokens), 'EX', HOT_CACHE_TTL);
-        }
-    } catch (e: any) {
-        console.error(`🔴 [CALLER] Hot cache refresh failed: ${e.message}`);
-    } finally {
-        hotCacheRefreshing = false;
-    }
+        if (tokens.length > 0) await redis.set(HOT_CACHE_KEY, JSON.stringify(tokens), 'EX', HOT_CACHE_TTL);
+    } catch (_) {} 
+    finally { hotCacheRefreshing = false; }
 }
 
 async function getHotCache(): Promise<TokenScore[]> {
@@ -424,11 +364,10 @@ async function runNotificationPass(bot: any): Promise<void> {
         if (topTokens.length === 0) return;
 
         const subscribedUsers = await prisma.user.findMany({ select: { telegramId: true } });
-
         const userFilters = await Promise.all(
             subscribedUsers.map(async u => ({
                 telegramId: u.telegramId,
-                filters:    await getUserCallerFilters(u.telegramId)
+                filters: await getUserCallerFilters(u.telegramId)
             }))
         );
 
@@ -440,7 +379,6 @@ async function runNotificationPass(bot: any): Promise<void> {
                 const matchedToken = topTokens.find(t => {
                     if (t.totalScore < filters.minScore) return false;
                     if (t.ageMins > filters.maxAgeMins) return false;
-                    // 🟢 FIX: Correctly drops tokens flagged with negative safety scores by the MEV block filter
                     if (filters.blockMev && t.breakdown.mevRisk < 0) return false;
 
                     const effectiveMomentum = Math.max(t.priceChangeM5, t.priceChangeH1 / 12);
@@ -487,9 +425,7 @@ async function runNotificationPass(bot: any): Promise<void> {
                                 { text: '🛡️ Deploy Guard',    callback_data: `caller_guard_${matchedToken.mint}` },
                                 { text: '⏳ Start DCA',        callback_data: `caller_dca_${matchedToken.mint}` }
                             ],
-                            [
-                                { text: '⬅️ Caller Menu',     callback_data: 'menu_caller' }
-                            ]
+                            [{ text: '⬅️ Caller Menu',     callback_data: 'menu_caller' }]
                         ]
                     }
                 }).catch(() => null);
@@ -497,23 +433,11 @@ async function runNotificationPass(bot: any): Promise<void> {
             } catch (_) {}
         }));
 
-    } catch (e: any) {
-        console.error(`🔴 [CALLER] Notification pass error: ${e.message}`);
-    }
+    } catch (_) {}
 }
 
 export async function startCoinCaller(bot: any): Promise<void> {
-    console.log(`⚡ [CALLER] Multi-source parallel scanner v3 initialized.`);
-    console.log(`   Sources: trending + new-pairs + pump-koth + boosted`);
-    console.log(`   Hot cache refresh: every 12s | Notification pass: every 5s`);
-
     refreshHotCache().catch(() => {});
-
-    setInterval(() => {
-        refreshHotCache().catch(() => {});
-    }, 12_000);
-
-    setInterval(() => {
-        runNotificationPass(bot).catch(() => {});
-    }, 5_000);
+    setInterval(() => { refreshHotCache().catch(() => {}); }, 12_000);
+    setInterval(() => { runNotificationPass(bot).catch(() => {}); }, 5_000);
 }

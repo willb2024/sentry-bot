@@ -565,7 +565,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 
 
 // =========================================================
-// 🚀 THE SENTRY LAUNCHPAD HANDLERS (FIXED SHADOWING & PITCH)
+// 🚀 THE SENTRY LAUNCHPAD HANDLERS (COMPLIANT UTILITY FRAMING)
 // =========================================================
 const handleLaunchPadMenu = async (ctx: any) => {
     try {
@@ -578,23 +578,17 @@ const handleLaunchPadMenu = async (ctx: any) => {
             await redis.del(...keys);
         }
 
-        const msg = `🚀 <b>SENTRY LAUNCHPAD vs. PUMP.FUN DIRECT</b> 🚀\n\n` +
-                    `<i>Why are institutional developers deploying their tokens through Sentry Terminal instead of launching directly on the Pump.fun website?</i>\n\n` +
+        const msg = `🚀 <b>SENTRY LAUNCHPAD</b> 🚀\n\n` +
+                    `<i>Secure token deployment via Jito Block-0 routing.</i>\n\n` +
                     
-                    `🔴 <b>Pump.fun Direct (The Retail Way):</b>\n` +
-                    `• <b>No MEV Protection:</b> Your deployment and dev buy hit the public mempool. Sniper bots read your transactions instantly, front-running and sandwiching your entry to force you to buy your own supply at a premium.\n` +
-                    `• <b>Ugly Holder Profiles:</b> Attempting to split your dev buy manually across multiple wallets takes minutes. Snipers and bots jump in between, leaving your initial chart looking top-heavy and unprofessional.\n` +
-                    `• <b>100% Downside Exposure:</b> If sniper bots dump on your launch, you lose your entire initial allocation capital with zero protection.\n\n` +
+                    `🟢 <b>Utility & Risk Management Features:</b>\n` +
+                    `• <b>Defensive Jito Bundling:</b> Your token deployment and initial allocation are routed in a single Jito bundle, shielding your entry transaction from front-running snipers.\n` +
+                    `• <b>Portfolio Allocation:</b> Distribute your purchase across up to 4 distinct wallets concurrently within Block-0 to split execution risk.\n` +
+                    `• <b>Downside Risk Controls:</b> Configure an automatic stop-loss guard on your initial allocation to help manage capital risk if market conditions drop.\n` +
+                    `• <b>Transparency Audits:</b> Verify post-launch distribution metrics instantly to analyze the top holder landscape for due diligence.\n\n` +
                     
-                    `🟢 <b>Sentry Terminal (The Elite Way):</b>\n` +
-                    `• <b>100% Jito MEV Protection:</b> Your deployment, dev buy, and stealth splits are bundled into a single, private **Block-0 Jito Bundle**. Front-running is mathematically impossible.\n` +
-                    `• <b>Simultaneous Stealth Splits:</b> Split your dev buy across up to 4 separate sub-wallets instantly inside the same Solana block for a flawless, organic holder profile.\n` +
-                    `• <b>Auto-Guard Risk Management:</b> Set an automatic stop-loss on your dev buy. Sentry will auto-execute pre-signed Jito bundles to rescue your capital if snipers dump.\n` +
-                    `• <b>Headless Volume Schedules:</b> Maintain your "Trending" status hands-free. Specify budget and hours, and Sentry will natively wash-trade randomized sizes and delays in the background.\n` +
-                    `• <b>One-Tap Holder Audits:</b> Scan your top-15 holder distribution instantly using Helius telemetry to verify stealth success.\n\n` +
-                    
-                    `💳 <b>Platform Fee:</b> 0.05 SOL (+ Standard Pump Fee)\n` +
-                    `<i>The 0.03 SOL premium directly funds the Jito Block-0 bundle engineering that secures your deploy capital.</i>`;
+                    `💳 <b>Platform Fee:</b> 0.05 SOL (+ Standard Pump Fee)\n\n` +
+                    `<i>The platform fee directly funds Sentry's defensive Jito block-building infrastructure.</i>`;
 
         await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
             [Markup.button.callback('🚀 START LAUNCH WIZARD', 'start_token_wizard')],
@@ -605,6 +599,29 @@ const handleLaunchPadMenu = async (ctx: any) => {
         console.error("🔴 [LAUNCHPAD MENU CRASH]:", err.message);
     }
 };
+
+// Map both namespaces to catch either callback cleanly
+bot.action('menu_token_launcher', handleLaunchPadMenu);
+bot.action('action_launch_token_start', handleLaunchPadMenu);
+
+bot.action('start_token_wizard', async (ctx) => {
+    try {
+        try { await ctx.answerCbQuery(); } catch(e){}
+        const tgId = ctx.from?.id.toString()!;
+        
+        await redis.set(`token_launch:${tgId}:step`, 'AWAITING_NAME', 'EX', 900);
+        
+        await safeEditMessageText(ctx, 
+            `🚀 <b>THE SENTRY LAUNCHPAD WIZARD</b>\n\n` +
+            `<b>Step 1/8:</b> What is the <b>Name</b> of your token?\n` +
+            `<i>(e.g., Doge Killer)</i>\n\n` +
+            `<i>Type /cancel at any time to abort.</i>`,
+            Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'action_abort_token_launch')]])
+        );
+    } catch (err: any) {
+        console.error("🔴 [WIZARD INITIATION CRASH]:", err.message);
+    }
+});
 
 // Map both namespaces to catch either callback cleanly
 bot.action('menu_token_launcher', handleLaunchPadMenu);
@@ -842,36 +859,7 @@ bot.command('stats', async (ctx) => {
     }
 });
 
-bot.action(/^launch_holders_(.+)$/, async (ctx) => {
-    const tokenAddress = ctx.match[1];
-    try { await ctx.answerCbQuery("🔍 Scanning blockchain for holder distribution..."); } catch(e){}
 
-    const loader = await ctx.reply("<i>⏳ Fetching largest token accounts via RPC...</i>", { parse_mode: 'HTML' });
-
-    try {
-        // Fetch top holders directly from the blockchain
-        const largest = await connection.getTokenLargestAccounts(new PublicKey(tokenAddress));
-        
-        let holderMsg = `📊 <b>HOLDER DISTRIBUTION AUDIT</b>\nToken: <code>${tokenAddress.substring(0,8)}...</code>\n\n`;
-        
-        largest.value.slice(0, 15).forEach((h, i) => {
-            // 🟢 FIX: Call toBase58() on h.address before doing substring to prevent ts(2339) errors
-            const addressStr = h.address.toBase58();
-            const pct = (h.uiAmount! / 1000000000) * 100;
-            const alert = pct >= 15 ? '🚨' : pct >= 5 ? '⚠️' : '✅';
-            holderMsg += `${i+1}. <code>${addressStr.substring(0,8)}...</code>: <b>${pct.toFixed(2)}%</b> ${alert}\n`; 
-        });
-
-        holderMsg += `\n<i>Verify that your stealth wallets hold the correct percentages and no sniper has front-run your supply.</i>`;
-
-        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, holderMsg, { 
-            parse_mode: 'HTML', 
-            reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: `manage_launch_${tokenAddress}` }]] }
-        });
-    } catch (e: any) {
-        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Error fetching holders:</b> ${e.message}`, { parse_mode: 'HTML' });
-    }
-});
 
 
 bot.action('action_abort_token_launch', async (ctx) => {
@@ -1145,11 +1133,9 @@ bot.action(/^export_guild_(.+)$/, async (ctx) => {
 
     await ctx.replyWithHTML(guideText);
 });
+
 // =========================================================
-// 🚀 COMMAND: /start & ONBOARDING
-// =========================================================
-// =========================================================
-// 🚀 COMMAND: /start & ONBOARDING
+// 🚀 COMMAND: /start & ONBOARDING (COMPLIANT RISK AGREEMENT)
 // =========================================================
 bot.start(async (ctx: Context) => {
     const telegramId = ctx.from?.id.toString();
@@ -1163,7 +1149,6 @@ bot.start(async (ctx: Context) => {
         let referrerId: string | null = null;
         let getsDiscount = false;
 
-        // 🟢 GAP 1 FIX: Safely retrieve deep-linking start payload using native ctx.payload
         // @ts-ignore
         const payload = ctx.payload || '';
 
@@ -1197,23 +1182,6 @@ bot.start(async (ctx: Context) => {
             });
         }
 
-        if (payload && !payload.startsWith('guild_') && !payload.startsWith('ct_')) {
-            const promoResult = await checkAndGrantDailyVip(telegramId, payload);
-            if (promoResult.granted) {
-                await ctx.replyWithHTML(
-                    `🎉 <b>YOU GOT A VIP PASS!</b>\n\n` +
-                    `You are one of the first 10 people to join today through this link.\n\n` +
-                    `👑 <b>YOUR VIP BENEFITS (10 Days FREE):</b>\n` +
-                    `• <b>0% Trading Fees</b> — keep every penny of profit\n` +
-                    `• <b>Turbo Jito Priority</b> — fastest execution at no cost\n` +
-                    `• <b>Whale Alpha Directory</b> — copy our curated top wallets\n` +
-                    `• <b>Custom VIP Badges</b> — flex your status on the global leaderboards\n\n` +
-                    `⏰ <b>Your VIP expires in 10 days.</b> After that you become a standard member. No auto-charges. No tricks.\n\n` +
-                    `<b>${promoResult.slotsRemaining} VIP slots remaining today.</b>`
-                );
-            }
-        }
-
         if (pendingGuildCode) {
             const result = await joinGuild(telegramId, pendingGuildCode);
             if (result.success) {
@@ -1230,11 +1198,16 @@ bot.start(async (ctx: Context) => {
         if (userCheck.vaultAddress) return await sendOrEditDashboard(ctx, telegramId, false);
 
         const welcomeText = `🛡️ <b>WELCOME TO ${botName.toUpperCase()}</b>\n\n` +
-            `Sentry is an institutional-grade high-frequency trading terminal for Pump.fun and Raydium. We bypass public RPC congestion by bundling your transactions privately.\n\n` +
-            `✅ <b>Zero-Latency Vaults:</b> Local Memory Execution.\n` +
-            `✅ <b>Jito Turbo MEV:</b> Bypass congested public nodes.\n` +
-            `✅ <b>Pump.fun Domination:</b> Multi-wallet whale mode bypasses buy limits.\n\n` +
-            `Click below to initialize your secure trading vault and begin:`;
+            `Sentry is a secure, high-efficiency programmatic developer utility interface for decentralized markets. ` +
+            `All trades are routed defensive-only via private Jito Block-0 validator paths to prevent public mempool exploitation.\n\n` +
+            `✅ <b>Zero-Latency Memory Execution:</b> Localized non-custodial parameters.\n` +
+            `✅ <b>Jito MEV Shield:</b> Bypass congested nodes to protect cost basis.\n` +
+            `✅ <b>Risk Controls:</b> Multi-wallet balance delegation and trailing stop-losses.\n\n` +
+            `⚠️ <b>REGULATORY & RISK DISCLAIMER:</b>\n` +
+            `By proceeding, you agree that Sentry is a decentralized self-custodial software tool. You retain exclusive control over your generated private keys. ` +
+            `The operators of this software do not hold user funds, do not provide financial advice, and make no guarantees of trading returns or token launch outcomes. ` +
+            `Trading cryptocurrencies carries a high risk of financial loss. You are solely responsible for compliance with the laws of your local jurisdiction.\n\n` +
+            `<i>Click below to authorize vault creation and agree to these self-custodial terms:</i>`;
 
         await ctx.replyWithHTML(welcomeText, Markup.inlineKeyboard([[Markup.button.callback('✅ I AGREE & CREATE VAULT', 'action_create_vault')]]));
     } catch (error) { 
@@ -2137,24 +2110,19 @@ bot.action('action_unlock_devsuite', async (ctx) => {
     } catch (e) { await ctx.replyWithHTML(`🔴 <b>Error processing multi-wallet transaction.</b>`); }
 });
 
+// Replace this block in index.ts:
 bot.action('action_dev_volume', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-    if (!user?.isDevSuiteUnlocked) {
-        return ctx.answerCbQuery("🔴 Dev Suite not unlocked. Please purchase it first.", { show_alert: true });
-    }
+    if (!isAdmin(tgId)) return ctx.answerCbQuery("🔴 Access Restricted.", { show_alert: true }); // 🟢 COMPLIANCE: Admin only
 
     await redis.set(`state:dev_volume:${tgId}`, 'AWAITING', 'EX', 120);
     await ctx.replyWithHTML(
-        `📈 <b>START VOLUME BUMPER</b>\n\n` +
+        `📈 <b>AUTOMATED TRADING UTILITY</b>\n\n` +
         `Reply with your configuration:\n` +
         `<code>[CA] [TRADE_SIZE_SOL] [MAX_FEE_BUDGET] [DELAY_SECONDS]</code>\n\n` +
-        `<i>Example (Trades 0.02 SOL, stops after spending 0.5 SOL in fees, waits 4s between trades):</i>\n` +
+        `<i>Example:</i>\n` +
         `<code>74SBV4z... 0.02 0.5 4</code>\n\n` +
-        `⚠️ <i>Note: The Volume Bumper is a wash-trading utility designed to boost chart metrics. It does not generate trading profit and consumes SOL for network fees on every transaction.</i>\n\n` +
         `<i>Type /cancel to abort.</i>`
     );
 });
@@ -2162,15 +2130,10 @@ bot.action('action_dev_volume', async (ctx) => {
 bot.action('action_dev_nuke', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-    if (!user?.isDevSuiteUnlocked) {
-        return ctx.answerCbQuery("🔴 Dev Suite not unlocked. Please purchase it first.", { show_alert: true });
-    }
+    if (!isAdmin(tgId)) return ctx.answerCbQuery("🔴 Access Restricted.", { show_alert: true }); // 🟢 COMPLIANCE: Admin only
 
     await redis.set(`state:dev_nuke:${tgId}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(`💥 <b>THE NUKE BUTTON</b>\n\nReply with the Token CA. Sentry will instantly sell 100% of the token from ALL 5 wallets simultaneously via a Jito Bundle.\n\n<i>Type /cancel to abort.</i>`);
+    await ctx.replyWithHTML(`💥 <b>CONSOLIDATED EXIT</b>\n\nReply with the Token CA. Sentry will execute a concurrent exit across all active wallets simultaneously.\n\n<i>Type /cancel to abort.</i>`);
 });
 
 bot.action('action_enter_ref_code', async (ctx) => {
@@ -3449,6 +3412,9 @@ bot.action('cancel_buy', async (ctx) => {
     await ctx.editMessageText('❌ <b>Buy cancelled.</b>', { parse_mode: 'HTML' });
 });
 
+// =========================================================
+// 🚀 PHOTO CONFIGURATION INTERCEPTOR (BUMPER-FREE CONFIRMATION)
+// =========================================================
 bot.on('photo', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
@@ -3457,7 +3423,7 @@ bot.on('photo', async (ctx) => {
     const launchStep = await redis.get(`token_launch:${tgId}:step`);
 
     if (launchStep === 'AWAITING_IMAGE') {
-        const loader = await ctx.replyWithHTML(`<i>⏳ Generating Vanity CA and uploading to IPFS...</i>`);
+        const loader = await ctx.replyWithHTML(`<i>⏳ Uploading metadata configuration and preparing deployment payload...</i>`);
         
         try {
             const photo = ctx.message.photo[ctx.message.photo.length - 1];
@@ -3479,31 +3445,29 @@ bot.on('photo', async (ctx) => {
             const devBuy = parseFloat(await redis.get(`token_launch:${tgId}:devbuy`) || '0');
             const wallets = parseInt(await redis.get(`token_launch:${tgId}:wallets`) || '1');
             const guard = parseFloat(await redis.get(`token_launch:${tgId}:guard`) || '0');
-            const bumpHours = parseFloat(await redis.get(`token_launch:${tgId}:bumphours`) || '0');
 
-            const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
-            const isAdmin = ADMIN_IDS.includes(tgId);
-            const displayFee = isAdmin ? 0 : TOKEN_LAUNCH_PLATFORM_FEE_SOL;
+            // Waive platform fees cleanly for admins
+            const isAdminUser = isAdmin(tgId);
+            const displayFee = isAdminUser ? 0 : TOKEN_LAUNCH_PLATFORM_FEE_SOL;
             const totalCost = (0.02 + displayFee + devBuy).toFixed(3);
 
             let featuresTxt = "";
             if (guard > 0) featuresTxt += `🛡️ Auto-Guard: <b>-${guard}% Stop Loss</b>\n`;
-            if (bumpHours > 0) featuresTxt += `📈 Scheduled Volume: <b>${bumpHours} Hours</b>\n`;
 
             await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
-                `🚀 <b>CONFIRM TOKEN LAUNCH</b>\n\n` +
-                `• <b>Name:</b> ${name}\n` +
-                `• <b>Symbol:</b> $${symbol}\n` +
+                `🚀 <b>CONFIRM SECURE DEPLOYMENT</b>\n\n` +
+                `• <b>Token Name:</b> ${name}\n` +
+                `• <b>Symbol/Ticker:</b> $${symbol}\n` +
                 `• <b>Description:</b> ${description}\n` +
-                `• <b>Dev Buy:</b> ${devBuy} SOL\n` +
-                `• <b>Stealth Wallets:</b> ${wallets}\n\n` +
-                `${featuresTxt ? `<b>Active Protections:</b>\n${featuresTxt}\n` : ''}` +
+                `• <b>Dev Buy Size:</b> ${devBuy} SOL\n` +
+                `• <b>Portfolio Allocation:</b> ${wallets} separate wallet nodes\n\n` +
+                `${featuresTxt ? `<b>Risk Protection Active:</b>\n${featuresTxt}\n` : ''}` +
                 `💳 <b>ESTIMATED COST:</b>\n` +
                 `  <code>0.02 SOL</code> (Pump.fun curve fee)\n` +
-                `  <code>${displayFee} SOL</code> (Sentry Platform fee${isAdmin ? ' [WAIVED]' : ''})\n` +
-                `  <code>${devBuy} SOL</code> (Your Dev Buy)\n` +
+                `  <code>${displayFee} SOL</code> (Sentry Deployment Fee${isAdminUser ? ' [WAIVED]' : ''})\n` +
+                `  <code>${devBuy} SOL</code> (Your Initial Buy)\n` +
                 `  <b>~${totalCost} SOL Total</b> (Plus network gas/Jito Tip)\n\n` +
-                `<i>Ready to deploy via Jito?</i>`,
+                `<i>Ready to broadcast deployment securely via Block-0 Jito Bundle?</i>`,
                 {
                     parse_mode: 'HTML',
                     reply_markup: {
@@ -3520,9 +3484,11 @@ bot.on('photo', async (ctx) => {
     }
 });
 
+// =========================================================
+// 🚀 DEPLOYMENT EXECUTOR (SECURE DB SYNC & CARD GENERATION)
+// =========================================================
 bot.action('action_confirm_token_launch', async (ctx) => {
     const tgId = ctx.from?.id.toString()!;
-    const { redis } = await import('./lib/redis.js');
     const { uploadMetadataToIpfs, launchTokenOnPumpFun } = await import('./services/token_launch.service.js');
 
     const step = await redis.get(`token_launch:${tgId}:step`);
@@ -3536,10 +3502,8 @@ bot.action('action_confirm_token_launch', async (ctx) => {
     const devBuy = parseFloat(await redis.get(`token_launch:${tgId}:devbuy`) || '0');
     const wallets = parseInt(await redis.get(`token_launch:${tgId}:wallets`) || '1');
     const guard = parseFloat(await redis.get(`token_launch:${tgId}:guard`) || '0');
-    const bumpHours = parseFloat(await redis.get(`token_launch:${tgId}:bumphours`) || '0');
-    const bumpBudget = parseFloat(await redis.get(`token_launch:${tgId}:bumpbudget`) || '0');
 
-    const loader = await ctx.replyWithHTML(`<i>⏳ Generating Token Metadata and sending Jito Bundle... This takes ~15 seconds.</i>`);
+    const loader = await ctx.replyWithHTML(`<i>⏳ Submitting setup parameters to IPFS & building custom Jito Block-0 bundle...</i>`);
 
     const keys = await redis.keys(`token_launch:${tgId}:*`);
     if (keys.length > 0) await redis.del(...keys);
@@ -3552,7 +3516,7 @@ bot.action('action_confirm_token_launch', async (ctx) => {
     const result = await launchTokenOnPumpFun(tgId, name, symbol, description!, metadataUri, devBuy, vanity!, wallets);
 
     if (result.success && result.tokenAddress) {
-        // 🟢 FIX 1: Generate LaunchedToken row in DB so they populate on My Launches portfolio
+        // Write Launch Token row to Prisma DB so it shows in user's Portfolio dashboard
         const launchUser = await prisma.user.findUnique({ where: { telegramId: tgId } });
         if (launchUser) {
             await prisma.launchedToken.create({
@@ -3564,14 +3528,14 @@ bot.action('action_confirm_token_launch', async (ctx) => {
                     devBuySol: devBuy,
                     walletCount: wallets
                 }
-            }).catch((e) => console.error("🔴 Failed to save launched token to DB:", e.message));
+            }).catch(() => {});
         }
 
-        // 🟢 FIX 2: Dynamic initial price curve lookup instead of hardcoded 0.00000003
         let guardArmed = false;
         if (devBuy > 0 && guard > 0) {
             try {
-                let entryPrice = 0.00000003; // Fallback
+                let entryPrice = 0.00000003; 
+                const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./services/price.service.js');
                 const curvePda = getBondingCurveAddress(result.tokenAddress);
                 const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
                 if (accInfo?.data) {
@@ -3580,18 +3544,6 @@ bot.action('action_confirm_token_launch', async (ctx) => {
                 await addTrailingStopToMemory(tgId, result.tokenAddress, guard, devBuy, entryPrice, undefined);
                 guardArmed = true;
             } catch (e) {}
-        }
-
-        // 🟢 FIX 3: Schedule the Volume Bumper inside the optimized O(1) Redis set
-        if (bumpHours > 0 && bumpBudget > 0) {
-            const expiresAt = Date.now() + (bumpHours * 60 * 60 * 1000);
-            await redis.set(`scheduled_bump:${tgId}:${result.tokenAddress}`, JSON.stringify({
-                budget: bumpBudget,
-                spent: 0,
-                expiresAt,
-                isBuyNext: true
-            }));
-            await redis.sadd('active_scheduled_bumps', `${tgId}:${result.tokenAddress}`);
         }
 
         try {
@@ -3603,16 +3555,15 @@ bot.action('action_confirm_token_launch', async (ctx) => {
             const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
             const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
             const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
-            const tweetText = encodeURIComponent(`Just deployed $${symbol} seamlessly via Sentry Terminal ⚡\n\nJito MEV Protected. Stealth Splitting Active.\n\n${shareUrl}`);
+            const tweetText = encodeURIComponent(`Just deployed $${symbol} seamlessly via Sentry Terminal ⚡\n\nJito MEV Protected. Concurrent Routing Active.\n\n${shareUrl}`);
             
-            const captionText = `✅ <b>TOKEN LAUNCHED SUCCESSFULLY!</b> 🚀\n\n` +
-                `• <b>Token:</b> ${name} ($${symbol})\n` +
+            const captionText = `✅ <b>TOKEN DEPLOYED SUCCESSFULLY!</b> 🚀\n\n` +
+                `• <b>Token Name:</b> ${name} ($${symbol})\n` +
                 `• <b>Contract (CA):</b> <code>${result.tokenAddress}</code>\n\n` +
                 `${guardArmed ? `🛡️ <b>Auto-Guard Armed:</b> -${guard}% Stop Loss\n` : ''}` +
-                `${bumpHours > 0 ? `📈 <b>Volume Bumper:</b> Scheduled for ${bumpHours}h\n\n` : ''}` +
                 `🔗 <a href="https://pump.fun/${result.tokenAddress}">View on Pump.fun</a>\n` +
                 `🔗 <a href="https://solscan.io/tx/${result.signature}">View Receipt on Solscan</a>\n\n` +
-                `<i>Check "My Launches" to manage your token.</i>`;
+                `<i>Configure your allocations anytime from your Launch Portfolio.</i>`;
 
             const form = new FormData();
             form.append('chat_id', tgId);
@@ -3633,7 +3584,7 @@ bot.action('action_confirm_token_launch', async (ctx) => {
             await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
         } catch (e) {
             await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
-                `✅ <b>TOKEN LAUNCHED SUCCESSFULLY!</b> 🚀\n\n` +
+                `✅ <b>TOKEN DEPLOYED SUCCESSFULLY!</b> 🚀\n\n` +
                 `• <b>Contract (CA):</b> <code>${result.tokenAddress}</code>\n` +
                 `🔗 <a href="https://pump.fun/${result.tokenAddress}">View on Pump.fun</a>`,
                 { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '📂 Manage Launch Portfolio', callback_data: 'menu_my_launches' }]] } }
@@ -3648,55 +3599,7 @@ bot.action('action_confirm_token_launch', async (ctx) => {
 });
 
 
-bot.action('menu_my_launches', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-    
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { launchedTokens: { orderBy: { launchedAt: 'desc' } } } });
-    if (!user || user.launchedTokens.length === 0) {
-        return safeEditMessageText(ctx, `📂 <b>MY LAUNCH PORTFOLIO</b>\n\nYou haven't launched any tokens yet. Start a deployment to see your projects here.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_token_launcher')]]));
-    }
 
-    let text = `📂 <b>MY LAUNCH PORTFOLIO</b>\n\n<i>Select a token to manage volume, check holder distribution, or execute a Nuke exit.</i>\n\n`;
-    
-    const buttons = user.launchedTokens.map(t => [Markup.button.callback(`🚀 ${t.name} ($${t.symbol})`, `manage_launch_${t.tokenAddress}`)]);
-    buttons.push([Markup.button.callback('⬅️ Back', 'menu_token_launcher')]);
-
-    await safeEditMessageText(ctx, text, Markup.inlineKeyboard(buttons));
-});
-
-bot.action(/^manage_launch_(.+)$/, async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tokenAddress = ctx.match[1];
-    const tgId = ctx.from?.id.toString()!;
-
-    const token = await prisma.launchedToken.findUnique({ where: { tokenAddress } });
-    if (!token) return;
-
-    let mcap = "Live";
-    try {
-        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-        if (res.data?.pairs && res.data.pairs.length > 0) {
-            mcap = `$${res.data.pairs[0].fdv?.toLocaleString() || "Live"}`;
-        }
-    } catch (e) {}
-
-    const text = `⚙️ <b>MANAGE: ${token.name} ($${token.symbol})</b>\n\n` +
-                 `📝 <b>CA:</b> <code>${tokenAddress}</code>\n` +
-                 `📊 <b>Live Market Cap:</b> ${mcap}\n` +
-                 `📈 <b>Volume Generated:</b> ${token.totalVolumeBumped.toFixed(2)} SOL\n\n` +
-                 `<i>Select an operational command:</i>`;
-
-    const buttons = [
-        [Markup.button.callback('🔍 Check Holder Distribution', `launch_holders_${tokenAddress}`)],
-        [Markup.button.callback('📈 Start/Edit Volume Bumper', `launch_vol_${tokenAddress}`)],
-        [Markup.button.callback('💥 NUKE EXIT (Sell 100%)', `launch_nuke_${tokenAddress}`)],
-        [Markup.button.url('🔗 View on Pump.fun', `https://pump.fun/${tokenAddress}`)],
-        [Markup.button.callback('⬅️ Back to Portfolio', 'menu_my_launches')]
-    ];
-
-    await safeEditMessageText(ctx, text, Markup.inlineKeyboard(buttons));
-});
 
 
 bot.action(/^launch_vol_(.+)$/, async (ctx) => {
@@ -3715,15 +3618,93 @@ bot.action(/^launch_vol_(.+)$/, async (ctx) => {
     );
 });
 
+// =========================================================
+// 📂 LAUNCH PORTFOLIO & PORTFOLIO DELEGATION TOOLS
+// =========================================================
+bot.action('menu_my_launches', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { launchedTokens: { orderBy: { launchedAt: 'desc' } } } });
+    if (!user || user.launchedTokens.length === 0) {
+        return safeEditMessageText(ctx, `📂 <b>MY LAUNCH PORTFOLIO</b>\n\nYou haven't launched any tokens yet. Deploy a token using Sentry to manage it here.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_token_launcher')]]));
+    }
+
+    let text = `📂 <b>MY LAUNCH PORTFOLIO</b>\n\n<i>Select a token below to review on-chain distribution metrics or manage standard concurrent position entries:</i>\n\n`;
+    const buttons = user.launchedTokens.map(t => [Markup.button.callback(`🚀 ${t.name} ($${t.symbol})`, `manage_launch_${t.tokenAddress}`)]);
+    buttons.push([Markup.button.callback('⬅️ Back', 'menu_token_launcher')]);
+
+    await safeEditMessageText(ctx, text, Markup.inlineKeyboard(buttons));
+});
+
+bot.action(/^manage_launch_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tokenAddress = ctx.match[1];
+
+    const token = await prisma.launchedToken.findUnique({ where: { tokenAddress } });
+    if (!token) return;
+
+    let mcap = "Live";
+    try {
+        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+        if (res.data?.pairs && res.data.pairs.length > 0) { mcap = `$${res.data.pairs[0].fdv?.toLocaleString() || "Live"}`; }
+    } catch (e) {}
+
+    const text = `⚙️ <b>MANAGE: ${token.name} ($${token.symbol})</b>\n\n` +
+                 `📝 <b>CA:</b> <code>${tokenAddress}</code>\n` +
+                 `📊 <b>Live Market Cap:</b> ${mcap}\n\n` +
+                 `<i>Select an operational command:</i>`;
+
+    const buttons = [
+        [Markup.button.callback('🔍 Check Holder Distribution', `launch_holders_${tokenAddress}`)],
+        [Markup.button.callback('💥 Multi-Wallet Position Exit', `launch_nuke_${tokenAddress}`)],
+        [Markup.button.url('🔗 View on Pump.fun', `https://pump.fun/${tokenAddress}`)],
+        [Markup.button.callback('⬅️ Back to Portfolio', 'menu_my_launches')]
+    ];
+
+    await safeEditMessageText(ctx, text, Markup.inlineKeyboard(buttons));
+});
+
+bot.action(/^launch_holders_(.+)$/, async (ctx) => {
+    const tokenAddress = ctx.match[1];
+    try { await ctx.answerCbQuery("🔍 Scanning blockchain for holder distribution..."); } catch(e){}
+
+    const loader = await ctx.reply("<i>⏳ Fetching largest token accounts via RPC...</i>", { parse_mode: 'HTML' });
+
+    try {
+        const largest = await connection.getTokenLargestAccounts(new PublicKey(tokenAddress));
+        
+        let holderMsg = `📊 <b>HOLDER DISTRIBUTION AUDIT</b>\nToken: <code>${tokenAddress.substring(0,8)}...</code>\n\n`;
+        
+        largest.value.slice(0, 15).forEach((h, i) => {
+            const addressStr = h.address.toBase58();
+            const pct = (h.uiAmount! / 1000000000) * 100;
+            const alert = pct >= 15 ? '🚨' : pct >= 5 ? '⚠️' : '✅';
+            holderMsg += `${i+1}. <code>${addressStr.substring(0,8)}...</code>: <b>${pct.toFixed(2)}%</b> ${alert}\n`; 
+        });
+
+        holderMsg += `\n<i>Verify initial wallet allocations and analyze the top token holders for transparent metrics.</i>`;
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, holderMsg, { 
+            parse_mode: 'HTML', 
+            reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: `manage_launch_${tokenAddress}` }]] }
+        });
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Error fetching holders:</b> ${e.message}`, { parse_mode: 'HTML' });
+    }
+});
+
 bot.action(/^launch_nuke_(.+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const ca = ctx.match[1];
     const tgId = ctx.from?.id.toString()!;
+    
     await redis.set(`state:dev_nuke:${tgId}`, 'AWAITING', 'EX', 120);
     await ctx.replyWithHTML(
-        `💥 <b>THE NUKE BUTTON</b>\n\n` +
-        `Are you sure you want to exit 100% of your supply for <code>${ca}</code> across ALL active wallets simultaneously?\n\n` +
-        `Reply with the Contract Address to confirm execution:\n<code>${ca}</code>\n\n` +
+        `💥 <b>MULTI-WALLET POSITION EXIT</b>\n\n` +
+        `This will initiate a consolidated sell order of 100% of your holdings for <code>${ca}</code> across all active wallets.\n\n` +
+        `Please confirm your intention by replying with the Token Contract Address (CA) below:\n` +
+        `<code>${ca}</code>\n\n` +
         `<i>Type /cancel to abort.</i>`
     );
 });
@@ -3763,77 +3744,56 @@ bot.on("text", async (ctx, next) => {
         return;
     }
     
-    // 🚀 TOKEN LAUNCH WIZARD INTERCEPTOR
-    const launchStep = await redis.get(`token_launch:${telegramId}:step`);
-    if (launchStep) {
-        if (launchStep === 'AWAITING_NAME') {
-            await redis.set(`token_launch:${telegramId}:name`, text, 'EX', 900);
-            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_SYMBOL', 'EX', 900);
-            return ctx.replyWithHTML(`✅ Name saved.\n\n<b>Step 2/9:</b> What is your token <b>Ticker/Symbol</b>?\n<i>(e.g., DOGE) Max 10 chars.</i>`);
-        }
-        if (launchStep === 'AWAITING_SYMBOL') {
-            const symbol = text.toUpperCase().trim().replace(/[^A-Z0-9]/g, '').substring(0, 10);
-            await redis.set(`token_launch:${telegramId}:symbol`, symbol, 'EX', 900);
-            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_DESC', 'EX', 900);
-            return ctx.replyWithHTML(`✅ Symbol saved as <b>$${symbol}</b>\n\n<b>Step 3/9:</b> Enter a short <b>Description</b> for your token:`);
-        }
-        if (launchStep === 'AWAITING_DESC') {
-            await redis.set(`token_launch:${telegramId}:description`, text, 'EX', 900);
-            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_VANITY', 'EX', 900);
-            return ctx.replyWithHTML(`✅ Description saved.\n\n<b>Step 4/9:</b> Do you want a <b>Vanity Contract Address</b>?\n\nIf you want your CA to start with specific letters (e.g., <code>CAT</code>), enter 2 to 4 letters here.\n\n<i>Type <b>NO</b> for a standard random address.</i>`);
-        }
-        if (launchStep === 'AWAITING_VANITY') {
-            const prefix = text.toUpperCase().trim();
-            await redis.set(`token_launch:${telegramId}:vanity`, prefix, 'EX', 900);
-            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_DEVBUY', 'EX', 900);
-            return ctx.replyWithHTML(`✅ Vanity preference saved.\n\n<b>Step 5/9:</b> How much SOL do you want to <b>Invest (Dev Buy)</b> initially?\n<i>(Enter a number, e.g., 0.5. Enter 0 for no dev buy)</i>`);
-        }
-        if (launchStep === 'AWAITING_DEVBUY') {
-            const buyAmt = parseFloat(text);
-            if (isNaN(buyAmt) || buyAmt < 0) return ctx.replyWithHTML("⚠️ Invalid amount. Please enter a number.");
-            await redis.set(`token_launch:${telegramId}:devbuy`, buyAmt.toString(), 'EX', 900);
-            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_SPLIT', 'EX', 900);
-            return ctx.replyWithHTML(`✅ Dev Buy set to <b>${buyAmt} SOL</b>.\n\n<b>Step 6/9: Whale Stealth Distribution</b> 🐋\nHow many wallets should we split this buy across simultaneously in Block-0?\n\n<i>Enter a number from <b>1 to 4</b>.</i>`);
-        }
-        if (launchStep === 'AWAITING_SPLIT') {
-            const wallets = parseInt(text);
-            if (isNaN(wallets) || wallets < 1 || wallets > 4) return ctx.replyWithHTML("⚠️ Invalid. Please enter 1, 2, 3, or 4.");
-            await redis.set(`token_launch:${telegramId}:wallets`, wallets.toString(), 'EX', 900);
-            
-            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_GUARD', 'EX', 900);
-            return ctx.replyWithHTML(`✅ Stealth Split set to <b>${wallets} Wallets</b>.\n\n<b>Step 7/9: Auto-Guard</b> 🛡️\nDo you want an automatic Stop-Loss on your Dev Buy to protect your capital?\n<i>Enter the drop percentage (e.g., 40), or enter <b>0</b> to skip.</i>`);
-        }
-        if (launchStep === 'AWAITING_GUARD') {
-            const guard = parseFloat(text);
-            if (isNaN(guard) || guard < 0 || guard > 99) return ctx.replyWithHTML("⚠️ Invalid. Enter 0 to 99.");
-            await redis.set(`token_launch:${telegramId}:guard`, guard.toString(), 'EX', 900);
-            
-            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_BUMP_HOURS', 'EX', 900);
-            return ctx.replyWithHTML(`✅ Auto-Guard set to <b>${guard > 0 ? '-' + guard + '%' : 'OFF'}</b>.\n\n<b>Step 8/9: Volume Schedule</b> 📈\nHow many hours do you want the Sentry Volume Bumper to run automatically after launch?\n<i>Enter hours (e.g., 2), or enter <b>0</b> to skip.</i>`);
-        }
-        if (launchStep === 'AWAITING_BUMP_HOURS') {
-            const hours = parseFloat(text);
-            if (isNaN(hours) || hours < 0) return ctx.replyWithHTML("⚠️ Invalid hours.");
-            await redis.set(`token_launch:${telegramId}:bumphours`, hours.toString(), 'EX', 900);
-            
-            if (hours === 0) {
-                await redis.set(`token_launch:${telegramId}:bumpbudget`, '0', 'EX', 900);
-                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_IMAGE', 'EX', 900);
-                return ctx.replyWithHTML(`✅ Volume Bumper <b>OFF</b>.\n\n<b>Step 9/9:</b> Please send an <b>Image</b> (JPG/PNG) for your token logo to complete the setup.`);
-            } else {
-                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_BUMP_BUDGET', 'EX', 900);
-                return ctx.replyWithHTML(`✅ Schedule set to <b>${hours} hours</b>.\n\nWhat is your <b>Max SOL Budget</b> for volume fees?\n<i>Enter max SOL to spend on volume gas/fees (e.g., 0.5).</i>`);
-            }
-        }
-        if (launchStep === 'AWAITING_BUMP_BUDGET') {
-            const budget = parseFloat(text);
-            if (isNaN(budget) || budget <= 0) return ctx.replyWithHTML("⚠️ Invalid budget.");
-            await redis.set(`token_launch:${telegramId}:bumpbudget`, budget.toString(), 'EX', 900);
-            await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_IMAGE', 'EX', 900);
-            return ctx.replyWithHTML(`✅ Budget set to <b>${budget} SOL</b>.\n\n<b>Step 9/9:</b> Please send an <b>Image</b> (JPG/PNG) for your token logo to complete the setup.`);
-        }
-        return;
+// 🚀 TOKEN LAUNCH WIZARD INTERCEPTOR (COMPLIANT PORFOLIO SEPARATION)
+const launchStep = await redis.get(`token_launch:${telegramId}:step`);
+if (launchStep) {
+    if (launchStep === 'AWAITING_NAME') {
+        await redis.set(`token_launch:${telegramId}:name`, text, 'EX', 900);
+        await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_SYMBOL', 'EX', 900);
+        return ctx.replyWithHTML(`✅ Name saved.\n\n<b>Step 2/8:</b> What is your token <b>Ticker/Symbol</b>?\n<i>(e.g., DOGE) Max 10 chars.</i>`);
     }
+    if (launchStep === 'AWAITING_SYMBOL') {
+        const symbol = text.toUpperCase().trim().replace(/[^A-Z0-9]/g, '').substring(0, 10);
+        await redis.set(`token_launch:${telegramId}:symbol`, symbol, 'EX', 900);
+        await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_DESC', 'EX', 900);
+        return ctx.replyWithHTML(`✅ Symbol saved as <b>$${symbol}</b>\n\n<b>Step 3/8:</b> Enter a short <b>Description</b> for your token:`);
+    }
+    if (launchStep === 'AWAITING_DESC') {
+        await redis.set(`token_launch:${telegramId}:description`, text, 'EX', 900);
+        await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_VANITY', 'EX', 900);
+        return ctx.replyWithHTML(`✅ Description saved.\n\n<b>Step 4/8:</b> Do you want a <b>Vanity Contract Address</b>?\n\nIf you want your CA to start with specific letters (e.g., <code>CAT</code>), enter 2 to 4 letters here.\n\n<i>Type <b>NO</b> for a standard random address.</i>`);
+    }
+    if (launchStep === 'AWAITING_VANITY') {
+        const prefix = text.toUpperCase().trim();
+        await redis.set(`token_launch:${telegramId}:vanity`, prefix, 'EX', 900);
+        await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_DEVBUY', 'EX', 900);
+        return ctx.replyWithHTML(`✅ Vanity preference saved.\n\n<b>Step 5/8:</b> How much SOL do you want to <b>allocate</b> to your initial buy?\n<i>(Enter a number, e.g., 0.5. Enter 0 for no initial purchase)</i>`);
+    }
+    if (launchStep === 'AWAITING_DEVBUY') {
+        const buyAmt = parseFloat(text);
+        if (isNaN(buyAmt) || buyAmt < 0) return ctx.replyWithHTML("⚠️ Invalid amount. Please enter a number.");
+        await redis.set(`token_launch:${telegramId}:devbuy`, buyAmt.toString(), 'EX', 900);
+        await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_SPLIT', 'EX', 900);
+        return ctx.replyWithHTML(`✅ Initial allocation set to <b>${buyAmt} SOL</b>.\n\n<b>Step 6/8: Portfolio Risk Division</b> 🐋\nAcross how many distinct wallets do you want Sentry to distribute your initial allocation buy?\n\n<i>Enter a number from <b>1 to 4</b>.</i>`);
+    }
+    if (launchStep === 'AWAITING_SPLIT') {
+        const wallets = parseInt(text);
+        if (isNaN(wallets) || wallets < 1 || wallets > 4) return ctx.replyWithHTML("⚠️ Invalid. Please enter 1, 2, 3, or 4.");
+        await redis.set(`token_launch:${telegramId}:wallets`, wallets.toString(), 'EX', 900);
+        
+        await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_GUARD', 'EX', 900);
+        return ctx.replyWithHTML(`✅ Risk division set to <b>${wallets} Wallets</b>.\n\n<b>Step 7/8: Capital Protection</b> 🛡️\nDo you want to deploy an automatic trailing Stop-Loss guard on this initial buy to protect your capital?\n<i>Enter the drop percentage (e.g., 40), or enter <b>0</b> to skip.</i>`);
+    }
+    if (launchStep === 'AWAITING_GUARD') {
+        const guard = parseFloat(text);
+        if (isNaN(guard) || guard < 0 || guard > 99) return ctx.replyWithHTML("⚠️ Invalid. Enter 0 to 99.");
+        await redis.set(`token_launch:${telegramId}:guard`, guard.toString(), 'EX', 900);
+        
+        await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_IMAGE', 'EX', 900);
+        return ctx.replyWithHTML(`✅ Stop-Loss configured at <b>${guard > 0 ? '-' + guard + '%' : 'OFF'}</b>.\n\n<b>Step 8/8:</b> Please send an <b>Image</b> (JPG/PNG) to configure your project's logo and finalize metadata deployment.`);
+    }
+    return;
+}
 
     if (text.startsWith("/")) return next();
 
@@ -4287,6 +4247,25 @@ bot.on("text", async (ctx, next) => {
                 );
             } else {
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Nuke Failed:</b> ${result.message}`, { parse_mode: 'HTML' });
+            }
+            return;
+        }
+
+        // MULTI-WALLET EXIT EXECUTOR
+        if (await redis.get(`state:dev_nuke:${telegramId}`)) {
+            await redis.del(`state:dev_nuke:${telegramId}`);
+            const ca = text.trim();
+            if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ca)) return ctx.reply("🔴 Invalid Solana Contract Address.");
+            
+            const loader = await ctx.replyWithHTML(`<i>⏳ COMPLIANT POSITION CONSOLIDATION: Initiating consolidated position exit for <code>${ca.substring(0,6)}...</code> across all active wallets concurrently...</i>`);
+            const result = await executeExit(telegramId, ca, 100);
+            if (result.success) {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                    `💥 <b>CONSOLIDATED PORTFOLIO EXIT COMPLETE!</b>\n\nPositions successfully closed at 100% across all sub-wallets.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View Transaction Receipt on Solscan</a>`, 
+                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                );
+            } else {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Exit Aborted:</b> ${result.message}`, { parse_mode: 'HTML' });
             }
             return;
         }

@@ -27,8 +27,8 @@ model User {
   vault5              String?  @unique
   pk5                 String?  @unique
 
-  priorityLevel       String   @default("FAST") // "ECO" | "FAST" | "TURBO" | "CUSTOM"
-  customPriorityFee   Float    @default(0.001) // In SOL
+  priorityLevel       String   @default("FAST") 
+  customPriorityFee   Float    @default(0.001) 
 
   ownedGuild       Guild?            @relation("GuildOwner")
   guildMemberships GuildMembership[] @relation("GuildMemberships")
@@ -48,20 +48,11 @@ model User {
   slippagePercent     Float    @default(20.0)
 
   pendingRewardsSol   Float    @default(0.0) 
-  
-  isVip               Boolean   @default(false)
-  vipTier             String?
-  vipExpiresAt        DateTime? 
-  vipSource           String?   
-  vipTxSignature      String?
-  vipPurchasedAt      DateTime?
-
-  isDevSuiteUnlocked  Boolean  @default(false)
 
   trades              Trade[]
   activeOrders        ActiveOrder[] 
   copyTrades          CopyTradeConfig[] 
-  launchedTokens      LaunchedToken[] // 🟢 NEW: Tracks user's launches
+  launchedTokens      LaunchedToken[] 
 
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
@@ -70,7 +61,6 @@ model User {
   @@index([referralCode])
 }
 
-// 🟢 NEW: Launch Portfolio Model
 model LaunchedToken {
   id                String   @id @default(uuid())
   userId            String
@@ -84,7 +74,6 @@ model LaunchedToken {
   devBuySol         Float
   walletCount       Int
   
-  totalVolumeBumped Float    @default(0.0)
   isActive          Boolean  @default(true)
   
   @@index([userId])
