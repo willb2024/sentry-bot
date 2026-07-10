@@ -857,18 +857,48 @@ bot.command('simbal', async (ctx) => {
 
 
 bot.action('action_create_guild_prompt', async (ctx) => {
-    const msg = `🏰 <b>CREATE YOUR GUILD</b>\n\n` +
-                `Your Developer Suite subscription covers the cost of this Guild. Creating it is completely free!\n\n` +
-                `Use the command below to launch your Guild:\n` +
-                `<code>/createguild [Name] | [Description] | [Reward]</code>\n\n` +
-                `<i>Example:</i>\n<code>/createguild Alpha Wolves | The premier 100x gem hunters | Top 5 get WL allocation</code>`;
+    try { await ctx.answerCbQuery(); } catch(e){}
     
-    await ctx.editMessageText(msg, {
-        parse_mode: 'HTML',
-        reply_markup: {
-            inline_keyboard: [[ { text: '⬅️ Back', callback_data: 'menu_guilds' } ]]
-        }
-    }).catch(() => {});
+    const msg = `🏰 <b>SENTRY GUILDS: BUILD A LOYAL COMMUNITY</b>\n\n` +
+                `<b>What is a Guild?</b>\n` +
+                `A Guild is your own private, on-chain loyalty engine inside Sentry. It transforms your passive audience into an organized, volume-generating army.\n\n` +
+                `<b>Why build a Guild?</b>\n` +
+                `Stop giving whitelist spots or airdrops to fake Twitter accounts and bots. A Sentry Guild automatically tracks the <i>actual on-chain SOL volume</i> of every member who joins via your invite link.\n\n` +
+                `You get a verified, rank-ordered leaderboard of the people actually buying your bags, allowing you to reward your truest, most loyal supporters.\n\n` +
+                `<b>The Ultimate Perk (50% Rev-Share):</b>\n` +
+                `By bringing your community to Sentry, you earn <b>50% of the platform fees</b> on every single trade your members make, forever. Your loyal community becomes a passive income stream.\n\n` +
+                `<i>Your Developer Suite subscription covers the infrastructure cost. Launching your Guild today is completely free.</i>`;
+    
+    await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
+        [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
+        [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
+    ]));
+});
+
+bot.action('action_start_guild_wizard', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { ownedGuild: true } });
+    if (!user?.isDevSuiteUnlocked) {
+        return ctx.replyWithHTML("🔴 <b>Dev Suite Required:</b> You must unlock the Developer Suite to create a Guild.");
+    }
+    if (user.ownedGuild) {
+        return ctx.replyWithHTML("🔴 <b>Limit Reached:</b> You already own a Guild.");
+    }
+
+    // Set the Redis state to listen for their next message as "Step 1"
+    await redis.hset(`guild_setup:${tgId}`, { step: 1 });
+    await redis.expire(`guild_setup:${tgId}`, 600);
+    
+    await safeEditMessageText(ctx, 
+        `🏰 <b>GUILD SETUP [Step 1/2]</b>\n\n` +
+        `Let's build your empire.\n\n` +
+        `What is the <b>Name</b> of your community?\n` +
+        `<i>(e.g., Alpha Wolves Community)</i>\n\n` +
+        `Reply to this message with your desired name.`,
+        Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel Setup', 'action_abort_guild_setup')]])
+    );
 });
 
 
