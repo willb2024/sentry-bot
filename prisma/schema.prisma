@@ -45,8 +45,16 @@ model User {
   isLoyaltyUnlocked   Boolean  @default(false) 
   hasReferralDiscount Boolean  @default(false) 
   
+  // 🟢 PART 1 FIX: Added Missing Schema Fields
+  isVip               Boolean   @default(false)
+  vipTier             String?
+  vipExpiresAt        DateTime?
+  vipSource           String?
+  vipTxSignature      String?
+  vipPurchasedAt      DateTime?
+  isDevSuiteUnlocked  Boolean   @default(false)
+  
   slippagePercent     Float    @default(20.0)
-
   pendingRewardsSol   Float    @default(0.0) 
 
   trades              Trade[]
@@ -73,6 +81,7 @@ model LaunchedToken {
   launchedAt        DateTime @default(now())
   devBuySol         Float
   walletCount       Int
+  totalVolumeBumped Float    @default(0.0) // 🟢 PART 1 FIX
   
   isActive          Boolean  @default(true)
   
@@ -83,21 +92,16 @@ model Trade {
   id              String   @id @default(uuid())
   userId          String
   user            User     @relation(fields:[userId], references: [id])
-
   tokenAddress    String
   isBuy           Boolean
   amountInSol     Float
-
   feeChargedSol   Float    
   affiliateCutSol Float    
   loyaltyRebateSol Float   
-
   txSignature     String   
   status          String   @default("CONFIRMED") 
-
   profitPercent   Float?   @default(0)
   realizedPnlSol  Float?   @default(0)
-
   createdAt       DateTime @default(now())
 
   @@index([userId])
@@ -109,19 +113,15 @@ model ActiveOrder {
   id                String   @id @default(uuid())
   userId            String
   user              User     @relation(fields:[userId], references: [id])
-
   tokenAddress      String
   orderType         String 
-
   amountSol         Float
   targetPriceUsd    Float?   
   trailingPercent   Float?   
   takeProfitPercent Float?   
   dcaIntervalMins   Int?     
-  
   maxBudgetSol      Float?   
   totalSpentSol     Float    @default(0.0)
-
   isActive          Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -134,26 +134,19 @@ model AutoSnipeConfig {
   id                      String   @id @default(uuid())
   userId                  String   @unique
   user                    User     @relation(fields: [userId], references: [id])
-  
   isActive                Boolean  @default(false)
   sniperMode              String   @default("PUMP") 
   amountSol               Float    @default(0.05)
-  
   requireSocials          Boolean  @default(true)
   maxDevBuyPercent        Float    @default(10.0)
-  
   autoTrailingDropPercent Float    @default(20.0) 
   autoTakeProfitPercent   Float?
-
   minMarketCap            Float    @default(0.0)
   maxMarketCap            Float    @default(100000.0)
   antiDeadCoin            Boolean  @default(false)
-
   maxBudgetSol            Float?   
   totalSpentSol           Float    @default(0.0)
-
   snipeDelaySeconds       Int      @default(0) 
-
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 }
@@ -162,15 +155,11 @@ model CopyTradeConfig {
   id                      String   @id @default(uuid())
   userId                  String   
   user                    User     @relation(fields: [userId], references: [id])
-  
   targetWallet            String   
   tradeAmountSol          Float    @default(0.1) 
-  
   autoTrailingDropPercent Float    @default(20.0) 
   autoTakeProfitPercent   Float?                  
-  
   isActive                Boolean  @default(true)
-  
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -182,17 +171,13 @@ model Guild {
   id               String            @id @default(uuid())
   ownerId          String            @unique          
   owner            User              @relation("GuildOwner", fields: [ownerId], references: [id])
-
   guildCode        String            @unique          
   name             String                             
   description      String?                            
   rewardDescription String?                           
-
   feePaidSol       Float             @default(2.0)
   isActive         Boolean           @default(true)
-
   members          GuildMembership[]
-
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -205,14 +190,11 @@ model GuildMembership {
   guild            Guild             @relation(fields: [guildId], references: [id])
   userId           String
   user             User              @relation("GuildMemberships", fields: [userId], references: [id])
-
   loyaltyPoints    Float             @default(0.0)   
   totalVolumeSol   Float             @default(0.0)   
   rank             Int?                            
   airdropsReceivedSol Float          @default(0.0)
-
   isActive         Boolean           @default(true) 
-
   joinedAt         DateTime          @default(now())
   lastActiveAt     DateTime          @default(now())
 

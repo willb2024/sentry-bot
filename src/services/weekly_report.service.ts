@@ -21,7 +21,8 @@ export interface WeeklyStats {
     weeklyPnlSol: number;
 }
 
-export async function computeWeeklyStats(telegramId: string): Promise<WeeklyStats | null> {
+// 🟢 FIX: Added precomputedRank and totalUsersCount to parameters
+export async function computeWeeklyStats(telegramId: string, precomputedRank?: number, totalUsersCount?: number): Promise<WeeklyStats | null> {
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const user = await prisma.user.findUnique({
@@ -46,10 +47,8 @@ export async function computeWeeklyStats(telegramId: string): Promise<WeeklyStat
     const weekTrades = user.trades || [];
     const sellTrades = weekTrades.filter(t => !t.isBuy);
 
-    // Volume
     const totalVolumeSol = weekTrades.reduce((sum, t) => sum + t.amountInSol, 0);
 
-    // Win/Loss
     let wins = 0, losses = 0, weeklyPnlSol = 0;
     let bestTrade: { token: string; pnlPercent: number } | null = null;
     let worstTrade: { token: string; pnlPercent: number } | null = null;
@@ -73,10 +72,8 @@ export async function computeWeeklyStats(telegramId: string): Promise<WeeklyStat
     const totalClosed = wins + losses;
     const winRate = totalClosed > 0 ? (wins / totalClosed) * 100 : 0;
 
-    // Fees paid (1% of each sell volume)
     const totalFeesPaidSol = sellTrades.reduce((sum, t) => sum + (t.amountInSol * 0.01), 0);
 
-    // Affiliate earnings this week
     let affiliateEarnedSol = 0;
     user.recruits.forEach(r => {
         r.trades.forEach(t => {
@@ -84,20 +81,23 @@ export async function computeWeeklyStats(telegramId: string): Promise<WeeklyStat
         });
     });
 
-    // Sentry Points
     const basePoints = Math.floor((user.totalVolumeSol || 0) * 10000);
     const recruitBonus = user.recruits.length * 2000;
     const welcomeBonus = user.referredById ? 10000 : 0;
     const sentryPoints = basePoints + recruitBonus + welcomeBonus;
 
-    // Global rank
-    const allUsers = await prisma.user.findMany({
-        select: { telegramId: true, totalVolumeSol: true }
-    });
-    const sorted = allUsers
-        .map(u => ({ telegramId: u.telegramId, points: Math.floor((u.totalVolumeSol || 0) * 10000) }))
-        .sort((a, b) => b.points - a.points);
-    const pointsRank = sorted.findIndex(u => u.telegramId === telegramId) + 1;
+    let pointsRank = precomputedRank;
+    let totalUsers = totalUsersCount;
+
+    // Fallback if called manually via /stats command
+    if (pointsRank === undefined || totalUsers === undefined) {
+        const allUsers = await prisma.user.findMany({ select: { telegramId: true, totalVolumeSol: true } });
+        const sorted = allUsers
+            .map(u => ({ telegramId: u.telegramId, points: Math.floor((u.totalVolumeSol || 0) * 10000) }))
+            .sort((a, b) => b.points - a.points);
+        pointsRank = sorted.findIndex(u => u.telegramId === telegramId) + 1;
+        totalUsers = allUsers.length;
+    }
 
     return {
         telegramId,
@@ -112,7 +112,7 @@ export async function computeWeeklyStats(telegramId: string): Promise<WeeklyStat
         affiliateEarnedSol: parseFloat(affiliateEarnedSol.toFixed(4)),
         sentryPoints,
         pointsRank,
-        totalUsers: allUsers.length,
+        totalUsers,
         weeklyPnlSol: parseFloat(weeklyPnlSol.toFixed(4))
     };
 }
@@ -139,28 +139,22 @@ export function formatWeeklyReport(stats: WeeklyStats): string {
     return (
         `⚡ <b>SENTRY WEEKLY REPORT</b>\n` +
         `<i>Week of ${weekOf}</i>\n\n` +
-
         `👤 <b>Operator:</b> @${stats.username}\n` +
         `🏆 <b>Global Rank:</b> #${stats.pointsRank} of ${stats.totalUsers}\n` +
         `${tierLabel} · <b>${stats.sentryPoints.toLocaleString()} PTS</b>\n\n` +
-
         `━━━━━━━━━━━━━━━\n` +
         `📊 <b>TRADING PERFORMANCE</b>\n\n` +
-
         `${pnlEmoji} Weekly PnL: <b>${pnlSign}${stats.weeklyPnlSol.toFixed(4)} SOL</b>\n` +
         `${winEmoji} Win Rate: <b>${stats.winRate}%</b> (${stats.wins}W / ${stats.losses}L)\n` +
         `💹 Volume Traded: <b>${stats.totalVolumeSol.toFixed(4)} SOL</b>\n` +
         `💸 Fees Paid: <b>${stats.totalFeesPaidSol.toFixed(4)} SOL</b>\n\n` +
-
         `━━━━━━━━━━━━━━━\n` +
         `🎯 <b>TOP TRADES</b>\n\n` +
         `${bestLine}\n` +
         `${worstLine}\n\n` +
-
         `━━━━━━━━━━━━━━━\n` +
         `💰 <b>AFFILIATE EARNINGS</b>\n\n` +
         `• This Week: <b>+${stats.affiliateEarnedSol.toFixed(4)} SOL</b>\n\n` +
-
         `━━━━━━━━━━━━━━━\n` +
         `<i>Keep trading to climb the ranks. Next report in 7 days.</i>\n` +
         `<i>Type /stats for live stats anytime.</i>`
@@ -170,17 +164,16 @@ export function formatWeeklyReport(stats: WeeklyStats): string {
 export async function sendWeeklyReportsToAll(bot: any): Promise<void> {
     console.log('📬 [WEEKLY REPORT] Starting weekly report dispatch...');
 
-    const allUsers = await prisma.user.findMany({
-        select: { telegramId: true }
-    });
+    const allUsers = await prisma.user.findMany({ select: { telegramId: true, totalVolumeSol: true } });
+    const sorted = [...allUsers].sort((a, b) => (b.totalVolumeSol || 0) - (a.totalVolumeSol || 0));
+    const rankMap = new Map(sorted.map((u, i) => [u.telegramId, i + 1]));
 
     let sent = 0, failed = 0;
 
     for (const u of allUsers) {
         try {
             await new Promise(r => setTimeout(r, 50));
-
-            const stats = await computeWeeklyStats(u.telegramId);
+            const stats = await computeWeeklyStats(u.telegramId, rankMap.get(u.telegramId) || 0, allUsers.length);
             if (!stats) continue;
 
             if (stats.totalVolumeSol === 0 && stats.affiliateEarnedSol === 0) continue;
@@ -189,11 +182,6 @@ export async function sendWeeklyReportsToAll(bot: any): Promise<void> {
             await bot.telegram.sendMessage(u.telegramId, message, { parse_mode: 'HTML' });
             sent++;
         } catch (e: any) {
-            if (e.code === 403 || e.description?.includes('blocked')) {
-                failed++;
-                continue;
-            }
-            console.error(`[WEEKLY REPORT] Failed for ${u.telegramId}:`, e.message);
             failed++;
         }
     }

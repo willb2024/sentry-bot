@@ -66,11 +66,12 @@ export async function uploadMetadataToIpfs(name: string, symbol: string, descrip
     }
 }
 
-export async function mineVanityKeypair(prefix: string): Promise<Keypair> {
-    if (!prefix || prefix.toUpperCase() === 'NO') return Keypair.generate();
+// 🟢 FIX: Added boolean return so index.ts knows if mining failed
+export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keypair, matched: boolean }> {
+    if (!prefix || prefix.toUpperCase() === 'NO') return { keypair: Keypair.generate(), matched: true };
     
     const search = prefix.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 4);
-    if (search.length === 0) return Keypair.generate();
+    if (search.length === 0) return { keypair: Keypair.generate(), matched: true };
 
     let keypair = Keypair.generate();
     let iterations = 0;
@@ -79,13 +80,14 @@ export async function mineVanityKeypair(prefix: string): Promise<Keypair> {
         function mineChunk() {
             for (let i = 0; i < 10000; i++) {
                 if (keypair.publicKey.toBase58().toLowerCase().startsWith(search)) {
-                    return resolve(keypair);
+                    return resolve({ keypair, matched: true });
                 }
                 keypair = Keypair.generate();
             }
             iterations += 10000;
+            // Failsafes after 1M tries to not freeze the node
             if (iterations >= 1000000) {
-                return resolve(keypair); 
+                return resolve({ keypair, matched: false }); 
             }
             setImmediate(mineChunk);
         }
@@ -130,12 +132,15 @@ export async function launchTokenOnPumpFun(
             if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
         }
 
-        const mintKeypair = await mineVanityKeypair(vanityPrefix);
+        // 🟢 FIX: Handle the new tuple return from mineVanityKeypair
+        const vanityResult = await mineVanityKeypair(vanityPrefix);
+        const mintKeypair = vanityResult.keypair;
         const tokenAddress = mintKeypair.publicKey.toBase58();
         
         const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
         const bundledTxs: string[] = [];
 
+        // 🟢 FIX: DenominatedInSol is passed as proper boolean, not string 'true'
         const response = await fetch('https://pumpportal.fun/api/create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -143,7 +148,7 @@ export async function launchTokenOnPumpFun(
                 action: 'create',
                 tokenMetadata: { name, symbol, uri: metadataUri },
                 mint: bs58.encode(mintKeypair.secretKey),
-                denominatedInSol: 'true',
+                denominatedInSol: true, 
                 amount: splitBuySol,
                 slippage: 25,
                 priorityFee: 0.001,
@@ -164,7 +169,7 @@ export async function launchTokenOnPumpFun(
                     publicKey: wallet.publicKey.toBase58(),
                     action: 'buy',
                     mint: tokenAddress,
-                    denominatedInSol: 'true',
+                    denominatedInSol: true, // 🟢 FIX
                     amount: splitBuySol,
                     slippage: 25,
                     priorityFee: 0.0005,
@@ -215,7 +220,10 @@ export async function launchTokenOnPumpFun(
 
         if (!isConfirmed) return { success: false, message: "Network congestion. Jito validator did not land the bundle." };
 
-        return { success: true, tokenAddress, signature, message: "Token launched successfully!" };
+        let returnMsg = "Token launched successfully!";
+        if (!vanityResult.matched) returnMsg = "Token launched! (Vanity prefix mining timed out, used secure random address).";
+
+        return { success: true, tokenAddress, signature, message: returnMsg };
     } catch (e: any) {
         return { success: false, message: e.message };
     }

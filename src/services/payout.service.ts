@@ -29,9 +29,10 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
         amountToPay = user.pendingRewardsSol;
         const lamportsToPay = Math.floor(amountToPay * LAMPORTS_PER_SOL);
 
-        await prisma.user.update({ where: { id: user.id }, data: { pendingRewardsSol: 0 } });
-        rewardsDebited = true; 
-
+       // 🟢 PART 2.8 FIX: Atomic decrement prevents erasing mid-flight affiliate earnings
+       await prisma.user.update({ where: { id: user.id }, data: { pendingRewardsSol: { decrement: amountToPay } } });
+       rewardsDebited = true;
+       
         const treasuryKeypair = Keypair.fromSecretKey(bs58.decode(treasuryPrivKey));
         const userVaultPubkey = new PublicKey(user.vaultAddress);
 

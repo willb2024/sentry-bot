@@ -10,23 +10,8 @@ const BACKUP_URL = process.env.BACKUP_RPC_URL || "https://api.mainnet-beta.solan
 const primaryConnection = new Connection(HELIUS_URL, 'confirmed');
 const backupConnection = new Connection(BACKUP_URL, 'confirmed');
 
-const SYNC_SUBSCRIPTION_METHODS = new Set([
-    'onAccountChange',
-    'onLogs',
-    'onProgramAccountChange',
-    'onSlotChange',
-    'onSignature',
-    'onRootChange',
-]);
-
-const SYNC_REMOVAL_METHODS = new Set([
-    'removeAccountChangeListener',
-    'removeOnLogsListener',
-    'removeProgramAccountChangeListener',
-    'removeSlotChangeListener',
-    'removeSignatureListener',
-    'removeRootChangeListener',
-]);
+const SYNC_SUBSCRIPTION_METHODS = new Set(['onAccountChange', 'onLogs', 'onProgramAccountChange', 'onSlotChange', 'onSignature', 'onRootChange']);
+const SYNC_REMOVAL_METHODS = new Set(['removeAccountChangeListener', 'removeOnLogsListener', 'removeProgramAccountChangeListener', 'removeSlotChangeListener', 'removeSignatureListener', 'removeRootChangeListener']);
 
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 30_000; 
@@ -44,110 +29,81 @@ function isCircuitOpen(): boolean {
     return true;
 }
 
-function recordPrimarySuccess() {
-    consecutivePrimaryFailures = 0;
-    circuitOpenedAt = null;
-}
+function recordPrimarySuccess() { consecutivePrimaryFailures = 0; circuitOpenedAt = null; }
 
 function recordPrimaryFailure() {
     consecutivePrimaryFailures++;
     if (consecutivePrimaryFailures >= CIRCUIT_BREAKER_THRESHOLD && circuitOpenedAt === null) {
         circuitOpenedAt = Date.now();
-        console.warn(
-            `🔴 [RPC CIRCUIT BREAKER] Primary RPC failed ${consecutivePrimaryFailures}x consecutively. ` +
-            `Routing directly to backup for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s.`
-        );
+        console.warn(`🔴 [RPC CIRCUIT BREAKER] Primary RPC failed. Routing to backup for 30s.`);
     }
 }
 
 const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 8);
 let activeCount = 0;
-const waitQueue: Array<() => void> = [];
 
-async function acquireSlot(): Promise<void> {
+// 🟢 PART 4.6 FIX: Priority Queue implementation
+const waitQueueHigh: Array<() => void> = [];
+const waitQueueLow: Array<() => void> = [];
+
+async function acquireSlot(highPriority: boolean = false): Promise<void> {
     if (activeCount < MAX_CONCURRENT_RPC) {
         activeCount++;
         return;
     }
-    await new Promise<void>((resolve) => waitQueue.push(resolve));
+    await new Promise<void>((resolve) => {
+        if (highPriority) waitQueueHigh.push(resolve);
+        else waitQueueLow.push(resolve);
+    });
     activeCount++;
 }
 
 function releaseSlot(): void {
     activeCount--;
-    const next = waitQueue.shift();
+    const next = waitQueueHigh.shift() || waitQueueLow.shift();
     if (next) next();
 }
 
-async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
-    await acquireSlot();
-    try {
-        return await fn();
-    } finally {
-        releaseSlot();
-    }
+async function withSlot<T>(highPriority: boolean, fn: () => Promise<T>): Promise<T> {
+    await acquireSlot(highPriority);
+    try { return await fn(); } finally { releaseSlot(); }
 }
 
 export const connection = new Proxy(primaryConnection, {
     get(target, prop, receiver) {
         const value = Reflect.get(target, prop, receiver);
-
         if (typeof value !== 'function') return value;
 
         const methodName = String(prop);
 
-        if (SYNC_SUBSCRIPTION_METHODS.has(methodName)) {
+        if (SYNC_SUBSCRIPTION_METHODS.has(methodName) || SYNC_REMOVAL_METHODS.has(methodName)) {
             return function (...args: any[]) {
-                try {
-                    return value.apply(target, args);
-                } catch (error: any) {
-                    console.warn(`⚠️ [WS FAILOVER] Primary failed on '${methodName}': ${error.message}. Switching to Backup RPC...`);
+                try { return value.apply(target, args); } 
+                catch (error: any) {
                     const backupValue = Reflect.get(backupConnection, prop);
-                    if (typeof backupValue === 'function') {
-                        return backupValue.apply(backupConnection, args);
-                    }
-                    throw error;
-                }
-            };
-        }
-
-        if (SYNC_REMOVAL_METHODS.has(methodName)) {
-            return function (...args: any[]) {
-                try {
-                    return value.apply(target, args);
-                } catch (error: any) {
-                    const backupValue = Reflect.get(backupConnection, prop);
-                    if (typeof backupValue === 'function') {
-                        return backupValue.apply(backupConnection, args);
-                    }
+                    if (typeof backupValue === 'function') return backupValue.apply(backupConnection, args);
                     throw error;
                 }
             };
         }
 
         return function (...args: any[]) {
-            return withSlot(async () => {
+            // Priority heuristic: If it's sending a transaction, push it to High Priority
+            const isHighPriority = methodName.includes('sendRawTransaction') || methodName.includes('getLatestBlockhash');
+            
+            return withSlot(isHighPriority, async () => {
                 if (isCircuitOpen()) {
                     const backupValue = Reflect.get(backupConnection, prop);
-                    if (typeof backupValue === 'function') {
-                        return await backupValue.apply(backupConnection, args);
-                    }
+                    if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
                 }
-
                 try {
                     const result = await value.apply(target, args);
                     recordPrimarySuccess();
                     return result;
                 } catch (error: any) {
-                    console.warn(
-                        `⚠️ [RPC FAILOVER] Primary RPC failed on '${methodName}': ${error.message}. Failing over to backup...`
-                    );
                     recordPrimaryFailure();
-
                     const backupValue = Reflect.get(backupConnection, prop);
-                    if (typeof backupValue === 'function') {
-                        return await backupValue.apply(backupConnection, args);
-                    }
+                    if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
                     throw error;
                 }
             });

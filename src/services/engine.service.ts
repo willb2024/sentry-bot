@@ -739,6 +739,10 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return null;
+        
+        // 🟢 PART 2.5 FIX: If user runs Multiple Wallets, force fallback to slow path 
+        // to ensure ALL wallets are sold during a stop-loss, not just Wallet 1.
+        if (user.activeWallets > 1) return null;
 
         const slippage = 100.0; 
         const vaultPubkey = new PublicKey(user.vaultAddress);
