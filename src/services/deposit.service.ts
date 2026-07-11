@@ -114,8 +114,8 @@ export async function startDepositWatcher(bot: any) {
         }
     }, 30000);
 }
-
-export function getLiveWalletBalance(address: string): number | null {
-    const data = activeListeners.get(address);
-    return data ? data.lastBalance : null;
+// 🟢 CLAUDE FIX C.6: Fast synchronous balance cache helper
+export function getLiveWalletBalance(walletAddress: string): number | null {
+    const cachedData = activeListeners.get(walletAddress);
+    return cachedData ? cachedData.lastBalance : null;
 }

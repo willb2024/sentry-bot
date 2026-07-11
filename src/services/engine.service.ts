@@ -238,6 +238,7 @@ export async function sendToJitoBundle(swapTx: VersionedTransaction, tipTx: Vers
             })
         );
 
+        // We race the regions and accept the first successful response to maximize block submission speed
         const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
 
         if (jitoRes?.data?.error) {
@@ -440,7 +441,7 @@ export async function executeSnipe(
 
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
-        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
+        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active Vault found." };
 
         // 🟢 C6 FIX: Pre-check cached memory balance before wasting a full RPC call
         let liveBalanceSol = getLiveWalletBalance(user.vaultAddress);
@@ -490,12 +491,6 @@ export async function executeSnipe(
         if (user.activeWallets >= 3 && user.pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk3)!)));
         if (user.activeWallets >= 4 && user.pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk4)!)));
         if (user.activeWallets >= 5 && user.pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk5)!)));
-
-        const splitBuySol = Number((amountSol / wallets.length).toFixed(4));
-        const slippageBps = slippage !== undefined ? slippage * 100 : (user.slippagePercent * 100);
-
-        const isPump = targetCA.toLowerCase().endsWith("pump") && !raydiumPoolId;
-        const bundledTxs: string[] = [];
 
         let successCount = 0;
         let totalVolume = 0;
