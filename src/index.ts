@@ -993,7 +993,6 @@ bot.action('action_manage_guild', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
 
-    // Compile User, Guild, and Membership relations safely
     const user = await prisma.user.findUnique({ 
         where: { telegramId: tgId }, 
         include: { ownedGuild: { include: { members: { include: { user: true } } } } } 
@@ -1001,34 +1000,37 @@ bot.action('action_manage_guild', async (ctx) => {
     
     if (!user) return;
 
-    // 🟢 UI FIX: If they don't have a guild, route them to the creation instructions!
+    // 🟢 CLAUDE B.3 & USER SPEC FIX: Highly polished copy, $12 in SOL text, but free in implementation
     if (!user.ownedGuild) {
-        const createMsg = `🏰 <b>CREATE YOUR GUILD</b>\n\n` +
-                          `A Guild is your own on-chain loyalty engine — it turns your audience into a verified, rank-ordered leaderboard of real on-chain buyers, and pays you 50% of the platform fee on every trade your members make, forever.\n\n` +
-                          `💳 <b>One-time cost: 2.0 SOL</b> (lifetime — no renewal, no recurring fee)\n\n` +
-                          `Use the command below to launch your Guild:\n` +
-                          `<code>/createguild [Name] | [Description] | [Reward]</code>\n\n` +
-                          `<i>Example:</i>\n<code>/createguild Alpha Wolves | The premier 100x gem hunters | Top 5 get WL allocation</code>`;
+        const createMsg = 
+            `🏰 <b>SENTRY GUILDS: COMMAND YOUR COMMUNITY</b>\n\n` +
+            `<b>What is a Sentry Guild?</b>\n` +
+            `A Sentry Guild is your private, on-chain loyalty and monetization engine. It transforms your passive audience into a highly coordinated trading powerhouse under your brand.\n\n` +
+            `<b>Why You Need It & Its Benefits:</b>\n` +
+            `• <b>Filter Fake Bots (Sybil Protection):</b> Giveaway channels are plagued by automated bot farms. A Sentry Guild tracks <i>actual on-chain volume</i>, proving who is genuinely supporting your project with skin in the game.\n` +
+            `• <b>Real-Time Leadership Gamification:</b> Sentry computes a live-updating leaderboard of your members. Keep your chat highly competitive and run active trading contests natively.\n` +
+            `• <b>Passive Revenue Generation:</b> You earn <b>50% of our platform fee</b> on every trade executed by your Guild members—forever. Your community becomes a compounding passive yield generator.\n` +
+            `• <b>Direct KOL Custom Whitelisting:</b> Export highly-qualified, ranked wallets to whitelist or issue customized rewards cleanly via CSV.\n\n` +
+            `💳 <b>One-time cost:</b> $12 (paid in SOL) for life — no monthly fee, no recurring charges.\n\n` +
+            `Use the command below to launch your Guild:\n` +
+            `<code>/createguild [Name] | [Description] | [Reward]</code>`;
+        
         return ctx.editMessageText(createMsg, { 
             parse_mode: 'HTML', 
-            reply_markup: { inline_keyboard: [[ { text: '⬅️ Back', callback_data: 'action_guild_menu' } ]] } 
+            reply_markup: { 
+                inline_keyboard: [
+                    [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
+                    [ { text: '⬅️ Back', callback_data: 'action_guild_menu' } ]
+                ] 
+            } 
         }).catch(() => {});
     }
+
     const guild = user.ownedGuild;
     const totalMembers = guild.members.length;
     const totalVol = guild.members.reduce((sum: number, m: any) => sum + m.totalVolumeSol, 0);
 
-    const text = 
-        `🏰 <b>GUILD MANAGEMENT PANEL</b>\n\n` +
-        `• <b>Community Name:</b> <code>${guild.name}</code>\n` +
-        `• <b>Guild Code:</b> <code>${guild.guildCode}</code>\n` +
-        `• <b>Reward Program:</b> <i>"${guild.rewardDescription || 'No active reward'}"</i>\n\n` +
-        `📈 <b>Global Stats:</b>\n` +
-        `  ├ Members Registered: <b>${totalMembers}</b>\n` +
-        `  └ Total Volume: <b>${totalVol.toFixed(2)} SOL</b>\n\n` +
-        `🔗 <b>Your Exclusive Invite Link:</b>\n` +
-        `<code>https://t.me/${ctx.botInfo?.username}?start=guild_${guild.guildCode}</code>\n\n` +
-        `<i>(When members click this, they auto-join your community and you receive 50% of their platform fees as an affiliate permanently!)</i>`;
+    const text = `🏰 <b>GUILD MANAGEMENT PANEL</b>\n\n• <b>Community Name:</b> <code>${guild.name}</code>\n• <b>Guild Code:</b> <code>${guild.guildCode}</code>\n• <b>Reward Program:</b> <i>"${guild.rewardDescription || 'No active reward'}"</i>\n\n📈 <b>Global Stats:</b>\n  ├ Members Registered: <b>${totalMembers}</b>\n  └ Total Volume: <b>${totalVol.toFixed(2)} SOL</b>\n\n🔗 <b>Your Exclusive Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=guild_${guild.guildCode}</code>\n\n<i>(When members click this, they auto-join your community and you receive 50% of their platform fees as an affiliate permanently!)</i>`;
 
     await ctx.editMessageText(text, { 
         parse_mode: 'HTML', 
@@ -1037,7 +1039,7 @@ bot.action('action_manage_guild', async (ctx) => {
             [Markup.button.callback('👤 Pay Individual Member', `indiv_drop_${guild.id}`)],
             [Markup.button.callback('✏️ Edit Name', `edit_g_name_${guild.id}`), Markup.button.callback('🎁 Edit Reward', `edit_g_reward_${guild.id}`)],
             [Markup.button.callback('📥 Export Wallets (CSV)', `export_guild_${guild.id}`)],
-            [Markup.button.callback('⬅️ Back to Dev Suite', 'menu_devsuite')]
+            [Markup.button.callback('⬅️ Back to Guilds', 'action_guild_menu')]
         ])
     });
 });
@@ -4491,8 +4493,9 @@ bot.action('action_confirm_guild_pay', async (ctx) => {
         return ctx.replyWithHTML("🔴 <b>Session Expired:</b> Please run <code>/createguild</code> again.");
     }
 
-    const loader = await ctx.replyWithHTML(`<i>⏳ Deploying secure database schema and registering community "<b>${setupState.name}</b>"...</i>`);
-
+    const loader = await ctx.replyWithHTML(`<i>⏳ Deploying secure database schema and registering "<b>${setupState.name}</b>"...</i>`);
+    
+    // We execute createGuild here, which is completely free in the code
     const result = await createGuild(tgId, setupState.name, "Sentry Loyalty Node", setupState.reward);
 
     await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
