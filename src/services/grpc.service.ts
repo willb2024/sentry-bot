@@ -763,6 +763,10 @@ function connectRaydiumFallbackWatcher(bot: any) {
                     const poolId = await extractPoolIdFromTx(logs.signature);
 
                     console.log(`🧪 [RAYDIUM WS] New Pool: ${tokenMint} (Pool ID: ${poolId})`);
+                    
+                    // 🟢 BUG 1 FIX: Actually feed the caller buffer!
+                    trackNewMint(tokenMint, "UNKNOWN"); 
+                    
                     await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
                 }
             } catch (_) {}
@@ -936,19 +940,12 @@ export async function igniteYellowstoneStream(bot: any) {
                         recentlySnipedTokens.add(tokenMint);
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         
-                        trackNewMint(tokenMint, "UNKNOWN");
-
-                        let poolId: string | undefined = undefined;
-                        try {
-                            const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
-                            if (accountKeys.length > 4) poolId = accountKeys[4];
-                        } catch (_) {}
-
-                        if (logs.some((l: string) => l.includes("Instruction: Create"))) {
-                            await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'PUMP');
-                        } else {
-                            await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
-                        }
+                        console.log(`☄️ [METEORA gRPC] New Meteora Pool Detected: ${tokenMint}`);
+                        
+                        // 🟢 BUG 2 FIX: Actually feed the caller buffer!
+                        trackNewMint(tokenMint, "UNKNOWN"); 
+                        
+                        await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM');
                     }
                 }
 

@@ -4,7 +4,6 @@ import { redis } from '../lib/redis.js';
 import axios from 'axios';
 import { checkTokenRugRisk } from './price.service.js';
 import { getRecentNewMints } from './grpc.service.js'; 
-import { getCachedTokenPrice } from './engine.service.js';
 
 const prisma = new PrismaClient();
 
@@ -17,7 +16,191 @@ export interface CallerFilters {
     blockMev: boolean;
 }
 
+export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
+    const defaultFilters: CallerFilters = {
+        isActive: false,
+        minScore: 75,
+        maxAgeMins: 60,
+        minPctChange: 10,
+        maxPctChange: 500,
+        blockMev: true
+    };
+    try {
+        const raw = await redis.get(`caller_filters:${telegramId}`);
+        if (raw) return { ...defaultFilters, ...JSON.parse(raw) };
+    } catch (e) {}
+    return defaultFilters;
+}
 
+export async function setUserCallerFilters(telegramId: string, updates: Partial<CallerFilters>) {
+    const current = await getUserCallerFilters(telegramId);
+    const updated = { ...current, ...updates };
+    await redis.set(`caller_filters:${telegramId}`, JSON.stringify(updated));
+    return updated;
+}
+
+async function getCachedRugStatus(mint: string): Promise<boolean> {
+    const cached = await redis.get(`rugcheck:${mint}`);
+    if (cached) return cached === 'true';
+    const isRug = await checkTokenRugRisk(mint);
+    await redis.set(`rugcheck:${mint}`, isRug ? 'true' : 'false', 'EX', 600);
+    return isRug;
+}
+
+// 🟢 PIPELINE 1: WebSocket Buffer (Fastest, requires DS to index quickly)
+async function fetchRecentNewMints() {
+    const rawMints = getRecentNewMints();
+    if (rawMints.length === 0) return [];
+
+    const enrichedTokens: any[] = [];
+    const mintsOnly = rawMints.map((m: any) => m.mint);
+    
+    for (let i = 0; i < mintsOnly.length; i += 30) {
+        const chunk = mintsOnly.slice(i, i + 30).join(',');
+        try {
+            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { timeout: 3000 });
+            if (res.data?.pairs) {
+                res.data.pairs.forEach((pair: any) => {
+                    enrichedTokens.push({
+                        mint: pair.baseToken.address,
+                        symbol: pair.baseToken.symbol,
+                        price: parseFloat(pair.priceUsd || "0"),
+                        volume: pair.volume?.h24 || 0,
+                        liquidity: pair.liquidity?.usd || 0,
+                        priceChangeM5: pair.priceChange?.m5 || 0,
+                        priceChangeH1: pair.priceChange?.h1 || 0,
+                        pairCreatedAt: pair.pairCreatedAt || Date.now(),
+                        socials: pair.info?.socials || [],
+                        sourceQuality: 'dexscreener'
+                    });
+                });
+            }
+        } catch (_) {}
+    }
+
+    // On-chain fallback for un-indexed mints
+    const missing = mintsOnly.filter(m => !enrichedTokens.some(e => e.mint === m));
+    const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
+    const { connection } = await import('../lib/connection.js');
+    const { PublicKey } = await import('@solana/web3.js');
+    const { cachedSolUsdPrice } = await import('./grpc.service.js');
+
+    for (const mint of missing) {
+        try {
+            const curvePda = getBondingCurveAddress(mint);
+            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda)).catch(()=>null);
+            if (accInfo?.data) {
+                const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+                const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
+                enrichedTokens.push({
+                    mint,
+                    symbol: rawMints.find((m: any) => m.mint === mint)?.symbol || 'UNKNOWN',
+                    price: decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice,
+                    volume: 0,
+                    liquidity: virtualSolReserves * cachedSolUsdPrice, 
+                    priceChangeM5: 0,
+                    pairCreatedAt: rawMints.find((m: any) => m.mint === mint)?.firstSeenAt || Date.now(),
+                    socials: [],
+                    sourceQuality: 'onchain-only'
+                });
+            }
+        } catch (_) {}
+    }
+    return enrichedTokens;
+}
+
+// 🟢 PIPELINE 2: Direct Pump.fun API (Safety net if WebSockets die)
+async function fetchFreshPumpTokens() {
+    try {
+        const res = await axios.get('https://frontend-api.pump.fun/coins/latest', { timeout: 3500 });
+        if (!Array.isArray(res.data)) return [];
+        
+        const now = Date.now();
+        const recentPump = res.data.filter((c: any) => c.created_timestamp && (now - c.created_timestamp) < 20 * 60 * 1000).slice(0, 30);
+        if (recentPump.length === 0) return [];
+
+        const mints = recentPump.map((c: any) => c.mint).join(',');
+        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 }).catch(() => null);
+        
+        const enrichedTokens: any[] = [];
+        const dsPairs = enrich?.data?.pairs || [];
+
+        for (const coin of recentPump) {
+            const dsPair = dsPairs.find((p: any) => p.baseToken.address === coin.mint);
+            if (dsPair) {
+                enrichedTokens.push({
+                    mint: dsPair.baseToken.address, symbol: dsPair.baseToken.symbol,
+                    price: parseFloat(dsPair.priceUsd || "0"), volume: dsPair.volume?.h24 || 0, liquidity: dsPair.liquidity?.usd || 0,
+                    priceChangeM5: dsPair.priceChange?.m5 || 0, priceChangeH1: dsPair.priceChange?.h1 || 0,
+                    pairCreatedAt: dsPair.pairCreatedAt || coin.created_timestamp, socials: dsPair.info?.socials || [],
+                    sourceQuality: 'pump-fallback'
+                });
+            } else {
+                const { cachedSolUsdPrice } = await import('./grpc.service.js');
+                const virtualSolReserves = coin.virtual_sol_reserves ? (coin.virtual_sol_reserves / 1_000_000_000) : 30;
+                enrichedTokens.push({
+                    mint: coin.mint, symbol: coin.symbol || 'UNKNOWN',
+                    price: coin.usd_market_cap ? (coin.usd_market_cap / 1_000_000_000) : 0, 
+                    volume: 0, liquidity: virtualSolReserves * cachedSolUsdPrice,
+                    priceChangeM5: 0, priceChangeH1: 0,
+                    pairCreatedAt: coin.created_timestamp, socials: [],
+                    sourceQuality: 'onchain-only'
+                });
+            }
+        }
+        return enrichedTokens;
+    } catch (_) { return []; }
+}
+
+// 🟢 PIPELINE 3: DexScreener Latest Profile Submissions
+async function fetchFreshViaRest() {
+    try {
+        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
+        if (!res.data) return [];
+        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
+        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
+        
+        const now = Date.now();
+        return (enrich.data?.pairs || []).map((pair: any) => ({
+            mint: pair.baseToken.address, symbol: pair.baseToken.symbol,
+            price: parseFloat(pair.priceUsd || "0"), volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0,
+            priceChangeM5: pair.priceChange?.m5 || 0, priceChangeH1: pair.priceChange?.h1 || 0,
+            pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [],
+            sourceQuality: 'rest-fallback'
+        })).filter((t: any) => (now - t.pairCreatedAt) < 30 * 60 * 1000); 
+    } catch (_) { return []; }
+}
+
+// 🟢 PIPELINES 4 & 5: Established Momentum (Trending / Boosted)
+async function fetchTrendingPairs() {
+    try {
+        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
+        if (!res.data) return [];
+        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
+        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
+        return enrich.data?.pairs?.map((pair: any) => ({
+            mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"), 
+            volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0, 
+            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
+        })) || [];
+    } catch (_) { return []; }
+}
+
+async function fetchBoostedPairs() {
+    try {
+        const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 3000 });
+        if (!res.data) return [];
+        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
+        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
+        return enrich.data?.pairs?.map((pair: any) => ({
+            mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"), 
+            volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0, 
+            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
+        })) || [];
+    } catch (_) { return []; }
+}
+
+// 🟢 SHARED SCORING MATH (Used by real Caller and Simulator)
 export interface TokenStats {
     ageMins: number;
     volume24h: number;
@@ -57,177 +240,32 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     }
 
     if (stats.sourceQuality === 'onchain-only') {
-        score += 15; // Modest bump for active on-chain reserves
-        reasons.push(`⛓️ High Initial Reserves`);
+        score += 15; 
+        reasons.push(`⛓️ Pre-Index High Reserves`);
     }
 
     return { score: Math.max(0, score), reasons };
 }
 
-export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
-    const defaultFilters: CallerFilters = {
-        isActive: false,
-        minScore: 75,
-        maxAgeMins: 60,
-        minPctChange: 10,
-        maxPctChange: 500,
-        blockMev: true
-    };
-    try {
-        const raw = await redis.get(`caller_filters:${telegramId}`);
-        if (raw) return { ...defaultFilters, ...JSON.parse(raw) };
-    } catch (e) {}
-    return defaultFilters;
-}
-
-export async function setUserCallerFilters(telegramId: string, updates: Partial<CallerFilters>) {
-    const current = await getUserCallerFilters(telegramId);
-    const updated = { ...current, ...updates };
-    await redis.set(`caller_filters:${telegramId}`, JSON.stringify(updated));
-    return updated;
-}
-
-async function getCachedRugStatus(mint: string): Promise<boolean> {
-    const cached = await redis.get(`rugcheck:${mint}`);
-    if (cached) return cached === 'true';
-    const isRug = await checkTokenRugRisk(mint);
-    await redis.set(`rugcheck:${mint}`, isRug ? 'true' : 'false', 'EX', 600);
-    return isRug;
-}
-
-
-
-async function fetchTrendingPairs() {
-    try {
-        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
-        if (!res.data) return [];
-        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
-        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
-        return enrich.data?.pairs?.map((pair: any) => ({
-            mint: pair.baseToken.address, symbol: pair.baseToken.symbol,
-            price: parseFloat(pair.priceUsd || "0"), volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0,
-            priceChangeM5: pair.priceChange?.m5 || 0, priceChangeH1: pair.priceChange?.h1 || 0,
-            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
-        })) || [];
-    } catch (_) { return []; }
-}
-
-async function fetchBoostedPairs() {
-    try {
-        const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 3000 });
-        if (!res.data) return [];
-        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
-        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
-        return enrich.data?.pairs?.map((pair: any) => ({
-            mint: pair.baseToken.address, symbol: pair.baseToken.symbol,
-            price: parseFloat(pair.priceUsd || "0"), volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0,
-            priceChangeM5: pair.priceChange?.m5 || 0, priceChangeH1: pair.priceChange?.h1 || 0,
-            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
-        })) || [];
-    } catch (_) { return []; }
-}
-
-async function fetchRecentNewMints() {
-    const rawMints = getRecentNewMints();
-    if (rawMints.length === 0) return [];
-
-    const enrichedTokens: any[] = [];
-    const mintsOnly = rawMints.map(m => m.mint);
-    
-    for (let i = 0; i < mintsOnly.length; i += 30) {
-        const chunk = mintsOnly.slice(i, i + 30).join(',');
-        try {
-            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { timeout: 3000 });
-            if (res.data?.pairs) {
-                res.data.pairs.forEach((pair: any) => {
-                    enrichedTokens.push({
-                        mint: pair.baseToken.address,
-                        symbol: pair.baseToken.symbol,
-                        price: parseFloat(pair.priceUsd || "0"),
-                        volume: pair.volume?.h24 || 0,
-                        liquidity: pair.liquidity?.usd || 0,
-                        priceChangeM5: pair.priceChange?.m5 || 0,
-                        priceChangeH1: pair.priceChange?.h1 || 0,
-                        pairCreatedAt: pair.pairCreatedAt || Date.now(),
-                        socials: pair.info?.socials || [],
-                        sourceQuality: 'dexscreener'
-                    });
-                });
-            }
-        } catch (_) {}
-    }
-
-    // 🟢 D1 FIX: On-chain price fallback for brand new un-indexed tokens!
-    const missing = mintsOnly.filter(m => !enrichedTokens.some(e => e.mint === m));
-    const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
-    const { connection } = await import('../lib/connection.js');
-    const { PublicKey } = await import('@solana/web3.js');
-    const { cachedSolUsdPrice } = await import('./grpc.service.js');
-
-    for (const mint of missing) {
-        try {
-            const curvePda = getBondingCurveAddress(mint);
-            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
-            if (accInfo?.data) {
-                const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-                const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
-                enrichedTokens.push({
-                    mint,
-                    symbol: rawMints.find(m => m.mint === mint)?.symbol || 'UNKNOWN',
-                    price: decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice,
-                    volume: 0,
-                    liquidity: virtualSolReserves * cachedSolUsdPrice, 
-                    priceChangeM5: 0,
-                    pairCreatedAt: rawMints.find(m => m.mint === mint)?.firstSeenAt || Date.now(),
-                    socials: [],
-                    sourceQuality: 'onchain-only'
-                });
-            }
-        } catch (_) {}
-    }
-    return enrichedTokens;
-}
-
-// src/services/caller.service.ts (Add this function above scoreTokens)
-
-// 🟢 B.3 FIX: REST-based safety net fallback if WebSocket is dead/blocked
-async function fetchFreshViaRest() {
-    try {
-        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
-        if (!res.data) return [];
-        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
-        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
-        
-        const now = Date.now();
-        return (enrich.data?.pairs || []).map((pair: any) => ({
-            mint: pair.baseToken.address, symbol: pair.baseToken.symbol,
-            price: parseFloat(pair.priceUsd || "0"), volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0,
-            priceChangeM5: pair.priceChange?.m5 || 0, priceChangeH1: pair.priceChange?.h1 || 0,
-            pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [],
-            sourceQuality: 'rest-fallback'
-        })).filter((t: any) => (now - t.pairCreatedAt) < 20 * 60 * 1000); // Strict filter: only < 20 mins old
-    } catch (_) { return []; }
-}
-
-
-// Replace your existing scoreTokens() function with this:
+// 🟢 MERGE AND SCORE
 export async function scoreTokens() {
     try {
-        const [newMints, trending, boosted, restFallback] = await Promise.all([
+        const [newMints, pumpFallback, restFallback, trending, boosted] = await Promise.all([
             fetchRecentNewMints(),
+            fetchFreshPumpTokens(),
+            fetchFreshViaRest().catch(()=>[]),
             fetchTrendingPairs().catch(()=>[]),
-            fetchBoostedPairs().catch(()=>[]),
-            fetchFreshViaRest().catch(()=>[]) // 🟢 Added fallback
+            fetchBoostedPairs().catch(()=>[])
         ]);
 
-        console.log(`🎯 [CALLER] Scanned Sources: WS_NewMints=${newMints.length} | REST_Fallback=${restFallback.length} | Trending=${trending.length} | Boosted=${boosted.length}`);
-
-        const allPairs = [...newMints, ...restFallback, ...trending, ...boosted];
+        const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...trending, ...boosted];
+        
+        // Deduplicate by Mint
         const uniquePairs = Array.from(new Map(allPairs.map(item => [item.mint, item])).values());
 
         const scored = await Promise.all(uniquePairs.map(async (pair) => {
             const isRug = await getCachedRugStatus(pair.mint);
-            const stats = {
+            const stats: TokenStats = {
                 ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
                 volume24h: pair.volume,
                 liquidity: pair.liquidity,
@@ -243,7 +281,8 @@ export async function scoreTokens() {
 
         const topScorers = scored.filter(t => t.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore);
         
-        console.log(`🎯 [CALLER] Funnel: ring_buffer=${getRecentNewMints().length} | ds_enriched=${newMints.filter(t=>t.sourceQuality==='dexscreener').length} | onchain_fallback=${newMints.filter(t=>t.sourceQuality==='onchain-only').length} | rest_fallback=${restFallback.length} | scored>0=${topScorers.length}`);
+        // 🟢 REQUIRED LOGGING FUNNEL (Solves the "Silent Starvation" mystery)
+        console.log(`🎯 [CALLER] Funnel: WS=${newMints.length} | PumpAPI=${pumpFallback.length} | DSRest=${restFallback.length} | Unique=${uniquePairs.length} | Scored>0=${topScorers.length}`);
 
         await redis.set('caller:hot_scored_tokens', JSON.stringify(topScorers), 'EX', 30);
         return topScorers;
@@ -253,12 +292,9 @@ export async function scoreTokens() {
     }
 }
 
-
-
-
 let isScoring = false;
 export async function startCoinCaller(bot: any) {
-    console.log("🎯 [CALLER ENGINE] Initialized. Scanning DexScreener every 15 seconds.");
+    console.log("🎯 [CALLER ENGINE] Initialized. Scanning 5 distinct pipelines every 15 seconds.");
 
     setInterval(async () => {
         if (isScoring) return;
@@ -289,7 +325,6 @@ export async function startCoinCaller(bot: any) {
 
                     await redis.set(alertKey, '1', 'EX', 3600 * 24);
 
-                    // 🟢 Credibility FIX: Log to history for tracking
                     const historyData = {
                         mint: matchedToken.mint,
                         symbol: matchedToken.symbol,
@@ -299,11 +334,23 @@ export async function startCoinCaller(bot: any) {
                     };
                     await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
 
+                    let historicalContext = "";
+                    try {
+                        const historyMap = await redis.hgetall('caller_history');
+                        const calls = Object.values(historyMap).map(val => JSON.parse(val)).filter(c => c.finalized && c.score >= 75);
+                        if (calls.length >= 5) { 
+                            const hits = calls.filter(c => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
+                            const winRate = ((hits / calls.length) * 100).toFixed(1);
+                            historicalContext = `<i>(Based on ${calls.length} verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting +20%).</i>\n\n`;
+                        }
+                    } catch(e) {}
+
                     const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                                 `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
                                 `<b>Audit Trail:</b>\n` +
                                 `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
+                                historicalContext +
                                 `<i>Click below to buy instantly via Jito:</i>`;
                     
                     try {
@@ -335,7 +382,7 @@ export async function startCoinCaller(bot: any) {
     }, 15000);
 }
 
-// 🟢 C1 FIX: Authentic Hit Rate Evaluator Job
+// 🟢 Authentic Hit Rate Evaluator Job
 export function startCallerEvaluator() {
     setInterval(async () => {
         try {
@@ -348,7 +395,6 @@ export function startCallerEvaluator() {
 
                 const ageHours = (now - data.alertedAt) / 3600000;
                 
-                // Only evaluate if older than 1 hour, mark finalized if older than 24h
                 if (ageHours >= 1) {
                     const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 3000 }).catch(() => null);
                     const currentPrice = parseFloat(res?.data?.pairs?.[0]?.priceUsd || "0");
@@ -366,5 +412,5 @@ export function startCallerEvaluator() {
                 }
             }
         } catch (_) {}
-    }, 5 * 60 * 1000); // Runs every 5 mins
+    }, 5 * 60 * 1000); 
 }
