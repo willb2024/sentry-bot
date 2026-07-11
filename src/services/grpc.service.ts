@@ -24,8 +24,7 @@ const GRPC_URL = `https://atlas-mainnet.helius-rpc.com`;
 const PUMP_FUN_PROGRAM  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 
-// Meteora DLMM & CPMM Support
-// Replace the old Meteora constants with these verified ones
+// 🟢 VERIFIED METEORA PROGRAM IDS
 const METEORA_DLMM_PROGRAM = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
 const METEORA_DBC_PROGRAM = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
 const METEORA_DAMM_V2_PROGRAM = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG";
@@ -218,6 +217,7 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
 }
 
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
+
     const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage, getNextSimOutcome } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
         if (Math.random() > 0.5) {
@@ -678,6 +678,106 @@ export function startUniversalGuardPoller(bot: any) {
     }, 10000); 
 }
 
+let isWsConnecting = false;
+let wsHeartbeat: NodeJS.Timeout | null = null;
+let lastMessageAt = Date.now();
+
+function connectPumpPortalStream(bot: any) {
+    if (isWsConnecting) return;
+    isWsConnecting = true;
+
+    const ws = new WebSocket('wss://pumpportal.fun/api/data', {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://pumpportal.fun' }
+    });
+
+    ws.on('open', () => {
+        isWsConnecting = false;
+        console.log("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
+        ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+        
+        lastMessageAt = Date.now();
+        if (wsHeartbeat) clearInterval(wsHeartbeat);
+        wsHeartbeat = setInterval(() => {
+            if (Date.now() - lastMessageAt > 90_000) {
+                console.warn("⚠️ [PUMP WS] No messages in 90s — forcing reconnect.");
+                ws.terminate();
+            }
+        }, 60_000);
+    });
+
+    ws.on('message', async (data: WebSocket.RawData) => {
+        lastMessageAt = Date.now();
+        try {
+            const parsed = JSON.parse(data.toString());
+            if (parsed.mint && !recentlySnipedTokens.has(parsed.mint)) {
+                if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
+                recentlySnipedTokens.add(parsed.mint);
+                setTimeout(() => recentlySnipedTokens.delete(parsed.mint), 60_000);
+                
+                trackNewMint(parsed.mint, parsed.symbol); 
+
+                const devInitialBuySol = parsed.initialBuy || 0;
+                await triggerAutoSnipes(bot, parsed.mint, parsed.symbol || "UNKNOWN", devInitialBuySol, 'PUMP');
+            }
+        } catch (_) {}
+    });
+
+    ws.on('error', (err: any) => { console.warn(`⚠️ [PUMP WS] Error: ${err.message}`); });
+    
+    ws.on('close', () => {
+        isWsConnecting = false;
+        if (wsHeartbeat) clearInterval(wsHeartbeat);
+        console.warn("⚠️ [PUMP WS] Dropped. Reconnecting in 30s to avoid 429 IP bans...");
+        setTimeout(() => connectPumpPortalStream(bot), 30_000);
+    });
+}
+
+function connectRaydiumFallbackWatcher(bot: any) {
+    if (raydiumWsFallbackStarted) return;
+    raydiumWsFallbackStarted = true;
+
+    const RAYDIUM_PUBLIC_KEY = new PublicKey(RAYDIUM_AMM_PROGRAM);
+
+    connection.onLogs(RAYDIUM_PUBLIC_KEY, async (logs) => {
+        if (logs.err) return;
+        
+        if (logs.logs.some((l: string) => l.includes("initialize2"))) {
+            try {
+                const tx = await connection.getParsedTransaction(logs.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }).catch(() => null);
+                if (!tx?.meta) return;
+
+                const tokenMint = tx.meta.postTokenBalances?.find((b: any) => b.mint !== WSOL_MINT)?.mint;
+
+                if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
+                    if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
+                    recentlySnipedTokens.add(tokenMint);
+                    setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
+
+                    const { extractPoolIdFromTx } = await import('./raydium.service.js');
+                    const poolId = await extractPoolIdFromTx(logs.signature);
+
+                    console.log(`🧪 [RAYDIUM WS] New Pool: ${tokenMint} (Pool ID: ${poolId})`);
+                    await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
+                }
+            } catch (_) {}
+            return;
+        }
+
+        if (logs.logs.some((l: string) => l.includes("Instruction: Swap"))) {
+            try {
+                if (cachedActiveGuards.length > 0 || cachedLimitOrders.length > 0) {
+                    if (!isPolling) {
+                        isPolling = true;
+                        setImmediate(() => { isPolling = false; }); 
+                    }
+                }
+            } catch (_) {}
+        }
+    }, 'confirmed');
+
+    console.log("🟡 [RAYDIUM] WebSocket push watcher armed for instant execution.");
+}
+
 async function triggerAutoSnipes(
     bot: any, mintCa: string, symbol: string, initialBuySol: number, mode: 'PUMP' | 'RAYDIUM', raydiumPoolId?: string
 ) {
@@ -791,94 +891,6 @@ async function triggerAutoSnipes(
     }
 }
 
-let isWsConnecting = false;
-
-function connectPumpPortalStream(bot: any) {
-    if (isWsConnecting) return;
-    isWsConnecting = true;
-
-    const ws = new WebSocket('wss://pumpportal.fun/api/data', {
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://pumpportal.fun' }
-    });
-
-    ws.on('open', () => {
-        isWsConnecting = false;
-        console.log("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
-        ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
-    });
-
-    ws.on('message', async (data: WebSocket.RawData) => {
-        try {
-            const parsed = JSON.parse(data.toString());
-            if (parsed.mint && !recentlySnipedTokens.has(parsed.mint)) {
-                if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
-                recentlySnipedTokens.add(parsed.mint);
-                setTimeout(() => recentlySnipedTokens.delete(parsed.mint), 60_000);
-                
-                trackNewMint(parsed.mint, parsed.symbol); 
-                scoreTokens().catch(() => {});
-
-                const devInitialBuySol = parsed.initialBuy || 0;
-                await triggerAutoSnipes(bot, parsed.mint, parsed.symbol || "UNKNOWN", devInitialBuySol, 'PUMP');
-            }
-        } catch (_) {}
-    });
-
-    ws.on('error', (err: any) => { console.warn(`⚠️ [PUMP WS] Error: ${err.message}`); });
-    
-    ws.on('close', () => {
-        isWsConnecting = false;
-        console.warn("⚠️ [PUMP WS] Dropped. Reconnecting in 30s to avoid 429 IP bans...");
-        setTimeout(() => connectPumpPortalStream(bot), 30_000);
-    });
-}
-
-function connectRaydiumFallbackWatcher(bot: any) {
-    if (raydiumWsFallbackStarted) return;
-    raydiumWsFallbackStarted = true;
-
-    const RAYDIUM_PUBLIC_KEY = new PublicKey(RAYDIUM_AMM_PROGRAM);
-
-    connection.onLogs(RAYDIUM_PUBLIC_KEY, async (logs) => {
-        if (logs.err) return;
-        
-        if (logs.logs.some((l: string) => l.includes("initialize2"))) {
-            try {
-                const tx = await connection.getParsedTransaction(logs.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }).catch(() => null);
-                if (!tx?.meta) return;
-
-                const tokenMint = tx.meta.postTokenBalances?.find((b: any) => b.mint !== WSOL_MINT)?.mint;
-
-                if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
-                    if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
-                    recentlySnipedTokens.add(tokenMint);
-                    setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
-
-                    const { extractPoolIdFromTx } = await import('./raydium.service.js');
-                    const poolId = await extractPoolIdFromTx(logs.signature);
-
-                    console.log(`🧪 [RAYDIUM WS] New Pool: ${tokenMint} (Pool ID: ${poolId})`);
-                    await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
-                }
-            } catch (_) {}
-            return;
-        }
-
-        if (logs.logs.some((l: string) => l.includes("Instruction: Swap"))) {
-            try {
-                if (cachedActiveGuards.length > 0 || cachedLimitOrders.length > 0) {
-                    if (!isPolling) {
-                        isPolling = true;
-                        setImmediate(() => { isPolling = false; }); 
-                    }
-                }
-            } catch (_) {}
-        }
-    }, 'confirmed');
-
-    console.log("🟡 [RAYDIUM] WebSocket push watcher armed for instant execution.");
-}
-
 export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
         connectPumpPortalStream(bot);
@@ -934,7 +946,6 @@ export async function igniteYellowstoneStream(bot: any) {
                     }
                 }
 
-                // 🟢 METEORA COVERAGE FIX: Authentic Program Logs for DLMM, DBC, and DAMM
                 if (logs.some((log: string) => log.includes("Instruction: InitializeCustomizablePermissionlessConstantProductPool") || log.includes("Instruction: InitializeReward") || log.includes("Instruction: InitializePool"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
                     const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
@@ -959,9 +970,11 @@ export async function igniteYellowstoneStream(bot: any) {
                 connectRaydiumFallbackWatcher(bot);
                 return;
             }
+
             if (err.message.includes("EADDRNOTAVAIL")) {
                 stream.destroy(); setTimeout(() => igniteYellowstoneStream(bot), 3_000); return;
             }
+
             stream.destroy(); setTimeout(() => igniteYellowstoneStream(bot), 3_000);
         });
 
@@ -970,7 +983,6 @@ export async function igniteYellowstoneStream(bot: any) {
             setTimeout(() => igniteYellowstoneStream(bot), 3_000);
         });
 
-        // 🟢 FIX: Correctly filtered subscriptions using verified Meteora IDs
         const request = {
             accounts: {}, slots: {},
             transactions: {
@@ -985,6 +997,7 @@ export async function igniteYellowstoneStream(bot: any) {
 
         stream.write(request);
         console.log("🟢 [gRPC] Yellowstone stream connected — Pump.fun + Raydium + Meteora enabled.");
+
     } catch (e: any) {
         if (!isGrpcDisabled) setTimeout(() => igniteYellowstoneStream(bot), 5_000);
     }

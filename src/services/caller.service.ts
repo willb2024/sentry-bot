@@ -4,6 +4,7 @@ import { redis } from '../lib/redis.js';
 import axios from 'axios';
 import { checkTokenRugRisk } from './price.service.js';
 import { getRecentNewMints } from './grpc.service.js'; 
+import { getCachedTokenPrice } from './engine.service.js';
 
 const prisma = new PrismaClient();
 
@@ -14,6 +15,53 @@ export interface CallerFilters {
     minPctChange: number;
     maxPctChange: number;
     blockMev: boolean;
+}
+
+
+export interface TokenStats {
+    ageMins: number;
+    volume24h: number;
+    liquidity: number;
+    priceChangeM5: number;
+    hasSocials: boolean;
+    isRug: boolean;
+    sourceQuality?: string;
+}
+
+export function computeTokenScore(stats: TokenStats): { score: number; reasons: string[] } {
+    let score = 0;
+    const reasons: string[] = [];
+
+    reasons.push(`🕒 Age: ${Math.floor(stats.ageMins)}m`);
+    if (stats.ageMins < 60) score += 30; 
+    else if (stats.ageMins < 180) score += 15;
+
+    reasons.push(`💰 Vol: $${(stats.volume24h/1000).toFixed(1)}k`);
+    if (stats.volume24h > 100000) score += 25; 
+    else if (stats.volume24h > 20000) score += 10;
+
+    reasons.push(`📈 Mom: +${stats.priceChangeM5.toFixed(1)}%`);
+    if (stats.priceChangeM5 > 15) score += 20;
+
+    reasons.push(`💧 Liq: $${(stats.liquidity/1000).toFixed(1)}k`);
+    if (stats.liquidity > 20000) score += 15;
+
+    if (stats.hasSocials) { 
+        score += 10; 
+        reasons.push(`🌐 Socials present`); 
+    }
+
+    if (stats.isRug) { 
+        score -= 100; 
+        reasons.push(`🚨 Rug risk flagged`); 
+    }
+
+    if (stats.sourceQuality === 'onchain-only') {
+        score += 15; // Modest bump for active on-chain reserves
+        reasons.push(`⛓️ High Initial Reserves`);
+    }
+
+    return { score: Math.max(0, score), reasons };
 }
 
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
@@ -47,37 +95,7 @@ async function getCachedRugStatus(mint: string): Promise<boolean> {
     return isRug;
 }
 
-// 🟢 D1 FIX: Pull from the live WebSocket buffer instead of broken REST endpoints
-async function fetchRecentNewMints() {
-    const rawMints = getRecentNewMints();
-    if (rawMints.length === 0) return [];
 
-    const enrichedTokens: any[] = [];
-    const mintsOnly = rawMints.map((m: any) => m.mint);
-    
-    for (let i = 0; i < mintsOnly.length; i += 30) {
-        const chunk = mintsOnly.slice(i, i + 30).join(',');
-        try {
-            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { timeout: 3000 });
-            if (res.data?.pairs) {
-                res.data.pairs.forEach((pair: any) => {
-                    enrichedTokens.push({
-                        mint: pair.baseToken.address,
-                        symbol: pair.baseToken.symbol,
-                        price: parseFloat(pair.priceUsd || "0"),
-                        volume: pair.volume?.h24 || 0,
-                        liquidity: pair.liquidity?.usd || 0,
-                        priceChangeM5: pair.priceChange?.m5 || 0,
-                        priceChangeH1: pair.priceChange?.h1 || 0,
-                        pairCreatedAt: pair.pairCreatedAt || Date.now(),
-                        socials: pair.info?.socials || []
-                    });
-                });
-            }
-        } catch (_) {}
-    }
-    return enrichedTokens;
-}
 
 async function fetchTrendingPairs() {
     try {
@@ -109,6 +127,67 @@ async function fetchBoostedPairs() {
     } catch (_) { return []; }
 }
 
+async function fetchRecentNewMints() {
+    const rawMints = getRecentNewMints();
+    if (rawMints.length === 0) return [];
+
+    const enrichedTokens: any[] = [];
+    const mintsOnly = rawMints.map(m => m.mint);
+    
+    for (let i = 0; i < mintsOnly.length; i += 30) {
+        const chunk = mintsOnly.slice(i, i + 30).join(',');
+        try {
+            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { timeout: 3000 });
+            if (res.data?.pairs) {
+                res.data.pairs.forEach((pair: any) => {
+                    enrichedTokens.push({
+                        mint: pair.baseToken.address,
+                        symbol: pair.baseToken.symbol,
+                        price: parseFloat(pair.priceUsd || "0"),
+                        volume: pair.volume?.h24 || 0,
+                        liquidity: pair.liquidity?.usd || 0,
+                        priceChangeM5: pair.priceChange?.m5 || 0,
+                        priceChangeH1: pair.priceChange?.h1 || 0,
+                        pairCreatedAt: pair.pairCreatedAt || Date.now(),
+                        socials: pair.info?.socials || [],
+                        sourceQuality: 'dexscreener'
+                    });
+                });
+            }
+        } catch (_) {}
+    }
+
+    // 🟢 D1 FIX: On-chain price fallback for brand new un-indexed tokens!
+    const missing = mintsOnly.filter(m => !enrichedTokens.some(e => e.mint === m));
+    const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
+    const { connection } = await import('../lib/connection.js');
+    const { PublicKey } = await import('@solana/web3.js');
+    const { cachedSolUsdPrice } = await import('./grpc.service.js');
+
+    for (const mint of missing) {
+        try {
+            const curvePda = getBondingCurveAddress(mint);
+            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
+            if (accInfo?.data) {
+                const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+                const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
+                enrichedTokens.push({
+                    mint,
+                    symbol: rawMints.find(m => m.mint === mint)?.symbol || 'UNKNOWN',
+                    price: decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice,
+                    volume: 0,
+                    liquidity: virtualSolReserves * cachedSolUsdPrice, 
+                    priceChangeM5: 0,
+                    pairCreatedAt: rawMints.find(m => m.mint === mint)?.firstSeenAt || Date.now(),
+                    socials: [],
+                    sourceQuality: 'onchain-only'
+                });
+            }
+        } catch (_) {}
+    }
+    return enrichedTokens;
+}
+
 export async function scoreTokens() {
     try {
         const [newMints, trending, boosted] = await Promise.all([
@@ -117,39 +196,30 @@ export async function scoreTokens() {
             fetchBoostedPairs().catch(()=>[])
         ]);
 
-        console.log(`🎯 [CALLER] Scanned Sources: NewMints=${newMints.length} | Trending=${trending.length} | Boosted=${boosted.length}`);
-
         const allPairs = [...newMints, ...trending, ...boosted];
         const uniquePairs = Array.from(new Map(allPairs.map(item => [item.mint, item])).values());
 
         const scored = await Promise.all(uniquePairs.map(async (pair) => {
-            const ageMins = (Date.now() - pair.pairCreatedAt) / 60000;
-            let score = 0;
-            let reasons = [];
-            
-            // 🟢 Credibility FIX: Detailed, undeniable breakdowns
-            reasons.push(`🕒 Age: ${Math.floor(ageMins)}m`);
-            if (ageMins < 60) { score += 30; } else if (ageMins < 180) { score += 15; }
-
-            reasons.push(`💰 Vol: $${(pair.volume/1000).toFixed(1)}k`);
-            if (pair.volume > 100000) { score += 25; } else if (pair.volume > 20000) { score += 10; }
-
-            reasons.push(`📈 Mom: +${pair.priceChangeM5.toFixed(1)}%`);
-            if (pair.priceChangeM5 > 15) { score += 20; }
-
-            reasons.push(`💧 Liq: $${(pair.liquidity/1000).toFixed(1)}k`);
-            if (pair.liquidity > 20000) { score += 15; }
-
-            if (pair.socials.length > 0) { score += 10; }
-
             const isRug = await getCachedRugStatus(pair.mint);
-            if (isRug) score -= 100;
+            const stats: TokenStats = {
+                ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
+                volume24h: pair.volume,
+                liquidity: pair.liquidity,
+                priceChangeM5: pair.priceChangeM5,
+                hasSocials: pair.socials.length > 0,
+                isRug,
+                sourceQuality: pair.sourceQuality
+            };
 
-            return { ...pair, totalScore: Math.max(0, score), ageMins, reasons, breakdown: { mevRisk: isRug ? -100 : 0 } };
+            const { score, reasons } = computeTokenScore(stats);
+            return { ...pair, totalScore: score, ageMins: stats.ageMins, reasons, breakdown: { mevRisk: isRug ? -100 : 0 } };
         }));
 
         const topScorers = scored.filter(t => t.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore);
         
+        // 🟢 REQUIRED LOGGING FUNNEL (D1)
+        console.log(`🎯 [CALLER] Funnel: ring_buffer=${getRecentNewMints().length} | ds_enriched=${newMints.filter(t=>t.sourceQuality==='dexscreener').length} | onchain_fallback=${newMints.filter(t=>t.sourceQuality==='onchain-only').length} | scored>0=${topScorers.length}`);
+
         await redis.set('caller:hot_scored_tokens', JSON.stringify(topScorers), 'EX', 30);
         return topScorers;
     } catch (e: any) {
@@ -157,6 +227,9 @@ export async function scoreTokens() {
         return [];
     }
 }
+
+
+
 let isScoring = false;
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Scanning DexScreener every 15 seconds.");
@@ -234,4 +307,38 @@ export async function startCoinCaller(bot: any) {
             isScoring = false;
         }
     }, 15000);
+}
+
+// 🟢 C1 FIX: Authentic Hit Rate Evaluator Job
+export function startCallerEvaluator() {
+    setInterval(async () => {
+        try {
+            const historyMap = await redis.hgetall('caller_history');
+            const now = Date.now();
+
+            for (const [mint, val] of Object.entries(historyMap)) {
+                const data = JSON.parse(val);
+                if (data.finalized) continue;
+
+                const ageHours = (now - data.alertedAt) / 3600000;
+                
+                // Only evaluate if older than 1 hour, mark finalized if older than 24h
+                if (ageHours >= 1) {
+                    const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 3000 }).catch(() => null);
+                    const currentPrice = parseFloat(res?.data?.pairs?.[0]?.priceUsd || "0");
+
+                    if (currentPrice > 0) {
+                        const pctChange = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
+                        if (ageHours < 6) data.outcome1h = Math.max(data.outcome1h || -100, pctChange);
+                        else if (ageHours < 24) data.outcome6h = Math.max(data.outcome6h || -100, pctChange);
+                        else {
+                            data.outcome24h = Math.max(data.outcome24h || -100, pctChange);
+                            data.finalized = true;
+                        }
+                        await redis.hset('caller_history', mint, JSON.stringify(data));
+                    }
+                }
+            }
+        } catch (_) {}
+    }, 5 * 60 * 1000); // Runs every 5 mins
 }

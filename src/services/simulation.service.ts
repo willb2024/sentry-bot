@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { generatePnlCard } from './image.service.js';
 import FormData from 'form-data'; 
+import { computeTokenScore, TokenStats } from './caller.service.js';
 
 const prisma = new PrismaClient();
 
@@ -102,6 +103,9 @@ export async function simExecuteSnipe(
     // 🟢 FAST EXECUTION: Under 1 second
     await new Promise(r => setTimeout(r, 600 + Math.random() * 300));
 
+    const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
+    await new Promise(r => setTimeout(r, delay));
+
     const currentBal = parseFloat(await getSimBalance(telegramId));
     const newBal = Math.max(0, currentBal - amountSol - 0.001).toFixed(4);
     await redis.set(`sim:balance:${telegramId}`, newBal);
@@ -154,6 +158,9 @@ export async function simExecuteExit(
     const positions = JSON.parse(await redis.get(posKey) || '[]');
     const pos = positions.find((p: any) => p.mint === tokenAddress);
 
+    const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
+    await new Promise(r => setTimeout(r, delay));
+
     let pnlPercent = forcedPnlPercent !== undefined 
         ? forcedPnlPercent 
         : parseFloat((Math.random() * 325 + 15).toFixed(2));
@@ -183,41 +190,42 @@ export async function simExecuteExit(
     };
 }
 
-export function generateSimCallerAlert(): { mint: string, symbol: string, score: number, reasons: string[], priceChangeM5: number, ageMins: number } {
+
+
+export function generateSimCallerAlert(): ReturnType<typeof computeTokenScore> & { mint: string; symbol: string; ageMins: number; priceChangeM5: number } {
     const symbols = ['DOGE', 'BONK', 'WIF', 'MYRO', 'POPCAT', 'ZEUS', 'BOME', 'MEW', 'SLERF'];
-    const priceChangeM5 = parseFloat((Math.random() * 220 + 30).toFixed(1));
+    const ageMins = Math.floor(Math.random() * 45) + 2;
+    
+    // D2 FIX: Use the identical math from the real caller
+    const stats: TokenStats = {
+        ageMins,
+        volume24h: Math.random() * 300000,
+        liquidity: Math.random() * 80000 + 5000,
+        priceChangeM5: parseFloat((Math.random() * 220 + 5).toFixed(1)),
+        hasSocials: Math.random() > 0.3,
+        isRug: Math.random() < 0.08 // ~8% rug frequency
+    };
+    
+    const { score, reasons } = computeTokenScore(stats);
     return {
         mint: generateSimTokenCA(),
         symbol: symbols[Math.floor(Math.random() * symbols.length)],
-        score: Math.floor(Math.random() * 25) + 75,
-        reasons: [`🔥 High momentum (+${Math.floor(priceChangeM5 * 1.3)}% vol spike)`, `📈 Heavy buy pressure`, `💧 Deep liquidity`],
-        priceChangeM5,
-        ageMins: Math.floor(Math.random() * 45) + 2
+        score, reasons, ageMins, priceChangeM5: stats.priceChangeM5
     };
 }
 
-// 🟢 FAST, CLUSTERED WIN/LOSS OUTCOMES (1w1L, 2w3L, 3w1L etc)
-export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard'): Promise<boolean> {
-    const key = `sim:${type}_seq:${telegramId}`;
-    let seqStr = await redis.get(key);
-    let seq: boolean[] = [];
-    
-    if (seqStr) seq = JSON.parse(seqStr);
-    
-    if (!seq || seq.length === 0) {
-        // Randomize the pattern it builds to mimic realistic retail win/loss clusters
-        const patterns = [
-            [true, false],                      // 1 Win, 1 Loss
-            [true, true, false, false, false],  // 2 Wins, 3 Losses
-            [false, false, false, true],        // 3 Losses, 1 Win
-            [true, false, true, false, false],  // Scattered
-            [true, true, true, false, false]    // Hot Streak
-        ];
-        seq = shuffleArray(patterns[Math.floor(Math.random() * patterns.length)]);
-    }
-    
-    const outcome = seq.pop() ?? true;
-    await redis.set(key, JSON.stringify(seq), 'EX', 86400); 
+// 🟢 D3 FIX: Biased by score with light momentum streaks
+export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
+    const baseProb = score !== undefined ? 0.30 + (score / 100) * 0.45 : 0.5;
+
+    const lastKey = `sim:last_outcome:${type}:${telegramId}`;
+    const last = await redis.get(lastKey);
+    const streakNudge = last === 'true' ? 0.05 : last === 'false' ? -0.05 : 0;
+
+    const finalProb = Math.min(0.9, Math.max(0.1, baseProb + streakNudge));
+    const outcome = Math.random() < finalProb;
+
+    await redis.set(lastKey, outcome ? 'true' : 'false', 'EX', 3600);
     return outcome;
 }
 
