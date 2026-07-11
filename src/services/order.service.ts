@@ -2,7 +2,6 @@
 import { redis } from '../lib/redis.js';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
-import { releaseIfUnused } from './grpc.service.js'; 
 
 const prisma = new PrismaClient();
 
@@ -159,7 +158,14 @@ export async function removeOrderFromMemory(orderId: string, telegramId: string,
             data: { isActive: false }
         });
 
-        releaseIfUnused(tokenAddress); // ADDED MEMORY LEAK FIX
+        // 🟢 CLAUDE FIX C.3: Check if token has zero guards left, and clean up the WebSocket.
+        const remainingGuards = await redis.smembers(`token_guards:${telegramId}:${tokenAddress}`);
+        if (remainingGuards.length === 0) {
+            // 🟢 TS FIX: Use dynamic import inside the function to prevent circular dependency crashes!
+            const { releaseGuardSubscription } = await import('./grpc.service.js');
+            releaseGuardSubscription(tokenAddress);
+        }
+
     } catch (e: any) {
         console.error(`🔴 [GUARD] Failed to remove order ${orderId} from memory: ${e.message}`);
     }

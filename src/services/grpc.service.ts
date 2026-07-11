@@ -91,13 +91,16 @@ setInterval(async () => {
 }, 2_000);
 
 // 🟢 CLAUDE FIX 3.8: Shrunk presigned exit interval from 20s to 5s to eliminate slow-path fallback gaps
+// 🟢 CLAUDE FIX 3.8: Shrunk presigned exit interval from 20s to 5s to eliminate slow-path fallback gaps
 setInterval(async () => {
     for (const guard of cachedActiveGuards) {
         if (lockedGuards.has(guard.id)) continue;
         try {
             const payload = await generatePreSignedExitTx(guard.telegramId, guard.tokenAddress);
             if (payload) {
-                await redis.set(`presigned_exit:${guard.id}`, payload, 'EX', 10); 
+                // 🟢 TS FIX: Safe check to stringify the payload object so Redis can store it cleanly
+                const valueToStore = typeof payload === 'string' ? payload : JSON.stringify(payload);
+                await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 10); 
             }
         } catch(e) {}
     }
