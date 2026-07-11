@@ -17,8 +17,9 @@ export async function createGuild(
     try {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
-        if (!user.isDevSuiteUnlocked) return { success: false, message: "Dev Suite not unlocked." };
+        
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
+        const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
 
         // 🟢 FIX: Removed the 2.0 SOL on-chain charge completely.
         const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];

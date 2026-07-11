@@ -44,8 +44,8 @@ model User {
   totalVolumeSol      Float    @default(0.0) 
   isLoyaltyUnlocked   Boolean  @default(false) 
   hasReferralDiscount Boolean  @default(false) 
+
   
-  // 🟢 PART 1 FIX: Added Missing Schema Fields
   isVip               Boolean   @default(false)
   vipTier             String?
   vipExpiresAt        DateTime?
@@ -54,8 +54,10 @@ model User {
   vipPurchasedAt      DateTime?
   isDevSuiteUnlocked  Boolean   @default(false)
   
+  withdrawalPin       String?   // 🟢 ADD THIS LINE RIGHT HERE
+  
   slippagePercent     Float    @default(20.0)
-  pendingRewardsSol   Float    @default(0.0) 
+  pendingRewardsSol   Float    @default(0.0)
 
   trades              Trade[]
   activeOrders        ActiveOrder[] 

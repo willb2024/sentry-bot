@@ -23,6 +23,11 @@ const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
 const GRPC_URL = `https://atlas-mainnet.helius-rpc.com`;
 const PUMP_FUN_PROGRAM  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
+
+// 🟢 NEW FEATURE: Meteora DLMM & CPMM Support
+const METEORA_DLMM_PROGRAM = "LBUZKhRxPF3XUpBCjp4kVn94zzBmndrfaXNAnYkS";
+const METEORA_CPMM_PROGRAM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 const recentlySnipedTokens = new Set<string>();
@@ -85,7 +90,7 @@ setInterval(async () => {
     } catch (_) {}
 }, 2_000);
 
-// 🟢 PERFORMANCE #8: Shrunk presigned exit interval from 20s to 5s
+// 🟢 CLAUDE FIX 3.8: Shrunk presigned exit interval from 20s to 5s to eliminate slow-path fallback gaps
 setInterval(async () => {
     for (const guard of cachedActiveGuards) {
         if (lockedGuards.has(guard.id)) continue;
@@ -97,6 +102,18 @@ setInterval(async () => {
         } catch(e) {}
     }
 }, 5_000);
+
+// 🟢 CLAUDE FIX C.3: Clean up orphaned WebSockets when Guards are closed
+export function releaseGuardSubscription(tokenAddress: string) {
+    const curvePda = getBondingCurveAddress(tokenAddress);
+    const subId = activeSubscriptions.get(curvePda);
+    if (subId !== undefined) {
+        try {
+            connection.removeAccountChangeListener(subId);
+            activeSubscriptions.delete(curvePda);
+        } catch (e) {}
+    }
+}
 
 async function sendPriceAlertWithChart(
     telegramId: string, tokenMint: string, symbol: string, currentPrice: number, targetPrice: number, entryPrice: number, bot: any
@@ -180,7 +197,6 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
 
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
 
-    // --- 🎮 SIMULATION INTERCEPT ---
     const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage, getNextSimOutcome } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
         if (Math.random() > 0.5) {
@@ -233,7 +249,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         }
         return; 
     }
-    // --- END SIMULATION INTERCEPT ---
 
     if (lockedGuards.has(guardSnapshot.id)) return;
 
@@ -434,7 +449,7 @@ export function startUniversalGuardPoller(bot: any) {
 
             const assumedSolUsdPrice = cachedSolUsdPrice;
 
-            // 🟢 PERFORMANCE #6: Parallelize Limit Order tracking
+            // 🟢 CLAUDE FIX Perf #6: Parallelize Limit Order tracking
             await Promise.all(activeLimitOrders.map(async (limit) => {
                 if (lockedLimitOrders.has(limit.id)) return;
 
@@ -579,56 +594,61 @@ export function startUniversalGuardPoller(bot: any) {
         }
     }, 1000); 
 
+    // 🟢 CLAUDE FIX C.4: Replaced redis.keys() with non-blocking scanStream
     setInterval(async () => {
         try {
-            const keys = await redis.keys('watchlist:*');
             const assumedSolUsdPrice = cachedSolUsdPrice;
-
-            const allWatchedMints = new Set<string>();
-            const userWatchlists: Record<string, any> = {};
-
-            for (const key of keys) {
-                const tgId = key.split(':')[1];
-                const watchedTokens = await redis.hgetall(key);
-                userWatchlists[tgId] = watchedTokens;
-                Object.keys(watchedTokens).forEach(ca => allWatchedMints.add(ca));
-            }
-
-            if (allWatchedMints.size === 0) return;
-
-            const livePricesNative: Record<string, number> = {};
-            const uniqueMints = [...allWatchedMints];
+            const stream = redis.scanStream({ match: 'watchlist:*', count: 100 });
             
-            const chunks: string[] = [];
-            for (let i = 0; i < uniqueMints.length; i += 100) chunks.push(uniqueMints.slice(i, i + 100).join(','));
+            stream.on("data", async (keys) => {
+                if (keys.length === 0) return;
 
-            await Promise.all(chunks.map(async (chunk) => {
-                try {
-                    const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk}&vsToken=${WSOL_MINT}`, { timeout: 3000 });
-                    if (res.data?.data) {
-                        for (const [mint, info] of Object.entries(res.data.data as Record<string, any>)) {
-                            livePricesNative[mint] = parseFloat((info as any).price) || 0;
+                const allWatchedMints = new Set<string>();
+                const userWatchlists: Record<string, any> = {};
+
+                for (const key of keys) {
+                    const tgId = key.split(':')[1];
+                    const watchedTokens = await redis.hgetall(key);
+                    userWatchlists[tgId] = watchedTokens;
+                    Object.keys(watchedTokens).forEach(ca => allWatchedMints.add(ca));
+                }
+
+                if (allWatchedMints.size === 0) return;
+
+                const livePricesNative: Record<string, number> = {};
+                const uniqueMints = [...allWatchedMints];
+                
+                const chunks: string[] = [];
+                for (let i = 0; i < uniqueMints.length; i += 100) chunks.push(uniqueMints.slice(i, i + 100).join(','));
+
+                await Promise.all(chunks.map(async (chunk) => {
+                    try {
+                        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk}&vsToken=${WSOL_MINT}`, { timeout: 3000 });
+                        if (res.data?.data) {
+                            for (const [mint, info] of Object.entries(res.data.data as Record<string, any>)) {
+                                livePricesNative[mint] = parseFloat((info as any).price) || 0;
+                            }
                         }
-                    }
-                } catch (_) {}
-            }));
+                    } catch (_) {}
+                }));
 
-            for (const [tgId, watchedTokens] of Object.entries(userWatchlists)) {
-                for (const [ca, dataStr] of Object.entries(watchedTokens as Record<string, string>)) {
-                    const data = JSON.parse(dataStr);
-                    if (data.targetPrice > 0) {
-                        const currentPriceNative = livePricesNative[ca] || 0;
-                        const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
-                        const cooldownKey = `alert_cooldown:${tgId}:${ca}`;
-                        const isOnCooldown = await redis.get(cooldownKey);
+                for (const [tgId, watchedTokens] of Object.entries(userWatchlists)) {
+                    for (const [ca, dataStr] of Object.entries(watchedTokens as Record<string, string>)) {
+                        const data = JSON.parse(dataStr);
+                        if (data.targetPrice > 0) {
+                            const currentPriceNative = livePricesNative[ca] || 0;
+                            const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
+                            const cooldownKey = `alert_cooldown:${tgId}:${ca}`;
+                            const isOnCooldown = await redis.get(cooldownKey);
 
-                        if (!isOnCooldown && currentPriceUsd > 0 && currentPriceUsd >= data.targetPrice) {
-                            await redis.set(cooldownKey, '1', 'EX', 3600); 
-                            try { await sendPriceAlertWithChart(tgId, ca, "Watched Token", currentPriceUsd, data.targetPrice, data.addedPrice || 0, bot); } catch (_) {}
+                            if (!isOnCooldown && currentPriceUsd > 0 && currentPriceUsd >= data.targetPrice) {
+                                await redis.set(cooldownKey, '1', 'EX', 3600); 
+                                try { await sendPriceAlertWithChart(tgId, ca, "Watched Token", currentPriceUsd, data.targetPrice, data.addedPrice || 0, bot); } catch (_) {}
+                            }
                         }
                     }
                 }
-            }
+            });
         } catch (_) {}
     }, 10000); 
 }
@@ -681,7 +701,7 @@ async function triggerAutoSnipes(
                     } catch (_) {}
                 }
 
-                // 🟢 PERFORMANCE #7: Fast-Fail Social Checks. Don't block the buy logic.
+                // 🟢 CLAUDE FIX Perf #7: Fast-Fail Social Checks
                 if (liveConfig.requireSocials) {
                     try {
                         const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 1500 });
@@ -850,20 +870,10 @@ export async function igniteYellowstoneStream(bot: any) {
                 const tx   = data.transaction.transaction;
                 const logs = tx.meta?.logMessages || [];
 
-                if (logs.some((log: string) => log.includes("Program log: Instruction: Create"))) {
-                    const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
-                    const newCoinCA = accountKeys[2];
-                    if (newCoinCA && !recentlySnipedTokens.has(newCoinCA)) {
-                        if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
-                        recentlySnipedTokens.add(newCoinCA);
-                        setTimeout(() => recentlySnipedTokens.delete(newCoinCA), 60_000);
-                        await triggerAutoSnipes(bot, newCoinCA, "UNKNOWN", 0, 'PUMP');
-                    }
-                }
-
-                if (logs.some((log: string) => log.includes("initialize2"))) {
+                // Detect Pump.fun & Raydium
+                if (logs.some((log: string) => log.includes("Program log: Instruction: Create") || log.includes("initialize2"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
-                    const tokenMint    = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
+                    const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
 
                     if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
                         if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
@@ -876,7 +886,28 @@ export async function igniteYellowstoneStream(bot: any) {
                             if (accountKeys.length > 4) poolId = accountKeys[4];
                         } catch (_) {}
 
-                        await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
+                        // If it came from Pump.fun, route to Pump
+                        if (logs.some((l: string) => l.includes("Instruction: Create"))) {
+                            await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'PUMP');
+                        } else {
+                            await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
+                        }
+                    }
+                }
+
+                // 🟢 METEORA COVERAGE: Detect Meteora DLMM / CPMM Initializations
+                if (logs.some((log: string) => log.includes("Instruction: InitializeCustomizablePermissionlessConstantProductPool") || log.includes("Instruction: InitializeReward"))) {
+                    const postBalances = tx.meta?.postTokenBalances || [];
+                    const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
+
+                    if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
+                        if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
+                        recentlySnipedTokens.add(tokenMint);
+                        setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
+                        console.log(`☄️ [METEORA gRPC] New Meteora Pool Detected: ${tokenMint}`);
+                        
+                        // Jupiter handles Meteora routing natively. We pass it as RAYDIUM/DEX mode.
+                        await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM');
                     }
                 }
             } catch (_) {}
@@ -903,17 +934,20 @@ export async function igniteYellowstoneStream(bot: any) {
             setTimeout(() => igniteYellowstoneStream(bot), 3_000);
         });
 
+        // 🟢 METEORA COVERAGE: Added Meteora program IDs to the gRPC subscription filter
         const request = {
             accounts: {}, slots: {},
             transactions: {
-                pumpfun: { accountInclude: [PUMP_FUN_PROGRAM],    accountExclude: [], accountRequired: [] },
-                raydium: { accountInclude: [RAYDIUM_AMM_PROGRAM], accountExclude: [], accountRequired: [] }
+                pumpfun: { accountInclude: [PUMP_FUN_PROGRAM], accountExclude: [], accountRequired: [] },
+                raydium: { accountInclude: [RAYDIUM_AMM_PROGRAM], accountExclude: [], accountRequired: [] },
+                meteora_dlmm: { accountInclude: [METEORA_DLMM_PROGRAM], accountExclude: [], accountRequired: [] },
+                meteora_cpmm: { accountInclude: [METEORA_CPMM_PROGRAM], accountExclude: [], accountRequired: [] }
             },
             transactionsStatus: {}, blocks: {}, blocksMeta: {}, entry: {}, commitment: 1, accountsDataSlice: []
         };
 
         stream.write(request);
-        console.log("🟢 [gRPC] Yellowstone stream connected — Pump.fun + Raydium enabled.");
+        console.log("🟢 [gRPC] Yellowstone stream connected — Pump.fun + Raydium + Meteora enabled.");
 
     } catch (e: any) {
         if (!isGrpcDisabled) setTimeout(() => igniteYellowstoneStream(bot), 5_000);

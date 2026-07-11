@@ -1,5 +1,5 @@
 // src/services/engine.service.ts
-import { PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, Keypair } from '@solana/web3.js';
+import { PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { PrismaClient } from '@prisma/client';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
@@ -10,9 +10,14 @@ import { awardGuildPoints } from './guild.service.js';
 import { checkRecentMevActivity } from './price.service.js'; 
 import { redis } from '../lib/redis.js'; 
 import dns from 'dns';
+import { getLiveWalletBalance } from './deposit.service.js';
 import https from 'https';
 
 dotenv.config();
+
+// Keep HTTP connections alive for massive speed boost to external API calls
+const httpsAgent = new https.Agent({ keepAlive: true });
+const axiosClient = axios.create({ httpsAgent });
 
 // 🟢 PERFORMANCE: Cache priority fees so 'FAST' default doesn't block on RPC
 let cachedPriorityFee = 1_000_000;
@@ -28,7 +33,7 @@ export async function getDynamicPriorityFee(priorityLevel: string, customPriorit
         lastPriorityFeeFetch = now;
         try {
             const rpcUrl = process.env.HELIUS_RPC_URL || connection.rpcEndpoint;
-            axios.post(rpcUrl, {
+            axiosClient.post(rpcUrl, {
                 jsonrpc: "2.0", id: 1, method: "getPriorityFeeEstimate",
                 params: [{ "targetOptions": { "defaultLevel": "high" } }]
             }, { timeout: 2000 }).then(res => {
@@ -182,7 +187,7 @@ export async function getCachedTokenPrice(mint: string): Promise<number> {
     if (cached) return parseFloat(cached);
 
     try {
-        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${mint}`);
+        const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${mint}`);
         const price = res.data?.data?.[mint]?.price;
         if (price) {
             await redis.set(`price_cache:${mint}`, price, 'EX', 5); 
@@ -204,23 +209,50 @@ export async function checkRecentMevActivityCached(tokenMint: string): Promise<b
     }
 }
 
+// 🟢 C8 FIX: Fan-out Jito Bundle Submission to all global regions concurrently
 export async function sendToJitoBundle(swapTx: VersionedTransaction, tipTx: VersionedTransaction): Promise<boolean> {
     try {
         const base64Swap = Buffer.from(swapTx.serialize()).toString('base64');
         const base64Tip = Buffer.from(tipTx.serialize()).toString('base64');
 
-        const jitoRes = await axios.post(`https://mainnet.block-engine.jito.wtf/api/v1/bundles`, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "sendBundle",
-            params: [[base64Swap, base64Tip]]
-        }, { headers: { 'Content-Type': 'application/json', ...API_HEADERS }, httpsAgent: activeAgent, timeout: 10000 });
+        const JITO_REGIONS = [
+            'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
+            'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
+            'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
+            'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
+            'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
+        ];
 
-        if (jitoRes.data?.error) {
+        const bundledTxs = [base64Swap, base64Tip];
+
+        const requests = JITO_REGIONS.map(url => 
+            axiosClient.post(url, {
+                jsonrpc: "2.0", 
+                id: 1, 
+                method: "sendBundle", 
+                params: [bundledTxs] 
+            }, { 
+                headers: { 'Content-Type': 'application/json', ...API_HEADERS },
+                httpsAgent: activeAgent,
+                timeout: 3000
+            })
+        );
+
+        const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
+
+        if (jitoRes?.data?.error) {
             console.error("🔴 [JITO BUNDLE REJECTED]:", JSON.stringify(jitoRes.data.error));
             return false;
         }
-        return !!jitoRes.data?.result;
+
+        const signature = bs58.encode(swapTx.signatures[0]);
+        for (let i = 0; i < 20; i++) {
+            await new Promise(r => setTimeout(r, 1000));
+            const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+            if (status?.value && !status.value.err) return true;
+        }
+        
+        return false;
     } catch (e: any) {
         return false;
     }
@@ -251,13 +283,13 @@ async function fetchApiTransaction(
                 ? amountSolForBuy
                 : (sellPercentage === 100 ? "100%" : rawTokenAmountForSell);
             try {
-                const pumpRes = await axios.post(
+                const pumpRes = await axiosClient.post(
                     `https://pumpportal.fun/api/trade-local`,
                     {
                         publicKey: vault, action, mint, denominatedInSol: action === 'buy',
                         amount: pumpAmount, slippage, priorityFee: 0.0001, pool: "auto"
                     },
-                    { httpsAgent: activeAgent, headers: API_HEADERS, responseType: 'arraybuffer', timeout: 3500 }
+                    { headers: API_HEADERS, responseType: 'arraybuffer', timeout: 3500 }
                 );
                 apiBuffer = Buffer.from(pumpRes.data);
                 return { buffer: apiBuffer, errorLog: "" };
@@ -292,21 +324,21 @@ async function fetchApiTransaction(
             const jupiterPriorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
 
             try {
-                const quoteRes = await axios.get(
+                const quoteRes = await axiosClient.get(
                     `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
-                    { httpsAgent: activeAgent, headers: API_HEADERS, timeout: 3500 }
+                    { headers: API_HEADERS, timeout: 3500 }
                 );
                 
                 let estimatedOutput = 0;
                 if (action === 'sell' && quoteRes.data?.outAmount) estimatedOutput = Number(quoteRes.data.outAmount) / 1_000_000_000;
 
-                const swapRes = await axios.post(
+                const swapRes = await axiosClient.post(
                     'https://lite-api.jup.ag/swap/v1/swap',
                     {
                         quoteResponse: quoteRes.data, userPublicKey: vault, wrapAndUnwrapSol: true,
                         dynamicComputeUnitLimit: true, prioritizationFeeLamports: jupiterPriorityLamports
                     },
-                    { httpsAgent: activeAgent, headers: API_HEADERS, timeout: 3500 }
+                    { headers: API_HEADERS, timeout: 3500 }
                 );
 
                 if (swapRes.data?.swapTransaction) {
@@ -410,15 +442,60 @@ export async function executeSnipe(
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
 
+        // 🟢 C6 FIX: Pre-check cached memory balance before wasting a full RPC call
+        let liveBalanceSol = getLiveWalletBalance(user.vaultAddress);
+        if (liveBalanceSol === null) {
+            const balanceLamports = await connection.getBalance(new PublicKey(user.vaultAddress));
+            liveBalanceSol = balanceLamports / LAMPORTS_PER_SOL;
+        }
+
+        if (liveBalanceSol < amountSol + 0.005) {
+            return { success: false, message: "Insufficient Funds." };
+        }
+
+        // 🟢 C7 FIX: Race condition for MEV to unblock the execution path
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve("TIMEOUT"), 300));
+        const mevResult = await Promise.race([mevPromise, timeoutPromise]);
+        
+        if (mevResult === true) {
+            return { success: false, message: "🚨 MEV Sandwich Bot / High Risk Activity Detected. Trade Blocked." };
+        } else if (mevResult === "TIMEOUT") {
+            // Unblocks the buy immediately, but evaluates the MEV warning asynchronously in the background
+            mevPromise.then(async (isMev) => {
+                if (isMev) {
+                    try {
+                        await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                chat_id: telegramId,
+                                text: `⚠️ <b>Advisory Warning:</b> <code>${targetCA}</code> was successfully sniped, but post-trade analysis detected high MEV activity. Consider tightening your trailing stop.`,
+                                parse_mode: 'HTML'
+                            })
+                        });
+                    } catch(e) {}
+                }
+            }).catch(()=>{});
+        }
+
         const slippage = user.slippagePercent || 20.0;
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
 
-        const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
-        if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
-        if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
-        if (user.activeWallets >= 4 && user.vault4 && user.pk4) wallets.push({ pub: user.vault4, pk: user.pk4 });
-        if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5 });
+        const rawW1 = decryptKey(user.turnkeySubOrgId);
+        if (!rawW1) return { success: false, message: "Decryption Failed." };
+        
+        const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
+        if (user.activeWallets >= 2 && user.pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk2)!)));
+        if (user.activeWallets >= 3 && user.pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk3)!)));
+        if (user.activeWallets >= 4 && user.pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk4)!)));
+        if (user.activeWallets >= 5 && user.pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk5)!)));
+
+        const splitBuySol = Number((amountSol / wallets.length).toFixed(4));
+        const slippageBps = slippage !== undefined ? slippage * 100 : (user.slippagePercent * 100);
+
+        const isPump = targetCA.toLowerCase().endsWith("pump") && !raydiumPoolId;
+        const bundledTxs: string[] = [];
 
         let successCount = 0;
         let totalVolume = 0;
@@ -429,32 +506,16 @@ export async function executeSnipe(
 
         const latestBlockhash = await getLatestBlockhashWithCache();
 
-        // 🟢 Wait for MEV check right before heavy building
-        const hasMev = await mevPromise;
-        if (hasMev) {
-            return { success: false, message: "🚨 High MEV Bot / Sandwich activity detected on this token recently. Snipe aborted by safety shields to protect your funds." };
-        }
-
         const executionPromises = wallets.map(async (w, index) => {
-            const balanceSol = (await connection.getBalance(new PublicKey(w.pub)).catch(()=>0)) / 1_000_000_000;
-            const requiredBuffer = 0.001 + (amountSol * 0.01) + 0.0005;
-
-            if (balanceSol < amountSol + requiredBuffer) {
-                walletErrors[index] = `Insufficient Funds`; walletReport[index] = `W${index + 1}: 🔴 Gas`; return;
-            }
-
-            const apiRes = await fetchApiTransaction('buy', targetCA, w.pub, amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, w.pk, raydiumPoolId);
+            const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, undefined, raydiumPoolId);
             if (!apiRes.buffer) {
                 walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return;
             }
 
-            const keypair = getCachedKeypair(w.pub, w.pk);
-            if (!keypair) { walletErrors[index] = "Decryption Fault."; walletReport[index] = `W${index + 1}: 🔴 Auth`; return; }
-
             const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
-            swapTx.sign([keypair]);
+            swapTx.sign([w]);
 
-            const tipTx = await buildTipAndFeeTransaction(keypair, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
+            const tipTx = await buildTipAndFeeTransaction(w, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
             if (!tipTx) { walletReport[index] = `W${index + 1}: 🔴 Sign`; return; }
 
             let txSig = bs58.encode(swapTx.signatures[0]);
@@ -563,11 +624,14 @@ export async function executeExit(
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
 
-        const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
-        if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
-        if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
-        if (user.activeWallets >= 4 && user.vault4 && user.pk4) wallets.push({ pub: user.vault4, pk: user.pk4 });
-        if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5 });
+        const rawW1 = decryptKey(user.turnkeySubOrgId);
+        if (!rawW1) return { success: false, message: "Decryption Failed." };
+
+        const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
+        if (user.activeWallets >= 2 && user.pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk2)!)));
+        if (user.activeWallets >= 3 && user.pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk3)!)));
+        if (user.activeWallets >= 4 && user.pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk4)!)));
+        if (user.activeWallets >= 5 && user.pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk5)!)));
 
         const tokenMint = new PublicKey(targetCA);
         let successCount = 0;
@@ -578,12 +642,10 @@ export async function executeExit(
         const walletErrors: string[] = [];
 
         const latestBlockhash = await getLatestBlockhashWithCache();
-        const balances = await Promise.all(wallets.map(w => connection.getBalance(new PublicKey(w.pub)).catch(() => 0)));
+        const balances = await Promise.all(wallets.map(w => connection.getBalance(new PublicKey(w.publicKey.toBase58())).catch(() => 0)));
 
         const executionPromises = wallets.map(async (w, index) => {
-            const vaultPubkey = new PublicKey(w.pub);
-            const keypair = getCachedKeypair(w.pub, w.pk);
-            if (!keypair) { walletErrors[index] = "Auth Fault."; walletReport[index] = `W${index + 1}: 🔴 Auth`; return; }
+            const vaultPubkey = new PublicKey(w.publicKey.toBase58());
 
             if (balances[index] < 1_500_000) { walletErrors[index] = `Gas.`; walletReport[index] = `W${index + 1}: 🔴 Gas`; return; }
 
@@ -597,18 +659,40 @@ export async function executeExit(
             const tokensToSellRaw = (rawTokenBalance * BigInt(Math.floor(sellPercentage))) / 100n;
             const uiTokensToSell = Number((Number(tokensToSellRaw) / (10 ** decimals)).toFixed(decimals));
 
-            const apiRes = await fetchApiTransaction('sell', targetCA, w.pub, 0, uiTokensToSell, tokensToSellRaw.toString(), sellPercentage, slippage, priorityLevel, customPriorityFee, w.pk);
+            const pkEncrypted = index === 0 ? user.turnkeySubOrgId : user[`pk${index+1}` as keyof typeof user];
+
+            const apiRes = await fetchApiTransaction('sell', targetCA, w.publicKey.toBase58(), 0, uiTokensToSell, tokensToSellRaw.toString(), sellPercentage, slippage, priorityLevel, customPriorityFee, pkEncrypted as string);
             if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
 
             const dynamicFeeBase = apiRes.estimatedOutput && apiRes.estimatedOutput > 0 ? apiRes.estimatedOutput : 0.01;
             const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
-            swapTx.sign([keypair]);
+            swapTx.sign([w]);
 
-            const tipTx = await buildTipAndFeeTransaction(keypair, telegramId, dynamicFeeBase, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
+            const tipTx = await buildTipAndFeeTransaction(w, telegramId, dynamicFeeBase, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
             if (!tipTx) { walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; return; }
 
             let txSig = bs58.encode(swapTx.signatures[0]);
-            const bundleOk = await sendToJitoBundle(swapTx, tipTx);
+            
+            // 🟢 C8 FIX: Exit Jito Fan-Out implemented!
+            const bundledTxs = [
+                Buffer.from(swapTx.serialize()).toString('base64'),
+                Buffer.from(tipTx.serialize()).toString('base64')
+            ];
+            
+            const JITO_REGIONS = [
+                'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
+                'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
+                'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
+                'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
+                'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
+            ];
+
+            const requests = JITO_REGIONS.map(url => 
+                axiosClient.post(url, { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] }, { headers: { 'Content-Type': 'application/json' }, timeout: 3000 })
+            );
+
+            const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
+            const bundleOk = jitoRes?.data?.result ? true : false;
             
             if (!bundleOk) {
                 if (slippage > 25.0 && sellPercentage !== 100) {
@@ -735,7 +819,7 @@ async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
     } catch { return 0.40; }
 }
 
-export async function generatePreSignedExitTx(telegramId: string, targetCA: string): Promise<string | null> {
+export async function generatePreSignedExitTx(telegramId: string, targetCA: string): Promise<{ swapBase64: string, tipBase64: string } | null> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return null;
@@ -767,9 +851,9 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
         const tipTx = await buildTipAndFeeTransaction(keypair, telegramId, 0.01, 'TURBO', 0.005, false, latestBlockhash.blockhash);
         if (!tipTx) return null;
 
-        return JSON.stringify({
+        return {
             swapBase64: Buffer.from(swapTx.serialize()).toString('base64'),
             tipBase64: Buffer.from(tipTx.serialize()).toString('base64')
-        });
+        };
     } catch (e) { return null; }
 }

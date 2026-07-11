@@ -2,6 +2,7 @@
 import { redis } from '../lib/redis.js';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
+import { releaseIfUnused } from './grpc.service.js'; 
 
 const prisma = new PrismaClient();
 
@@ -144,6 +145,8 @@ export async function updateEntryPrice(orderId: string, entryPrice: number) {
     await updateGuardSafe(orderId, (order) => { order.entryPrice = entryPrice; });
 }
 
+
+// Update the function:
 export async function removeOrderFromMemory(orderId: string, telegramId: string, tokenAddress: string) {
     try {
         await redis.del(`order:trail:${orderId}`);
@@ -155,6 +158,8 @@ export async function removeOrderFromMemory(orderId: string, telegramId: string,
             where: { id: orderId, orderType: ORDER_TYPES.GUARD },
             data: { isActive: false }
         });
+
+        releaseIfUnused(tokenAddress); // ADDED MEMORY LEAK FIX
     } catch (e: any) {
         console.error(`🔴 [GUARD] Failed to remove order ${orderId} from memory: ${e.message}`);
     }

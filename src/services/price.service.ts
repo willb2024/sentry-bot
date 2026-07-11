@@ -1,6 +1,7 @@
 // src/services/price.service.ts
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
+import { redis } from '../lib/redis.js';
 
 const PUMP_FUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 
@@ -65,12 +66,36 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
 }
 
 export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
+    const key = `rugcheck:${tokenMint}`;
     try {
+        const cached = await redis.get(key);
+        if (cached !== null) return cached === 'true';
+
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, 
             { signal: AbortSignal.timeout(2000) });
-            const data = (await res.json()) as any;
-        return data.risks?.some((r: any) => r.name === 'Freeze Authority still enabled' || r.score > 500) ?? false;
-    } catch (_) { return false; }
+        
+        const data = (await res.json()) as any;
+        const risks = data.risks || [];
+        
+        // 🟢 NEW: Deep Safety Checks
+        const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
+        const isMintable = data.token?.mintAuthority !== null; // Dev can print infinite tokens
+        const highScore = data.score > 500;
+        
+        // 🟢 Check Top 10 Holder Concentration (Over 40% concentrated is extremely risky)
+        const topHolders = data.topHolders || [];
+        const top10Pct = topHolders.reduce((acc: number, h: any) => acc + (h.pct || 0), 0);
+        const isHighlyConcentrated = top10Pct > 40.0;
+
+        const isUnsafe = isHoneypot || isMintable || highScore || isHighlyConcentrated;
+
+        // Cache the result for 10 minutes
+        await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
+        return isUnsafe;
+    } catch (_) { 
+        // Fail open if the API times out to preserve block-0 speeds
+        return false; 
+    }
 }
 
 export async function fetchDexScreenerCandles(

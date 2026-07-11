@@ -49,6 +49,7 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     return 0;
 }
 
+// Replace this function in src/services/copytrade.service.ts
 export async function syncCopyTradeListeners(bot: any) {
     try {
         const activeConfigs = await prisma.copyTradeConfig.findMany({
@@ -73,92 +74,83 @@ export async function syncCopyTradeListeners(bot: any) {
 
                     const preBalances = txDetails.meta.preTokenBalances || [];
                     const postBalances = txDetails.meta.postTokenBalances || [];
-                    let purchasedTokenMint: string | null = null;
+                    
+                    let targetTokenMint: string | null = null;
+                    let tradeType: 'buy' | 'sell' | null = null;
+                    let sellPercentage = 0;
 
                     for (const post of postBalances) {
                         if (post.owner === walletStr) {
                             const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
                             const preAmt = pre ? Number(pre.uiTokenAmount.uiAmount) : 0;
                             const postAmt = Number(post.uiTokenAmount.uiAmount);
+                            
                             if (postAmt > preAmt) {
-                                purchasedTokenMint = post.mint;
+                                tradeType = 'buy';
+                                targetTokenMint = post.mint;
+                                break;
+                            } else if (postAmt < preAmt && preAmt > 0) {
+                                tradeType = 'sell';
+                                targetTokenMint = post.mint;
+                                sellPercentage = ((preAmt - postAmt) / preAmt) * 100;
                                 break;
                             }
                         }
                     }
 
-                    if (purchasedTokenMint && purchasedTokenMint !== "So11111111111111111111111111111111111111112") {
-                        console.log(`🎯 [COPY-TRADE] Whale ${walletStr.substring(0,6)} bought: ${purchasedTokenMint}.`);
-
+                    if (targetTokenMint && targetTokenMint !== "So11111111111111111111111111111111111111112") {
                         const freshConfigs = await prisma.copyTradeConfig.findMany({
                             where: { targetWallet: walletStr, isActive: true },
                             include: { user: true }
                         });
 
-                        const entryPrice = await fetchLiveEntryPrice(purchasedTokenMint);
+                        // 🟢 FIX: Handle Buy Mirroring
+                        if (tradeType === 'buy') {
+                            console.log(`🎯 [COPY-TRADE] Whale ${walletStr.substring(0,6)} BOUGHT: ${targetTokenMint}.`);
+                            const entryPrice = await fetchLiveEntryPrice(targetTokenMint);
 
-                        const channelId = process.env.WHALE_ALERT_CHANNEL_ID;
-                        if (channelId) {
-                            const cooldownKey = `ct_alert_cooldown:${walletStr}`;
-                            const isOnCooldown = await redis.get(cooldownKey);
-
-                            if (!isOnCooldown) {
-                                await redis.set(cooldownKey, '1', 'EX', 60);
-
-                                const botUsername = bot.botInfo?.username || 'lightningsnipe_bot';
-                                const message =
-                                    `🚨 <b>SMART MONEY WHALE ALERT [SOL]</b> 🚨\n\n` +
-                                    `🐋 <b>Whale Wallet:</b> <code>${walletStr}</code>\n` +
-                                    `🪙 <b>Bought Token:</b> <code>${purchasedTokenMint}</code>\n` +
-                                    `⚡ <b>Transaction:</b> <a href="https://solscan.io/tx/${signature}">View on Solscan</a>`;
-
-                                await bot.telegram.sendMessage(channelId, message, {
-                                    parse_mode: 'HTML',
-                                    link_preview_options: { is_disabled: true },
-                                    reply_markup: {
-                                        inline_keyboard: [[
-                                            { 
-                                                text: '⚡ Copy This Whale Automatically', 
-                                                url: `https://t.me/${botUsername}?start=ct_${walletStr}` 
-                                            }
-                                        ]]
-                                    }
-                                }).catch((e: any) => console.warn(`⚠️ [COPY-TRADE] Whale alert send failed: ${e.message}`));
-                            }
-                        }
-
-                        for (const follower of freshConfigs) {
-                            executeSnipe(follower.user.telegramId, purchasedTokenMint!, follower.tradeAmountSol)
-                                .then(async (res) => {
-                                    if (res.success) {
-                                        try {
-                                            await addTrailingStopToMemory(
-                                                follower.user.telegramId,
-                                                purchasedTokenMint!,
-                                                follower.autoTrailingDropPercent,
-                                                follower.tradeAmountSol,
-                                                entryPrice,
-                                                follower.autoTakeProfitPercent || undefined
-                                            );
-                                        } catch (guardErr: any) {
-                                            console.error(`🔴 [COPY-TRADE] Failed to arm guard for ${follower.user.telegramId}: ${guardErr.message}`);
-                                            await bot.telegram.sendMessage(
-                                                follower.user.telegramId,
-                                                `⚠️ <b>Copy trade filled but Guard failed to arm!</b>\nPlease set a stop-loss manually for <code>${purchasedTokenMint}</code>.`,
-                                                { parse_mode: 'HTML' }
-                                            ).catch(() => null);
+                            for (const follower of freshConfigs) {
+                                executeSnipe(follower.user.telegramId, targetTokenMint, follower.tradeAmountSol)
+                                    .then(async (res) => {
+                                        if (res.success) {
+                                            try {
+                                                await addTrailingStopToMemory(
+                                                    follower.user.telegramId, targetTokenMint!,
+                                                    follower.autoTrailingDropPercent, follower.tradeAmountSol,
+                                                    entryPrice, follower.autoTakeProfitPercent || undefined
+                                                );
+                                            } catch (guardErr) {}
+                                            
+                                            try {
+                                                await bot.telegram.sendMessage(follower.user.telegramId,
+                                                    `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${targetTokenMint}</code>\nInvested: <b>${follower.tradeAmountSol} SOL</b>\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`,
+                                                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                                                );
+                                            } catch (_) {}
                                         }
-                                        
-                                        try {
-                                            await bot.telegram.sendMessage(
-                                                follower.user.telegramId,
-                                                `👥 <b>COPY TRADE SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${purchasedTokenMint}</code>\nInvested: <b>${follower.tradeAmountSol} SOL</b>${entryPrice > 0 ? `\nEntry Price: <b>${entryPrice.toFixed(8)} SOL</b>` : ''}\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`,
-                                                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                                            );
-                                        } catch (_) {}
-                                    }
-                                })
-                                .catch((e: any) => console.error(`🔴 [COPY-TRADE] Snipe failed for follower ${follower.user.telegramId}: ${e.message}`));
+                                    }).catch(() => {});
+                            }
+                        } 
+                        // 🟢 NEW: Handle Sell Mirroring
+                        else if (tradeType === 'sell' && sellPercentage >= 1) {
+                            console.log(`🎯 [COPY-TRADE] Whale ${walletStr.substring(0,6)} SOLD ${sellPercentage.toFixed(1)}% of: ${targetTokenMint}.`);
+                            
+                            // Dynamically import executeExit to avoid circular dependency
+                            const { executeExit } = await import('./engine.service.js');
+
+                            for (const follower of freshConfigs) {
+                                executeExit(follower.user.telegramId, targetTokenMint, sellPercentage)
+                                    .then(async (res) => {
+                                        if (res.success) {
+                                            try {
+                                                await bot.telegram.sendMessage(follower.user.telegramId,
+                                                    `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${sellPercentage.toFixed(1)}%</b> of <code>${targetTokenMint}</code>\n<i>Sentry has automatically mirrored this exit.</i>\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`,
+                                                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                                                );
+                                            } catch (_) {}
+                                        }
+                                    }).catch(() => {});
+                            }
                         }
                     }
                 }, 'processed');
@@ -167,15 +159,11 @@ export async function syncCopyTradeListeners(bot: any) {
             }
         }
 
+        // Cleanup orphaned listeners
         for (const [walletStr, subId] of activeWsListeners.entries()) {
             if (!targetWallets.includes(walletStr)) {
-                try {
-                    connection.removeOnLogsListener(subId);
-                } catch (e: any) {
-                    console.warn(`⚠️ [COPY-TRADE] Failed to remove listener for ${walletStr}: ${e.message}`);
-                } finally {
-                    activeWsListeners.delete(walletStr);
-                }
+                try { connection.removeOnLogsListener(subId); } catch (e) {}
+                finally { activeWsListeners.delete(walletStr); }
             }
         }
     } catch (e: any) {

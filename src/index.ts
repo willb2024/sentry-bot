@@ -88,6 +88,7 @@ export async function safeSendMessage(tgId: string, text: string, options: any =
 
 
 
+
 export async function safeEditMessageText(ctx: any, text: string, options: any = {}) {
     let retries = 3;
     while (retries > 0) {
@@ -516,20 +517,16 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         `📊 <b>Your Economics:</b>\n• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n• Affiliate Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
         `<i>Forward a call here, paste a Token CA, or select a module below.</i>`;
 
-    // 🟢 UI UPDATED: VIP removed. Cancel All Automations added.
-    const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
-        [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
-        [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-        [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
-        [Markup.button.callback('🛠️ Dev Suite (PRO)', 'menu_devsuite'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-        [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
-        [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All Automations', 'action_global_cancel')],
-        [
-            Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), 
-            { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }
-        ]
-    ]);
+        const UI = Markup.inlineKeyboard([
+            [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+            [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
+            [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
+            [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+            [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+            [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
+            [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All Automations', 'action_global_cancel')],
+            [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
+        ]);
 
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
     else await ctx.replyWithHTML(layoutTxt, UI);
@@ -595,8 +592,7 @@ bot.action('start_token_wizard', async (ctx) => {
     }
 });
 
-// Map both namespaces to catch either callback cleanly
-bot.action('action_launch_token_start', handleLaunchPadMenu);
+
 
 // 🟢 NEW: Separate Vault Menu renderer to prevent fake bot.handleUpdate latency
 async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
@@ -623,7 +619,9 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
             Markup.button.callback(user.activeWallets >= 5 ? '🟢 5' : '5', 'set_wallets_5')
         ],
         [Markup.button.callback('🧹 Sweep All Sub-Wallets to W1', 'action_consolidate_wallets')],
-        [Markup.button.callback('📤 Export Keys', 'action_export_key'), Markup.button.callback('📥 Import Key', 'action_import_key')],
+        [Markup.button.callback('📤 Export Keys', 'action_export_key'),
+             Markup.button.callback('📥 Import Key', 'action_import_key')],
+             [Markup.button.callback('🔒 Set Withdrawal PIN', 'action_set_pin')], // 🟢 NEW BUTTON
         [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
     ]);
 
@@ -880,14 +878,10 @@ bot.action('action_start_guild_wizard', async (ctx) => {
     const tgId = ctx.from?.id.toString()!;
 
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { ownedGuild: true } });
-    if (!user?.isDevSuiteUnlocked) {
-        return ctx.replyWithHTML("🔴 <b>Dev Suite Required:</b> You must unlock the Developer Suite to create a Guild.");
-    }
-    if (user.ownedGuild) {
+    if (user?.ownedGuild) {
         return ctx.replyWithHTML("🔴 <b>Limit Reached:</b> You already own a Guild.");
     }
 
-    // Set the Redis state to listen for their next message as "Step 1"
     await redis.hset(`guild_setup:${tgId}`, { step: 1 });
     await redis.expire(`guild_setup:${tgId}`, 600);
     
@@ -907,10 +901,11 @@ bot.command('createguild', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { ownedGuild: true } });
-    if (!user?.isDevSuiteUnlocked) return ctx.reply("🔴 Dev Suite required to create a Guild.");
-    if (user.ownedGuild) return ctx.reply("🔴 You already own a Guild.");
+    if (user?.ownedGuild) return ctx.reply("🔴 You already own a Guild.");
 
     const text = (ctx.message as any).text.replace('/createguild', '').trim();
+    
+    // If they provided the exact pipe-delimited syntax, skip the wizard and deploy instantly
     if (text) {
         const parts = text.split('|').map((p: string) => p.trim());
         if (parts.length === 3) {
@@ -931,9 +926,9 @@ bot.command('createguild', async (ctx) => {
         }
     }
 
+    // Otherwise, push them into the interactive wizard
     await redis.hset(`guild_setup:${tgId}`, { step: 1 });
     await redis.expire(`guild_setup:${tgId}`, 600);
-    
     await ctx.replyWithHTML(`🏰 <b>GUILD SETUP [Step 1/2]</b>\n\nWhat is the name of your community?\n<i>(e.g., Alpha Wolves Community)</i>\n\nReply to this message with the name. (Type /cancel to abort)`);
 });
 
@@ -1009,7 +1004,8 @@ bot.action('action_manage_guild', async (ctx) => {
     // 🟢 UI FIX: If they don't have a guild, route them to the creation instructions!
     if (!user.ownedGuild) {
         const createMsg = `🏰 <b>CREATE YOUR GUILD</b>\n\n` +
-                          `Your Developer Suite subscription covers the cost of this Guild. Creating it is completely free!\n\n` +
+                          `A Guild is your own on-chain loyalty engine — it turns your audience into a verified, rank-ordered leaderboard of real on-chain buyers, and pays you 50% of the platform fee on every trade your members make, forever.\n\n` +
+                          `💳 <b>One-time cost: 2.0 SOL</b> (lifetime — no renewal, no recurring fee)\n\n` +
                           `Use the command below to launch your Guild:\n` +
                           `<code>/createguild [Name] | [Description] | [Reward]</code>\n\n` +
                           `<i>Example:</i>\n<code>/createguild Alpha Wolves | The premier 100x gem hunters | Top 5 get WL allocation</code>`;
@@ -1018,7 +1014,6 @@ bot.action('action_manage_guild', async (ctx) => {
             reply_markup: { inline_keyboard: [[ { text: '⬅️ Back', callback_data: 'action_guild_menu' } ]] } 
         }).catch(() => {});
     }
-
     const guild = user.ownedGuild;
     const totalMembers = guild.members.length;
     const totalVol = guild.members.reduce((sum: number, m: any) => sum + m.totalVolumeSol, 0);
@@ -1978,8 +1973,7 @@ bot.action('menu_devsuite', async (ctx) => {
     if (!tgId) return;
 
     const user = await prisma.user.findUnique({ 
-        where: { telegramId: tgId },
-        include: { ownedGuild: true } 
+        where: { telegramId: tgId }
     });
     if (!user) return;
 
@@ -1988,16 +1982,11 @@ bot.action('menu_devsuite', async (ctx) => {
     if (user.isDevSuiteUnlocked) {
         text += `🟢 <b>ACCESS GRANTED — WELCOME DEV</b>\n\n` +
             `Your institutional developer dashboard is fully active. You have lifetime, unlimited access to Sentry's advanced smart-contract utilities.\n\n` +
-            `<i>Configure your Volume Bumpers, plan your Multi-Wallet Nuke, or manage your Community Guild below.</i>`;
-
-        const guildButton = user.ownedGuild 
-            ? Markup.button.callback('🏰 Manage Guild', 'action_manage_guild')
-            : Markup.button.callback('🏰 Create Guild', 'action_create_guild_prompt');
+            `<i>Configure your Volume Bumpers or plan your Multi-Wallet Nuke below.</i>`;
 
         await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
             [Markup.button.callback('📈 Start Volume Bumper', 'action_dev_volume')],
             [Markup.button.callback('💥 NUKE (Sell All Wallets)', 'action_dev_nuke')],
-            [guildButton], 
             [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
         ]));
     } else {
@@ -2011,14 +2000,10 @@ bot.action('menu_devsuite', async (ctx) => {
             `<i>The Problem:</i> Smart devs split their token supply across multiple wallets to avoid scaring buyers. But when it's time to take profit, selling 5 wallets one by one crashes your own chart and loses you thousands of dollars to slippage and MEV sandwich bots.\n` +
             `<i>The Solution:</i> The Nuke button compiles the sell orders from all 5 of your wallets into a single, encrypted Jito block. You exit your entire supply in the exact same millisecond at the absolute peak price.\n\n` +
             
-            `🏰 <b>3. Sentry Guilds (The KOL Loyalty Engine)</b>\n` +
-            `<i>The Problem:</i> Giving away whitelist spots or airdrops on Twitter usually results in thousands of fake bot entries and zero actual buyers.\n` +
-            `<i>The Solution:</i> Create a Guild. Your community joins via a link, and Sentry tracks their <b>actual on-chain SOL trading volume</b>. You get a verified CSV leaderboard of real capital allocators to reward, while earning a massive <b>50% revenue share</b> on every trade your community makes.\n\n` +
-            
-            `<i>Unlock lifetime access to all 3 institutional tools for a one-time fee of <b>2.0 SOL</b>.</i>`;
+            `<i>Unlock lifetime access to both institutional tools for a one-time fee of <b>1.5 SOL</b>.</i>`;
             
         await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
-            [Markup.button.callback('🔓 Unlock Dev Suite (2.0 SOL)', 'action_unlock_devsuite')],
+            [Markup.button.callback('🔓 Unlock Dev Suite (1.5 SOL)', 'action_unlock_devsuite')],
             [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
         ]));
     }
@@ -2179,32 +2164,24 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
     const levelText = `⚙️ <b>SENTRY CONFIGURATION</b>\n\n` +
         `👛 <b>Current Slippage:</b> ${currentSlippage}%\n` +
         `🚀 <b>Transaction Speed (Jito Bribe):</b> <b>${level}</b> (${currentFeeDisplay})\n\n` +
-        
-        `🚕 <b>SLIPPAGE EXPLAINED (The Master Example):</b>\n` +
-        `<i>Imagine a coin launches at <b>$1.00</b>. You click BUY. In the 0.5 seconds your trade takes to reach the validator, 15 other traders buy first, pushing the price to <b>$1.15</b>.</i>\n\n` +
-        `• <b>Low Slippage (5%):</b> Your maximum allowed buy price is $1.05. The trade <u>fails</u> because the price ($1.15) is too high. You get nothing and miss the pump.\n` +
-        `• <b>High Slippage (20%):</b> Your maximum allowed buy price is $1.20. Sentry <u>successfully</u> buys at $1.15. You win your entry and ride the pump!\n\n` +
-        `<i>Slippage acts as your protection limit. We recommend 20% to ensure your buys and panic-sells never fail.</i>\n\n` +
-        
+        `🚕 <b>SLIPPAGE EXPLAINED:</b>\n` +
+        `<i>Slippage acts as your protection limit. We recommend 20% to ensure your buys and panic-sells never fail during high volatility.</i>\n\n` +
         `🚀 <b>TRANSACTION SPEED EXPLAINED:</b>\n` +
-        `<i>Sentry bypasses public network congestion by tipping the validators (using Jito) to process your trade on Block-0.</i>\n\n` +
-        `• <b>Eco 🍃 (0.0005 SOL):</b> Low priority. Best for quiet trading hours to save gas.\n` +
-        `• <b>Fast 🐎 (0.001 SOL):</b> Standard priority. Best for everyday trading, bypassing 90% of network lag.\n` +
-        `• <b>Turbo ⚡ (0.005 SOL):</b> High priority. Bribes validators heavily to guarantee your entry on competitive launches.\n` +
-        `• <b>Custom ⚙️:</b> Set your own custom tip (e.g. 0.02 SOL) to secure guaranteed priority during heavy network congestion.\n`;
+        `<i>Sentry bypasses public network congestion by tipping the validators (using Jito) to process your trade on Block-0.</i>\n`;
 
-    const UI = Markup.inlineKeyboard([
-        [
-            Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
-            Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
-            Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
-        ],
-        [
-            Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed')
-        ],
-        [Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')],
-        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-    ]);
+        const UI = Markup.inlineKeyboard([
+            [
+                Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
+                Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
+                Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
+            ],
+            [
+                Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed')
+            ],
+            [Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')],
+            [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
+            [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+        ]);
 
     if (isEdit) await safeEditMessageText(ctx, levelText, UI);
     else await ctx.replyWithHTML(levelText, UI);
@@ -2680,18 +2657,9 @@ async function sendVipStatus(ctx: any, tgId: string, isEdit: boolean = false) {
     }
 }
 
-bot.command('vipstatus', async (ctx) => {
-    const tgId = ctx.from?.id?.toString();
-    if (!tgId) return;
-    await sendVipStatus(ctx, tgId, false);
-});
 
-bot.action('menu_vip', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id?.toString();
-    if (!tgId) return;
-    await sendVipStatus(ctx, tgId, true);
-});
+
+
 // 🟢 VIP PROMO ADMIN CONTROLS
 bot.command('startpromo', async (ctx) => {
     try {
@@ -3163,6 +3131,7 @@ bot.hears(/^\/(scan|xray|info) (.+)/i, async (ctx) => {
 // =========================================================
 // 💸 DYNAMIC WITHDRAWAL SYSTEM (FIXED BRACKETS)
 // =========================================================
+// 🟢 UPDATED: Secured Withdrawal Command
 bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
@@ -3173,7 +3142,24 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
 
     const text = (ctx.message as any).text || "";
     const inputParts = text.trim().split(/\s+/);
-    if (inputParts.length !== 3) {
+
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (!user || !user.vaultAddress || !user.turnkeySubOrgId) {
+        await redis.del(withdrawLockKey);
+        return ctx.reply("🔴 Authentication Failed. No Vault found.");
+    }
+
+    // 🟢 SECURITY: Check if PIN is required
+    if (user.withdrawalPin) {
+        if (inputParts.length !== 4) {
+            await redis.del(withdrawLockKey);
+            return ctx.replyWithHTML(`🔴 <b>Format Error.</b> You have a Security PIN enabled. Please use:\n<code>/withdraw [ADDRESS] [AMOUNT] [PIN]</code>`);
+        }
+        if (inputParts[3] !== user.withdrawalPin) {
+            await redis.del(withdrawLockKey);
+            return ctx.replyWithHTML(`🚨 <b>SECURITY ALERT:</b> Incorrect Withdrawal PIN.`);
+        }
+    } else if (inputParts.length !== 3) {
         await redis.del(withdrawLockKey);
         return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Please use: <code>/withdraw [ADDRESS] [AMOUNT]</code> or <code>/withdraw [ADDRESS] ALL</code>`);
     }
@@ -3188,19 +3174,9 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
         return ctx.reply("🔴 Invalid amount specified.");
     }
 
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    if (!user || !user.vaultAddress || !user.turnkeySubOrgId) {
-        await redis.del(withdrawLockKey);
-        return ctx.reply("🔴 Authentication Failed. No Vault found.");
-    }
-
     let targetPubkey: PublicKey;
-    try { 
-        targetPubkey = new PublicKey(targetAddress); 
-    } catch (e) { 
-        await redis.del(withdrawLockKey);
-        return ctx.reply("🔴 Invalid destination Solana address."); 
-    }
+    try { targetPubkey = new PublicKey(targetAddress); } 
+    catch (e) { await redis.del(withdrawLockKey); return ctx.reply("🔴 Invalid destination Solana address."); }
 
     const loader = await ctx.replyWithHTML(`<i>⏳ Submitting transaction to Solana validators. Sweeping in progress...</i>`);
 
@@ -3246,8 +3222,7 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
                         await new Promise(r => setTimeout(r, 2000));
                         const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
                         if (status?.value && !status.value.err) {
-                            isConfirmed = true;
-                            break;
+                            isConfirmed = true; break;
                         }
                     }
 
@@ -3257,18 +3232,13 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
                         totalSentAmount += (lamportsToWithdraw / LAMPORTS_PER_SOL);
                         successCount++;
                     }
-                } catch (txError) {
-                    console.error("Withdrawal loop transaction error:", txError);
-                }
+                } catch (txError) {}
             }
 
             if (successCount > 0) {
                 await redis.del(`balance_cache:${telegramId}`); 
                 await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
-                    `🟢 <b>WITHDRAWAL INITIATED</b>\n\n` +
-                    `<b>Total Swept:</b> ~<code>${totalSentAmount.toFixed(4)} SOL</code>\n` +
-                    `<b>Destination:</b> <code>${targetPubkey.toBase58()}</code>\n\n` + 
-                    `🔗 <a href="https://solscan.io/tx/${finalSignature}">View Latest Receipt on Solscan</a>`, 
+                    `🟢 <b>WITHDRAWAL INITIATED</b>\n\n<b>Total Swept:</b> ~<code>${totalSentAmount.toFixed(4)} SOL</code>\n<b>Destination:</b> <code>${targetPubkey.toBase58()}</code>\n\n🔗 <a href="https://solscan.io/tx/${finalSignature}">View Latest Receipt on Solscan</a>`, 
                     { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                 );
             } else {
@@ -3281,7 +3251,6 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
         }
     })();
 });
-
 
 // =========================================================
 // 🎁 ADMIN COMMAND: GIVE FREE VIP & DEV SUITE TO KOLS
@@ -3346,19 +3315,7 @@ bot.action(/^confirm_buy_(.+)$/, async (ctx) => {
     const amountSol = rawAmt ? parseFloat(rawAmt) : (user?.autoSnipeConfig?.amountSol || 0.1);
     const loader = await ctx.replyWithHTML(`⚡ <b>EXECUTING SNIPE</b>\n\nTarget: <code>${tokenAddress.substring(0,8)}...</code>\nAmount: <b>${amountSol} SOL</b>\n<i>⏳ Verifying Contract Security & Building Jito Bundle...</i>`);
 
-    try {
-        // 🟢 CLAUDE FIX 3.8: Unified RugCheck usage instead of inline Axios call
-        const isRug = await checkTokenRugRisk(tokenAddress);
-        if (isRug) {
-            await redis.del(snipeLockKey);
-            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
-                `🚨 <b>CRITICAL RUG PULL DETECTED</b> 🚨\n\nContract ${tokenAddress.substring(0,6)}... has a Freeze Authority or high honeypot risk. Sentry has automatically blocked this transaction to save your funds.`, 
-                { parse_mode: 'HTML' }
-            );
-        }
-    } catch (e) {
-        // Continue to buy if API times out to not block fast snipes
-    }
+    // 🟢 C5 FIX: The redundant rug check has been safely removed here!
 
     const result = await executeSnipe(telegramId, tokenAddress, amountSol);
 
@@ -3707,10 +3664,20 @@ bot.action(/^launch_nuke_(.+)$/, async (ctx) => {
     );
 });
 
-
 // =========================================================
 // ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
 // =========================================================
+
+async function deleteKeysPattern(pattern: string) {
+    const { redis } = await import('./lib/redis.js');
+    let cursor = '0';
+    do {
+        const [nextCursor, elements] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        cursor = nextCursor;
+        if (elements.length > 0) await redis.del(...elements);
+    } while (cursor !== '0');
+}
+
 bot.on("text", async (ctx, next) => {
     const text = ctx.message.text.trim();
     const telegramId = ctx.from?.id.toString();
@@ -3736,9 +3703,7 @@ bot.on("text", async (ctx, next) => {
         ];
         
         await redis.del(...keysToClear); 
-        
-        const launchKeys = await redis.keys(`token_launch:${telegramId}:*`);
-        if (launchKeys.length > 0) await redis.del(...launchKeys);
+        await deleteKeysPattern(`token_launch:${telegramId}:*`);
 
         await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
         await sendOrEditDashboard(ctx, telegramId, false);
@@ -3753,12 +3718,13 @@ bot.on("text", async (ctx, next) => {
         const loader = await ctx.replyWithHTML(`<i>⏳ Verifying VIP payment on-chain...</i>`);
         try {
             const user = await prisma.user.findUnique({ where: { telegramId } });
-            const tierDef = VIP_TIERS[pendingVipTier as VipTierKey];
+            const { VIP_TIERS, verifyVipPayment, grantVip } = await import('./services/vip.service.js');
+            const tierDef = VIP_TIERS[pendingVipTier as keyof typeof VIP_TIERS];
             const treasury = process.env.TREASURY_WALLET_ADDRESS!;
             
             const verifyRes = await verifyVipPayment(txSig, tierDef.priceSol, treasury, user!.vaultAddress!);
             if (verifyRes.valid) {
-                await grantVip(telegramId, pendingVipTier as VipTierKey, 'purchased', txSig);
+                await grantVip(telegramId, pendingVipTier as any, 'purchased', txSig);
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>VIP ACTIVATED!</b>\n\nYour account has been successfully upgraded to <b>${tierDef.label}</b>.`, { parse_mode: 'HTML' });
                 await sendOrEditDashboard(ctx, telegramId, false);
             } else {
@@ -3769,6 +3735,23 @@ bot.on("text", async (ctx, next) => {
         }
         return;
     }
+// 🟢 NEW: PIN Interceptor
+if (await redis.get(`state:set_pin:${telegramId}`)) {
+    await redis.del(`state:set_pin:${telegramId}`);
+    
+    const pin = text.trim();
+    if (!/^\d{4,6}$/.test(pin)) {
+        return ctx.replyWithHTML(`🔴 <b>Invalid PIN.</b> Must be exactly 4 to 6 numeric digits.`);
+    }
+
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (user) { 
+        await prisma.user.update({ where: { id: user.id }, data: { withdrawalPin: pin } }); 
+        await ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour PIN is: <code>${pin}</code>\n\nAll future /withdraw commands will require you to append this PIN to the end of the command.`);
+        await sendOrEditVaultMenu(ctx, telegramId);
+    }
+    return;
+}
 
     // 🟢 TOKEN LAUNCH WIZARD
     const launchStep = await redis.get(`token_launch:${telegramId}:step`);
@@ -3831,7 +3814,6 @@ bot.on("text", async (ctx, next) => {
             if (user) { 
                 await prisma.user.update({ where: { id: user.id }, data: { slippagePercent: val } }); 
                 await ctx.replyWithHTML(`✅ <b>Slippage successfully updated to ${val}%.</b>`);
-                await sendOrEditSettings(ctx, telegramId, false); 
             }
             return;
         }
@@ -3844,7 +3826,6 @@ bot.on("text", async (ctx, next) => {
             if (user) {
                 await prisma.user.update({ where: { id: user.id }, data: { priorityLevel: "CUSTOM", customPriorityFee: val } });
                 await ctx.replyWithHTML(`✅ <b>Custom Jito Tip successfully set to ${val} SOL!</b>`);
-                await sendOrEditSettings(ctx, telegramId, false); 
             }
             return;
         }
@@ -3907,7 +3888,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Age.</b> Must be a positive number.");
             await setUserCallerFilters(telegramId, { maxAgeMins: val });
             await ctx.replyWithHTML(`✅ <b>Max Age updated to ${val} minutes!</b>`);
-            await sendCallerMenu(ctx, telegramId, false);
             return;
         }
 
@@ -3919,7 +3899,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(min) || isNaN(max) || min > max) return ctx.replyWithHTML("🔴 <b>Invalid Range.</b>");
             await setUserCallerFilters(telegramId, { minPctChange: min, maxPctChange: max });
             await ctx.replyWithHTML(`✅ <b>Percentage Range updated to ${min}% - ${max}%!</b>`);
-            await sendCallerMenu(ctx, telegramId, false);
             return;
         }
 
@@ -3929,7 +3908,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val < 0 || val > 100) return ctx.replyWithHTML("🔴 <b>Invalid Score.</b> Must be between 0 and 100.");
             await setUserCallerFilters(telegramId, { minScore: val });
             await ctx.replyWithHTML(`✅ <b>Minimum Score updated to ${val}!</b>`);
-            await sendCallerMenu(ctx, telegramId, false);
             return;
         }
         
@@ -3947,11 +3925,6 @@ bot.on("text", async (ctx, next) => {
             
             if (res.success) {
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>TIERED AIRDROP COMPLETE!</b>\n\n${res.message}\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Transaction</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-                if (res.notifiedUsers) {
-                    for (const winner of res.notifiedUsers) {
-                        try { await bot.telegram.sendMessage(winner.tgId, `🎁 <b>GUILD REWARD RECEIVED!</b>\n\nYou just received a customized reward of <b>${winner.amount.toFixed(4)} SOL</b> directly from your Guild Leader for ranking high on the <b>${winner.guildName}</b> leaderboard!\n\n<i>Check your W1 balance on Sentry to see it.</i>`, { parse_mode: 'HTML' }); } catch (e) {}
-                    }
-                }
             } else { await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Airdrop Failed:</b> ${res.message}`, { parse_mode: 'HTML' }); }
             return;
         }
@@ -3970,9 +3943,6 @@ bot.on("text", async (ctx, next) => {
             
             if (res.success) {
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>PAYOUT SUCCESSFUL!</b>\n\n${res.message}\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Transaction</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-                if (res.notifiedUser) {
-                    try { await bot.telegram.sendMessage(res.notifiedUser.tgId, `🎁 <b>GUILD REWARD RECEIVED!</b>\n\nYour Guild Leader has hand-picked you for an individual reward of <b>${res.notifiedUser.amount.toFixed(4)} SOL</b> inside the <b>${res.notifiedUser.guildName}</b> community!\n\n<i>Check your W1 balance on Sentry to see it.</i>`, { parse_mode: 'HTML' }); } catch (e) {}
-                }
             } else { await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Payout Failed:</b> ${res.message}`, { parse_mode: 'HTML' }); }
             return;
         }     
@@ -4016,7 +3986,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val <= 0) return ctx.reply("🔴 Invalid amount.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { amountSol: val } });
             await ctx.replyWithHTML(`✅ <b>Sniper Amount set to ${val} SOL.</b>`);
-            await sendOrEditSniper(ctx, telegramId, false);
             return;
         }
 
@@ -4026,7 +3995,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val < 0) return ctx.reply("🔴 Invalid amount.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { maxBudgetSol: val === 0 ? null : val } });
             await ctx.replyWithHTML(`✅ <b>Max Budget set to ${val === 0 ? 'Infinite' : val + ' SOL'}.</b>`);
-            await sendOrEditSniper(ctx, telegramId, false);
             return;
         }
 
@@ -4036,7 +4004,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val < 0 || val > 100) return ctx.reply("🔴 Invalid percentage.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { maxDevBuyPercent: val } });
             await ctx.replyWithHTML(`✅ <b>Max Dev Bag set to ${val}%.</b>`);
-            await sendOrEditSniper(ctx, telegramId, false);
             return;
         }
 
@@ -4046,7 +4013,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val < 1 || val > 100) return ctx.reply("🔴 Invalid percentage.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { autoTrailingDropPercent: val } });
             await ctx.replyWithHTML(`✅ <b>Auto-Guard SL set to -${val}%.</b>`);
-            await sendOrEditSniper(ctx, telegramId, false);
             return;
         }
 
@@ -4056,7 +4022,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val < 0) return ctx.reply("🔴 Invalid percentage.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { autoTakeProfitPercent: val === 0 ? null : val } });
             await ctx.replyWithHTML(`✅ <b>Auto-TP set to ${val === 0 ? 'OFF' : '+' + val + '%'}.</b>`);
-            await sendOrEditSniper(ctx, telegramId, false);
             return;
         }
 
@@ -4066,7 +4031,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val < 0) return ctx.reply("🔴 Invalid delay.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { snipeDelaySeconds: val } });
             await ctx.replyWithHTML(`✅ <b>Block Delay set to ${val} seconds.</b>`);
-            await sendOrEditSniper(ctx, telegramId, false);
             return;
         }
 
@@ -4078,7 +4042,6 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(min) || isNaN(max)) return ctx.reply("🔴 Invalid numbers.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { minMarketCap: min, maxMarketCap: max } });
             await ctx.replyWithHTML(`✅ <b>MC Filter set: $${min} - $${max}.</b>`);
-            await sendOrEditSniper(ctx, telegramId, false);
             return;
         }
 
@@ -4101,7 +4064,6 @@ bot.on("text", async (ctx, next) => {
             return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>BROADCAST COMPLETE</b>\n\nSuccessfully delivered to <b>${sentCount} / ${allUsers.length}</b> users!`, { parse_mode: 'HTML' });
         }
 
-        // 🟢 CLAUDE FIX 4.2: Enforce Dev Suite requirement on Automated Trading Utility
         if (await redis.get(`state:dev_volume:${telegramId}`)) {
             await redis.del(`state:dev_volume:${telegramId}`);
             
@@ -4156,7 +4118,6 @@ bot.on("text", async (ctx, next) => {
             return;
         }
         
-        // 🟢 CLAUDE FIX 4.2: Enforce Dev Suite requirement on Nuke
         if (await redis.get(`state:dev_nuke:${telegramId}`)) {
             await redis.del(`state:dev_nuke:${telegramId}`);
 
@@ -4296,7 +4257,6 @@ bot.on("text", async (ctx, next) => {
 
             await prisma.user.update({ where: { telegramId }, data: { referredById: referrer.id } });
             await ctx.replyWithHTML(`✅ <b>Success!</b>\n\nYou are now linked to Partner <b>${code}</b>. They will receive a revenue share of your trading volume.`);
-            await sendOrEditDashboard(ctx, telegramId, false);
             return;
         }
 
@@ -4329,7 +4289,8 @@ bot.on("text", async (ctx, next) => {
                     `Please review your loyalty infrastructure setup:\n\n` +
                     `• <b>Community Name:</b> <code>${communityName}</code>\n` +
                     `• <b>Member Reward:</b> <i>"${rewardDescription}"</i>\n\n` +
-                    `<i>Your Developer Suite subscription covers the cost of this Guild. Creating it is completely free.</i>`,
+                    `💳 <b>Cost:</b> <b>2.0 SOL</b> (one-time, charged from your Main Wallet on confirmation)\n` +
+                    `<i>This unlocks permanent Guild ownership: unlimited members, live leaderboard, CSV export, and a 50% revenue share on every trade your members make — forever.</i>`,
                     Markup.inlineKeyboard([
                         [Markup.button.callback('✅ Confirm & Create Guild', 'action_confirm_guild_pay')],
                         [Markup.button.callback('❌ Abort Setup', 'action_abort_guild_setup')]
@@ -4347,7 +4308,6 @@ bot.on("text", async (ctx, next) => {
             const success = await importPrivateKey(telegramId, text.trim());
             if (success) {
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `✅ <b>Wallet Imported Successfully!</b>\nYour Sentry terminal is now linked to your new encrypted address.`, { parse_mode: 'HTML' });
-                await sendOrEditDashboard(ctx, telegramId, false);
             } else {
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Import Failed.</b> Not a valid Solana Base58 Private Key.`, { parse_mode: 'HTML' });
             }
@@ -4356,6 +4316,7 @@ bot.on("text", async (ctx, next) => {
 
     } catch (redisErr) {}
  
+    // Quick Snipe / Watch via Regex
     const caRegex = /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/;
     const match = text.match(caRegex);
 
@@ -4399,7 +4360,8 @@ bot.on("text", async (ctx, next) => {
         const loader = await ctx.replyWithHTML(`⚡ <b>SNIPE ENGAGED</b>\n\nTarget: <code>${possibleCA.substring(0,8)}...</code>\nAmount: <b>${tradeAmountSol} SOL</b>\n<i>⏳ Running security scan & fetching Token Info...</i>`);
         
         try {
-            // 🟢 CLAUDE FIX 3.8: Unified RugCheck usage
+            // 🟢 C5: Fast Cached RugCheck!
+            const { checkTokenRugRisk } = await import('./services/price.service.js');
             const isRug = await checkTokenRugRisk(possibleCA);
             if (isRug) {
                 await redis.del(spamLockKey);
@@ -4420,6 +4382,7 @@ bot.on("text", async (ctx, next) => {
         const tgLink = pair?.info?.socials?.find((s: any) => s.type === 'telegram')?.url || null;
         const twitterLink = pair?.info?.socials?.find((s: any) => s.type === 'twitter')?.url || null;
 
+        const { checkTokenRugRisk } = await import('./services/price.service.js');
         const rugDetected = await checkTokenRugRisk(possibleCA);
         const mevWarning = rugDetected ? `\n\n🚨 <b>WARNING: Critical Rug/Honeypot risk detected on RugCheck!</b>` : '';
         const socialsLine = [tgLink, twitterLink].filter(Boolean).join(' | ') || 'None found';
@@ -4509,6 +4472,14 @@ bot.action('action_abort_guild_setup', async (ctx) => {
     const tgId = ctx.from?.id.toString()!;
     await redis.del(`guild_setup:${tgId}`);
     await ctx.editMessageText("❌ <b>Guild setup cancelled.</b> Your wallet has not been charged.", { parse_mode: 'HTML' });
+});
+
+// 🟢 NEW: PIN Setup action
+bot.action('action_set_pin', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:set_pin:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`🔒 <b>SET WITHDRAWAL PIN</b>\n\nProtect your funds from Telegram session hijacking.\n\nReply with a <b>4 to 6 digit number</b> to set your PIN.\n<i>(If you ever forget this, you will need to contact support to manually verify ownership).</i>\n\n<i>Type /cancel to abort.</i>`);
 });
 
 bot.action('action_confirm_guild_pay', async (ctx) => {
@@ -4702,53 +4673,50 @@ async function bootEcosystem() {
 // 🟢 NEW: Headless Scheduled Volume Bumper Loop
 setInterval(async () => {
     try {
-        const keys = await redis.keys('scheduled_bump:*');
-        for (const key of keys) {
-            const dataRaw = await redis.get(key);
-            if (!dataRaw) continue;
-            const data = JSON.parse(dataRaw);
-            
-            // If schedule expired or budget exhausted, clean it up
-            if (Date.now() > data.expiresAt || data.spent >= data.budget) {
-                await redis.del(key);
-                continue;
+        let cursor = '0';
+        do {
+            const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'scheduled_bump:*', 'COUNT', 100);
+            cursor = nextCursor;
+            for (const key of keys) {
+                const dataRaw = await redis.get(key);
+                if (!dataRaw) continue;
+                const data = JSON.parse(dataRaw);
+                
+                if (Date.now() > data.expiresAt || data.spent >= data.budget) {
+                    await redis.del(key);
+                    continue;
+                }
+                
+                const parts = key.split(':');
+                const tgId = parts[1];
+                const tokenCA = parts[2];
+                
+                const cdKey = `bump_cd:${tokenCA}`;
+                if (await redis.get(cdKey)) continue;
+                await redis.set(cdKey, '1', 'EX', 12); 
+                
+                try {
+                   const tradeSize = 0.01 + Math.random() * 0.02; 
+                   const { executeSnipe, executeExit } = await import('./services/engine.service.js');
+                   
+                   if (data.isBuyNext) {
+                       const res = await executeSnipe(tgId, tokenCA, tradeSize, 'buy', undefined, true);
+                       if (res.success) data.isBuyNext = false;
+                   } else {
+                       const res = await executeExit(tgId, tokenCA, 100, true);
+                       if (res.success) data.isBuyNext = true;
+                   }
+                   
+                   data.spent += (tradeSize * 0.01) + 0.0005; 
+                   await redis.set(key, JSON.stringify(data));
+                   
+                   await prisma.launchedToken.update({
+                       where: { tokenAddress: tokenCA },
+                       data: { totalVolumeBumped: { increment: tradeSize } }
+                   }).catch(() => {});
+                } catch(e) {}
             }
-            
-            const parts = key.split(':');
-            const tgId = parts[1];
-            const tokenCA = parts[2];
-            
-            // To avoid rapid fire overlapping, check a cooldown (12 seconds)
-            const cdKey = `bump_cd:${tokenCA}`;
-            if (await redis.get(cdKey)) continue;
-            await redis.set(cdKey, '1', 'EX', 12); 
-            
-            try {
-               // Randomize trade size slightly to look organic
-               const tradeSize = 0.01 + Math.random() * 0.02; 
-               const { executeSnipe, executeExit } = await import('./services/engine.service.js');
-               
-               if (data.isBuyNext) {
-                   const res = await executeSnipe(tgId, tokenCA, tradeSize, 'buy', undefined, true);
-                   if (res.success) data.isBuyNext = false;
-               } else {
-                   const res = await executeExit(tgId, tokenCA, 100, true);
-                   if (res.success) data.isBuyNext = true;
-               }
-               
-               // Approximate fee (1% platform + network gas)
-               data.spent += (tradeSize * 0.01) + 0.0005; 
-               await redis.set(key, JSON.stringify(data));
-               
-               await prisma.launchedToken.update({
-                   where: { tokenAddress: tokenCA },
-                   data: { totalVolumeBumped: { increment: tradeSize } }
-               }).catch(() => {});
-
-            } catch(e) {
-                // Fail silently so headless loop doesn't crash
-            }
-        }
+        } while (cursor !== '0');
     } catch (e) {}
 }, 5000);
 
