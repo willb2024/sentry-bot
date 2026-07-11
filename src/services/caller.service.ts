@@ -1,443 +1,225 @@
 // src/services/caller.service.ts
-import dotenv from 'dotenv';
-dotenv.config();
-
-import axios from 'axios';
-import { checkTokenRugRisk, getBondingCurveAddress } from './price.service.js';
-import { redis } from '../lib/redis.js';
-import { PublicKey } from '@solana/web3.js';
-import { connection } from '../lib/connection.js';
 import { PrismaClient } from '@prisma/client';
+import { redis } from '../lib/redis.js';
+import axios from 'axios';
+import { checkTokenRugRisk } from './price.service.js';
+import { getRecentNewMints } from './grpc.service.js'; 
 
 const prisma = new PrismaClient();
 
-export interface TokenScore {
-    mint: string;
-    symbol: string;
-    totalScore: number;
-    ageMins: number;
-    priceChangeM5: number;
-    priceChangeH1: number;
-    breakdown: {
-        volumeSpike:    number;
-        buySellRatio:   number;
-        liquidityDepth: number;
-        ageScore:       number;
-        mevRisk:        number;
-        curveProgress:  number;
-        momentumBonus:  number;
-    };
-    reasons:  string[];
-    warnings: string[];
-    source: string;
-}
-
 export interface CallerFilters {
-    minVolUsd:    number;
-    maxAgeMins:   number;
+    isActive: boolean;
+    minScore: number;
+    maxAgeMins: number;
     minPctChange: number;
     maxPctChange: number;
-    blockMev:     boolean;
-    minScore:     number;
-    isActive:     boolean;
+    blockMev: boolean;
 }
-
-const DEFAULT_FILTERS: CallerFilters = {
-    minVolUsd:    5000,
-    maxAgeMins:   120,
-    minPctChange: 15,
-    maxPctChange: 10000,
-    blockMev:     true,
-    minScore:     50,
-    isActive:     false
-};
 
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
+    const defaultFilters: CallerFilters = {
+        isActive: false,
+        minScore: 75,
+        maxAgeMins: 60,
+        minPctChange: 10,
+        maxPctChange: 500,
+        blockMev: true
+    };
     try {
         const raw = await redis.get(`caller_filters:${telegramId}`);
-        if (!raw) return DEFAULT_FILTERS;
-        return { ...DEFAULT_FILTERS, ...JSON.parse(raw) };
-    } catch (e: any) {
-        return DEFAULT_FILTERS;
-    }
+        if (raw) return { ...defaultFilters, ...JSON.parse(raw) };
+    } catch (e) {}
+    return defaultFilters;
 }
 
-export async function setUserCallerFilters(
-    telegramId: string,
-    filters: Partial<CallerFilters>
-): Promise<CallerFilters> {
-    try {
-        const current = await getUserCallerFilters(telegramId);
-        const updated  = { ...current, ...filters };
-        await redis.set(`caller_filters:${telegramId}`, JSON.stringify(updated));
-        return updated;
-    } catch (e: any) {
-        return DEFAULT_FILTERS;
-    }
-}
-
-const CURVE_PROGRESS_TTL = 30;       
-const RUG_CHECK_TTL      = 600;      
-const HOT_CACHE_KEY      = 'caller:hot_scored_tokens';
-const HOT_CACHE_TTL      = 60;       
-
-const dexClient = axios.create({
-    baseURL: 'https://api.dexscreener.com',
-    timeout: 6000,
-    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-});
-
-const pumpClient = axios.create({
-    baseURL: 'https://frontend-api.pump.fun',
-    timeout: 5000,
-    headers: { 'User-Agent': 'Mozilla/5.0' }
-});
-
-// 🟢 PERF: Bounded Concurrency Executor
-async function mapParallel<T, R>(
-    items: T[],
-    limit: number,
-    fn: (item: T, idx: number) => Promise<R>
-): Promise<R[]> {
-    const results: R[] = [];
-    let i = 0;
-
-    const workers = Array(limit).fill(0).map(async () => {
-        while (i < items.length) {
-            const currentIndex = i++;
-            try {
-                await new Promise(resolve => setTimeout(resolve, Math.random() * 200 + 100));
-                const res = await fn(items[currentIndex], currentIndex);
-                if (res !== null && res !== undefined) results.push(res);
-            } catch (e) {
-                // skip
-            }
-        }
-    });
-
-    await Promise.all(workers);
-    return results;
-}
-
-async function fetchTrendingPairs(): Promise<any[]> {
-    try {
-        const res = await dexClient.get('/token-profiles/latest/v1', { timeout: 5000 });
-        const profiles: any[] = Array.isArray(res.data) ? res.data : [];
-        const solanaMints = profiles
-            .filter(p => p.chainId === 'solana')
-            .slice(0, 20)
-            .map(p => p.tokenAddress)
-            .filter(Boolean);
-
-        if (solanaMints.length === 0) return [];
-
-        const pairRes = await dexClient.get(`/latest/dex/tokens/${solanaMints.join(',')}`, { timeout: 6000 });
-        return (pairRes.data?.pairs || []).filter((p: any) => p.chainId === 'solana');
-    } catch (_) { return []; }
-}
-
-async function fetchNewSolanaPairs(): Promise<any[]> {
-    try {
-        const res = await dexClient.get('/latest/dex/search?q=solana&sort=trending', { timeout: 5000 });
-        const pairs: any[] = res.data?.pairs || [];
-        return pairs.filter(p => p.chainId === 'solana').slice(0, 30);
-    } catch (_) { return []; }
-}
-
-async function fetchPumpKothPairs(): Promise<any[]> {
-    try {
-        const res = await pumpClient.get('/coins/king-of-the-hill?offset=0&limit=20&includeNsfw=false', { timeout: 5000 });
-        const coins: any[] = Array.isArray(res.data) ? res.data : [];
-        if (coins.length === 0) return [];
-
-        const mints = coins.filter(c => c.mint).slice(0, 20).map(c => c.mint);
-        if (mints.length === 0) return [];
-
-        const pairRes = await dexClient.get(`/latest/dex/tokens/${mints.join(',')}`, { timeout: 6000 });
-        return (pairRes.data?.pairs || []).filter((p: any) => p.chainId === 'solana');
-    } catch (_) { return []; }
-}
-
-async function fetchBoostedPairs(): Promise<any[]> {
-    try {
-        const res = await dexClient.get('/token-boosts/top/v1', { timeout: 5000 });
-        const profiles: any[] = (Array.isArray(res.data) ? res.data : []).filter((p: any) => p.chainId === 'solana');
-        if (profiles.length === 0) return [];
-
-        const mints = profiles.slice(0, 25).map((p: any) => p.tokenAddress).filter(Boolean);
-        const pairRes = await dexClient.get(`/latest/dex/tokens/${mints.join(',')}`, { timeout: 6000 });
-        return (pairRes.data?.pairs || []).filter((p: any) => p.chainId === 'solana');
-    } catch (_) { return []; }
-}
-
-async function getCachedCurveProgress(mint: string): Promise<{ progress: number; curveScore: number; reason: string | null }> {
-    const key = `curve_progress:${mint}`;
-    try {
-        const cached = await redis.get(key);
-        if (cached) return JSON.parse(cached);
-    } catch (_) {}
-
-    try {
-        const curvePda = getBondingCurveAddress(mint);
-        const accInfo  = await connection.getAccountInfo(new PublicKey(curvePda));
-        let result = { progress: 0, curveScore: 0, reason: null as string | null };
-
-        if (accInfo?.data) {
-            const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-            const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
-            const progress = Math.min(100, (virtualSolReserves / 85) * 100);
-
-            if (progress > 80) result = { progress, curveScore: 20, reason: `🔥 Curve ${progress.toFixed(0)}% to graduation` };
-            else if (progress > 50) result = { progress, curveScore: 10, reason: null };
-        }
-
-        await redis.set(key, JSON.stringify(result), 'EX', CURVE_PROGRESS_TTL);
-        return result;
-    } catch (_) { return { progress: 0, curveScore: 0, reason: null }; }
+export async function setUserCallerFilters(telegramId: string, updates: Partial<CallerFilters>) {
+    const current = await getUserCallerFilters(telegramId);
+    const updated = { ...current, ...updates };
+    await redis.set(`caller_filters:${telegramId}`, JSON.stringify(updated));
+    return updated;
 }
 
 async function getCachedRugStatus(mint: string): Promise<boolean> {
-    const key = `rug_status:${mint}`;
-    try {
-        const cached = await redis.get(key);
-        if (cached !== null) return cached === 'true';
-    } catch (_) {}
-
+    const cached = await redis.get(`rugcheck:${mint}`);
+    if (cached) return cached === 'true';
     const isRug = await checkTokenRugRisk(mint);
-    await redis.set(key, isRug ? 'true' : 'false', 'EX', RUG_CHECK_TTL).catch(() => {});
+    await redis.set(`rugcheck:${mint}`, isRug ? 'true' : 'false', 'EX', 600);
     return isRug;
 }
 
-async function scorePair(pair: any, source: string): Promise<TokenScore | null> {
-    try {
-        if (!pair?.baseToken?.address || !pair?.baseToken?.symbol) return null;
+// 🟢 D1 FIX: Pull from the live WebSocket buffer instead of broken REST endpoints
+async function fetchRecentNewMints() {
+    const rawMints = getRecentNewMints();
+    if (rawMints.length === 0) return [];
 
-        const mint   = pair.baseToken.address as string;
-        const symbol = pair.baseToken.symbol  as string;
-
-        const reasons:  string[] = [];
-        const warnings: string[] = [];
-
-        const ageMins = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
-
-        let ageScore = 0;
-        if      (ageMins < 10)  { ageScore = 25; reasons.push(`🆕 Ultra fresh (${ageMins.toFixed(0)}m old)`); }
-        else if (ageMins < 30)  { ageScore = 20; reasons.push(`⏱️ Very fresh (${ageMins.toFixed(0)}m old)`); }
-        else if (ageMins < 120) { ageScore = 10; }
-
-        const priceChangeM5 = pair.priceChange?.m5  ?? 0;
-        const priceChangeH1 = pair.priceChange?.h1  ?? 0;
-
-        let momentumBonus = 0;
-        const bestMomentum = Math.max(Math.abs(priceChangeM5), Math.abs(priceChangeH1) / 12);
-        if (bestMomentum > 200) {
-            momentumBonus = 20;
-            reasons.push(`🚀 Extreme momentum (+${priceChangeM5.toFixed(0)}% 5m | +${priceChangeH1.toFixed(0)}% 1h)`);
-        } else if (bestMomentum > 50) {
-            momentumBonus = 12;
-            reasons.push(`📈 Strong momentum (+${priceChangeM5.toFixed(0)}% 5m)`);
-        } else if (bestMomentum > 20) { momentumBonus = 6; }
-
-        if (priceChangeM5 < -20 || priceChangeH1 < -30) warnings.push(`📉 Negative price action (${priceChangeM5.toFixed(0)}% 5m)`);
-
-        const vol5m       = pair.volume?.m5  || 0;
-        const vol1h       = pair.volume?.h1  || 0.1;
-        const vol24h      = pair.volume?.h24 || 0;
-        const spikeRatio  = vol1h > 0 ? (vol5m * 12) / vol1h : 0;
-
-        let volumeSpike = 0;
-        if (spikeRatio > 3.0) {
-            volumeSpike = 20;
-            reasons.push(`⚡ Massive vol spike (${(spikeRatio).toFixed(1)}x above 1h avg)`);
-        } else if (spikeRatio > 2.0) {
-            volumeSpike = 15;
-            reasons.push(`📊 High vol spike (${(spikeRatio).toFixed(1)}x)`);
-        } else if (spikeRatio > 1.2) { volumeSpike = 8; }
-
-        if (vol24h > 0) reasons.push(`💹 24h Vol: $${vol24h.toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
-
-        const buys    = pair.txns?.h1?.buys  || pair.txns?.m5?.buys  || 0;
-        const sells   = pair.txns?.h1?.sells || pair.txns?.m5?.sells || 0;
-        const totalTx = buys + sells;
-        const buyRatio = totalTx > 0 ? buys / totalTx : 0;
-
-        let buySellRatio = 0;
-        if (buyRatio > 0.70) {
-            buySellRatio = 15;
-            reasons.push(`🟢 Heavy buy pressure (${(buyRatio * 100).toFixed(0)}% buys)`);
-        } else if (buyRatio > 0.55) {
-            buySellRatio = 8;
-        } else if (buyRatio < 0.35) {
-            buySellRatio = -10;
-            warnings.push(`🔴 Heavy sell pressure (${(100 - buyRatio * 100).toFixed(0)}% sells)`);
-        }
-
-        const liq = pair.liquidity?.usd || 0;
-        let liquidityDepth = 0;
-        if      (liq > 100000) { liquidityDepth = 15; reasons.push(`💧 Deep liq ($${(liq/1000).toFixed(0)}k)`); }
-        else if (liq > 50000)  { liquidityDepth = 10; reasons.push(`💧 Good liq ($${(liq/1000).toFixed(0)}k)`); }
-        else if (liq > 10000)  { liquidityDepth = 5;  }
-        else if (liq < 1000)   { warnings.push(`⚠️ Very low liquidity (<$1k)`); }
-
-        let curveProgress = 0;
-        if (mint.toLowerCase().endsWith('pump')) {
-            const curveResult = await getCachedCurveProgress(mint);
-            curveProgress = curveResult.curveScore;
-            if (curveResult.reason) reasons.push(curveResult.reason);
-        }
-
-        const prelimScore = volumeSpike + buySellRatio + liquidityDepth + ageScore + curveProgress + momentumBonus;
-
-        let safetyScore = 0;
-        if (prelimScore >= 25) {
-            const isRug = await getCachedRugStatus(mint);
-            if (isRug) {
-                safetyScore = -25;
-                warnings.push(`🚨 RugCheck: HIGH RISK`);
-            } else {
-                safetyScore = 10;
-                reasons.push(`✅ RugCheck: Safe`);
+    const enrichedTokens: any[] = [];
+    const mintsOnly = rawMints.map((m: any) => m.mint);
+    
+    for (let i = 0; i < mintsOnly.length; i += 30) {
+        const chunk = mintsOnly.slice(i, i + 30).join(',');
+        try {
+            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { timeout: 3000 });
+            if (res.data?.pairs) {
+                res.data.pairs.forEach((pair: any) => {
+                    enrichedTokens.push({
+                        mint: pair.baseToken.address,
+                        symbol: pair.baseToken.symbol,
+                        price: parseFloat(pair.priceUsd || "0"),
+                        volume: pair.volume?.h24 || 0,
+                        liquidity: pair.liquidity?.usd || 0,
+                        priceChangeM5: pair.priceChange?.m5 || 0,
+                        priceChangeH1: pair.priceChange?.h1 || 0,
+                        pairCreatedAt: pair.pairCreatedAt || Date.now(),
+                        socials: pair.info?.socials || []
+                    });
+                });
             }
-        }
-
-        const totalScore = Math.min(100, Math.max(0, prelimScore + safetyScore));
-
-        return {
-            mint, symbol, totalScore, ageMins, priceChangeM5, priceChangeH1,
-            breakdown: { volumeSpike, buySellRatio, liquidityDepth, ageScore, mevRisk: safetyScore, curveProgress, momentumBonus },
-            reasons, warnings, source
-        };
-    } catch (_) { return null; }
+        } catch (_) {}
+    }
+    return enrichedTokens;
 }
 
-export async function scoreTokens(): Promise<TokenScore[]> {
+async function fetchTrendingPairs() {
     try {
-        const [trendingPairs, newPairs, kothPairs, boostedPairs] = await Promise.all([
-            fetchTrendingPairs(), fetchNewSolanaPairs(), fetchPumpKothPairs(), fetchBoostedPairs()
-        ]);
-
-        const tagged: Array<{ pair: any; source: string }> = [
-            ...trendingPairs.map(p => ({ pair: p, source: 'trending'  })),
-            ...newPairs.map(p =>      ({ pair: p, source: 'new-pairs' })),
-            ...kothPairs.map(p =>     ({ pair: p, source: 'pump-koth' })),
-            ...boostedPairs.map(p =>  ({ pair: p, source: 'boosted'   })),
-        ];
-
-        const seenMints = new Set<string>();
-        const deduped   = tagged.filter(({ pair }) => {
-            const mint = pair?.baseToken?.address;
-            if (!mint || seenMints.has(mint)) return false;
-            seenMints.add(mint);
-            return true;
-        });
-
-        const scored = await mapParallel(deduped, 12, async ({ pair, source }) => {
-            return await scorePair(pair, source);
-        });
-
-        return scored.filter((s): s is TokenScore => s !== null && s !== undefined).sort((a, b) => b.totalScore - a.totalScore);
+        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
+        if (!res.data) return [];
+        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
+        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
+        return enrich.data?.pairs?.map((pair: any) => ({
+            mint: pair.baseToken.address, symbol: pair.baseToken.symbol,
+            price: parseFloat(pair.priceUsd || "0"), volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0,
+            priceChangeM5: pair.priceChange?.m5 || 0, priceChangeH1: pair.priceChange?.h1 || 0,
+            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
+        })) || [];
     } catch (_) { return []; }
 }
 
-let hotCacheRefreshing = false;
-async function refreshHotCache(): Promise<void> {
-    if (hotCacheRefreshing) return; 
-    hotCacheRefreshing = true;
+async function fetchBoostedPairs() {
     try {
-        const tokens = await scoreTokens();
-        if (tokens.length > 0) await redis.set(HOT_CACHE_KEY, JSON.stringify(tokens), 'EX', HOT_CACHE_TTL);
-    } catch (_) {} 
-    finally { hotCacheRefreshing = false; }
+        const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 3000 });
+        if (!res.data) return [];
+        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
+        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
+        return enrich.data?.pairs?.map((pair: any) => ({
+            mint: pair.baseToken.address, symbol: pair.baseToken.symbol,
+            price: parseFloat(pair.priceUsd || "0"), volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0,
+            priceChangeM5: pair.priceChange?.m5 || 0, priceChangeH1: pair.priceChange?.h1 || 0,
+            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
+        })) || [];
+    } catch (_) { return []; }
 }
 
-async function getHotCache(): Promise<TokenScore[]> {
+export async function scoreTokens() {
     try {
-        const raw = await redis.get(HOT_CACHE_KEY);
-        if (raw) return JSON.parse(raw) as TokenScore[];
-    } catch (_) {}
-    return [];
-}
+        // 🟢 D1 FIX: Fetch from WS buffer as primary, others as supplementary
+        const [newMints, trending, boosted] = await Promise.all([
+            fetchRecentNewMints(),
+            fetchTrendingPairs().catch(()=>[]),
+            fetchBoostedPairs().catch(()=>[])
+        ]);
 
-async function runNotificationPass(bot: any): Promise<void> {
-    try {
-        const topTokens = await getHotCache();
-        if (topTokens.length === 0) return;
+        // 🟢 REQUIRED LOGGING: Ensures we never fail silently on data feeds again
+        console.log(`🎯 [CALLER] Scanned Sources: NewMints=${newMints.length} | Trending=${trending.length} | Boosted=${boosted.length}`);
 
-        const subscribedUsers = await prisma.user.findMany({ select: { telegramId: true } });
-        const userFilters = await Promise.all(
-            subscribedUsers.map(async u => ({
-                telegramId: u.telegramId,
-                filters: await getUserCallerFilters(u.telegramId)
-            }))
-        );
+        const allPairs = [...newMints, ...trending, ...boosted];
+        const uniquePairs = Array.from(new Map(allPairs.map(item => [item.mint, item])).values());
 
-        const activeUsers = userFilters.filter(u => u.filters.isActive);
-        if (activeUsers.length === 0) return;
+        const scored = await Promise.all(uniquePairs.map(async (pair) => {
+            const ageMins = (Date.now() - pair.pairCreatedAt) / 60000;
+            let score = 0;
+            let reasons = [];
+            
+            if (ageMins < 60) { score += 30; reasons.push(`Brand new (${Math.floor(ageMins)}m old)`); }
+            else if (ageMins < 180) { score += 15; }
 
-        await Promise.all(activeUsers.map(async ({ telegramId, filters }) => {
-            try {
-                const matchedToken = topTokens.find(t => {
-                    if (t.totalScore < filters.minScore) return false;
-                    if (t.ageMins > filters.maxAgeMins) return false;
-                    if (filters.blockMev && t.breakdown.mevRisk < 0) return false;
+            if (pair.volume > 100000) { score += 25; reasons.push(`High Volume ($${(pair.volume/1000).toFixed(1)}k)`); }
+            else if (pair.volume > 20000) { score += 10; }
 
-                    const effectiveMomentum = Math.max(t.priceChangeM5, t.priceChangeH1 / 12);
-                    if (effectiveMomentum < filters.minPctChange) return false;
-                    if (effectiveMomentum > filters.maxPctChange)  return false;
+            if (pair.priceChangeM5 > 15) { score += 20; reasons.push(`Momentum Spike (+${pair.priceChangeM5.toFixed(1)}%)`); }
+            if (pair.liquidity > 20000) { score += 15; reasons.push(`Healthy Liq`); }
+            if (pair.socials.length > 0) { score += 10; }
 
-                    return true;
-                });
+            const isRug = await getCachedRugStatus(pair.mint);
+            if (isRug) score -= 100;
 
-                if (!matchedToken) return;
-
-                const lockKey     = `caller_notified:${telegramId}:${matchedToken.mint}`;
-                const isNotified  = await redis.set(lockKey, '1', 'EX', 86400, 'NX');
-                if (!isNotified) return;
-
-                const botName = process.env.BOT_NAME || 'Sentry Terminal';
-
-                let msg = `🎯 <b>${botName.toUpperCase()} — ALPHA ALERT</b>\n\n` +
-                          `<b>Token:</b> $${matchedToken.symbol}\n` +
-                          `<code>${matchedToken.mint}</code>\n\n` +
-                          `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n` +
-                          `<b>Age:</b> ${matchedToken.ageMins.toFixed(0)} mins\n` +
-                          `<b>5m Change:</b> ${matchedToken.priceChangeM5 >= 0 ? '+' : ''}${matchedToken.priceChangeM5.toFixed(1)}%\n` +
-                          `<b>1h Change:</b> ${matchedToken.priceChangeH1 >= 0 ? '+' : ''}${matchedToken.priceChangeH1.toFixed(1)}%\n` +
-                          `<b>Source:</b> <code>${matchedToken.source}</code>\n\n` +
-                          `${matchedToken.reasons.map(r => `✅ ${r}`).join('\n')}\n`;
-
-                if (matchedToken.warnings && matchedToken.warnings.length > 0) {
-                    msg += `${matchedToken.warnings.map(w => `⚠️ ${w}`).join('\n')}\n`;
-                }
-
-                msg += `\n<i>Click below to act instantly:</i>`;
-
-                await bot.telegram.sendMessage(telegramId, msg, {
-                    parse_mode: 'HTML',
-                    link_preview_options: { is_disabled: true },
-                    reply_markup: {
-                        inline_keyboard: [
-                            [
-                                { text: '⚡ Snipe 0.1 SOL',    callback_data: `forcebuy_${matchedToken.mint}_0.1` },
-                                { text: '📊 DexScreener',      url: `https://dexscreener.com/solana/${matchedToken.mint}` }
-                            ],
-                            [
-                                { text: '🛡️ Deploy Guard',    callback_data: `caller_guard_${matchedToken.mint}` },
-                                { text: '⏳ Start DCA',        callback_data: `caller_dca_${matchedToken.mint}` }
-                            ],
-                            [{ text: '⬅️ Caller Menu',     callback_data: 'menu_caller' }]
-                        ]
-                    }
-                }).catch(() => null);
-
-            } catch (_) {}
+            return { ...pair, totalScore: Math.max(0, score), ageMins, reasons, breakdown: { mevRisk: isRug ? -100 : 0 } };
         }));
 
-    } catch (_) {}
+        const topScorers = scored.filter(t => t.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore);
+        
+        await redis.set('caller:hot_scored_tokens', JSON.stringify(topScorers), 'EX', 30);
+        return topScorers;
+    } catch (e: any) {
+        console.error("🔴 [CALLER] Engine Error:", e.message);
+        return [];
+    }
 }
 
-export async function startCoinCaller(bot: any): Promise<void> {
-    refreshHotCache().catch(() => {});
-    setInterval(() => { refreshHotCache().catch(() => {}); }, 12_000);
-    setInterval(() => { runNotificationPass(bot).catch(() => {}); }, 5_000);
+let isScoring = false;
+export async function startCoinCaller(bot: any) {
+    console.log("🎯 [CALLER ENGINE] Initialized. Scanning DexScreener every 15 seconds.");
+
+    setInterval(async () => {
+        if (isScoring) return;
+        isScoring = true;
+
+        try {
+            const tokens = await scoreTokens();
+            if (tokens.length === 0) return;
+
+            const allUsers = await prisma.user.findMany({ select: { telegramId: true } });
+            
+            for (const user of allUsers) {
+                const filters = await getUserCallerFilters(user.telegramId);
+                if (!filters.isActive) continue;
+
+                const matchedToken = tokens.find(t => 
+                    t.totalScore >= filters.minScore &&
+                    t.ageMins <= filters.maxAgeMins &&
+                    t.priceChangeM5 >= filters.minPctChange &&
+                    t.priceChangeM5 <= filters.maxPctChange &&
+                    (!filters.blockMev || t.breakdown.mevRisk >= 0)
+                );
+
+                if (matchedToken) {
+                    const alertKey = `caller_alerted:${user.telegramId}:${matchedToken.mint}`;
+                    const alreadyAlerted = await redis.get(alertKey);
+                    if (alreadyAlerted) continue;
+
+                    await redis.set(alertKey, '1', 'EX', 3600 * 24); // Alert once per coin per 24H
+
+                    const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
+                                `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
+                                `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n` +
+                                `<b>Age:</b> ${matchedToken.ageMins.toFixed(0)} minutes old\n\n` +
+                                `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
+                                `<i>Click below to buy instantly via Jito:</i>`;
+                    
+                    try {
+                        await bot.telegram.sendMessage(user.telegramId, msg, {
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [
+                                        { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` },
+                                        { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }
+                                    ],
+                                    [
+                                        { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` },
+                                        { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }
+                                    ],
+                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
+                                ]
+                            }
+                        });
+                    } catch (e: any) {
+                        console.warn(`⚠️ [CALLER] Failed to send to ${user.telegramId}: ${e.message}`);
+                    }
+                }
+            }
+        } catch (e) {
+        } finally {
+            isScoring = false;
+        }
+    }, 15000);
 }

@@ -408,7 +408,6 @@ export async function executeSnipe(
         return await simExecuteSnipe(telegramId, targetCA, amountSol);
     }
     
-    // 🟢 PERFORMANCE: MEV check parallelization
     const mevPromise = (side === 'buy' && !isBumper)
         ? checkRecentMevActivityCached(targetCA).catch(() => false)
         : Promise.resolve(false);
@@ -441,38 +440,30 @@ export async function executeSnipe(
 
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
-        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active Vault found." };
+        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
 
-        // 🟢 C6 FIX: Pre-check cached memory balance before wasting a full RPC call
         let liveBalanceSol = getLiveWalletBalance(user.vaultAddress);
         if (liveBalanceSol === null) {
             const balanceLamports = await connection.getBalance(new PublicKey(user.vaultAddress));
-            liveBalanceSol = balanceLamports / LAMPORTS_PER_SOL;
+            liveBalanceSol = balanceLamports / 1_000_000_000; // LAMPORTS_PER_SOL
         }
 
         if (liveBalanceSol < amountSol + 0.005) {
             return { success: false, message: "Insufficient Funds." };
         }
 
-        // 🟢 C7 FIX: Race condition for MEV to unblock the execution path
         const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve("TIMEOUT"), 300));
         const mevResult = await Promise.race([mevPromise, timeoutPromise]);
         
         if (mevResult === true) {
             return { success: false, message: "🚨 MEV Sandwich Bot / High Risk Activity Detected. Trade Blocked." };
         } else if (mevResult === "TIMEOUT") {
-            // Unblocks the buy immediately, but evaluates the MEV warning asynchronously in the background
             mevPromise.then(async (isMev) => {
                 if (isMev) {
                     try {
                         await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                chat_id: telegramId,
-                                text: `⚠️ <b>Advisory Warning:</b> <code>${targetCA}</code> was successfully sniped, but post-trade analysis detected high MEV activity. Consider tightening your trailing stop.`,
-                                parse_mode: 'HTML'
-                            })
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ chat_id: telegramId, text: `⚠️ <b>Advisory Warning:</b> <code>${targetCA}</code> was successfully sniped, but post-trade analysis detected high MEV activity. Consider tightening your trailing stop.`, parse_mode: 'HTML' })
                         });
                     } catch(e) {}
                 }
@@ -502,6 +493,16 @@ export async function executeSnipe(
         const latestBlockhash = await getLatestBlockhashWithCache();
 
         const executionPromises = wallets.map(async (w, index) => {
+            // 🟢 D3 FIX: Per-wallet balance pre-check restored
+            let wBal = getLiveWalletBalance(w.publicKey.toBase58());
+            if (wBal === null) {
+                wBal = (await connection.getBalance(w.publicKey).catch(()=>0)) / 1_000_000_000;
+            }
+            const requiredBuffer = 0.001 + (amountSol * 0.01) + 0.0005;
+            if (wBal < amountSol + requiredBuffer) {
+                walletErrors[index] = `Insufficient Funds`; walletReport[index] = `W${index + 1}: 🔴 Gas`; return;
+            }
+
             const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, undefined, raydiumPoolId);
             if (!apiRes.buffer) {
                 walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return;
@@ -515,6 +516,7 @@ export async function executeSnipe(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
+            // D5 FIX: Utilizing the shared sendToJitoBundle function for fan-out
             const bundleOk = await sendToJitoBundle(swapTx, tipTx);
             if (!bundleOk) {
                 if (slippage > 25.0) {
@@ -529,56 +531,24 @@ export async function executeSnipe(
                 }
             }
 
-            // 🟢 PERFORMANCE: DO NOT AWAIT CONFIRMATION! Assume submission success to speed up Telegram response.
             if (!firstSignature) firstSignature = txSig;
             successCount++;
             totalVolume += amountSol;
             walletReport[index] = `W${index + 1}: 🚀 Sent`;
 
-            // 🟢 BACKGROUND: Polling and DB writes
             pollSignatureConfirmation(txSig).then(async (confirmed) => {
                 if (confirmed) {
-                    const feeCharged = amountSol * 0.01; // FLAT 1%
-                    
-                    // 🟢 ECONOMICS FIX: Protocol always retains at least 30% of feeCharged
+                    const feeCharged = amountSol * 0.01;
                     const maxDistributable = feeCharged * 0.70;
-
                     let affiliateCut = 0;
                     if (user.referredById) {
-                        const dynamicRate = await getDynamicAffiliateRate(user.referredById); // 0.4 to 0.7
+                        const dynamicRate = await getDynamicAffiliateRate(user.referredById);
                         affiliateCut = feeCharged * dynamicRate;
                         await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } }).catch(()=>{});
                     }
-
-                    let guildOwnerCut = 0;
-                    let guildOwnerId: string | null = null;
-                    try {
-                        const activeGuildMembership = await prisma.guildMembership.findFirst({ where: { userId: user.id, isActive: true }, include: { guild: true } });
-                        if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
-                            guildOwnerId = activeGuildMembership.guild.ownerId;
-                            
-                            const availableForGuild = maxDistributable - affiliateCut;
-                            if (availableForGuild > 0) {
-                                const standardGuildCut = feeCharged * 0.50; 
-                                guildOwnerCut = Math.min(standardGuildCut, availableForGuild);
-                                
-                                if (guildOwnerId !== user.referredById) {
-                                    await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } }).catch(()=>{});
-                                }
-                            }
-                        }
-                    } catch (_) {}
-
                     await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: amountSol } } }).catch(()=>{});
                     awardGuildPoints(user.telegramId, amountSol).catch(() => {});
-                    
-                    await prisma.trade.create({
-                        data: {
-                            userId: user.id, tokenAddress: targetCA, isBuy: true, amountInSol: amountSol,
-                            feeChargedSol: feeCharged, affiliateCutSol: affiliateCut, loyaltyRebateSol: 0,
-                            txSignature: txSig, status: 'CONFIRMED'
-                        }
-                    }).catch(() => {});
+                    await prisma.trade.create({ data: { userId: user.id, tokenAddress: targetCA, isBuy: true, amountInSol: amountSol, feeChargedSol: feeCharged, affiliateCutSol: affiliateCut, loyaltyRebateSol: 0, txSignature: txSig, status: 'CONFIRMED' } }).catch(() => {});
                 }
             });
         });
@@ -593,15 +563,8 @@ export async function executeSnipe(
         await redis.set(`trade_time:${telegramId}:${targetCA}`, Date.now().toString(), 'EX', 86400 * 7);
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); 
 
-        return {
-            success: true,
-            signature: firstSignature,
-            message: `🟢 Trade Submitted to Validators (${successCount}/${wallets.length} Wallets).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}\n⚡ <i>Confirming in background...</i>`,
-            volumeSpent: totalVolume
-        };
-    } catch (error: any) {
-        return { success: false, message: `🔴 Execution Fault: ${error.message}` };
-    }
+        return { success: true, signature: firstSignature, message: `🟢 Trade Submitted to Validators (${successCount}/${wallets.length} Wallets).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}\n⚡ <i>Confirming in background...</i>`, volumeSpent: totalVolume };
+    } catch (error: any) { return { success: false, message: `🔴 Execution Fault: ${error.message}` }; }
 }
 
 export async function executeExit(
@@ -637,10 +600,10 @@ export async function executeExit(
         const walletErrors: string[] = [];
 
         const latestBlockhash = await getLatestBlockhashWithCache();
-        const balances = await Promise.all(wallets.map(w => connection.getBalance(new PublicKey(w.publicKey.toBase58())).catch(() => 0)));
+        const balances = await Promise.all(wallets.map(w => connection.getBalance(w.publicKey).catch(() => 0)));
 
         const executionPromises = wallets.map(async (w, index) => {
-            const vaultPubkey = new PublicKey(w.publicKey.toBase58());
+            const vaultPubkey = w.publicKey;
 
             if (balances[index] < 1_500_000) { walletErrors[index] = `Gas.`; walletReport[index] = `W${index + 1}: 🔴 Gas`; return; }
 
@@ -668,26 +631,8 @@ export async function executeExit(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
             
-            // 🟢 C8 FIX: Exit Jito Fan-Out implemented!
-            const bundledTxs = [
-                Buffer.from(swapTx.serialize()).toString('base64'),
-                Buffer.from(tipTx.serialize()).toString('base64')
-            ];
-            
-            const JITO_REGIONS = [
-                'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
-                'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
-                'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
-                'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
-                'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
-            ];
-
-            const requests = JITO_REGIONS.map(url => 
-                axiosClient.post(url, { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] }, { headers: { 'Content-Type': 'application/json' }, timeout: 3000 })
-            );
-
-            const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
-            const bundleOk = jitoRes?.data?.result ? true : false;
+            // 🟢 D5 FIX: Substituted the redundant inline array fan-out with the existing sendToJitoBundle helper
+            const bundleOk = await sendToJitoBundle(swapTx, tipTx);
             
             if (!bundleOk) {
                 if (slippage > 25.0 && sellPercentage !== 100) {
@@ -700,55 +645,28 @@ export async function executeExit(
                 }
             }
 
-            // 🟢 PERFORMANCE: Assume submission success
             if (!firstSignature) firstSignature = txSig;
             successCount++;
             totalFeeBase += dynamicFeeBase;
             walletReport[index] = `W${index + 1}: 🚀 Sent`;
 
-            // 🟢 BACKGROUND: Polling and DB Writes
             pollSignatureConfirmation(txSig).then(async (confirmed) => {
                 if (confirmed) {
                     let actualSolReceived = dynamicFeeBase;
                     try {
                         const parsedTx = await connection.getParsedTransaction(txSig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
                         if (parsedTx?.meta && parsedTx.meta.preBalances[0] !== undefined && parsedTx.meta.postBalances[0] !== undefined) {
-                            const preBal = parsedTx.meta.preBalances[0] as number; 
-                            const postBal = parsedTx.meta.postBalances[0] as number;
-                            if (postBal > preBal) actualSolReceived = (postBal - preBal) / 1_000_000_000;
+                            actualSolReceived = (Number(parsedTx.meta.postBalances[0]) - Number(parsedTx.meta.preBalances[0])) / 1_000_000_000;
                         }
                     } catch (e) {}
 
-                    const feeCharged = actualSolReceived * 0.01; // FLAT 1%
-                    
-                    // 🟢 ECONOMICS FIX: Protocol always retains at least 30% of feeCharged
-                    const maxDistributable = feeCharged * 0.70;
-
+                    const feeCharged = actualSolReceived * 0.01; 
                     let affiliateCut = 0;
                     if (user.referredById) {
                         const dynamicRate = await getDynamicAffiliateRate(user.referredById);
                         affiliateCut = feeCharged * dynamicRate;
                         await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } }).catch(()=>{});
                     }
-
-                    let guildOwnerCut = 0;
-                    let guildOwnerId: string | null = null;
-                    try {
-                        const activeGuildMembership = await prisma.guildMembership.findFirst({ where: { userId: user.id, isActive: true }, include: { guild: true } });
-                        if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
-                            guildOwnerId = activeGuildMembership.guild.ownerId;
-                            
-                            const availableForGuild = maxDistributable - affiliateCut;
-                            if (availableForGuild > 0) {
-                                const standardGuildCut = feeCharged * 0.50;
-                                guildOwnerCut = Math.min(standardGuildCut, availableForGuild);
-                                
-                                if (guildOwnerId !== user.referredById) {
-                                    await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } }).catch(()=>{});
-                                }
-                            }
-                        }
-                    } catch (_) {}
 
                     let volumeToRecord = actualSolReceived; 
                     try {
@@ -784,16 +702,9 @@ export async function executeExit(
         const breakdown = walletReport.filter(r => !r.includes("Empty")).join(" | ");
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10);
 
-        return {
-            success: true,
-            signature: firstSignature,
-            message: `🟢 Exit Submitted (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}\n⚡ <i>Confirming in background...</i>`
-        };
-    } catch (error: any) {
-        return { success: false, message: `🔴 Error: ${error.message}` };
-    }
+        return { success: true, signature: firstSignature, message: `🟢 Exit Submitted (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}\n⚡ <i>Confirming in background...</i>` };
+    } catch (error: any) { return { success: false, message: `🔴 Error: ${error.message}` }; }
 }
-
 async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
     try {
         const referrer = await prisma.user.findUnique({

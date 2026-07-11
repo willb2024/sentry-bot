@@ -17,6 +17,15 @@ function randomBase58(length: number): string {
     return result;
 }
 
+function shuffleArray<T>(array: T[]): T[] {
+    const arr = [...array];
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
 export function applySimSlippage(targetPnl: number): number {
     const maxPercentDeviation = Math.abs(targetPnl) * 0.05; 
     const absoluteDeviation = (Math.random() * 2 - 1) * Math.max(1.2, maxPercentDeviation);
@@ -39,10 +48,6 @@ export function generateSimTokenCA(): string {
 
 export function generateSimSignature(): string {
     return randomBase58(87);
-}
-
-export function randomTradeDelay(): number {
-    return Math.floor(Math.random() * 2000) + 500;
 }
 
 export async function isSimulationActive(telegramId: string): Promise<boolean> {
@@ -68,15 +73,22 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     return wallets;
 }
 
+// 🟢 TRACK SIMULATED TRADES PROPERLY FOR THE DASHBOARD
 export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number, profitPercent: number = 0) {
     const key = `sim:trades:${telegramId}`;
     const existing = JSON.parse(await redis.get(key) || '[]');
+    
+    // Calculates realized PnL correctly so Flow Analytics reflects true values
+    const realizedPnlSol = isBuy ? 0 : amountInSol * (profitPercent / 100);
+
     existing.unshift({
         createdAt: new Date().toISOString(),
         isBuy,
         amountInSol,
-        profitPercent
+        profitPercent,
+        realizedPnlSol
     });
+    
     await redis.set(key, JSON.stringify(existing.slice(0, 100)), 'EX', 86400); 
     await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
@@ -86,7 +98,9 @@ export async function simExecuteSnipe(
     tokenAddress: string,
     amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
-    await new Promise(r => setTimeout(r, randomTradeDelay()));
+    
+    // 🟢 FAST EXECUTION: Under 1 second
+    await new Promise(r => setTimeout(r, 600 + Math.random() * 300));
 
     const currentBal = parseFloat(await getSimBalance(telegramId));
     const newBal = Math.max(0, currentBal - amountSol - 0.001).toFixed(4);
@@ -132,7 +146,9 @@ export async function simExecuteExit(
     percent: number,
     forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
-    await new Promise(r => setTimeout(r, randomTradeDelay()));
+    
+    // 🟢 FAST EXECUTION
+    await new Promise(r => setTimeout(r, 800 + Math.random() * 400));
 
     const posKey = `sim:positions:${telegramId}`;
     const positions = JSON.parse(await redis.get(posKey) || '[]');
@@ -180,13 +196,29 @@ export function generateSimCallerAlert(): { mint: string, symbol: string, score:
     };
 }
 
-function shuffleArray<T>(array: T[]): T[] {
-    const arr = [...array];
-    for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
+// 🟢 FAST, CLUSTERED WIN/LOSS OUTCOMES (1w1L, 2w3L, 3w1L etc)
+export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard'): Promise<boolean> {
+    const key = `sim:${type}_seq:${telegramId}`;
+    let seqStr = await redis.get(key);
+    let seq: boolean[] = [];
+    
+    if (seqStr) seq = JSON.parse(seqStr);
+    
+    if (!seq || seq.length === 0) {
+        // Randomize the pattern it builds to mimic realistic retail win/loss clusters
+        const patterns = [
+            [true, false],                      // 1 Win, 1 Loss
+            [true, true, false, false, false],  // 2 Wins, 3 Losses
+            [false, false, false, true],        // 3 Losses, 1 Win
+            [true, false, true, false, false],  // Scattered
+            [true, true, true, false, false]    // Hot Streak
+        ];
+        seq = shuffleArray(patterns[Math.floor(Math.random() * patterns.length)]);
     }
-    return arr;
+    
+    const outcome = seq.pop() ?? true;
+    await redis.set(key, JSON.stringify(seq), 'EX', 86400); 
+    return outcome;
 }
 
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
@@ -202,20 +234,9 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
 }
 
 async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
-    const baseSequence = [
-        false, false, false, true, true, true, false, false, true, false, false, false, true, true           
-    ];
-
-    let sequence = shuffleArray(baseSequence);
     let totalSimSpent = 0;
-    let sequenceIndex = 0;
 
     while (await redis.get(`sim:autosnipe:${telegramId}`) === 'true' && await isSimulationActive(telegramId)) {
-        if (sequenceIndex >= sequence.length) {
-            sequence = shuffleArray(baseSequence);
-            sequenceIndex = 0;
-        }
-
         const user = await prisma.user.findUnique({ where: { telegramId: telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
         
@@ -224,6 +245,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const tpPercent = config?.autoTakeProfitPercent || 50; 
         const maxBudget = config?.maxBudgetSol || 10.0;
 
+        // 🟢 ACCURATELY CHECK BUDGET LIMITS
         if (totalSimSpent + amountSol > maxBudget) {
             await bot.telegram.sendMessage(
                 telegramId, 
@@ -233,8 +255,8 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             break;
         }
 
-        const isProfit = sequence[sequenceIndex];
-        sequenceIndex++;
+        // 🟢 GET NEXT REALISTIC WIN/LOSS CLUSTER OUTCOME
+        const isProfit = await getNextSimOutcome(telegramId, 'guard');
 
         const tokenCA = generateSimTokenCA();
         const targetPnl = isProfit ? tpPercent : -Math.abs(slPercent);
@@ -243,6 +265,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const entryPriceSol = parseFloat((Math.random() * 0.000008 + 0.0000005).toFixed(10));
         const tokensBought = Math.floor(amountSol / entryPriceSol);
 
+        // 🟢 SIMULATE FAST BUY (Under 1s delay)
         const buyRes = await simExecuteSnipe(telegramId, tokenCA, amountSol);
         totalSimSpent += amountSol;
 
@@ -258,15 +281,16 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         
         await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
 
-        const randomWaitMs = [2000, 3000, 4000, 5000][Math.floor(Math.random() * 4)];
-        await new Promise(r => setTimeout(r, randomWaitMs));
-
+        // Short random breather between trades (1 to 2 seconds)
+        await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000));
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
 
+        // 🟢 SIMULATE FAST SELL
         await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
         await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, finalPnl, slPercent, entryPriceSol, tokensBought);
 
-        await new Promise(r => setTimeout(r, 2000)); 
+        // Breath before next loop iteration
+        await new Promise(r => setTimeout(r, 1500)); 
         if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
     }
 
@@ -300,7 +324,6 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         const telegramBotToken = process.env.BOT_TOKEN!;
         const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
         
-        // 🟢 FIX: Static FormData with native fetch cleanly prevents dynamic dynamic node-fetch exceptions
         const form = new FormData();
         form.append('chat_id', telegramId);
         form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
@@ -315,28 +338,4 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
     } catch (e: any) {
         console.error("Simulation image send failed:", e.message);
     }
-}
-
-export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard'): Promise<boolean> {
-    const key = `sim:${type}_seq:${telegramId}`;
-    let seqStr = await redis.get(key);
-    let seq: boolean[] = [];
-    
-    if (seqStr) seq = JSON.parse(seqStr);
-    
-    if (!seq || seq.length === 0) {
-        if (type === 'caller') {
-            seq = shuffleArray([
-                false, false, false, true, 
-                false, false, true,       
-                false, true               
-            ]);
-        } else if (type === 'guard') {
-            seq = shuffleArray([false, false, true, true, true, true, false]);
-        }
-    }
-    
-    const outcome = seq.pop() ?? true;
-    await redis.set(key, JSON.stringify(seq), 'EX', 86400); 
-    return outcome;
 }

@@ -24,7 +24,7 @@ const GRPC_URL = `https://atlas-mainnet.helius-rpc.com`;
 const PUMP_FUN_PROGRAM  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 
-// 🟢 NEW FEATURE: Meteora DLMM & CPMM Support
+// Meteora DLMM & CPMM Support
 const METEORA_DLMM_PROGRAM = "LBUZKhRxPF3XUpBCjp4kVn94zzBmndrfaXNAnYkS";
 const METEORA_CPMM_PROGRAM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
 
@@ -43,6 +43,24 @@ let globalCurvePdas = new Set<string>();
 
 export let cachedSolUsdPrice = 150.0;
 let isPriceReady = false; 
+
+// 🟢 D1 FIX: Live WebSocket In-Memory Ring Buffer for AI Coin Caller
+export const recentNewMints: { mint: string, symbol: string, firstSeenAt: number }[] = [];
+
+export function getRecentNewMints() {
+    const now = Date.now();
+    while(recentNewMints.length > 0 && now - recentNewMints[0].firstSeenAt > 30 * 60 * 1000) {
+        recentNewMints.shift(); // Remove mints older than 30 mins
+    }
+    return [...recentNewMints];
+}
+
+function trackNewMint(mint: string, symbol: string = "UNKNOWN") {
+    if (!recentlySnipedTokens.has(mint)) {
+        recentNewMints.push({ mint, symbol, firstSeenAt: Date.now() });
+        if (recentNewMints.length > 300) recentNewMints.shift(); // Keep buffer light
+    }
+}
 
 export async function syncInitialSolPrice() {
     try {
@@ -90,15 +108,12 @@ setInterval(async () => {
     } catch (_) {}
 }, 2_000);
 
-// 🟢 CLAUDE FIX 3.8: Shrunk presigned exit interval from 20s to 5s to eliminate slow-path fallback gaps
-// 🟢 CLAUDE FIX 3.8: Shrunk presigned exit interval from 20s to 5s to eliminate slow-path fallback gaps
 setInterval(async () => {
     for (const guard of cachedActiveGuards) {
         if (lockedGuards.has(guard.id)) continue;
         try {
             const payload = await generatePreSignedExitTx(guard.telegramId, guard.tokenAddress);
             if (payload) {
-                // 🟢 TS FIX: Safe check to stringify the payload object so Redis can store it cleanly
                 const valueToStore = typeof payload === 'string' ? payload : JSON.stringify(payload);
                 await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 10); 
             }
@@ -106,15 +121,17 @@ setInterval(async () => {
     }
 }, 5_000);
 
-// 🟢 CLAUDE FIX C.3: Clean up orphaned WebSockets when Guards are closed
+// 🟢 C3 FIX: Prevent WebSocket Memory Leaks
 export function releaseGuardSubscription(tokenAddress: string) {
-    const curvePda = getBondingCurveAddress(tokenAddress);
-    const subId = activeSubscriptions.get(curvePda);
-    if (subId !== undefined) {
-        try {
-            connection.removeAccountChangeListener(subId);
-            activeSubscriptions.delete(curvePda);
-        } catch (e) {}
+    if (tokenAddress.toLowerCase().endsWith("pump")) {
+        const curvePda = getBondingCurveAddress(tokenAddress);
+        if (!cachedActiveGuards.some(g => g.tokenAddress === tokenAddress) && !cachedLimitOrders.some(l => l.tokenAddress === tokenAddress)) {
+            const subId = activeSubscriptions.get(curvePda);
+            if (subId !== undefined) {
+                try { connection.removeAccountChangeListener(subId); } catch(e){}
+                activeSubscriptions.delete(curvePda);
+            }
+        }
     }
 }
 
@@ -199,7 +216,6 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
 }
 
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
-
     const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage, getNextSimOutcome } = await import('./simulation.service.js');
     if (await isSimulationActive(guardSnapshot.telegramId)) {
         if (Math.random() > 0.5) {
@@ -452,7 +468,6 @@ export function startUniversalGuardPoller(bot: any) {
 
             const assumedSolUsdPrice = cachedSolUsdPrice;
 
-            // 🟢 CLAUDE FIX Perf #6: Parallelize Limit Order tracking
             await Promise.all(activeLimitOrders.map(async (limit) => {
                 if (lockedLimitOrders.has(limit.id)) return;
 
@@ -597,62 +612,67 @@ export function startUniversalGuardPoller(bot: any) {
         }
     }, 1000); 
 
-    // 🟢 CLAUDE FIX C.4: Replaced redis.keys() with non-blocking scanStream
     setInterval(async () => {
         try {
-            const assumedSolUsdPrice = cachedSolUsdPrice;
-            const stream = redis.scanStream({ match: 'watchlist:*', count: 100 });
-            
-            stream.on("data", async (keys) => {
-                if (keys.length === 0) return;
+            let cursor = '0';
+            const allWatchedMints = new Set<string>();
+            const userWatchlists: Record<string, any> = {};
 
-                const allWatchedMints = new Set<string>();
-                const userWatchlists: Record<string, any> = {};
-
+            do {
+                const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'watchlist:*', 'COUNT', 100);
+                cursor = nextCursor;
                 for (const key of keys) {
                     const tgId = key.split(':')[1];
                     const watchedTokens = await redis.hgetall(key);
                     userWatchlists[tgId] = watchedTokens;
                     Object.keys(watchedTokens).forEach(ca => allWatchedMints.add(ca));
                 }
+            } while (cursor !== '0');
 
-                if (allWatchedMints.size === 0) return;
+            if (allWatchedMints.size === 0) return;
 
-                const livePricesNative: Record<string, number> = {};
-                const uniqueMints = [...allWatchedMints];
-                
-                const chunks: string[] = [];
-                for (let i = 0; i < uniqueMints.length; i += 100) chunks.push(uniqueMints.slice(i, i + 100).join(','));
+            const livePricesNative: Record<string, number> = {};
+            const uniqueMints = [...allWatchedMints];
+            const assumedSolUsdPrice = cachedSolUsdPrice;
+            
+            const chunks: string[] = [];
+            for (let i = 0; i < uniqueMints.length; i += 100) {
+                chunks.push(uniqueMints.slice(i, i + 100).join(','));
+            }
 
-                await Promise.all(chunks.map(async (chunk) => {
-                    try {
-                        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk}&vsToken=${WSOL_MINT}`, { timeout: 3000 });
-                        if (res.data?.data) {
-                            for (const [mint, info] of Object.entries(res.data.data as Record<string, any>)) {
-                                livePricesNative[mint] = parseFloat((info as any).price) || 0;
-                            }
+            await Promise.all(chunks.map(async (chunk) => {
+                try {
+                    const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk}&vsToken=${WSOL_MINT}`, { timeout: 3000 });
+                    if (res.data?.data) {
+                        for (const [mint, info] of Object.entries(res.data.data as Record<string, any>)) {
+                            livePricesNative[mint] = parseFloat((info as any).price) || 0;
                         }
-                    } catch (_) {}
-                }));
+                    }
+                } catch (_) {}
+            }));
 
-                for (const [tgId, watchedTokens] of Object.entries(userWatchlists)) {
-                    for (const [ca, dataStr] of Object.entries(watchedTokens as Record<string, string>)) {
-                        const data = JSON.parse(dataStr);
-                        if (data.targetPrice > 0) {
-                            const currentPriceNative = livePricesNative[ca] || 0;
-                            const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
-                            const cooldownKey = `alert_cooldown:${tgId}:${ca}`;
-                            const isOnCooldown = await redis.get(cooldownKey);
+            for (const [tgId, watchedTokens] of Object.entries(userWatchlists)) {
+                for (const [ca, dataStr] of Object.entries(watchedTokens as Record<string, string>)) {
+                    const data = JSON.parse(dataStr);
+                    if (data.targetPrice > 0) {
+                        const currentPriceNative = livePricesNative[ca] || 0;
+                        const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
 
-                            if (!isOnCooldown && currentPriceUsd > 0 && currentPriceUsd >= data.targetPrice) {
-                                await redis.set(cooldownKey, '1', 'EX', 3600); 
-                                try { await sendPriceAlertWithChart(tgId, ca, "Watched Token", currentPriceUsd, data.targetPrice, data.addedPrice || 0, bot); } catch (_) {}
-                            }
+                        const cooldownKey = `alert_cooldown:${tgId}:${ca}`;
+                        const isOnCooldown = await redis.get(cooldownKey);
+
+                        if (!isOnCooldown && currentPriceUsd > 0 && currentPriceUsd >= data.targetPrice) {
+                            await redis.set(cooldownKey, '1', 'EX', 3600); 
+                            try {
+                                await sendPriceAlertWithChart(tgId, ca, "Watched Token", currentPriceUsd, data.targetPrice, data.addedPrice || 0, bot);
+                            } catch (_) {}
                         }
                     }
                 }
-            });
-        } catch (_) {}
+            }
+        } catch (e: any) {
+            console.error("⚠️ [WATCHLIST SCAN FAULT]:", e.message);
+        }
     }, 10000); 
 }
 
@@ -704,7 +724,6 @@ async function triggerAutoSnipes(
                     } catch (_) {}
                 }
 
-                // 🟢 CLAUDE FIX Perf #7: Fast-Fail Social Checks
                 if (liveConfig.requireSocials) {
                     try {
                         const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 1500 });
@@ -794,6 +813,7 @@ function connectPumpPortalStream(bot: any) {
                 recentlySnipedTokens.add(parsed.mint);
                 setTimeout(() => recentlySnipedTokens.delete(parsed.mint), 60_000);
                 
+                trackNewMint(parsed.mint, parsed.symbol); 
                 scoreTokens().catch(() => {});
 
                 const devInitialBuySol = parsed.initialBuy || 0;
@@ -819,28 +839,42 @@ function connectRaydiumFallbackWatcher(bot: any) {
 
     connection.onLogs(RAYDIUM_PUBLIC_KEY, async (logs) => {
         if (logs.err) return;
-        if (!logs.logs.some((l: string) => l.includes("initialize2"))) return;
+        
+        if (logs.logs.some((l: string) => l.includes("initialize2"))) {
+            try {
+                const tx = await connection.getParsedTransaction(logs.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }).catch(() => null);
+                if (!tx?.meta) return;
 
-        try {
-            const tx = await connection.getParsedTransaction(logs.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }).catch(() => null);
-            if (!tx?.meta) return;
+                const tokenMint = tx.meta.postTokenBalances?.find((b: any) => b.mint !== WSOL_MINT)?.mint;
 
-            const tokenMint = tx.meta.postTokenBalances?.find((b: any) => b.mint !== WSOL_MINT)?.mint;
+                if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
+                    if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
+                    recentlySnipedTokens.add(tokenMint);
+                    setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
 
-            if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
-                if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
-                recentlySnipedTokens.add(tokenMint);
-                setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
+                    const { extractPoolIdFromTx } = await import('./raydium.service.js');
+                    const poolId = await extractPoolIdFromTx(logs.signature);
 
-                const { extractPoolIdFromTx } = await import('./raydium.service.js');
-                const poolId = await extractPoolIdFromTx(logs.signature);
+                    console.log(`🧪 [RAYDIUM WS] New Pool: ${tokenMint} (Pool ID: ${poolId})`);
+                    await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
+                }
+            } catch (_) {}
+            return;
+        }
 
-                await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
-            }
-        } catch (_) {}
+        if (logs.logs.some((l: string) => l.includes("Instruction: Swap"))) {
+            try {
+                if (cachedActiveGuards.length > 0 || cachedLimitOrders.length > 0) {
+                    if (!isPolling) {
+                        isPolling = true;
+                        setImmediate(() => { isPolling = false; }); 
+                    }
+                }
+            } catch (_) {}
+        }
     }, 'confirmed');
 
-    console.log("🟡 [RAYDIUM] WebSocket fallback watcher armed.");
+    console.log("🟡 [RAYDIUM] WebSocket push watcher armed for instant execution.");
 }
 
 export async function igniteYellowstoneStream(bot: any) {
@@ -873,7 +907,6 @@ export async function igniteYellowstoneStream(bot: any) {
                 const tx   = data.transaction.transaction;
                 const logs = tx.meta?.logMessages || [];
 
-                // Detect Pump.fun & Raydium
                 if (logs.some((log: string) => log.includes("Program log: Instruction: Create") || log.includes("initialize2"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
                     const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
@@ -883,13 +916,14 @@ export async function igniteYellowstoneStream(bot: any) {
                         recentlySnipedTokens.add(tokenMint);
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         
+                        trackNewMint(tokenMint, "UNKNOWN");
+
                         let poolId: string | undefined = undefined;
                         try {
                             const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
                             if (accountKeys.length > 4) poolId = accountKeys[4];
                         } catch (_) {}
 
-                        // If it came from Pump.fun, route to Pump
                         if (logs.some((l: string) => l.includes("Instruction: Create"))) {
                             await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'PUMP');
                         } else {
@@ -898,7 +932,6 @@ export async function igniteYellowstoneStream(bot: any) {
                     }
                 }
 
-                // 🟢 METEORA COVERAGE: Detect Meteora DLMM / CPMM Initializations
                 if (logs.some((log: string) => log.includes("Instruction: InitializeCustomizablePermissionlessConstantProductPool") || log.includes("Instruction: InitializeReward"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
                     const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
@@ -909,7 +942,6 @@ export async function igniteYellowstoneStream(bot: any) {
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         console.log(`☄️ [METEORA gRPC] New Meteora Pool Detected: ${tokenMint}`);
                         
-                        // Jupiter handles Meteora routing natively. We pass it as RAYDIUM/DEX mode.
                         await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM');
                     }
                 }
@@ -937,7 +969,6 @@ export async function igniteYellowstoneStream(bot: any) {
             setTimeout(() => igniteYellowstoneStream(bot), 3_000);
         });
 
-        // 🟢 METEORA COVERAGE: Added Meteora program IDs to the gRPC subscription filter
         const request = {
             accounts: {}, slots: {},
             transactions: {

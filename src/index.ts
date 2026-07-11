@@ -834,9 +834,8 @@ bot.command('stats', async (ctx) => {
 bot.action('action_abort_token_launch', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
-    const { redis } = await import('./lib/redis.js');
-    const keys = await redis.keys(`token_launch:${tgId}:*`);
-    if (keys.length > 0) await redis.del(...keys);
+    // 🟢 D4 FIX
+    await deleteKeysPattern(`token_launch:${tgId}:*`);
     await safeEditMessageText(ctx, `❌ <b>Token launch cancelled.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'btn_dashboard')]]));
 });
 
@@ -1000,7 +999,7 @@ bot.action('action_manage_guild', async (ctx) => {
     
     if (!user) return;
 
-    // 🟢 CLAUDE B.3 & USER SPEC FIX: Highly polished copy, $12 in SOL text, but free in implementation
+    // 🟢 D2 FIX: Removed the 2.0 SOL price reference from the UI.
     if (!user.ownedGuild) {
         const createMsg = 
             `🏰 <b>SENTRY GUILDS: COMMAND YOUR COMMUNITY</b>\n\n` +
@@ -1011,7 +1010,7 @@ bot.action('action_manage_guild', async (ctx) => {
             `• <b>Real-Time Leadership Gamification:</b> Sentry computes a live-updating leaderboard of your members. Keep your chat highly competitive and run active trading contests natively.\n` +
             `• <b>Passive Revenue Generation:</b> You earn <b>50% of our platform fee</b> on every trade executed by your Guild members—forever. Your community becomes a compounding passive yield generator.\n` +
             `• <b>Direct KOL Custom Whitelisting:</b> Export highly-qualified, ranked wallets to whitelist or issue customized rewards cleanly via CSV.\n\n` +
-            `💳 <b>One-time cost:</b> $12 (paid in SOL) for life — no monthly fee, no recurring charges.\n\n` +
+            `💳 <b>Cost:</b> Free — Included with your Sentry account.\n\n` +
             `Use the command below to launch your Guild:\n` +
             `<code>/createguild [Name] | [Description] | [Reward]</code>`;
         
@@ -3429,11 +3428,13 @@ bot.action('action_confirm_token_launch', async (ctx) => {
     const guard = parseFloat(await redis.get(`token_launch:${tgId}:guard`) || '0');
 
     const loader = await ctx.replyWithHTML(`<i>⏳ Submitting setup parameters to IPFS & building custom Jito Block-0 bundle...</i>`);
+     await deleteKeysPattern(`token_launch:${tgId}:*`);
+
+    const metadataUri = await uploadMetadataToIpfs(name, symbol, description!, imageUrl!);
 
     const keys = await redis.keys(`token_launch:${tgId}:*`);
     if (keys.length > 0) await redis.del(...keys);
 
-    const metadataUri = await uploadMetadataToIpfs(name, symbol, description!, imageUrl!);
     if (!metadataUri) {
         return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Metadata Upload Failed.</b> Please try again.`, { parse_mode: 'HTML' });
     }
@@ -4279,19 +4280,18 @@ if (await redis.get(`state:set_pin:${telegramId}`)) {
                     `<i>(e.g., "Top 50 traders get guaranteed whitelist allocation for our upcoming token launch")</i>`
                 );
             }
-            
             if (step === 2) {
                 const communityName = setupState.name;
                 const rewardDescription = text.trim();
                 
                 await redis.hmset(`guild_setup:${telegramId}`, { step: '3', reward: rewardDescription });
                 
+                // 🟢 D2 FIX: Adjusted confirmation copy to match actual logic (free)
                 await ctx.replyWithHTML(
                     `🏰 <b>CONFIRM GUILD CREATION</b>\n\n` +
                     `Please review your loyalty infrastructure setup:\n\n` +
                     `• <b>Community Name:</b> <code>${communityName}</code>\n` +
                     `• <b>Member Reward:</b> <i>"${rewardDescription}"</i>\n\n` +
-                    `💳 <b>Cost:</b> <b>2.0 SOL</b> (one-time, charged from your Main Wallet on confirmation)\n` +
                     `<i>This unlocks permanent Guild ownership: unlimited members, live leaderboard, CSV export, and a 50% revenue share on every trade your members make — forever.</i>`,
                     Markup.inlineKeyboard([
                         [Markup.button.callback('✅ Confirm & Create Guild', 'action_confirm_guild_pay')],
