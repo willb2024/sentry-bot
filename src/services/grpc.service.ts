@@ -25,8 +25,10 @@ const PUMP_FUN_PROGRAM  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 
 // Meteora DLMM & CPMM Support
-const METEORA_DLMM_PROGRAM = "LBUZKhRxPF3XUpBCjp4kVn94zzBmndrfaXNAnYkS";
-const METEORA_CPMM_PROGRAM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+// Replace the old Meteora constants with these verified ones
+const METEORA_DLMM_PROGRAM = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
+const METEORA_DBC_PROGRAM = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
+const METEORA_DAMM_V2_PROGRAM = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG";
 
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
@@ -932,7 +934,8 @@ export async function igniteYellowstoneStream(bot: any) {
                     }
                 }
 
-                if (logs.some((log: string) => log.includes("Instruction: InitializeCustomizablePermissionlessConstantProductPool") || log.includes("Instruction: InitializeReward"))) {
+                // 🟢 METEORA COVERAGE FIX: Authentic Program Logs for DLMM, DBC, and DAMM
+                if (logs.some((log: string) => log.includes("Instruction: InitializeCustomizablePermissionlessConstantProductPool") || log.includes("Instruction: InitializeReward") || log.includes("Instruction: InitializePool"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
                     const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
 
@@ -956,11 +959,9 @@ export async function igniteYellowstoneStream(bot: any) {
                 connectRaydiumFallbackWatcher(bot);
                 return;
             }
-
             if (err.message.includes("EADDRNOTAVAIL")) {
                 stream.destroy(); setTimeout(() => igniteYellowstoneStream(bot), 3_000); return;
             }
-
             stream.destroy(); setTimeout(() => igniteYellowstoneStream(bot), 3_000);
         });
 
@@ -969,20 +970,21 @@ export async function igniteYellowstoneStream(bot: any) {
             setTimeout(() => igniteYellowstoneStream(bot), 3_000);
         });
 
+        // 🟢 FIX: Correctly filtered subscriptions using verified Meteora IDs
         const request = {
             accounts: {}, slots: {},
             transactions: {
                 pumpfun: { accountInclude: [PUMP_FUN_PROGRAM], accountExclude: [], accountRequired: [] },
                 raydium: { accountInclude: [RAYDIUM_AMM_PROGRAM], accountExclude: [], accountRequired: [] },
                 meteora_dlmm: { accountInclude: [METEORA_DLMM_PROGRAM], accountExclude: [], accountRequired: [] },
-                meteora_cpmm: { accountInclude: [METEORA_CPMM_PROGRAM], accountExclude: [], accountRequired: [] }
+                meteora_dbc: { accountInclude: [METEORA_DBC_PROGRAM], accountExclude: [], accountRequired: [] },
+                meteora_damm: { accountInclude: [METEORA_DAMM_V2_PROGRAM], accountExclude: [], accountRequired: [] }
             },
             transactionsStatus: {}, blocks: {}, blocksMeta: {}, entry: {}, commitment: 1, accountsDataSlice: []
         };
 
         stream.write(request);
         console.log("🟢 [gRPC] Yellowstone stream connected — Pump.fun + Raydium + Meteora enabled.");
-
     } catch (e: any) {
         if (!isGrpcDisabled) setTimeout(() => igniteYellowstoneStream(bot), 5_000);
     }

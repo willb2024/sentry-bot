@@ -111,14 +111,12 @@ async function fetchBoostedPairs() {
 
 export async function scoreTokens() {
     try {
-        // 🟢 D1 FIX: Fetch from WS buffer as primary, others as supplementary
         const [newMints, trending, boosted] = await Promise.all([
             fetchRecentNewMints(),
             fetchTrendingPairs().catch(()=>[]),
             fetchBoostedPairs().catch(()=>[])
         ]);
 
-        // 🟢 REQUIRED LOGGING: Ensures we never fail silently on data feeds again
         console.log(`🎯 [CALLER] Scanned Sources: NewMints=${newMints.length} | Trending=${trending.length} | Boosted=${boosted.length}`);
 
         const allPairs = [...newMints, ...trending, ...boosted];
@@ -129,14 +127,19 @@ export async function scoreTokens() {
             let score = 0;
             let reasons = [];
             
-            if (ageMins < 60) { score += 30; reasons.push(`Brand new (${Math.floor(ageMins)}m old)`); }
-            else if (ageMins < 180) { score += 15; }
+            // 🟢 Credibility FIX: Detailed, undeniable breakdowns
+            reasons.push(`🕒 Age: ${Math.floor(ageMins)}m`);
+            if (ageMins < 60) { score += 30; } else if (ageMins < 180) { score += 15; }
 
-            if (pair.volume > 100000) { score += 25; reasons.push(`High Volume ($${(pair.volume/1000).toFixed(1)}k)`); }
-            else if (pair.volume > 20000) { score += 10; }
+            reasons.push(`💰 Vol: $${(pair.volume/1000).toFixed(1)}k`);
+            if (pair.volume > 100000) { score += 25; } else if (pair.volume > 20000) { score += 10; }
 
-            if (pair.priceChangeM5 > 15) { score += 20; reasons.push(`Momentum Spike (+${pair.priceChangeM5.toFixed(1)}%)`); }
-            if (pair.liquidity > 20000) { score += 15; reasons.push(`Healthy Liq`); }
+            reasons.push(`📈 Mom: +${pair.priceChangeM5.toFixed(1)}%`);
+            if (pair.priceChangeM5 > 15) { score += 20; }
+
+            reasons.push(`💧 Liq: $${(pair.liquidity/1000).toFixed(1)}k`);
+            if (pair.liquidity > 20000) { score += 15; }
+
             if (pair.socials.length > 0) { score += 10; }
 
             const isRug = await getCachedRugStatus(pair.mint);
@@ -154,7 +157,6 @@ export async function scoreTokens() {
         return [];
     }
 }
-
 let isScoring = false;
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Scanning DexScreener every 15 seconds.");
@@ -186,12 +188,22 @@ export async function startCoinCaller(bot: any) {
                     const alreadyAlerted = await redis.get(alertKey);
                     if (alreadyAlerted) continue;
 
-                    await redis.set(alertKey, '1', 'EX', 3600 * 24); // Alert once per coin per 24H
+                    await redis.set(alertKey, '1', 'EX', 3600 * 24);
+
+                    // 🟢 Credibility FIX: Log to history for tracking
+                    const historyData = {
+                        mint: matchedToken.mint,
+                        symbol: matchedToken.symbol,
+                        score: matchedToken.totalScore,
+                        priceAtAlert: matchedToken.price,
+                        alertedAt: Date.now()
+                    };
+                    await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
 
                     const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
-                                `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n` +
-                                `<b>Age:</b> ${matchedToken.ageMins.toFixed(0)} minutes old\n\n` +
+                                `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
+                                `<b>Audit Trail:</b>\n` +
                                 `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
                                 `<i>Click below to buy instantly via Jito:</i>`;
                     
