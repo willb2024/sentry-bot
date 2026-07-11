@@ -1493,17 +1493,24 @@ bot.action('trigger_caller_scan', async (ctx) => {
         );
         
         if (matchedToken) {
-            const { getRecentNewMints } = await import('./services/grpc.service.js');
-            const hitRateData = await redis.hgetall('caller_history');
-            const totalAlerts = Object.keys(hitRateData).length;
-            
-            // Render the transparent breakdown
+            let historicalContext = "";
+            try {
+                // 🟢 Authentic Hit-Rate Calculation based ONLY on finalized historical data
+                const historyMap = await redis.hgetall('caller_history');
+                const calls = Object.values(historyMap).map(val => JSON.parse(val)).filter(c => c.finalized && c.score >= 75);
+                if (calls.length >= 5) { 
+                    const hits = calls.filter(c => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
+                    const winRate = ((hits / calls.length) * 100).toFixed(1);
+                    historicalContext = `<i>(Based on ${calls.length} historic verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting their +20% targets).</i>\n\n`;
+                }
+            } catch(e) {}
+
             const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                         `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                         `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
                         `<b>Audit Trail:</b>\n` +
                         `${matchedToken.reasons.map((r: any) => `✅ ${r}`).join('\n')}\n\n` +
-                        `<i>(Based on ${totalAlerts} historic alerts, coins scoring 75+ have a high probability of hitting their +20% targets).</i>\n\n` +
+                        historicalContext +
                         `<i>Click below to buy instantly via Jito:</i>`;
             
             await ctx.editMessageText(msg, {
@@ -4444,6 +4451,26 @@ bot.action('action_abort_guild_setup', async (ctx) => {
 });
 
 
+// 🟢 B.2 FIX: Caller Debugging Command
+bot.command('callerdebug', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    
+    const { getRecentNewMints } = await import('./services/grpc.service.js');
+    const buffer = getRecentNewMints();
+    const rawHot = await redis.get('caller:hot_scored_tokens');
+    const scored = rawHot ? JSON.parse(rawHot) : [];
+    
+    await ctx.replyWithHTML(
+        `🔧 <b>CALLER DEBUG</b>\n\n` +
+        `Ring buffer size: <b>${buffer.length}</b>\n` +
+        `Newest mint: <code>${buffer[buffer.length-1]?.mint?.substring(0,10) || 'NONE'}</code>\n` +
+        `Newest mint age: <b>${buffer.length ? Math.floor((Date.now()-buffer[buffer.length-1].firstSeenAt)/1000)+'s' : 'N/A'}</b>\n` +
+        `Last scored batch size: <b>${scored.length}</b>\n\n` +
+        `<i>(If buffer size is 0 after 2 minutes, your server is blocking outbound WebSocket connections. Relying on REST fallback.)</i>`
+    );
+});
+
 // Add this command handler to index.ts for the transparent stats check
 bot.command('callerstats', async (ctx) => {
     const loader = await ctx.replyWithHTML("<i>⏳ Auditing recent AI Call history...</i>");
@@ -4805,6 +4832,9 @@ setInterval(async () => {
         console.error("🔴 TELEGRAM BOOT FAILED:", err.message);
         process.exit(1);
     }
+
+    const { startCallerEvaluator } = await import('./services/caller.service.js');
+        startCallerEvaluator(); // 🟢 Starts the background hit-rate processing job
 } // 🟢 This closing bracket was missing!
 
 bootEcosystem();

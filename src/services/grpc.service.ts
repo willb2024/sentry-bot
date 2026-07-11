@@ -678,6 +678,8 @@ export function startUniversalGuardPoller(bot: any) {
     }, 10000); 
 }
 
+// src/services/grpc.service.ts (Replace this function)
+
 let isWsConnecting = false;
 let wsHeartbeat: NodeJS.Timeout | null = null;
 let lastMessageAt = Date.now();
@@ -697,12 +699,16 @@ function connectPumpPortalStream(bot: any) {
         
         lastMessageAt = Date.now();
         if (wsHeartbeat) clearInterval(wsHeartbeat);
+        
+        // 🟢 B.1 FIX: 30-second Proof-of-life heartbeat
         wsHeartbeat = setInterval(() => {
+            const secondsSinceLastMsg = Math.floor((Date.now() - lastMessageAt) / 1000);
+            console.log(`💓 [PUMP WS] Alive check. Last msg ${secondsSinceLastMsg}s ago. Buffer size: ${recentNewMints.length}`);
             if (Date.now() - lastMessageAt > 90_000) {
                 console.warn("⚠️ [PUMP WS] No messages in 90s — forcing reconnect.");
                 ws.terminate();
             }
-        }, 60_000);
+        }, 30_000);
     });
 
     ws.on('message', async (data: WebSocket.RawData) => {

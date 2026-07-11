@@ -188,20 +188,46 @@ async function fetchRecentNewMints() {
     return enrichedTokens;
 }
 
+// src/services/caller.service.ts (Add this function above scoreTokens)
+
+// 🟢 B.3 FIX: REST-based safety net fallback if WebSocket is dead/blocked
+async function fetchFreshViaRest() {
+    try {
+        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
+        if (!res.data) return [];
+        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 30).join(',');
+        const enrich = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 3000 });
+        
+        const now = Date.now();
+        return (enrich.data?.pairs || []).map((pair: any) => ({
+            mint: pair.baseToken.address, symbol: pair.baseToken.symbol,
+            price: parseFloat(pair.priceUsd || "0"), volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0,
+            priceChangeM5: pair.priceChange?.m5 || 0, priceChangeH1: pair.priceChange?.h1 || 0,
+            pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [],
+            sourceQuality: 'rest-fallback'
+        })).filter((t: any) => (now - t.pairCreatedAt) < 20 * 60 * 1000); // Strict filter: only < 20 mins old
+    } catch (_) { return []; }
+}
+
+
+// Replace your existing scoreTokens() function with this:
 export async function scoreTokens() {
     try {
-        const [newMints, trending, boosted] = await Promise.all([
+        const [newMints, trending, boosted, restFallback] = await Promise.all([
             fetchRecentNewMints(),
             fetchTrendingPairs().catch(()=>[]),
-            fetchBoostedPairs().catch(()=>[])
+            fetchBoostedPairs().catch(()=>[]),
+            fetchFreshViaRest().catch(()=>[]) // 🟢 Added fallback
         ]);
 
-        const allPairs = [...newMints, ...trending, ...boosted];
+        console.log(`🎯 [CALLER] Scanned Sources: WS_NewMints=${newMints.length} | REST_Fallback=${restFallback.length} | Trending=${trending.length} | Boosted=${boosted.length}`);
+
+        const allPairs = [...newMints, ...restFallback, ...trending, ...boosted];
         const uniquePairs = Array.from(new Map(allPairs.map(item => [item.mint, item])).values());
 
         const scored = await Promise.all(uniquePairs.map(async (pair) => {
             const isRug = await getCachedRugStatus(pair.mint);
-            const stats: TokenStats = {
+            const stats = {
                 ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
                 volume24h: pair.volume,
                 liquidity: pair.liquidity,
@@ -217,8 +243,7 @@ export async function scoreTokens() {
 
         const topScorers = scored.filter(t => t.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore);
         
-        // 🟢 REQUIRED LOGGING FUNNEL (D1)
-        console.log(`🎯 [CALLER] Funnel: ring_buffer=${getRecentNewMints().length} | ds_enriched=${newMints.filter(t=>t.sourceQuality==='dexscreener').length} | onchain_fallback=${newMints.filter(t=>t.sourceQuality==='onchain-only').length} | scored>0=${topScorers.length}`);
+        console.log(`🎯 [CALLER] Funnel: ring_buffer=${getRecentNewMints().length} | ds_enriched=${newMints.filter(t=>t.sourceQuality==='dexscreener').length} | onchain_fallback=${newMints.filter(t=>t.sourceQuality==='onchain-only').length} | rest_fallback=${restFallback.length} | scored>0=${topScorers.length}`);
 
         await redis.set('caller:hot_scored_tokens', JSON.stringify(topScorers), 'EX', 30);
         return topScorers;
@@ -227,6 +252,7 @@ export async function scoreTokens() {
         return [];
     }
 }
+
 
 
 

@@ -100,9 +100,7 @@ export async function simExecuteSnipe(
     amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
     
-    // 🟢 FAST EXECUTION: Under 1 second
-    await new Promise(r => setTimeout(r, 600 + Math.random() * 300));
-
+    // 🟢 D4 FIX: Single realistic delay (1.5s - 4.5s typical, 5% long tail for Jito)
     const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
     await new Promise(r => setTimeout(r, delay));
 
@@ -151,15 +149,14 @@ export async function simExecuteExit(
     forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
     
-    // 🟢 FAST EXECUTION
-    await new Promise(r => setTimeout(r, 800 + Math.random() * 400));
+    // 🟢 D4 FIX: Single realistic delay
+    const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
+    await new Promise(r => setTimeout(r, delay));
 
     const posKey = `sim:positions:${telegramId}`;
     const positions = JSON.parse(await redis.get(posKey) || '[]');
     const pos = positions.find((p: any) => p.mint === tokenAddress);
 
-    const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
-    await new Promise(r => setTimeout(r, delay));
 
     let pnlPercent = forcedPnlPercent !== undefined 
         ? forcedPnlPercent 
