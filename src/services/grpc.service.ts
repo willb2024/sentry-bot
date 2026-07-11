@@ -901,9 +901,40 @@ async function triggerAutoSnipes(
     }
 }
 
+// Polling-based pump.fun source — independent of the WebSocket entirely.
+// Runs on a plain interval, so even if the WS is banned/dead, this keeps working.
+let pollingStarted = false;
+function startPumpFunPolling() {
+    if (pollingStarted) return;
+    pollingStarted = true;
+    console.log("🔁 [PUMP POLL] Starting REST polling fallback (10s interval).");
+
+    setInterval(async () => {
+        try {
+            const res = await axios.get(
+                'https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false',
+                { timeout: 4000, headers: { 'User-Agent': 'Mozilla/5.0' } }
+            );
+            if (!Array.isArray(res.data)) return;
+
+            let added = 0;
+            for (const coin of res.data) {
+                if (coin.mint && !recentlySnipedTokens.has(coin.mint)) {
+                    trackNewMint(coin.mint, coin.symbol || "UNKNOWN");
+                    added++;
+                }
+            }
+            if (added > 0) console.log(`🔁 [PUMP POLL] Added ${added} new mints via REST poll. Buffer size: ${recentNewMints.length}`);
+        } catch (e: any) {
+            console.warn(`⚠️ [PUMP POLL] Fetch failed: ${e.message}`);
+        }
+    }, 10_000);
+}
+
 export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
         connectPumpPortalStream(bot);
+        startPumpFunPolling();          // ← ADD THIS LINE
         startUniversalGuardPoller(bot);
         pollerStarted = true;
         console.log("🟢 [SNIPER] PumpPortal WebSocket stream active.");
