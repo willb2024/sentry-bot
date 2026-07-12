@@ -21,13 +21,13 @@ export function decodePumpCurvePrice(base64Data: string): number {
 
         const virtualTokenReserves = buffer.readBigUInt64LE(8);
         const virtualSolReserves = buffer.readBigUInt64LE(16);
-        
-        const solAmount = Number(virtualSolReserves) / 1_000_000_000; 
-        const tokenAmount = Number(virtualTokenReserves) / 1_000_000; 
-        
+
+        const solAmount = Number(virtualSolReserves) / 1_000_000_000;
+        const tokenAmount = Number(virtualTokenReserves) / 1_000_000;
+
         if (tokenAmount === 0) return 0;
-        
-        return solAmount / tokenAmount; 
+
+        return solAmount / tokenAmount;
     } catch (e: any) {
         console.error("⚠️ [PRICE SERVICE] Failed to decode pump curve price:", e.message);
         return 0;
@@ -61,7 +61,7 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
         return false;
     } catch (e: any) {
         console.error("⚠️ [PRICE SERVICE] MEV activity check exception:", e.message);
-        return false; 
+        return false;
     }
 }
 
@@ -71,30 +71,32 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         const cached = await redis.get(key);
         if (cached !== null) return cached === 'true';
 
-        const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, 
+        const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
             { signal: AbortSignal.timeout(2000) });
-        
+
+        if (!res.ok) {
+            await redis.set(key, 'false', 'EX', 60);
+            return false;
+        }
+
         const data = (await res.json()) as any;
         const risks = data.risks || [];
-        
-        // 🟢 NEW: Deep Safety Checks
+
         const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
-        const isMintable = data.token?.mintAuthority !== null; // Dev can print infinite tokens
+        const isMintable = !!(data.token && data.token.mintAuthority);
         const highScore = data.score > 500;
-        
-        // 🟢 Check Top 10 Holder Concentration (Over 40% concentrated is extremely risky)
+
         const topHolders = data.topHolders || [];
         const top10Pct = topHolders.reduce((acc: number, h: any) => acc + (h.pct || 0), 0);
         const isHighlyConcentrated = top10Pct > 40.0;
 
         const isUnsafe = isHoneypot || isMintable || highScore || isHighlyConcentrated;
 
-        // Cache the result for 10 minutes
         await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
         return isUnsafe;
-    } catch (_) { 
-        // Fail open if the API times out to preserve block-0 speeds
-        return false; 
+    } catch (_) {
+        await redis.set(key, 'false', 'EX', 60);
+        return false;
     }
 }
 
@@ -107,7 +109,6 @@ export async function fetchDexScreenerCandles(
             { signal: AbortSignal.timeout(5000) }
         );
         if (!res.ok) return [];
-        // Change this line:
         const data = (await res.json()) as any;
         return (data?.bars || []).slice(-60).map((b: any) => ({
             time: b.t,
