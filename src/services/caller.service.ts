@@ -55,7 +55,8 @@ export async function startCoinCaller(bot: any) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
-                const matchedToken = tokens.find(t => 
+                // 🟢 FIX: Filter ALL matching tokens, not just the first one
+                const matchingTokens = tokens.filter(t => 
                     t.totalScore >= filters.minScore &&
                     t.ageMins <= filters.maxAgeMins &&
                     t.priceChangeM5 >= filters.minPctChange &&
@@ -65,13 +66,20 @@ export async function startCoinCaller(bot: any) {
                     (!filters.blockMev || t.breakdown.mevRisk >= 0)
                 );
 
-                if (matchedToken) {
-                    const alertKey = `caller_alerted:${user.telegramId}:${matchedToken.mint}`;
+                let matchedToken = null;
+                
+                // 🟢 FIX: Cycle down the list until we find one this user HASN'T been alerted about yet
+                for (const t of matchingTokens) {
+                    const alertKey = `caller_alerted:${user.telegramId}:${t.mint}`;
                     const alreadyAlerted = await redis.get(alertKey);
-                    if (alreadyAlerted) continue;
+                    if (!alreadyAlerted) {
+                        matchedToken = t;
+                        await redis.set(alertKey, '1', 'EX', 3600 * 24); // Mark it so they don't get it again
+                        break; 
+                    }
+                }
 
-                    await redis.set(alertKey, '1', 'EX', 3600 * 24);
-
+                if (matchedToken) {
                     const historyData = {
                         mint: matchedToken.mint,
                         symbol: matchedToken.symbol,
@@ -128,7 +136,6 @@ export async function startCoinCaller(bot: any) {
         }
     }, 15000);
 }
-
 export async function setUserCallerFilters(telegramId: string, updates: Partial<CallerFilters>) {
     const current = await getUserCallerFilters(telegramId);
     const updated = { ...current, ...updates };

@@ -1521,6 +1521,7 @@ bot.action('onboard_step3', async (ctx) => {
 
 
 // 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
+// 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
 bot.action('trigger_caller_scan', async (ctx) => {
     try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
@@ -1589,15 +1590,36 @@ bot.action('trigger_caller_scan', async (ctx) => {
             topTokens = result;
         }
         
-        const matchedToken = topTokens.find((t: any) => 
+        // 🟢 FIX: Find ALL matching tokens instead of just the first one
+        const matchingTokens = topTokens.filter((t: any) => 
             t.totalScore >= filters.minScore &&
             t.ageMins <= filters.maxAgeMins &&
             t.priceChangeM5 >= filters.minPctChange &&
             t.priceChangeM5 <= filters.maxPctChange &&
-            t.liquidity >= filters.minLiquidity && // 🟢 NEW FILTER
-            t.volume >= filters.minVolume24h &&    // 🟢 NEW FILTER
+            t.liquidity >= filters.minLiquidity && 
+            t.volume >= filters.minVolume24h &&    
             (!filters.blockMev || t.breakdown.mevRisk >= 0)
         );
+        
+        let matchedToken = null;
+        
+        if (matchingTokens.length > 0) {
+            // Cycle through and find one the user hasn't manually scanned recently
+            for (const t of matchingTokens) {
+                const seenKey = `caller_alerted:${tgId}:${t.mint}`;
+                const seen = await redis.get(seenKey);
+                if (!seen) {
+                    matchedToken = t;
+                    await redis.set(seenKey, '1', 'EX', 3600 * 24); // Mark as seen
+                    break;
+                }
+            }
+            
+            // If they have literally seen EVERY matching token, just show a random one from the pool so the button doesn't fail
+            if (!matchedToken) {
+                matchedToken = matchingTokens[Math.floor(Math.random() * matchingTokens.length)];
+            }
+        }
         
         if (matchedToken) {
             let historicalContext = "";
