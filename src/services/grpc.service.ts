@@ -12,6 +12,7 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 import bs58 from 'bs58';
 import crypto from 'crypto';
+import { subscribeToMintPrice, unsubscribeFromMintPrice, getLivePriceSol } from './guard-price-feed.service.js';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 import FormData from 'form-data'; 
@@ -450,271 +451,36 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 }
 
 export function startUniversalGuardPoller(bot: any) {
-    console.log("🛡️ [GUARD ENGINE] Instant Pre-Signed RAM-Cached Poller Initialized.");
+    console.log("🛡️ [GUARD ENGINE] Push-Based Subscription Poller Initialized.");
 
-    setInterval(async () => {
-        if (isPolling) return;
-        isPolling = true;
-
-        try {
-            const activeGuards      = [...cachedActiveGuards];
-            const activeLimitOrders = [...cachedLimitOrders];
-            const currentCurvePdas  = new Set<string>();
-
-            if (activeGuards.length === 0 && activeLimitOrders.length === 0) {
-                globalCurvePdas = currentCurvePdas; 
-                return;
-            }
-
-            const uniqueMints = [...new Set([
-                ...activeGuards.map(g => g.tokenAddress),
-                ...activeLimitOrders.map(l => l.tokenAddress)
-            ])];
-
-            const livePricesNative: Record<string, { price: number }> = {};
-            const chunks: string[] = [];
-            for (let i = 0; i < uniqueMints.length; i += 100) {
-                chunks.push(uniqueMints.slice(i, i + 100).join(','));
-            }
-
-            await Promise.all(chunks.map(async (chunk) => {
-                try {
-                    const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk}&vsToken=${WSOL_MINT}`, { timeout: 2000 });
-                    if (res.data?.data) {
-                        for (const [mint, info] of Object.entries(res.data.data as Record<string, any>)) {
-                            livePricesNative[mint] = { price: parseFloat((info as any).price) || 0 };
-                        }
-                    }
-                } catch (_) {}
-            }));
-
-            const zeroMints = uniqueMints.filter(m => !livePricesNative[m] || livePricesNative[m].price === 0);
-            if (zeroMints.length > 0) {
-                try {
-                    const chunksOfThirty: string[][] = [];
-                    for (let i = 0; i < zeroMints.length; i += 30) chunksOfThirty.push(zeroMints.slice(i, i + 30));
-                    await Promise.all(chunksOfThirty.map(async (chunkArr) => {
-                        const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunkArr.join(',')}`, { timeout: 1500 });
-                        dexRes.data?.pairs?.forEach((pair: any) => {
-                            const mint = pair.baseToken.address;
-                            if (!livePricesNative[mint] || livePricesNative[mint].price === 0) {
-                                const solPrice = parseFloat(pair.priceNative || '0');
-                                if (solPrice > 0) livePricesNative[mint] = { price: solPrice };
-                            }
-                        });
-                    }));
-                } catch (_) {}
-            }
-
-            const assumedSolUsdPrice = cachedSolUsdPrice;
-
-            await Promise.all(activeLimitOrders.map(async (limit) => {
-                if (lockedLimitOrders.has(limit.id)) return;
-
-                let currentPriceNative = 0;
-                const isPump = limit.tokenAddress.toLowerCase().endsWith("pump");
-
-                if (isPump) {
-                    try {
-                        const curvePda = getBondingCurveAddress(limit.tokenAddress);
-                        const accInfo  = await connection.getAccountInfo(new PublicKey(curvePda)).catch(() => null);
-                        if (accInfo?.data) {
-                            const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-                            if (!isBondingCurveGraduated(buf)) {
-                                currentPriceNative = decodePumpCurvePrice(buf.toString('base64'));
-                            }
-                        }
-                    } catch (_) {}
-                    if (currentPriceNative === 0) currentPriceNative = livePricesNative[limit.tokenAddress]?.price || 0;
-                } else {
-                    currentPriceNative = livePricesNative[limit.tokenAddress]?.price || 0;
-                }
-
-                if (currentPriceNative <= 0 || !limit.targetPriceUsd) return;
-
-                const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
-
-                if (limit.orderType === 'ALERT') {
-                    if (currentPriceUsd >= limit.targetPriceUsd) {
-                        lockedLimitOrders.add(limit.id);
-                        await prisma.activeOrder.update({ where: { id: limit.id }, data: { isActive: false } });
-                        try {
-                            await bot.telegram.sendMessage(limit.user.telegramId,
-                                `🔔 <b>PRICE ALERT TRIGGERED!</b>\n\nToken: <code>${limit.tokenAddress}</code>\nYour target of <b>$${limit.targetPriceUsd}</b> has been reached.\nCurrent price: <b>$${currentPriceUsd.toFixed(6)}</b>\n\n<i>Reply with the CA to buy now.</i>`, { parse_mode: 'HTML' }
-                            );
-                        } catch (_) {}
-                        lockedLimitOrders.delete(limit.id);
-                    }
-                } else {
-                    if (currentPriceUsd <= limit.targetPriceUsd) {
-                        lockedLimitOrders.add(limit.id);
-                        await prisma.activeOrder.update({ where: { id: limit.id }, data: { isActive: false } });
-
-                        executeSnipe(limit.user.telegramId, limit.tokenAddress, limit.amountSol).then(async (result) => {
-                            if (result.success) {
-                                try { await bot.telegram.sendMessage(limit.user.telegramId, `🎯 <b>LIMIT ORDER EXECUTED!</b>\n\nToken: <code>${limit.tokenAddress.substring(0, 8)}...</code>\nTarget Met: <b>$${currentPriceUsd.toFixed(6)}</b>\nInvested: <b>${limit.amountSol} SOL</b>\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }); } catch (_) {}
-                            } else {
-                                try { await bot.telegram.sendMessage(limit.user.telegramId, `🔴 <b>LIMIT ORDER FAILED</b>\nToken: <code>${limit.tokenAddress}</code>\n${result.message}`, { parse_mode: 'HTML' }); } catch (_) {}
-                            }
-                            lockedLimitOrders.delete(limit.id);
-                        }).catch(() => lockedLimitOrders.delete(limit.id));
-                    }
-                }
-            }));
-
-            const pendingRpcGuards: Array<{ guard: TrailingOrder; curvePda: string }> = [];
-
-            await Promise.all(activeGuards.map(async (guard) => {
-                if (lockedGuards.has(guard.id)) return;
-
-                const { isSimulationActive } = await import('./simulation.service.js');
-                if (await isSimulationActive(guard.telegramId)) {
-                    await checkAndTriggerGuard(guard, 0, bot);
-                    return;
-                }
-
-                const isPump = guard.tokenAddress.toLowerCase().endsWith("pump");
-
-                if (isPump) {
-                    const curvePda = getBondingCurveAddress(guard.tokenAddress);
-                    currentCurvePdas.add(curvePda);
-
-                    if (!activeSubscriptions.has(curvePda)) {
-                        const guardIdSnapshot = guard.id;
-
-                        const subId = connection.onAccountChange(new PublicKey(curvePda), async (accInfo) => {
-                            const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-
-                            if (isBondingCurveGraduated(buf)) {
-                                const freshSnapshot = cachedActiveGuards.find(g => g.id === guardIdSnapshot);
-                                if (freshSnapshot) {
-                                    const jupPrice = livePricesNative[freshSnapshot.tokenAddress]?.price;
-                                    if (jupPrice && jupPrice > 0) {
-                                        await checkAndTriggerGuard(freshSnapshot, jupPrice, bot);
-                                    } else {
-                                        try {
-                                            const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${freshSnapshot.tokenAddress}&vsToken=${WSOL_MINT}`, { timeout: 3000 });
-                                            const p = parseFloat(res.data?.data?.[freshSnapshot.tokenAddress]?.price);
-                                            if (p > 0) await checkAndTriggerGuard(freshSnapshot, p, bot);
-                                        } catch (_) {}
-                                    }
-                                }
-                                return;
-                            }
-
-                            const priceInSol = decodePumpCurvePrice(buf.toString('base64'));
-                            if (priceInSol <= 0) return;
-                            const freshSnapshot = cachedActiveGuards.find(g => g.id === guardIdSnapshot);
-                            if (freshSnapshot) await checkAndTriggerGuard(freshSnapshot, priceInSol, bot);
-                        }, 'processed');
-
-                        activeSubscriptions.set(curvePda, subId);
-                        pendingRpcGuards.push({ guard, curvePda });
-                    } else {
-                        const jupPrice = livePricesNative[guard.tokenAddress]?.price;
-                        if (jupPrice && jupPrice > 0) {
-                            await checkAndTriggerGuard(guard, jupPrice, bot);
-                        }
-                    }
-                } else {
-                    const jupPrice = livePricesNative[guard.tokenAddress]?.price;
-                    if (jupPrice && jupPrice > 0) {
-                        await checkAndTriggerGuard(guard, jupPrice, bot);
-                    }
-                }
-            }));
-
-            globalCurvePdas = currentCurvePdas; 
-
-            if (pendingRpcGuards.length > 0) {
-                Promise.all(
-                    pendingRpcGuards.map(async ({ guard, curvePda }) => {
-                        try {
-                            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
-                            if (accInfo?.data) {
-                                const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-                                if (isBondingCurveGraduated(buf)) {
-                                    const jupPrice = livePricesNative[guard.tokenAddress]?.price;
-                                    if (jupPrice && jupPrice > 0) await checkAndTriggerGuard(guard, jupPrice, bot);
-                                } else {
-                                    const priceInSol = decodePumpCurvePrice(buf.toString('base64'));
-                                    if (priceInSol > 0) await checkAndTriggerGuard(guard, priceInSol, bot);
-                                }
-                            }
-                        } catch (_) {}
-                    })
-                ).catch(() => {});
-            }
-
-        } catch (_) {
-        } finally {
-            isPolling = false;
-        }
-    }, 1000); 
-
-    // 🟢 C4 FIX: O(1) Redis SCAN Cursor loop for watchlists. Removes Event Loop Blocking!
+    // Fast, ultra-cheap tick: evaluate active guards using ALREADY-CACHED prices.
+    // NO Helius RPC calls are executed in this interval block.
     setInterval(async () => {
         try {
-            let cursor = '0';
-            const allWatchedMints = new Set<string>();
-            const userWatchlists: Record<string, any> = {};
-
-            do {
-                const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'watchlist:*', 'COUNT', 100);
-                cursor = nextCursor;
-                for (const key of keys) {
-                    const tgId = key.split(':')[1];
-                    const watchedTokens = await redis.hgetall(key);
-                    userWatchlists[tgId] = watchedTokens;
-                    Object.keys(watchedTokens).forEach(ca => allWatchedMints.add(ca));
-                }
-            } while (cursor !== '0');
-
-            if (allWatchedMints.size === 0) return;
-
-            const livePricesNative: Record<string, number> = {};
-            const uniqueMints = [...allWatchedMints];
-            const assumedSolUsdPrice = cachedSolUsdPrice;
-            
-            const chunks: string[] = [];
-            for (let i = 0; i < uniqueMints.length; i += 100) {
-                chunks.push(uniqueMints.slice(i, i + 100).join(','));
-            }
-
-            await Promise.all(chunks.map(async (chunk) => {
-                try {
-                    const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk}&vsToken=${WSOL_MINT}`, { timeout: 3000 });
-                    if (res.data?.data) {
-                        for (const [mint, info] of Object.entries(res.data.data as Record<string, any>)) {
-                            livePricesNative[mint] = parseFloat((info as any).price) || 0;
-                        }
-                    }
-                } catch (_) {}
-            }));
-
-            for (const [tgId, watchedTokens] of Object.entries(userWatchlists)) {
-                for (const [ca, dataStr] of Object.entries(watchedTokens as Record<string, string>)) {
-                    const data = JSON.parse(dataStr);
-                    if (data.targetPrice > 0) {
-                        const currentPriceNative = livePricesNative[ca] || 0;
-                        const currentPriceUsd = currentPriceNative * assumedSolUsdPrice;
-
-                        const cooldownKey = `alert_cooldown:${tgId}:${ca}`;
-                        const isOnCooldown = await redis.get(cooldownKey);
-
-                        if (!isOnCooldown && currentPriceUsd > 0 && currentPriceUsd >= data.targetPrice) {
-                            await redis.set(cooldownKey, '1', 'EX', 3600); 
-                            try {
-                                await sendPriceAlertWithChart(tgId, ca, "Watched Token", currentPriceUsd, data.targetPrice, data.addedPrice || 0, bot);
-                            } catch (_) {}
-                        }
-                    }
-                }
+            const activeGuards = await getAllActiveGuards();
+            for (const guard of activeGuards) {
+                const livePrice = getLivePriceSol(guard.tokenAddress);
+                if (livePrice === null) continue; // Skip if no push update cached yet
+                await checkAndTriggerGuard(guard, livePrice, bot);
             }
         } catch (e: any) {
-            console.error("⚠️ [WATCHLIST SCAN FAULT]:", e.message);
+            console.error(`🔴 [GUARD POLLER] Tick failed: ${e.message}`);
         }
-    }, 10000); 
+    }, 1000);
+
+    // Slow, resilient reconciliation pass: automatically handles non-pump tokens
+    // and re-subscribes dropped WebSocket listeners every 15s instead of 1s.
+    setInterval(async () => {
+        try {
+            const activeGuards = await getAllActiveGuards();
+            const pumpMints = new Set(activeGuards.filter(g => g.tokenAddress.toLowerCase().endsWith('pump')).map(g => g.tokenAddress));
+            for (const mint of pumpMints) {
+                await subscribeToMintPrice(mint, `reconcile:${mint}`); // No-op if already active
+            }
+        } catch (e: any) {
+            console.error(`🔴 [GUARD POLLER] Reconcile pass failed: ${e.message}`);
+        }
+    }, 15000); 
 }
 
 // 🟢 REST FALLBACK LOGIC

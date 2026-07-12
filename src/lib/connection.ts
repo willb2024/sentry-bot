@@ -110,3 +110,5 @@ export const connection = new Proxy(primaryConnection, {
         };
     }
 }) as unknown as Connection;
+// 🟢 COLD CONNECTION: Non-latency critical read paths
+export const coldConnection = backupConnection;

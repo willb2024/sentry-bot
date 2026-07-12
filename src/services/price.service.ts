@@ -2,6 +2,8 @@
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
+import { getMint } from '@solana/spl-token';
+import { coldConnection } from '../lib/connection.js';
 
 const PUMP_FUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 
@@ -12,6 +14,28 @@ export function getBondingCurveAddress(tokenMint: string): string {
         PUMP_FUN_PROGRAM_ID
     );
     return pda.toBase58();
+}
+
+// 🟢 REDUCE HELIUS COST: Cache static token decimals/authorities for 6 hours
+export async function getCachedMintInfo(mint: string): Promise<{ decimals: number; mintAuthority: string | null; freezeAuthority: string | null }> {
+    const key = `mint_info:${mint}`;
+    try {
+        const cached = await redis.get(key);
+        if (cached) return JSON.parse(cached);
+
+        const info = await getMint(coldConnection, new PublicKey(mint));
+        const payload = {
+            decimals: info.decimals,
+            mintAuthority: info.mintAuthority?.toBase58() ?? null,
+            freezeAuthority: info.freezeAuthority?.toBase58() ?? null
+        };
+        
+        await redis.set(key, JSON.stringify(payload), 'EX', 21600); // 6 Hours TTL
+        return payload;
+    } catch (e: any) {
+        console.error(`🔴 [CACHE] Failed to cache mint info for ${mint}: ${e.message}`);
+        return { decimals: 9, mintAuthority: null, freezeAuthority: null }; // Safe default
+    }
 }
 
 export function decodePumpCurvePrice(base64Data: string): number {
