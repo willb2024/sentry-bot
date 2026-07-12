@@ -1521,6 +1521,7 @@ bot.action('onboard_step3', async (ctx) => {
 
 
 // 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
+// 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
 bot.action('trigger_caller_scan', async (ctx) => {
     try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
@@ -1560,9 +1561,8 @@ bot.action('trigger_caller_scan', async (ctx) => {
                 `The simulated pool captured fresh mints, but none cleared your strict filters:\n` +
                 `• Min Score: <b>${filters.minScore}+</b>\n` +
                 `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
-                `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
                 `• Momentum: <b>${filters.minPctChange}% - ${filters.maxPctChange}%</b>\n\n` +
-                `<i>Try lowering your minimums, or check back shortly!</i>`,
+                `<i>Try lowering your minimum score, or check back shortly!</i>`,
                 { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
             );
         }
@@ -1592,10 +1592,6 @@ bot.action('trigger_caller_scan', async (ctx) => {
         const matchedToken = topTokens.find((t: any) => 
             t.totalScore >= filters.minScore &&
             t.ageMins <= filters.maxAgeMins &&
-            t.priceChangeM5 >= filters.minPctChange &&
-            t.priceChangeM5 <= filters.maxPctChange &&
-            t.liquidity >= filters.minLiquidity && // 🟢 NEW FILTER
-            t.volume >= filters.minVolume24h &&    // 🟢 NEW FILTER
             (!filters.blockMev || t.breakdown.mevRisk >= 0)
         );
         
@@ -1616,7 +1612,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
                         `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                         `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
                         `<b>Audit Trail:</b>\n` +
-                        `${matchedToken.reasons.map((r: any) => `✅ ${r}`).join('\n')}\n\n` +
+                        `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
                         historicalContext +
                         `<i>Click below to buy instantly via Jito:</i>`;
             
@@ -1638,10 +1634,8 @@ bot.action('trigger_caller_scan', async (ctx) => {
                 `The live pool captured <b>${rawPoolSize}</b> fresh mints in the last 30 minutes, but none safely cleared your strict filters:\n` +
                 `• Min Score: <b>${filters.minScore}+</b>\n` +
                 `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
-                `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
-                `• Momentum: <b>${filters.minPctChange}% - ${filters.maxPctChange}%</b>\n` +
                 `• Block MEV: <b>${filters.blockMev ? 'Yes' : 'No'}</b>\n\n` +
-                `<i>The trenches are quiet. Try lowering your minimums, or check back shortly!</i>`,
+                `<i>The trenches are quiet. Try lowering your minimum score, or check back shortly!</i>`,
                 { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
             );
         }
@@ -1687,8 +1681,6 @@ bot.action(/^caller_dca_(.+)$/, async (ctx) => {
 });
 // =========================================================
 // 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
-// =========================================================
-// 🟢 UPGRADED: Added "Scan Mainnet Now" to the top of the menu layout
 async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     const filters = await getUserCallerFilters(tgId);
     
@@ -1705,8 +1697,6 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         `• <b>Minimum Score:</b> ${filters.minScore} / 100\n` +
         `• <b>Max Token Age:</b> ${filters.maxAgeMins} Mins\n` +
         `• <b>Momentum % Range:</b> ${filters.minPctChange}% to ${filters.maxPctChange}%\n` +
-        `• <b>Min Liquidity:</b> $${filters.minLiquidity.toLocaleString()}\n` +
-        `• <b>Min 24h Volume:</b> $${filters.minVolume24h.toLocaleString()}\n` +
         `• <b>Block MEV:</b> ${mevText}\n\n` +
         `<i>Adjust your scanner parameters below:</i>`;
 
@@ -1716,10 +1706,6 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         [
             Markup.button.callback(`⏱️ Max Age (${filters.maxAgeMins}m)`, 'edit_caller_age'),
             Markup.button.callback(`📈 % Range (${filters.minPctChange} - ${filters.maxPctChange}%)`, 'edit_caller_pct')
-        ],
-        [
-            Markup.button.callback(`💧 Min Liq ($${(filters.minLiquidity/1000).toFixed(0)}k)`, 'edit_caller_liq'),
-            Markup.button.callback(`📊 Min Vol ($${(filters.minVolume24h/1000).toFixed(0)}k)`, 'edit_caller_vol')
         ],
         [
             Markup.button.callback(`✏️ Min Score (${filters.minScore})`, 'edit_caller_score'), 
@@ -1733,19 +1719,7 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
 }
 
 // 🟢 NEW BUTTON ACTIONS: Add these right below your other edit_caller_* actions
-bot.action('edit_caller_liq', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-    await redis.set(`state:edit_caller_liq:${tgId}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(`💧 <b>EDIT MINIMUM LIQUIDITY</b>\n\nReply with the minimum Liquidity (in USD) a token must have.\n<i>Example: 15000 (for $15k minimum liq)</i>\n\n<i>Type /cancel to abort.</i>`);
-});
 
-bot.action('edit_caller_vol', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-    await redis.set(`state:edit_caller_vol:${tgId}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(`📊 <b>EDIT MINIMUM VOLUME</b>\n\nReply with the minimum 24h Volume (in USD) a token must have.\n<i>Example: 50000 (for $50k minimum volume)</i>\n\n<i>Type /cancel to abort.</i>`);
-});
 
 bot.action('edit_caller_age', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3772,7 +3746,7 @@ bot.on("text", async (ctx, next) => {
             `state:dev_volume:${telegramId}`, `state:dev_nuke:${telegramId}`,
             `active_bumper:${telegramId}`, `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
             `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`,
-            `state:edit_caller_score:${telegramId}`, `state:edit_caller_liq:${telegramId}`, `state:edit_caller_vol:${telegramId}`,
+            `state:edit_caller_score:${telegramId}`, 
             `sim:autosnipe:${telegramId}`, `sim:caller_seq:${telegramId}`, `state:guard_ca:${telegramId}`,
             `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`,
             `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`,
@@ -4028,29 +4002,8 @@ bot.on("text", async (ctx, next) => {
             return;
         }
 
-        // 🟢 NEW INPUT: Liquidity Filter
-        if (await redis.get(`state:edit_caller_liq:${telegramId}`)) {
-            await redis.del(`state:edit_caller_liq:${telegramId}`);
-            const val = parseInt(text.trim());
-            if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Amount.</b> Must be a positive number.");
-            const { setUserCallerFilters } = await import('./services/caller.service.js'); 
-            await setUserCallerFilters(telegramId, { minLiquidity: val });
-            await ctx.replyWithHTML(`✅ <b>Min Liquidity updated to $${val.toLocaleString()}!</b>`);
-            await sendCallerMenu(ctx, telegramId, false); 
-            return;
-        }
+      
 
-        // 🟢 NEW INPUT: Volume Filter
-        if (await redis.get(`state:edit_caller_vol:${telegramId}`)) {
-            await redis.del(`state:edit_caller_vol:${telegramId}`);
-            const val = parseInt(text.trim());
-            if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Amount.</b> Must be a positive number.");
-            const { setUserCallerFilters } = await import('./services/caller.service.js');
-            await setUserCallerFilters(telegramId, { minVolume24h: val });
-            await ctx.replyWithHTML(`✅ <b>Min 24h Volume updated to $${val.toLocaleString()}!</b>`);
-            await sendCallerMenu(ctx, telegramId, false); 
-            return;
-        }
         
         const tieredGuildId = await redis.get(`state:guild_tiered_drop:${telegramId}`);
         if (tieredGuildId) {

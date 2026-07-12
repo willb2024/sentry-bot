@@ -7,15 +7,12 @@ import { getRecentNewMints } from './grpc.service.js';
 
 const prisma = new PrismaClient();
 
-
 export interface CallerFilters {
     isActive: boolean;
     minScore: number;
     maxAgeMins: number;
     minPctChange: number;
     maxPctChange: number;
-    minLiquidity: number; // 🟢 NEW
-    minVolume24h: number; // 🟢 NEW
     blockMev: boolean;
 }
 
@@ -26,8 +23,6 @@ export async function getUserCallerFilters(telegramId: string): Promise<CallerFi
         maxAgeMins: 60,
         minPctChange: 10,
         maxPctChange: 500,
-        minLiquidity: 10000, // Default $10k Liq
-        minVolume24h: 50000, // Default $50k Vol
         blockMev: true
     };
     try {
@@ -35,97 +30,6 @@ export async function getUserCallerFilters(telegramId: string): Promise<CallerFi
         if (raw) return { ...defaultFilters, ...JSON.parse(raw) };
     } catch (e) {}
     return defaultFilters;
-}
-
-export async function startCoinCaller(bot: any) {
-    console.log("🎯 [CALLER ENGINE] Initialized. Scanning 5 distinct pipelines every 15 seconds.");
-
-    setInterval(async () => {
-        if (isScoring) return;
-        isScoring = true;
-
-        try {
-            const tokens = await scoreTokens();
-            if (tokens.length === 0) return;
-
-            const allUsers = await prisma.user.findMany({ select: { telegramId: true } });
-            
-            for (const user of allUsers) {
-                const filters = await getUserCallerFilters(user.telegramId);
-                if (!filters.isActive) continue;
-
-                const matchedToken = tokens.find(t => 
-                    t.totalScore >= filters.minScore &&
-                    t.ageMins <= filters.maxAgeMins &&
-                    t.priceChangeM5 >= filters.minPctChange &&
-                    t.priceChangeM5 <= filters.maxPctChange &&
-                    t.liquidity >= filters.minLiquidity && // 🟢 NEW FILTER
-                    t.volume >= filters.minVolume24h &&    // 🟢 NEW FILTER
-                    (!filters.blockMev || t.breakdown.mevRisk >= 0)
-                );
-
-                if (matchedToken) {
-                    const alertKey = `caller_alerted:${user.telegramId}:${matchedToken.mint}`;
-                    const alreadyAlerted = await redis.get(alertKey);
-                    if (alreadyAlerted) continue;
-
-                    await redis.set(alertKey, '1', 'EX', 3600 * 24);
-
-                    const historyData = {
-                        mint: matchedToken.mint,
-                        symbol: matchedToken.symbol,
-                        score: matchedToken.totalScore,
-                        priceAtAlert: matchedToken.price,
-                        alertedAt: Date.now()
-                    };
-                    await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
-
-                    let historicalContext = "";
-                    try {
-                        const historyMap = await redis.hgetall('caller_history');
-                        const calls = Object.values(historyMap).map(val => JSON.parse(val)).filter(c => c.finalized && c.score >= 75);
-                        if (calls.length >= 5) { 
-                            const hits = calls.filter(c => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
-                            const winRate = ((hits / calls.length) * 100).toFixed(1);
-                            historicalContext = `<i>(Based on ${calls.length} verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting +20%).</i>\n\n`;
-                        }
-                    } catch(e) {}
-
-                    const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
-                                `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
-                                `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
-                                `<b>Audit Trail:</b>\n` +
-                                `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
-                                historicalContext +
-                                `<i>Click below to buy instantly via Jito:</i>`;
-                    
-                    try {
-                        await bot.telegram.sendMessage(user.telegramId, msg, {
-                            parse_mode: 'HTML',
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [
-                                        { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` },
-                                        { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }
-                                    ],
-                                    [
-                                        { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` },
-                                        { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }
-                                    ],
-                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
-                                ]
-                            }
-                        });
-                    } catch (e: any) {
-                        console.warn(`⚠️ [CALLER] Failed to send to ${user.telegramId}: ${e.message}`);
-                    }
-                }
-            }
-        } catch (e) {
-        } finally {
-            isScoring = false;
-        }
-    }, 15000);
 }
 
 export async function setUserCallerFilters(telegramId: string, updates: Partial<CallerFilters>) {
@@ -407,7 +311,94 @@ export async function scoreTokens() {
 }
 
 let isScoring = false;
+export async function startCoinCaller(bot: any) {
+    console.log("🎯 [CALLER ENGINE] Initialized. Scanning 5 distinct pipelines every 15 seconds.");
 
+    setInterval(async () => {
+        if (isScoring) return;
+        isScoring = true;
+
+        try {
+            const tokens = await scoreTokens();
+            if (tokens.length === 0) return;
+
+            const allUsers = await prisma.user.findMany({ select: { telegramId: true } });
+            
+            for (const user of allUsers) {
+                const filters = await getUserCallerFilters(user.telegramId);
+                if (!filters.isActive) continue;
+
+                const matchedToken = tokens.find(t => 
+                    t.totalScore >= filters.minScore &&
+                    t.ageMins <= filters.maxAgeMins &&
+                    t.priceChangeM5 >= filters.minPctChange &&
+                    t.priceChangeM5 <= filters.maxPctChange &&
+                    (!filters.blockMev || t.breakdown.mevRisk >= 0)
+                );
+
+                if (matchedToken) {
+                    const alertKey = `caller_alerted:${user.telegramId}:${matchedToken.mint}`;
+                    const alreadyAlerted = await redis.get(alertKey);
+                    if (alreadyAlerted) continue;
+
+                    await redis.set(alertKey, '1', 'EX', 3600 * 24);
+
+                    const historyData = {
+                        mint: matchedToken.mint,
+                        symbol: matchedToken.symbol,
+                        score: matchedToken.totalScore,
+                        priceAtAlert: matchedToken.price,
+                        alertedAt: Date.now()
+                    };
+                    await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
+
+                    let historicalContext = "";
+                    try {
+                        const historyMap = await redis.hgetall('caller_history');
+                        const calls = Object.values(historyMap).map(val => JSON.parse(val)).filter(c => c.finalized && c.score >= 75);
+                        if (calls.length >= 5) { 
+                            const hits = calls.filter(c => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
+                            const winRate = ((hits / calls.length) * 100).toFixed(1);
+                            historicalContext = `<i>(Based on ${calls.length} verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting +20%).</i>\n\n`;
+                        }
+                    } catch(e) {}
+
+                    const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
+                                `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
+                                `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
+                                `<b>Audit Trail:</b>\n` +
+                                `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
+                                historicalContext +
+                                `<i>Click below to buy instantly via Jito:</i>`;
+                    
+                    try {
+                        await bot.telegram.sendMessage(user.telegramId, msg, {
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [
+                                        { text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` },
+                                        { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }
+                                    ],
+                                    [
+                                        { text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` },
+                                        { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }
+                                    ],
+                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
+                                ]
+                            }
+                        });
+                    } catch (e: any) {
+                        console.warn(`⚠️ [CALLER] Failed to send to ${user.telegramId}: ${e.message}`);
+                    }
+                }
+            }
+        } catch (e) {
+        } finally {
+            isScoring = false;
+        }
+    }, 15000);
+}
 
 // 🟢 Authentic Hit Rate Evaluator Job
 export function startCallerEvaluator() {
