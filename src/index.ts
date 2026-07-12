@@ -2038,6 +2038,9 @@ bot.action('menu_affiliate', async (ctx) => {
 // =========================================================
 // 🛠️ SENTRY DEV SUITE & 50/50 KOL PAYWALL (1.5 SOL)
 // =========================================================
+// =========================================================
+// 🛠️ SENTRY DEV SUITE & 50/50 KOL PAYWALL (2.0 SOL)
+// =========================================================
 bot.action('menu_devsuite', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -2071,10 +2074,10 @@ bot.action('menu_devsuite', async (ctx) => {
             `<i>The Problem:</i> Smart devs split their token supply across multiple wallets to avoid scaring buyers. But when it's time to take profit, selling 5 wallets one by one crashes your own chart and loses you thousands of dollars to slippage and MEV sandwich bots.\n` +
             `<i>The Solution:</i> The Nuke button compiles the sell orders from all 5 of your wallets into a single, encrypted Jito block. You exit your entire supply in the exact same millisecond at the absolute peak price.\n\n` +
             
-            `<i>Unlock lifetime access to both institutional tools for a one-time fee of <b>1.5 SOL</b>.</i>`;
+            `<i>Unlock lifetime access to both institutional tools for a one-time fee of <b>2.0 SOL</b>.</i>`;
             
         await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
-            [Markup.button.callback('🔓 Unlock Dev Suite (1.5 SOL)', 'action_unlock_devsuite')],
+            [Markup.button.callback('🔓 Unlock Dev Suite (2.0 SOL)', 'action_unlock_devsuite')],
             [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
         ]));
     }
@@ -2090,11 +2093,12 @@ bot.action('action_unlock_devsuite', async (ctx) => {
         return ctx.replyWithHTML("⚠️ <b>Upgrade Active:</b> You already have lifetime access to the Developer Suite!");
     }
 
-    const PRICE_SOL = 2.0; 
+    const PRICE_SOL = 2.0; // 🟢 RESTORED TO 2.0 SOL
     const priceLamports = PRICE_SOL * LAMPORTS_PER_SOL;
 
     try {
         await ctx.answerCbQuery(`⏳ Aggregating wallet balances...`);
+// ... rest of the function stays the same ...
         const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
         if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
         if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
@@ -2854,7 +2858,7 @@ const pnlPercent = pnlMatch ? parseFloat(pnlMatch[1]) : parseFloat((Math.random(
                     const { generatePnlCard } = await import('./services/image.service.js');
                     const imageBuffer = await generatePnlCard(targetCA, pnlPercent, user?.referralCode);
                     const tweetText = encodeURIComponent(`Just secured +${pnlPercent.toFixed(1)}% using Sentry Terminal ⚡️\nhttps://t.me/${process.env.BOT_USERNAME}?start=${user?.referralCode}`);
-                    const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+                    const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share & Earn on X', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
                     await ctx.replyWithPhoto({ source: imageBuffer }, { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn });
                     await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
                 } catch (_) {
@@ -3548,7 +3552,9 @@ bot.action('action_confirm_token_launch', async (ctx) => {
             const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
             const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
             const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
-            const tweetText = encodeURIComponent(`Just deployed $${symbol} seamlessly via Sentry Terminal ⚡\n\nJito MEV Protected. Concurrent Routing Active.\n\n${shareUrl}`);
+            
+            // 🟢 UPGRADE: Share to Earn Text & Button
+            const tweetText = encodeURIComponent(`Just deployed $${symbol} seamlessly via Sentry Terminal ⚡\n\nJito MEV Protected. Concurrent Whale Routing Active.\n\nJoin my community and trade this token early here 👇\n${shareUrl}`);
             
             const captionText = `✅ <b>TOKEN DEPLOYED SUCCESSFULLY!</b> 🚀\n\n` +
                 `• <b>Token Name:</b> ${name} ($${symbol})\n` +
@@ -3565,7 +3571,7 @@ bot.action('action_confirm_token_launch', async (ctx) => {
             form.append('parse_mode', 'HTML');
             form.append('reply_markup', JSON.stringify({
                 inline_keyboard: [
-                    [{ text: '🐦 Share Launch on X', url: `https://twitter.com/intent/tweet?text=${tweetText}` }],
+                    [{ text: '🐦 Share Launch & Earn on X', url: `https://twitter.com/intent/tweet?text=${tweetText}` }],
                     [{ text: '📂 Manage Launch Portfolio', callback_data: 'menu_my_launches' }],
                     [{ text: '⬅️ Dashboard', callback_data: 'btn_dashboard' }]
                 ]

@@ -99,13 +99,13 @@ export async function simExecuteSnipe(
     amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
     
-    // 🟢 FIX: Check simulated balance before allowing the trade
+    // 🟢 CHECK SIMULATED BALANCE BEFORE ALLOWING SNIPE
     const currentBal = parseFloat(await getSimBalance(telegramId));
     if (currentBal < amountSol + 0.001) {
         return { success: false, signature: '', message: '🔴 Insufficient Funds.', volumeSpent: 0 };
     }
 
-    // 🟢 Match realistic network/RPC/Jito latency
+    // 🟢 D4 FIX: Match realistic network/RPC/Jito latency (1.5s - 4.5s typical, 5% long tail)
     const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
     await new Promise(r => setTimeout(r, delay));
 
@@ -153,7 +153,7 @@ export async function simExecuteExit(
     forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
     
-    // 🟢 D4 FIX: Match realistic network/RPC/Jito latency for selling
+    // 🟢 D4 FIX: Match realistic Jito execution latency for selling
     const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
     await new Promise(r => setTimeout(r, delay));
 
@@ -355,11 +355,20 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         const user = await prisma.user.findUnique({ where: { telegramId } });
         const imageBuffer = await generatePnlCard(tokenAddress, pnlPercent, user?.referralCode ?? undefined);
         
+        // 🟢 D2/D5 UPGRADE: Share & Earn on X with direct referral link tracking!
+        const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
+        const imgId = crypto.randomBytes(8).toString('hex');
+        await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); 
+        const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
+
+        const tweetText = encodeURIComponent(`Just secured a verified ${pnlPercent >= 0 ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\nCopy my trades and earn passive SOL here 👇\n${shareUrl}`);
+        const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share & Earn on X', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+
         // 🟢 FIX: Safely use Telegraf native sendPhoto, bypassing fetch/form-data errors completely!
         await bot.telegram.sendPhoto(
             telegramId,
             { source: imageBuffer },
-            { caption: captionText, parse_mode: 'HTML' }
+            { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
         );
     } catch (e: any) {
         console.error("Simulation image generation failed:", e.message);

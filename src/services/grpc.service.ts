@@ -255,8 +255,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
         await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
 
-        // Always clear the guard regardless of whether the notification succeeds —
-        // the trade already happened via simExecuteExit above this block.
+        // Always clear the guard regardless of whether the notification succeeds
         await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
 
         try {
@@ -282,6 +281,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             const tweetText = encodeURIComponent(`Just secured a verified ${pnlPercent >= 0 ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${guardSnapshot.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\nVerified details: ${shareUrl}`);
             const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
 
+            // 🟢 FIX: Send via native bot method, bypass form-data errors
             await bot.telegram.sendPhoto(
                 guardSnapshot.telegramId,
                 { source: imageBuffer },
@@ -366,6 +366,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
                             const captionText = `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n💰 <b>Net Profit: +${profitSol.toFixed(4)} SOL</b> (+${profitPercent.toFixed(1)}%)\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
+                            // 🟢 FIX: Send via native bot method, bypass form-data errors
                             await bot.telegram.sendPhoto(
                                 guard.telegramId,
                                 { source: imageBuffer },
@@ -428,6 +429,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
                             const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n📉 <b>Peak Drop: -${dropPercent.toFixed(1)}%</b>\n${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
+                            // 🟢 FIX: Send via native bot method, bypass form-data errors
                             await bot.telegram.sendPhoto(
                                 guard.telegramId,
                                 { source: imageBuffer },
@@ -650,6 +652,7 @@ export function startUniversalGuardPoller(bot: any) {
         }
     }, 1000); 
 
+    // 🟢 C4 FIX: O(1) Redis SCAN Cursor loop for watchlists. Removes Event Loop Blocking!
     setInterval(async () => {
         try {
             let cursor = '0';
