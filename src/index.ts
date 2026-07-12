@@ -1674,6 +1674,8 @@ bot.action('trigger_caller_scan', async (ctx) => {
     }
 });
 
+
+
 // 🟢 NEW: Direct, auto-filled Guard prompt from a called coin
 bot.action(/^caller_guard_(.+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -2087,24 +2089,20 @@ bot.action('menu_devsuite', async (ctx) => {
         ]));
     } else {
         text += `<b>WHY SMART DEVS & KOLS UPGRADE TO PRO:</b>\n\n` +
-            
             `📈 <b>1. The Volume Bumper (Save $3,000+)</b>\n` +
-            `<i>The Problem:</i> When you launch a coin on Pump.fun, the algorithm drops your token from the front page if it lacks constant volume. Shady Telegram marketing agencies charge 15-20 SOL (~$3,000) to run basic volume scripts that often get your token flagged by RugCheck.\n` +
-            `<i>The Solution:</i> Sentry's Bumper lets you wash-trade your own coin across your 5 sub-wallets using private Jito MEV tips. It randomizes trade sizes (e.g. 0.012, 0.018) and delays so it looks exactly like organic, human volume. You keep your token trending safely without paying an agency.\n\n` +
-            
+            `<i>The Problem:</i> When you launch a coin, the algorithm drops your token from the front page if it lacks constant volume. Shady marketing agencies charge 15-20 SOL to run scripts that get your token flagged by RugCheck.\n` +
+            `<i>The Solution:</i> Sentry's Bumper executes automated wash-trading across ALL of your active sub-wallets concurrently within private Jito MEV bundles. It coordinates massive, un-snipeable volume spikes that keep your token trending safely without paying an agency.\n\n` +
             `💥 <b>2. The Nuke Button (Maximum Liquidity Exit)</b>\n` +
-            `<i>The Problem:</i> Smart devs split their token supply across multiple wallets to avoid scaring buyers. But when it's time to take profit, selling 5 wallets one by one crashes your own chart and loses you thousands of dollars to slippage and MEV sandwich bots.\n` +
+            `<i>The Problem:</i> Smart devs split their token supply across multiple wallets. But selling 5 wallets one by one crashes your own chart and loses you thousands to slippage and sandwich bots.\n` +
             `<i>The Solution:</i> The Nuke button compiles the sell orders from all 5 of your wallets into a single, encrypted Jito block. You exit your entire supply in the exact same millisecond at the absolute peak price.\n\n` +
-            
-            `<i>Unlock lifetime access to both institutional tools for a one-time fee of <b>2.0 SOL</b>.</i>`;
+            `<i>Unlock lifetime access to both institutional tools for a one-time fee of <b>3.0 SOL</b>.</i>`;
             
         await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
-            [Markup.button.callback('🔓 Unlock Dev Suite (2.0 SOL)', 'action_unlock_devsuite')],
+            [Markup.button.callback('🔓 Unlock Dev Suite (3.0 SOL)', 'action_unlock_devsuite')],
             [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
         ]));
     }
 });
-
 bot.action('action_unlock_devsuite', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
@@ -2115,12 +2113,11 @@ bot.action('action_unlock_devsuite', async (ctx) => {
         return ctx.replyWithHTML("⚠️ <b>Upgrade Active:</b> You already have lifetime access to the Developer Suite!");
     }
 
-    const PRICE_SOL = 2.0; // 🟢 RESTORED TO 2.0 SOL
+    const PRICE_SOL = 3.0; // 🟢 UPDATED TO 3.0 SOL
     const priceLamports = PRICE_SOL * LAMPORTS_PER_SOL;
 
     try {
         await ctx.answerCbQuery(`⏳ Aggregating wallet balances...`);
-// ... rest of the function stays the same ...
         const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
         if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
         if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
@@ -2196,7 +2193,6 @@ bot.action('action_unlock_devsuite', async (ctx) => {
             return ctx.replyWithHTML(`🔴 <b>Payment transaction dropped by the network.</b> Your SOL was not deducted. Please try again.`);
         }
 
-        // 🟢 CLAUDE FIX 2.2: Bulletproof Try/Catch for Database Update
         try {
             await prisma.user.update({ where: { id: user.id }, data: { isDevSuiteUnlocked: true } });
             if (user.referredById) {
@@ -2205,17 +2201,17 @@ bot.action('action_unlock_devsuite', async (ctx) => {
                     where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } }
                 });
             }
-            await ctx.replyWithHTML(`✅ <b>DEV SUITE UNLOCKED!</b>\n\n2.0 SOL compiled from your wallets and processed.\n🔗 <a href="https://solscan.io/tx/${sig}">Receipt</a>`, { link_preview_options: { is_disabled: true } });
+            // 🟢 UPDATED: 3.0 SOL Display
+            await ctx.replyWithHTML(`✅ <b>DEV SUITE UNLOCKED!</b>\n\n3.0 SOL compiled from your wallets and processed.\n🔗 <a href="https://solscan.io/tx/${sig}">Receipt</a>`, { link_preview_options: { is_disabled: true } });
             bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_devsuite' } } as any);
         } catch (e: any) {
             console.error("CRITICAL DB WRITE ERROR AFTER PAYMENT:", e.message);
-            await ctx.replyWithHTML(`⚠️ <b>Payment Confirmed but Activation Failed!</b>\n\nYour 2.0 SOL payment succeeded, but the database update failed. Please contact support immediately and provide this signature:\n<code>${sig}</code>`);
+            // 🟢 UPDATED: 3.0 SOL Display
+            await ctx.replyWithHTML(`⚠️ <b>Payment Confirmed but Activation Failed!</b>\n\nYour 3.0 SOL payment succeeded, but the database update failed. Please contact support immediately and provide this signature:\n<code>${sig}</code>`);
         }
         
     } catch (e) { await ctx.replyWithHTML(`🔴 <b>Error processing multi-wallet transaction.</b>`); }
 });
-// Replace this block in index.ts:
-
 
 bot.action('action_enter_ref_code', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}

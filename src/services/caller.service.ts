@@ -25,8 +25,8 @@ export async function getUserCallerFilters(telegramId: string): Promise<CallerFi
         maxAgeMins: 60,
         minPctChange: 10,
         maxPctChange: 500,
-        minLiquidity: 10000, // Default $10k Liq
-        minVolume24h: 50000, // Default $50k Vol
+        minLiquidity: 3000, // 🟢 FIX: Lowered default for fresh tokens
+        minVolume24h: 5000, // 🟢 FIX: Lowered default for fresh tokens
         blockMev: true
     };
 
@@ -55,7 +55,6 @@ export async function startCoinCaller(bot: any) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
-                // 🟢 FIX: Filter ALL matching tokens, not just the first one
                 const matchingTokens = tokens.filter(t => 
                     t.totalScore >= filters.minScore &&
                     t.ageMins <= filters.maxAgeMins &&
@@ -68,13 +67,12 @@ export async function startCoinCaller(bot: any) {
 
                 let matchedToken = null;
                 
-                // 🟢 FIX: Cycle down the list until we find one this user HASN'T been alerted about yet
                 for (const t of matchingTokens) {
                     const alertKey = `caller_alerted:${user.telegramId}:${t.mint}`;
                     const alreadyAlerted = await redis.get(alertKey);
                     if (!alreadyAlerted) {
                         matchedToken = t;
-                        await redis.set(alertKey, '1', 'EX', 3600 * 24); // Mark it so they don't get it again
+                        await redis.set(alertKey, '1', 'EX', 3600 * 24); 
                         break; 
                     }
                 }
@@ -136,6 +134,7 @@ export async function startCoinCaller(bot: any) {
         }
     }, 15000);
 }
+
 export async function setUserCallerFilters(telegramId: string, updates: Partial<CallerFilters>) {
     const current = await getUserCallerFilters(telegramId);
     const updated = { ...current, ...updates };
@@ -209,7 +208,7 @@ async function fetchRecentNewMints() {
                         mint,
                         symbol: rawMints.find((m: any) => m.mint === mint)?.symbol || 'UNKNOWN',
                         price: decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice,
-                        volume: realSolReserves * cachedSolUsdPrice * 2, // Proxy for actual volume
+                        volume: realSolReserves * cachedSolUsdPrice * 2, 
                         liquidity: virtualSolReserves * cachedSolUsdPrice,
                         priceChangeM5: 0,
                         pairCreatedAt: rawMints.find((m: any) => m.mint === mint)?.firstSeenAt || Date.now(),
@@ -386,7 +385,7 @@ export async function scoreTokens() {
         const { PublicKey } = await import('@solana/web3.js');
         const { cachedSolUsdPrice } = await import('./grpc.service.js');
 
-        // 🟢 UNIVERSAL ZERO-FIXER: Catches ANY indexed pump token that DexScreener reported as 0
+        // 🟢 UNIVERSAL ZERO-FIXER
         const needsFix = uniquePairs.filter(p => (p.liquidity === 0 || p.volume === 0) && p.mint.toLowerCase().endsWith('pump'));
 
         if (needsFix.length > 0) {
