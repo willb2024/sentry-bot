@@ -2330,16 +2330,14 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     let config = user.autoSnipeConfig;
     if (!config) config = await prisma.autoSnipeConfig.create({ data: { userId: user.id, amountSol: 0.01, sniperMode: "PUMP" } });
 
-    // --- 🎮 SIMULATION STATUS INTERCEPT ---
     const { isSimulationActive } = await import('./services/simulation.service.js');
     const isSimMode = await isSimulationActive(telegramId);
     const isSimActive = isSimMode && (await redis.get(`sim:autosnipe:${telegramId}`) === 'true');
     
     const isCurrentlyActive = isSimMode ? isSimActive : config.isActive;
     const statusObj = isCurrentlyActive ? "🟢 ACTIVE & SCANNING MEMPOOL" : "🔴 OFFLINE (Stopped)";
-    // --- END SIMULATION INTERCEPT ---
 
-    let modeDisplay = "💊 PUMP.FUN COINS (BONDING CURVES)";
+    let modeDisplay = "💊 PUMP.FUN COINS";
     if (config.sniperMode === "RAYDIUM") modeDisplay = "🧪 RAYDIUM LIQUIDITY POOLS";
     else if (config.sniperMode === "BOTH") modeDisplay = "🔥 BOTH (PUMP.FUN & RAYDIUM)";
 
@@ -2348,32 +2346,25 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const spentSol = config.totalSpentSol || 0;
     const antiDeadObj = config.antiDeadCoin ? "🟢 ON (Active)" : "🔴 OFF (Disabled)"; 
     const devBagDisplay = `${config.maxDevBuyPercent}%`; 
+    const scoreDisplay = config.minScore > 0 ? `${config.minScore}/100 ⭐` : `OFF`; // 🟢 NEW
 
     const sniperText = 
         `🎯 <b>TRENCH AUTO-SNIPER ENGINE</b> 🎯\n` +
-        `<i>Sentry scans the raw Solana mempool to front-run Pump.fun bonding curves and Raydium LPs. Our zero-trust shields protect your capital automatically:</i>\n\n` +
+        `<i>Sentry scans the raw Solana mempool to front-run tokens. Our zero-trust shields protect your capital automatically:</i>\n\n` +
         
         `⚙️ <b>LIVE EXECUTION PARAMETERS:</b>\n\n` +
         `• <b>Status:</b> ${statusObj}\n` +
-        `  ├ <i>Explanation: Shows if Sentry is actively scanning Solana blocks or turned off.</i>\n\n` +
-        
         `• <b>Target Mode:</b> <b>${modeDisplay}</b>\n\n` +
         `• <b>Spend:</b> <b>${config.amountSol} SOL</b> per wallet\n` +
-        `  ├ <i>Example: If you have 3 wallets active, Sentry fires 3 concurrent transactions, investing <b>${(config.amountSol * 3).toFixed(2)} SOL</b> total.</i>\n\n` +
         `• <b>Max Budget:</b> <b>${config.maxBudgetSol ? config.maxBudgetSol + ' SOL' : 'Infinite (No Limit)'}</b>\n` +
-        `  ├ <i>Example: Set this to 1.0 SOL. Sentry will automatically shut down the moment it buys 10 tokens to protect your wallet.</i>\n\n` +
-        `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n` +
-        `  ├ <i>Total cumulative SOL spent by your sniper during this session.</i>\n\n` +
+        `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n\n` +
+        `• <b>AI Score Filter:</b> <b>${scoreDisplay}</b>\n` + // 🟢 NEW
+        `  ├ <i>Links your Auto-Sniper to the AI Caller brain. Only snipes tokens that hit this score.</i>\n\n` +
         `• <b>Market Cap Filter:</b> <b>${mcDisplay}</b>\n` +
-        `  ├ <i>Example: Set to $20k - $80k. Sentry blocks "ghost launches" and only buys coins that have immediate volume.</i>\n\n` +
         `• <b>Max Dev Bag:</b> <b>${devBagDisplay}</b>\n` +
-        `  ├ <i>Example: Set to 10%. If the creator buys more than 10% of their own supply at launch, Sentry immediately aborts.</i>\n\n` +
         `• <b>Anti-Dead Shield:</b> ${antiDeadObj}\n` +
-        `  ├ <i>Explanation: Blocks coin launches where the developer has 0 SOL of their own skin in the game.</i>\n\n` +
-        `• <b>Block Delay:</b> <b>${config.snipeDelaySeconds} Seconds</b>\n` +
-        `  ├ <i>Example: Set to 2s. Sentry waits exactly 2 blocks before buying to let metadata and developer holding checks fully populate on-chain.</i>\n\n` +
-        `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n` +
-        `  ├ <i>Example: Sentry deploys an in-memory Trailing Stop and Take Profit the exact millisecond your buy confirms.</i>\n`;
+        `• <b>Block Delay:</b> <b>${config.snipeDelaySeconds} Seconds</b>\n\n` +
+        `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n`;
 
     let modeBtnText = '🟢 Mode: Pump.fun 💊';
     if (config.sniperMode === 'RAYDIUM') modeBtnText = '🟢 Mode: Raydium LPs 🧪';
@@ -2382,6 +2373,7 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const UI = Markup.inlineKeyboard([
         [Markup.button.callback(isCurrentlyActive ? '🛑 SHUT DOWN ENGINE' : '⚡ ARM SNIPER ENGINE', 'toggle_autosnipe')],
         [Markup.button.callback(modeBtnText, 'toggle_sniper_mode')],
+        [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score')], // 🟢 NEW BUTTON
         [Markup.button.callback(`👻 Anti-Dead Shield: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
         [Markup.button.callback(`✏️ Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
         [Markup.button.callback(`📊 MC Filter (${mcDisplay})`, 'edit_snipe_mc')],
@@ -2447,6 +2439,12 @@ bot.action('edit_snipe_dev', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     await redis.set(`state:autosnipe_dev:${ctx.from?.id.toString()}`, 'AWAITING', 'EX', 120);
     await ctx.replyWithHTML(`🐋 <b>EDIT MAX DEV BAG</b>\nReply with the maximum percentage of the supply the developer is allowed to buy at launch.\n<i>Example: 15</i>`);
+});
+
+bot.action('edit_snipe_score', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await redis.set(`state:autosnipe_score:${ctx.from?.id.toString()}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`⭐ <b>EDIT AI MINIMUM SCORE</b>\nReply with the minimum score (0-100) a token must hit for the sniper to execute. <i>(Type 0 to disable AI filtering)</i>\n<i>Example: 75</i>`);
 });
 
 bot.action('edit_snipe_delay', async (ctx) => {
@@ -4154,6 +4152,15 @@ bot.on("text", async (ctx, next) => {
             if (isNaN(val) || val < 0) return ctx.reply("🔴 Invalid amount.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { maxBudgetSol: val === 0 ? null : val } });
             await ctx.replyWithHTML(`✅ <b>Max Budget set to ${val === 0 ? 'Infinite' : val + ' SOL'}.</b>`);
+            return;
+        }
+
+        if (await redis.get(`state:autosnipe_score:${telegramId}`)) {
+            await redis.del(`state:autosnipe_score:${telegramId}`);
+            const val = parseInt(text);
+            if (isNaN(val) || val < 0 || val > 100) return ctx.reply("🔴 Invalid score. Must be between 0 and 100.");
+            await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { minScore: val } });
+            await ctx.replyWithHTML(`✅ <b>AI Min Score set to ${val === 0 ? 'OFF' : val + '/100'}.</b>`);
             return;
         }
 

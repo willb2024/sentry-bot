@@ -276,6 +276,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const slPercent = config?.autoTrailingDropPercent || 20;
         const tpPercent = config?.autoTakeProfitPercent || 50; 
         const maxBudget = config?.maxBudgetSol || 10.0;
+        const minScore = config?.minScore || 0;
 
         // 🟢 ACCURATELY CHECK BUDGET LIMITS
         if (totalSimSpent + amountSol > maxBudget) {
@@ -285,6 +286,20 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
                 { parse_mode: 'HTML' }
             );
             break;
+        }
+
+        // 🟢 GENERATE REALISTIC CALLER SCORE FOR SIMULATION
+        // 60% chance for 30-50 (average), 30% chance for 50-70 (good), 10% chance for 70-90 (golden)
+        const rand = Math.random();
+        let simScore = 0;
+        if (rand < 0.6) simScore = Math.floor(Math.random() * 21) + 30;
+        else if (rand < 0.9) simScore = Math.floor(Math.random() * 21) + 50;
+        else simScore = Math.floor(Math.random() * 21) + 70;
+
+        // 🟢 FILTER LOGIC: If the simulated coin is too weak, skip it and keep scanning
+        if (simScore < minScore) {
+            await new Promise(r => setTimeout(r, 1500)); // Wait before finding next coin
+            continue; 
         }
 
         const isProfit = await getNextSimOutcome(telegramId, 'guard');
@@ -297,7 +312,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
 
         const buyRes = await simExecuteSnipe(telegramId, tokenCA, amountSol);
         
-        // 🟢 FIX: Halt auto-sniper loop if simulated balance runs out
+        // Halt auto-sniper loop if simulated balance runs out
         if (!buyRes.success) {
             await bot.telegram.sendMessage(telegramId, `🛑 <b>AUTO-SNIPER PAUSED:</b> Simulated balance insufficient.`, { parse_mode: 'HTML' });
             await redis.set(`sim:autosnipe:${telegramId}`, 'false');
@@ -306,8 +321,9 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         totalSimSpent += amountSol;
 
         const buyMsg = 
-            `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\n` +
+            `🟢 <b>BUY & GUARD SUCCESSFUL!</b> 🎮\n\n` +
             `Token: <code>${tokenCA.substring(0,8)}...</code>\n` +
+            `AI Score: <b>${simScore}/100</b> ⭐\n` +
             `Invested: <b>${amountSol} SOL</b>\n` +
             `Received: <b>${tokensBought.toLocaleString()} Tokens</b>\n` +
             `Entry Price: <b>${entryPriceSol.toFixed(9)} SOL</b>\n` +

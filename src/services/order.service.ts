@@ -181,7 +181,15 @@ export async function cancelAllGuardsForToken(telegramId: string, tokenAddress: 
     try {
         const orderIds = await redis.smembers(`token_guards:${telegramId}:${tokenAddress}`);
         for (const id of orderIds) {
-            await removeOrderFromMemory(id, telegramId, tokenAddress);
+            const raw = await redis.get(`order:trail:${id}`);
+            if (raw) {
+                await removeOrderFromMemory(id, telegramId, tokenAddress);
+            } else {
+                // 🟢 FIX: Clean up zombie token guards to prevent tracking bloat
+                await redis.srem(`active_guards_global`, id);
+                await redis.srem(`user_guards:${telegramId}`, id);
+                await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, id);
+            }
         }
     } catch (e: any) {
         console.error(`🔴 [GUARD] Failed to cancel guards for token ${tokenAddress}: ${e.message}`);
@@ -200,10 +208,15 @@ export async function cancelAllUserGuards(telegramId: string): Promise<number> {
                     const order: TrailingOrder = JSON.parse(raw);
                     await removeOrderFromMemory(orderId, telegramId, order.tokenAddress);
                 } catch (e) {
+                    // Corrupted JSON - Force clean
                     await redis.del(`order:trail:${orderId}`);
                     await redis.srem(`active_guards_global`, orderId);
                     await redis.srem(`user_guards:${telegramId}`, orderId);
                 }
+            } else {
+                // 🟢 FIX: Handle Zombie IDs (Key expired but set member remained)
+                await redis.srem(`active_guards_global`, orderId);
+                await redis.srem(`user_guards:${telegramId}`, orderId);
             }
         }
         return userOrderIds.length;

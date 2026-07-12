@@ -143,6 +143,7 @@ model AutoSnipeConfig {
   maxDevBuyPercent        Float    @default(10.0)
   autoTrailingDropPercent Float    @default(20.0) 
   autoTakeProfitPercent   Float?
+   minScore                Int      @default(0) 
   minMarketCap            Float    @default(0.0)
   maxMarketCap            Float    @default(100000.0)
   antiDeadCoin            Boolean  @default(false)

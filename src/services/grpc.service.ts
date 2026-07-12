@@ -639,8 +639,51 @@ async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
+                // 🟢 LIVE AI CALLER SCORE FILTER
+                if (liveConfig.minScore > 0) {
+                    let score = 0;
+                    try {
+                        const { computeTokenScore } = await import('./caller.service.js');
+                        let liqUsd = 0, volUsd = 0;
+
+                        if (mode === 'PUMP') {
+                            const { getBondingCurveAddress } = await import('./price.service.js');
+                            const curvePda = getBondingCurveAddress(mintCa);
+                            const accInfo  = await connection.getAccountInfo(new PublicKey(curvePda));
+                            if (accInfo?.data) {
+                                const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+                                if (buf.length >= 40) {
+                                    const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
+                                    const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
+                                    liqUsd = virtualSolReserves * cachedSolUsdPrice;
+                                    volUsd = realSolReserves * cachedSolUsdPrice * 2;
+                                }
+                            }
+                        }
+
+                        // Feed the on-chain metrics directly to the Caller's exact scoring algorithm
+                        const stats = {
+                            ageMins: (liveConfig.snipeDelaySeconds || 0) / 60, 
+                            volume24h: volUsd,
+                            liquidity: liqUsd,
+                            priceChangeM5: 0, 
+                            hasSocials: liveConfig.requireSocials,
+                            isRug: false 
+                        };
+
+                        const evalResult = computeTokenScore(stats);
+                        score = evalResult.score;
+                    } catch (e) {}
+
+                    // 🛑 Block the snipe if the token score is too low!
+                    if (score < liveConfig.minScore) {
+                        return; 
+                    }
+                }
+
                 if (mode === 'PUMP' && initialBuySol > 0 && liveConfig.maxDevBuyPercent > 0) {
                     try {
+                        const { getBondingCurveAddress } = await import('./price.service.js');
                         const curvePda = getBondingCurveAddress(mintCa);
                         const accInfo  = await connection.getAccountInfo(new PublicKey(curvePda));
                         if (accInfo?.data) {
@@ -658,6 +701,7 @@ async function triggerAutoSnipes(
 
                 if (mode === 'PUMP') {
                     try {
+                        const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
                         const curvePda = getBondingCurveAddress(mintCa);
                         const accInfo  = await connection.getAccountInfo(new PublicKey(curvePda));
                         if (accInfo?.data) {
@@ -671,16 +715,12 @@ async function triggerAutoSnipes(
 
                 if (liveConfig.requireSocials) {
                     try {
+                        const { default: axios } = await import('axios');
                         const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 1500 });
                         const pairs = dexRes.data?.pairs || [];
                         const hasSocials = pairs.some((p: any) => p.info?.socials && p.info.socials.length > 0);
-                        if (!hasSocials) {
-                            console.warn(`⚠️ [AUTO-SNIPE] Social Check Failed for ${mintCa}. Shield bypassed purchase.`);
-                            return; 
-                        }
-                    } catch (e: any) {
-                        console.warn(`⚠️ [AUTO-SNIPE] Profile API Timeout on ${mintCa}, proceeding aggressively to preserve block priority.`);
-                    }
+                        if (!hasSocials) return; 
+                    } catch (e: any) {}
                 }
 
                 const intendedSpend = liveConfig.amountSol * liveConfig.user.activeWallets;
@@ -710,6 +750,7 @@ async function triggerAutoSnipes(
                     });
 
                     const entryPrice = await fetchLiveEntryPrice(mintCa);
+                    const { addTrailingStopToMemory } = await import('./order.service.js');
                     await addTrailingStopToMemory(
                         liveConfig.user.telegramId, mintCa, liveConfig.autoTrailingDropPercent,
                         liveConfig.amountSol, entryPrice, liveConfig.autoTakeProfitPercent || undefined
