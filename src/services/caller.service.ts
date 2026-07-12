@@ -85,26 +85,44 @@ async function fetchRecentNewMints() {
     const { PublicKey } = await import('@solana/web3.js');
     const { cachedSolUsdPrice } = await import('./grpc.service.js');
 
-    for (const mint of missing) {
+    if (missing.length > 0) {
         try {
-            const curvePda = getBondingCurveAddress(mint);
-            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda)).catch(()=>null);
-            if (accInfo?.data) {
-                const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-                const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
-                enrichedTokens.push({
-                    mint,
-                    symbol: rawMints.find((m: any) => m.mint === mint)?.symbol || 'UNKNOWN',
-                    price: decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice,
-                    volume: 0,
-                    liquidity: virtualSolReserves * cachedSolUsdPrice, 
-                    priceChangeM5: 0,
-                    pairCreatedAt: rawMints.find((m: any) => m.mint === mint)?.firstSeenAt || Date.now(),
-                    socials: [],
-                    sourceQuality: 'onchain-only'
+            const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
+            const { connection } = await import('../lib/connection.js');
+            const { PublicKey } = await import('@solana/web3.js');
+            const { cachedSolUsdPrice } = await import('./grpc.service.js');
+    
+            for (let i = 0; i < missing.length; i += 100) {
+                const mintChunk = missing.slice(i, i + 100);
+                const pdaChunk = mintChunk.map(m => new PublicKey(getBondingCurveAddress(m)));
+    
+                const accInfos = await connection.getMultipleAccountsInfo(pdaChunk).catch((e: any) => {
+                    console.error(`🔴 [CALLER] Batched onchain fallback failed: ${e.message}`);
+                    return null;
+                });
+                if (!accInfos) continue;
+    
+                accInfos.forEach((accInfo, idx) => {
+                    if (!accInfo?.data) return;
+                    const mint = mintChunk[idx];
+                    const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+                    const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
+                    enrichedTokens.push({
+                        mint,
+                        symbol: rawMints.find((m: any) => m.mint === mint)?.symbol || 'UNKNOWN',
+                        price: decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice,
+                        volume: 0,
+                        liquidity: virtualSolReserves * cachedSolUsdPrice,
+                        priceChangeM5: 0,
+                        pairCreatedAt: rawMints.find((m: any) => m.mint === mint)?.firstSeenAt || Date.now(),
+                        socials: [],
+                        sourceQuality: 'onchain-only'
+                    });
                 });
             }
-        } catch (_) {}
+        } catch (e: any) {
+            console.error(`🔴 [CALLER] Onchain fallback fatal: ${e.message}`);
+        }
     }
     return enrichedTokens;
 }
@@ -278,7 +296,7 @@ export async function scoreTokens() {
             const { score, reasons } = computeTokenScore(stats);
             return { ...pair, totalScore: score, ageMins: stats.ageMins, reasons, breakdown: { mevRisk: isRug ? -100 : 0 } };
         }));
-
+        console.log('🔍 [CALLER DEBUG] Sample:', JSON.stringify(scored.slice(0, 3), null, 2));
         const topScorers = scored.filter(t => t.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore);
         
         // 🟢 REQUIRED LOGGING FUNNEL (Solves the "Silent Starvation" mystery)
