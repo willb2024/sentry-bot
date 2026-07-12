@@ -126,7 +126,7 @@ setInterval(async () => {
 export function releaseGuardSubscription(tokenAddress: string) {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
     try {
-        // 🟢 FIX: Catch fake simulation mints that cause 'Invalid public key' noise
+        // Catch fake simulation mints that cause 'Invalid public key' noise
         const curvePda = getBondingCurveAddress(tokenAddress); 
         if (!cachedActiveGuards.some(g => g.tokenAddress === tokenAddress) && !cachedLimitOrders.some(l => l.tokenAddress === tokenAddress)) {
             const subId = activeSubscriptions.get(curvePda);
@@ -221,6 +221,10 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
 
     const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage, getNextSimOutcome } = await import('./simulation.service.js');
+    
+    // ==============================================
+    // 🎮 SIMULATION BRANCH
+    // ==============================================
     if (await isSimulationActive(guardSnapshot.telegramId)) {
         if (lockedGuards.has(guardSnapshot.id)) return;
 
@@ -267,6 +271,8 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             const pnlMessage = pnlPercent >= 0
                 ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
                 : `🩸 <b>Incurred Loss: -${Math.abs(solPnl).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
+            
+            // 🟢 FIX: Correctly used guardSnapshot.trailingPercent instead of undefined dropPercent
             const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n${pnlPercent < 0 ? `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` : ''}${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
 
             const imgId = crypto.randomBytes(8).toString('hex');
@@ -276,14 +282,12 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             const tweetText = encodeURIComponent(`Just secured a verified ${pnlPercent >= 0 ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${guardSnapshot.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\nVerified details: ${shareUrl}`);
             const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
 
-            const form = new FormData();
-            form.append('chat_id', guardSnapshot.telegramId);
-            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
-            form.append('caption', captionText);
-            form.append('parse_mode', 'HTML');
-            form.append('reply_markup', JSON.stringify(twitterBtn));
+            await bot.telegram.sendPhoto(
+                guardSnapshot.telegramId,
+                { source: imageBuffer },
+                { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
+            );
 
-            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form as any, headers: form.getHeaders() });
         } catch (e: any) {
             console.error(`🔴 [SIM GUARD] PnL card failed for ${guardSnapshot.telegramId}:`, e.message);
             try {
@@ -298,6 +302,9 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         return; 
     }
 
+    // ==============================================
+    // ⚡ LIVE GUARD BRANCH
+    // ==============================================
     if (lockedGuards.has(guardSnapshot.id)) return;
 
     let guard = guardSnapshot;
@@ -332,12 +339,14 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             triggerInstantExit(guard).then(async (result) => {
                 if (result.success || (result as any).message?.includes("No tokens found")) {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
+                    
                     if (result.success) {
                         await redis.del(`balance_cache:${guard.telegramId}`);
+
                         try {
-                            const user = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
-                            const multiplier = user?.activeWallets || 1;
-                            const profitSol  = (guard.amountInSol * (profitPercent / 100)) * multiplier;
+                            const user          = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
+                            const multiplier    = user?.activeWallets || 1;
+                            const profitSol     = (guard.amountInSol * (profitPercent / 100)) * multiplier;
                             
                             const imgId = crypto.randomBytes(8).toString('hex');
                             const imageBuffer = await generatePnlCard(guard.tokenAddress, profitPercent, user?.referralCode ?? undefined);
@@ -357,21 +366,21 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
                             const captionText = `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n💰 <b>Net Profit: +${profitSol.toFixed(4)} SOL</b> (+${profitPercent.toFixed(1)}%)\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            const form = new FormData();
-                            form.append('chat_id', guard.telegramId);
-                            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
-                            form.append('caption', captionText);
-                            form.append('parse_mode', 'HTML');
-                            form.append('reply_markup', JSON.stringify(twitterBtn));
-                            
-                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form as any, headers: form.getHeaders() });
-                        } catch (e: any) {}
+                            await bot.telegram.sendPhoto(
+                                guard.telegramId,
+                                { source: imageBuffer },
+                                { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
+                            );
+
+                        } catch (e: any) {
+                            console.error("Take profit image send failed:", e.message);
+                        }
                     }
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 } else {
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 }
-            }).catch(() => {});
+            }).catch((e: any) => console.error("🔴 TP Execution Error:", e.message));
             return; 
         }
     }
@@ -419,15 +428,15 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
                             const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n📉 <b>Peak Drop: -${dropPercent.toFixed(1)}%</b>\n${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            const form = new FormData();
-                            form.append('chat_id', guard.telegramId);
-                            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
-                            form.append('caption', captionText);
-                            form.append('parse_mode', 'HTML');
-                            form.append('reply_markup', JSON.stringify(twitterBtn));
-                            
-                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form as any, headers: form.getHeaders() });
-                        } catch (e: any) {}
+                            await bot.telegram.sendPhoto(
+                                guard.telegramId,
+                                { source: imageBuffer },
+                                { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
+                            );
+
+                        } catch (e: any) {
+                            console.error("Stop loss image send failed:", e.message);
+                        }
                     }
                     setTimeout(() => lockedGuards.delete(guard.id), 15_000);
                 } else {
@@ -705,6 +714,35 @@ export function startUniversalGuardPoller(bot: any) {
     }, 10000); 
 }
 
+// 🟢 REST FALLBACK LOGIC
+let pollingStarted = false;
+export function startPumpFunPolling() {
+    if (pollingStarted) return;
+    pollingStarted = true;
+    console.log("🔁 [PUMP POLL] Starting REST polling fallback (10s interval).");
+
+    setInterval(async () => {
+        try {
+            const res = await axios.get(
+                'https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false',
+                { timeout: 4000, headers: { 'User-Agent': 'Mozilla/5.0' } }
+            );
+            if (!Array.isArray(res.data)) return;
+
+            let added = 0;
+            for (const coin of res.data) {
+                if (coin.mint && !recentlySnipedTokens.has(coin.mint)) {
+                    trackNewMint(coin.mint, coin.symbol || "UNKNOWN");
+                    added++;
+                }
+            }
+            if (added > 0) console.log(`🔁 [PUMP POLL] Added ${added} new mints via REST poll. Buffer size: ${recentNewMints.length}`);
+        } catch (e: any) {
+            console.warn(`⚠️ [PUMP POLL] Fetch failed: ${e.message}`);
+        }
+    }, 10_000);
+}
+
 let isWsConnecting = false;
 let wsHeartbeat: NodeJS.Timeout | null = null;
 let lastMessageAt = Date.now();
@@ -748,6 +786,8 @@ function connectPumpPortalStream(bot: any) {
                 trackNewMint(parsed.mint, parsed.symbol); 
 
                 const devInitialBuySol = parsed.initialBuy || 0;
+                
+                // Execute Auto-Snipers
                 await triggerAutoSnipes(bot, parsed.mint, parsed.symbol || "UNKNOWN", devInitialBuySol, 'PUMP');
             }
         } catch (_) {}
@@ -789,7 +829,6 @@ function connectRaydiumFallbackWatcher(bot: any) {
 
                     console.log(`🧪 [RAYDIUM WS] New Pool: ${tokenMint} (Pool ID: ${poolId})`);
                     
-                    // 🟢 BUG 1 FIX: Actually feed the caller buffer!
                     trackNewMint(tokenMint, "UNKNOWN"); 
                     
                     await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
@@ -926,40 +965,10 @@ async function triggerAutoSnipes(
     }
 }
 
-// Polling-based pump.fun source — independent of the WebSocket entirely.
-// Runs on a plain interval, so even if the WS is banned/dead, this keeps working.
-let pollingStarted = false;
-function startPumpFunPolling() {
-    if (pollingStarted) return;
-    pollingStarted = true;
-    console.log("🔁 [PUMP POLL] Starting REST polling fallback (10s interval).");
-
-    setInterval(async () => {
-        try {
-            const res = await axios.get(
-                'https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false',
-                { timeout: 4000, headers: { 'User-Agent': 'Mozilla/5.0' } }
-            );
-            if (!Array.isArray(res.data)) return;
-
-            let added = 0;
-            for (const coin of res.data) {
-                if (coin.mint && !recentlySnipedTokens.has(coin.mint)) {
-                    trackNewMint(coin.mint, coin.symbol || "UNKNOWN");
-                    added++;
-                }
-            }
-            if (added > 0) console.log(`🔁 [PUMP POLL] Added ${added} new mints via REST poll. Buffer size: ${recentNewMints.length}`);
-        } catch (e: any) {
-            console.warn(`⚠️ [PUMP POLL] Fetch failed: ${e.message}`);
-        }
-    }, 10_000);
-}
-
 export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
         connectPumpPortalStream(bot);
-        startPumpFunPolling();          // ← ADD THIS LINE
+        startPumpFunPolling();
         startUniversalGuardPoller(bot);
         pollerStarted = true;
         console.log("🟢 [SNIPER] PumpPortal WebSocket stream active.");
@@ -996,12 +1005,19 @@ export async function igniteYellowstoneStream(bot: any) {
                         recentlySnipedTokens.add(tokenMint);
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         
-                        console.log(`☄️ [METEORA gRPC] New Meteora Pool Detected: ${tokenMint}`);
-                        
-                        // 🟢 BUG 2 FIX: Actually feed the caller buffer!
-                        trackNewMint(tokenMint, "UNKNOWN"); 
-                        
-                        await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM');
+                        trackNewMint(tokenMint, "UNKNOWN");
+
+                        let poolId: string | undefined = undefined;
+                        try {
+                            const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
+                            if (accountKeys.length > 4) poolId = accountKeys[4];
+                        } catch (_) {}
+
+                        if (logs.some((l: string) => l.includes("Instruction: Create"))) {
+                            await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'PUMP');
+                        } else {
+                            await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
+                        }
                     }
                 }
 
@@ -1015,6 +1031,7 @@ export async function igniteYellowstoneStream(bot: any) {
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         console.log(`☄️ [METEORA gRPC] New Meteora Pool Detected: ${tokenMint}`);
                         
+                        trackNewMint(tokenMint, "UNKNOWN");
                         await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM');
                     }
                 }
