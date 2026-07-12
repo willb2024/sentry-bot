@@ -631,7 +631,6 @@ export async function executeExit(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
             
-            // 🟢 D5 FIX: Substituted the redundant inline array fan-out with the existing sendToJitoBundle helper
             const bundleOk = await sendToJitoBundle(swapTx, tipTx);
             
             if (!bundleOk) {
@@ -688,6 +687,33 @@ export async function executeExit(
                             realizedPnlSol: volumeToRecord * (profitPercent / 100)
                         }
                     }).catch(() => {});
+
+                    // 🟢 FIX: Send live PnL card now that we actually know the result!
+                    if (!isBumper) {
+                        try {
+                            const { generatePnlCard } = await import('./image.service.js');
+                            const imageBuffer = await generatePnlCard(targetCA, profitPercent, user.referralCode ?? undefined);
+                            const FormData = (await import('form-data')).default || await import('form-data');
+                            
+                            // TypeScript/Node.js workaround for module forms
+                            const form: any = new FormData();
+                            form.append('chat_id', telegramId);
+                            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
+                            form.append('caption',
+                                `${profitPercent >= 0 ? '🟢' : '🔴'} <b>SELL CONFIRMED</b>\n\n` +
+                                `Token: <code>${targetCA.substring(0,8)}...</code>\n` +
+                                `PnL: <b>${profitPercent >= 0 ? '+' : ''}${profitPercent.toFixed(2)}%</b>\n` +
+                                `🔗 <a href="https://solscan.io/tx/${txSig}">View on Solscan</a>`
+                            );
+                            form.append('parse_mode', 'HTML');
+                            
+                            await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, {
+                                method: 'POST', body: form as any, headers: form.getHeaders()
+                            });
+                        } catch (e) {
+                            console.error("Failed to generate/send live PnL card:", e);
+                        }
+                    }
                 }
             });
         });
