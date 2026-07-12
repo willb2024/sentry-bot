@@ -2346,25 +2346,44 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const spentSol = config.totalSpentSol || 0;
     const antiDeadObj = config.antiDeadCoin ? "🟢 ON (Active)" : "🔴 OFF (Disabled)"; 
     const devBagDisplay = `${config.maxDevBuyPercent}%`; 
-    const scoreDisplay = config.minScore > 0 ? `${config.minScore}/100 ⭐` : `OFF`; // 🟢 NEW
+    const scoreDisplay = config.minScore > 0 ? `${config.minScore}/100 ⭐` : `OFF`;
 
     const sniperText = 
         `🎯 <b>TRENCH AUTO-SNIPER ENGINE</b> 🎯\n` +
-        `<i>Sentry scans the raw Solana mempool to front-run tokens. Our zero-trust shields protect your capital automatically:</i>\n\n` +
+        `<i>Sentry scans raw block transitions to front-run listings. Operational parameters explained:</i>\n\n` +
         
-        `⚙️ <b>LIVE EXECUTION PARAMETERS:</b>\n\n` +
         `• <b>Status:</b> ${statusObj}\n` +
-        `• <b>Target Mode:</b> <b>${modeDisplay}</b>\n\n` +
-        `• <b>Spend:</b> <b>${config.amountSol} SOL</b> per wallet\n` +
+        `  ├ <i>Controls active mempool monitoring and execution.</i>\n\n` +
+
+        `• <b>Target Mode:</b> <b>${modeDisplay}</b>\n` +
+        `  ├ <i>Specifies listing venues to check (Pump.fun curve, Raydium pool, or both).</i>\n\n` +
+
+        `• <b>Spend Amount:</b> <b>${config.amountSol} SOL</b> per wallet\n` +
+        `  ├ <i>Capital spent per node. Multi-wallet mode fires this concurrently.</i>\n\n` +
+
         `• <b>Max Budget:</b> <b>${config.maxBudgetSol ? config.maxBudgetSol + ' SOL' : 'Infinite (No Limit)'}</b>\n` +
-        `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n\n` +
-        `• <b>AI Score Filter:</b> <b>${scoreDisplay}</b>\n` + // 🟢 NEW
-        `  ├ <i>Links your Auto-Sniper to the AI Caller brain. Only snipes tokens that hit this score.</i>\n\n` +
+        `  ├ <i>Safety cap that automatically turns off the sniper to prevent draining your wallet.</i>\n\n` +
+
+        `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n` +
+        `  ├ <i>Total cumulative SOL deployed by Sentry during your current session.</i>\n\n` +
+
+        `• <b>AI Score Filter:</b> <b>${scoreDisplay}</b>\n` +
+        `  ├ <i>Evaluates token stats (liq, volume, age, socials) and blocks trigger if score is too low.</i>\n\n` +
+
         `• <b>Market Cap Filter:</b> <b>${mcDisplay}</b>\n` +
-        `• <b>Max Dev Bag:</b> <b>${devBagDisplay}</b>\n` +
+        `  ├ <i>Valuation limits to avoid buying highly inflated launches or ghost pools.</i>\n\n` +
+
+        `• <b>Max Dev Bag (Dev Limit):</b> <b>${devBagDisplay}</b>\n` +
+        `  ├ <i>Aborts snipe if developer buys more than this token supply % in the launch block.</i>\n\n` +
+
         `• <b>Anti-Dead Shield:</b> ${antiDeadObj}\n` +
-        `• <b>Block Delay:</b> <b>${config.snipeDelaySeconds} Seconds</b>\n\n` +
-        `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n`;
+        `  ├ <i>Filters out lazy launches where the creator did not buy any of their own supply at mint.</i>\n\n` +
+
+        `• <b>Block Delay:</b> <b>${config.snipeDelaySeconds} Seconds</b>\n` +
+        `  ├ <i>Time Sentry waits post-mint to allow on-chain distribution checks to settle.</i>\n\n` +
+
+        `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n` +
+        `  ├ <i>Deploys cost-basis tracking stop-loss and take-profit targets instantly via Jito.</i>\n`;
 
     let modeBtnText = '🟢 Mode: Pump.fun 💊';
     if (config.sniperMode === 'RAYDIUM') modeBtnText = '🟢 Mode: Raydium LPs 🧪';
@@ -2373,7 +2392,7 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const UI = Markup.inlineKeyboard([
         [Markup.button.callback(isCurrentlyActive ? '🛑 SHUT DOWN ENGINE' : '⚡ ARM SNIPER ENGINE', 'toggle_autosnipe')],
         [Markup.button.callback(modeBtnText, 'toggle_sniper_mode')],
-        [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score')], // 🟢 NEW BUTTON
+        [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score')],
         [Markup.button.callback(`👻 Anti-Dead Shield: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
         [Markup.button.callback(`✏️ Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
         [Markup.button.callback(`📊 MC Filter (${mcDisplay})`, 'edit_snipe_mc')],

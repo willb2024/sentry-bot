@@ -639,12 +639,31 @@ async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
-                // 🟢 LIVE AI CALLER SCORE FILTER
+                // 🟢 Single DexScreener fetch shared by score filter + social requirement (RAYDIUM/BOTH only)
+                let dexPairCache: any = null;
+                let dexFetchAttempted = false;
+                const getDexPair = async () => {
+                    if (dexFetchAttempted) return dexPairCache;
+                    dexFetchAttempted = true;
+                    try {
+                        const { default: axios } = await import('axios');
+                        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 });
+                        dexPairCache = res.data?.pairs?.[0] || null;
+                    } catch (_) { dexPairCache = null; }
+                    return dexPairCache;
+                };
+
+                // 🟢 LIVE AI CALLER SCORE FILTER (real age, real liq/vol for both modes, real socials, real rug check)
                 if (liveConfig.minScore > 0) {
                     let score = 0;
                     try {
                         const { computeTokenScore } = await import('./caller.service.js');
-                        let liqUsd = 0, volUsd = 0;
+
+                        const { getRecentNewMints } = await import('./grpc.service.js');
+                        const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
+                        const ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
+
+                        let liqUsd = 0, volUsd = 0, priceChangeM5 = 0, hasSocials = false, isRug = false;
 
                         if (mode === 'PUMP') {
                             const { getBondingCurveAddress } = await import('./price.service.js');
@@ -659,26 +678,28 @@ async function triggerAutoSnipes(
                                     volUsd = realSolReserves * cachedSolUsdPrice * 2;
                                 }
                             }
+                        } else {
+                            const pair = await getDexPair();
+                            if (pair) {
+                                liqUsd = pair.liquidity?.usd || 0;
+                                volUsd = pair.volume?.h24 || 0;
+                                priceChangeM5 = pair.priceChange?.m5 || 0;
+                                hasSocials = (pair.info?.socials?.length || 0) > 0;
+                            }
                         }
 
-                        // Feed the on-chain metrics directly to the Caller's exact scoring algorithm
-                        const stats = {
-                            ageMins: (liveConfig.snipeDelaySeconds || 0) / 60, 
-                            volume24h: volUsd,
-                            liquidity: liqUsd,
-                            priceChangeM5: 0, 
-                            hasSocials: liveConfig.requireSocials,
-                            isRug: false 
-                        };
+                        try {
+                            const { checkTokenRugRisk } = await import('./price.service.js');
+                            isRug = await checkTokenRugRisk(mintCa);
+                        } catch (_) {}
 
-                        const evalResult = computeTokenScore(stats);
-                        score = evalResult.score;
-                    } catch (e) {}
-
-                    // 🛑 Block the snipe if the token score is too low!
-                    if (score < liveConfig.minScore) {
-                        return; 
+                        const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials, isRug };
+                        score = computeTokenScore(stats).score;
+                    } catch (e) {
+                        return; // fail closed
                     }
+
+                    if (score < liveConfig.minScore) return;
                 }
 
                 if (mode === 'PUMP' && initialBuySol > 0 && liveConfig.maxDevBuyPercent > 0) {
@@ -715,11 +736,17 @@ async function triggerAutoSnipes(
 
                 if (liveConfig.requireSocials) {
                     try {
-                        const { default: axios } = await import('axios');
-                        const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 1500 });
-                        const pairs = dexRes.data?.pairs || [];
-                        const hasSocials = pairs.some((p: any) => p.info?.socials && p.info.socials.length > 0);
-                        if (!hasSocials) return; 
+                        if (mode === 'PUMP') {
+                            const { default: axios } = await import('axios');
+                            const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 1500 });
+                            const pairs = dexRes.data?.pairs || [];
+                            const hasSocials = pairs.some((p: any) => p.info?.socials && p.info.socials.length > 0);
+                            if (!hasSocials) return;
+                        } else {
+                            const pair = await getDexPair(); // reuses the fetch from the score check above
+                            const hasSocials = (pair?.info?.socials?.length || 0) > 0;
+                            if (!hasSocials) return;
+                        }
                     } catch (e: any) {}
                 }
 
