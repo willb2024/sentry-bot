@@ -124,8 +124,10 @@ setInterval(async () => {
 
 // 🟢 C3 FIX: Prevent WebSocket Memory Leaks
 export function releaseGuardSubscription(tokenAddress: string) {
-    if (tokenAddress.toLowerCase().endsWith("pump")) {
-        const curvePda = getBondingCurveAddress(tokenAddress);
+    if (!tokenAddress.toLowerCase().endsWith("pump")) return;
+    try {
+        // 🟢 FIX: Catch fake simulation mints that cause 'Invalid public key' noise
+        const curvePda = getBondingCurveAddress(tokenAddress); 
         if (!cachedActiveGuards.some(g => g.tokenAddress === tokenAddress) && !cachedLimitOrders.some(l => l.tokenAddress === tokenAddress)) {
             const subId = activeSubscriptions.get(curvePda);
             if (subId !== undefined) {
@@ -133,7 +135,7 @@ export function releaseGuardSubscription(tokenAddress: string) {
                 activeSubscriptions.delete(curvePda);
             }
         }
-    }
+    } catch (_) { /* fake sim mint, nothing to release, ignore silently */ }
 }
 
 async function sendPriceAlertWithChart(
@@ -222,8 +224,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
     if (await isSimulationActive(guardSnapshot.telegramId)) {
         if (lockedGuards.has(guardSnapshot.id)) return;
 
-        // 🟢 FIX: Track elapsed time so resolution is guaranteed within a realistic window,
-        // instead of an infinite flat 50/50 coin flip every poll tick.
         const createdKey = `sim:guard_created:${guardSnapshot.id}`;
         let createdAtStr = await redis.get(createdKey);
         if (!createdAtStr) {
@@ -251,7 +251,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
         await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
 
-        // 🟢 FIX: Always clear the guard regardless of whether the notification succeeds —
+        // Always clear the guard regardless of whether the notification succeeds —
         // the trade already happened via simExecuteExit above this block.
         await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
 
@@ -267,7 +267,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             const pnlMessage = pnlPercent >= 0
                 ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
                 : `🩸 <b>Incurred Loss: -${Math.abs(solPnl).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
-            const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n${pnlPercent < 0 ? `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` : ''}${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.`;
+            const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n${pnlPercent < 0 ? `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` : ''}${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
 
             const imgId = crypto.randomBytes(8).toString('hex');
             await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
@@ -285,8 +285,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
             await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form as any, headers: form.getHeaders() });
         } catch (e: any) {
-            // 🟢 FIX: log the real error, and guarantee the user still sees a result
-            // even if image generation/sending fails for any reason.
             console.error(`🔴 [SIM GUARD] PnL card failed for ${guardSnapshot.telegramId}:`, e.message);
             try {
                 await bot.telegram.sendMessage(
@@ -706,8 +704,6 @@ export function startUniversalGuardPoller(bot: any) {
         }
     }, 10000); 
 }
-
-// src/services/grpc.service.ts (Replace this function)
 
 let isWsConnecting = false;
 let wsHeartbeat: NodeJS.Timeout | null = null;

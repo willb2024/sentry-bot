@@ -23,5 +23,7 @@ const redisOptions: RedisOptions = {
 
 export const redis = new Redis(redisUrl as string, redisOptions);
 
+
+
 redis.on('connect', () => console.log('🟢 [2/5] Redis In-Memory Matrix Connected!'));
 redis.on('error', (err: any) => console.error('🔴 [REDIS FAULT]:', err.message));
