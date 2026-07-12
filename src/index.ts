@@ -2838,8 +2838,8 @@ bot.action(/^sell_(10|25|50|75|100)_(.+)$/, async (ctx) => {
             
             const { isSimulationActive } = await import('./services/simulation.service.js');
             if (await isSimulationActive(tgId)) {
-                const pnlMatch = result.message.match(/PnL: \+?([\d.]+)%/);
-                const pnlPercent = pnlMatch ? parseFloat(pnlMatch[1]) : parseFloat((Math.random() * 200 + 20).toFixed(2));
+                const pnlMatch = result.message.match(/PnL: (-?\+?[\d.]+)%/);
+const pnlPercent = pnlMatch ? parseFloat(pnlMatch[1]) : parseFloat((Math.random() * 200 + 20).toFixed(2));
                 const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
                 
                 const captionText =
