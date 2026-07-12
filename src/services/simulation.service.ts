@@ -263,19 +263,19 @@ export function generateSimCallerAlert(filters: {
     maxAgeMins: number;
     minPctChange: number;
     maxPctChange: number;
+    minLiquidity: number; // 🟢 NEW
+    minVolume24h: number; // 🟢 NEW
     blockMev: boolean;
-}): (ReturnType<typeof computeTokenScore> & { mint: string; symbol: string; ageMins: number; priceChangeM5: number }) | null {
+}): (ReturnType<typeof computeTokenScore> & { mint: string; symbol: string; ageMins: number; priceChangeM5: number; liquidity: number; volume: number }) | null {
     const symbols = ['DOGE', 'BONK', 'WIF', 'MYRO', 'POPCAT', 'ZEUS', 'BOME', 'MEW', 'SLERF'];
 
-    // Simulate scanning a small pool of candidate tokens, same as the real pipeline
-    // would pull from WS/REST — most won't pass the filters, exactly like real life.
     const poolSize = 8;
     const candidates = Array.from({ length: poolSize }, () => {
         const ageMins = Math.floor(Math.random() * 90) + 1;
         const stats: TokenStats = {
             ageMins,
-            volume24h: Math.random() * 300000,
-            liquidity: Math.random() * 80000 + 2000,
+            volume24h: Math.random() * 500000 + 5000,   // Random Vol between $5k and $505k
+            liquidity: Math.random() * 100000 + 2000,   // Random Liq between $2k and $102k
             priceChangeM5: parseFloat((Math.random() * 220 + 1).toFixed(1)),
             hasSocials: Math.random() > 0.3,
             isRug: Math.random() < 0.08
@@ -285,16 +285,19 @@ export function generateSimCallerAlert(filters: {
             mint: generateSimTokenCA(),
             symbol: symbols[Math.floor(Math.random() * symbols.length)],
             score, reasons, ageMins, priceChangeM5: stats.priceChangeM5,
-            mevRisk: stats.isRug ? -100 : 0
+            mevRisk: stats.isRug ? -100 : 0,
+            liquidity: stats.liquidity, // Pass down for filtering
+            volume: stats.volume24h     // Pass down for filtering
         };
     });
 
-    // Apply the SAME filter logic the real scoreTokens()/startCoinCaller() flow uses
     const match = candidates.find(t =>
         t.score >= filters.minScore &&
         t.ageMins <= filters.maxAgeMins &&
         t.priceChangeM5 >= filters.minPctChange &&
         t.priceChangeM5 <= filters.maxPctChange &&
+        t.liquidity >= filters.minLiquidity && // 🟢 SIM MATCHES NEW FILTERS
+        t.volume >= filters.minVolume24h &&    // 🟢 SIM MATCHES NEW FILTERS
         (!filters.blockMev || t.mevRisk >= 0)
     );
 

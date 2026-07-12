@@ -1521,7 +1521,6 @@ bot.action('onboard_step3', async (ctx) => {
 
 
 // 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
-// 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
 bot.action('trigger_caller_scan', async (ctx) => {
     try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
@@ -1561,8 +1560,9 @@ bot.action('trigger_caller_scan', async (ctx) => {
                 `The simulated pool captured fresh mints, but none cleared your strict filters:\n` +
                 `• Min Score: <b>${filters.minScore}+</b>\n` +
                 `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
+                `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
                 `• Momentum: <b>${filters.minPctChange}% - ${filters.maxPctChange}%</b>\n\n` +
-                `<i>Try lowering your minimum score, or check back shortly!</i>`,
+                `<i>Try lowering your minimums, or check back shortly!</i>`,
                 { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
             );
         }
@@ -1592,6 +1592,10 @@ bot.action('trigger_caller_scan', async (ctx) => {
         const matchedToken = topTokens.find((t: any) => 
             t.totalScore >= filters.minScore &&
             t.ageMins <= filters.maxAgeMins &&
+            t.priceChangeM5 >= filters.minPctChange &&
+            t.priceChangeM5 <= filters.maxPctChange &&
+            t.liquidity >= filters.minLiquidity && // 🟢 NEW FILTER
+            t.volume >= filters.minVolume24h &&    // 🟢 NEW FILTER
             (!filters.blockMev || t.breakdown.mevRisk >= 0)
         );
         
@@ -1634,8 +1638,10 @@ bot.action('trigger_caller_scan', async (ctx) => {
                 `The live pool captured <b>${rawPoolSize}</b> fresh mints in the last 30 minutes, but none safely cleared your strict filters:\n` +
                 `• Min Score: <b>${filters.minScore}+</b>\n` +
                 `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
+                `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
+                `• Momentum: <b>${filters.minPctChange}% - ${filters.maxPctChange}%</b>\n` +
                 `• Block MEV: <b>${filters.blockMev ? 'Yes' : 'No'}</b>\n\n` +
-                `<i>The trenches are quiet. Try lowering your minimum score, or check back shortly!</i>`,
+                `<i>The trenches are quiet. Try lowering your minimums, or check back shortly!</i>`,
                 { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
             );
         }
@@ -1699,15 +1705,21 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         `• <b>Minimum Score:</b> ${filters.minScore} / 100\n` +
         `• <b>Max Token Age:</b> ${filters.maxAgeMins} Mins\n` +
         `• <b>Momentum % Range:</b> ${filters.minPctChange}% to ${filters.maxPctChange}%\n` +
+        `• <b>Min Liquidity:</b> $${filters.minLiquidity.toLocaleString()}\n` +
+        `• <b>Min 24h Volume:</b> $${filters.minVolume24h.toLocaleString()}\n` +
         `• <b>Block MEV:</b> ${mevText}\n\n` +
         `<i>Adjust your scanner parameters below:</i>`;
 
     const ui = Markup.inlineKeyboard([
-        [Markup.button.callback('🔍 Scan Mainnet Now', 'trigger_caller_scan')], // 🟢 NEW MANUAL TRIGGER BUTTON
+        [Markup.button.callback('🔍 Scan Mainnet Now', 'trigger_caller_scan')], 
         [Markup.button.callback(filters.isActive ? '🛑 TURN OFF CALLER' : '⚡ TURN ON CALLER', 'toggle_caller_status')],
         [
             Markup.button.callback(`⏱️ Max Age (${filters.maxAgeMins}m)`, 'edit_caller_age'),
-            Markup.button.callback(`📈 % Range (${filters.minPctChange} to ${filters.maxPctChange}%)`, 'edit_caller_pct')
+            Markup.button.callback(`📈 % Range (${filters.minPctChange} - ${filters.maxPctChange}%)`, 'edit_caller_pct')
+        ],
+        [
+            Markup.button.callback(`💧 Min Liq ($${(filters.minLiquidity/1000).toFixed(0)}k)`, 'edit_caller_liq'),
+            Markup.button.callback(`📊 Min Vol ($${(filters.minVolume24h/1000).toFixed(0)}k)`, 'edit_caller_vol')
         ],
         [
             Markup.button.callback(`✏️ Min Score (${filters.minScore})`, 'edit_caller_score'), 
@@ -1716,12 +1728,24 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 
-    if (isEdit) {
-        await safeEditMessageText(ctx, text, ui);
-    } else {
-        await ctx.replyWithHTML(text, ui);
-    }
+    if (isEdit) await safeEditMessageText(ctx, text, ui);
+    else await ctx.replyWithHTML(text, ui);
 }
+
+// 🟢 NEW BUTTON ACTIONS: Add these right below your other edit_caller_* actions
+bot.action('edit_caller_liq', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:edit_caller_liq:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`💧 <b>EDIT MINIMUM LIQUIDITY</b>\n\nReply with the minimum Liquidity (in USD) a token must have.\n<i>Example: 15000 (for $15k minimum liq)</i>\n\n<i>Type /cancel to abort.</i>`);
+});
+
+bot.action('edit_caller_vol', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:edit_caller_vol:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`📊 <b>EDIT MINIMUM VOLUME</b>\n\nReply with the minimum 24h Volume (in USD) a token must have.\n<i>Example: 50000 (for $50k minimum volume)</i>\n\n<i>Type /cancel to abort.</i>`);
+});
 
 bot.action('edit_caller_age', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3742,10 +3766,12 @@ bot.on("text", async (ctx, next) => {
             `state:dev_volume:${telegramId}`, `state:dev_nuke:${telegramId}`,
             `active_bumper:${telegramId}`, `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
             `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`,
+            `state:edit_caller_score:${telegramId}`, `state:edit_caller_liq:${telegramId}`, `state:edit_caller_vol:${telegramId}`,
             `sim:autosnipe:${telegramId}`, `sim:caller_seq:${telegramId}`, `state:guard_ca:${telegramId}`,
             `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`,
             `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`,
-            `state:guild_airdrop:${telegramId}`, `vip:awaiting_tx:${telegramId}`
+            `state:guild_airdrop:${telegramId}`, `vip:awaiting_tx:${telegramId}`,
+            `state:set_pin:${telegramId}`, `state:withdraw_pin:${telegramId}`
         ];
         
         await redis.del(...keysToClear); 
@@ -3781,8 +3807,7 @@ bot.on("text", async (ctx, next) => {
         }
         return;
     }
-// Inside bot.on("text"), replace the old plaintext PIN handlers with this secure logic:
-    
+
     // 🟢 SECURITY: Hashed PIN Setup
     if (await redis.get(`state:set_pin:${telegramId}`)) {
         await redis.del(`state:set_pin:${telegramId}`);
@@ -3966,8 +3991,10 @@ bot.on("text", async (ctx, next) => {
             await redis.del(`state:edit_caller_age:${telegramId}`);
             const val = parseInt(text.trim());
             if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Age.</b> Must be a positive number.");
+            const { setUserCallerFilters } = await import('./services/caller.service.js');
             await setUserCallerFilters(telegramId, { maxAgeMins: val });
             await ctx.replyWithHTML(`✅ <b>Max Age updated to ${val} minutes!</b>`);
+            await sendCallerMenu(ctx, telegramId, false);
             return;
         }
 
@@ -3977,8 +4004,10 @@ bot.on("text", async (ctx, next) => {
             if (parts.length !== 2) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Use: <code>[MIN_%] [MAX_%]</code> (Example: <code>10 500</code>)");
             const min = parseFloat(parts[0]); const max = parseFloat(parts[1]);
             if (isNaN(min) || isNaN(max) || min > max) return ctx.replyWithHTML("🔴 <b>Invalid Range.</b>");
+            const { setUserCallerFilters } = await import('./services/caller.service.js');
             await setUserCallerFilters(telegramId, { minPctChange: min, maxPctChange: max });
             await ctx.replyWithHTML(`✅ <b>Percentage Range updated to ${min}% - ${max}%!</b>`);
+            await sendCallerMenu(ctx, telegramId, false);
             return;
         }
 
@@ -3986,8 +4015,34 @@ bot.on("text", async (ctx, next) => {
             await redis.del(`state:edit_caller_score:${telegramId}`);
             const val = parseInt(text.trim());
             if (isNaN(val) || val < 0 || val > 100) return ctx.replyWithHTML("🔴 <b>Invalid Score.</b> Must be between 0 and 100.");
+            const { setUserCallerFilters } = await import('./services/caller.service.js');
             await setUserCallerFilters(telegramId, { minScore: val });
             await ctx.replyWithHTML(`✅ <b>Minimum Score updated to ${val}!</b>`);
+            await sendCallerMenu(ctx, telegramId, false);
+            return;
+        }
+
+        // 🟢 NEW INPUT: Liquidity Filter
+        if (await redis.get(`state:edit_caller_liq:${telegramId}`)) {
+            await redis.del(`state:edit_caller_liq:${telegramId}`);
+            const val = parseInt(text.trim());
+            if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Amount.</b> Must be a positive number.");
+            const { setUserCallerFilters } = await import('./services/caller.service.js'); 
+            await setUserCallerFilters(telegramId, { minLiquidity: val });
+            await ctx.replyWithHTML(`✅ <b>Min Liquidity updated to $${val.toLocaleString()}!</b>`);
+            await sendCallerMenu(ctx, telegramId, false); 
+            return;
+        }
+
+        // 🟢 NEW INPUT: Volume Filter
+        if (await redis.get(`state:edit_caller_vol:${telegramId}`)) {
+            await redis.del(`state:edit_caller_vol:${telegramId}`);
+            const val = parseInt(text.trim());
+            if (isNaN(val) || val < 0) return ctx.replyWithHTML("🔴 <b>Invalid Amount.</b> Must be a positive number.");
+            const { setUserCallerFilters } = await import('./services/caller.service.js');
+            await setUserCallerFilters(telegramId, { minVolume24h: val });
+            await ctx.replyWithHTML(`✅ <b>Min 24h Volume updated to $${val.toLocaleString()}!</b>`);
+            await sendCallerMenu(ctx, telegramId, false); 
             return;
         }
         
@@ -4363,7 +4418,6 @@ bot.on("text", async (ctx, next) => {
                 
                 await redis.hmset(`guild_setup:${telegramId}`, { step: '3', reward: rewardDescription });
                 
-                // 🟢 D2 FIX: Adjusted confirmation copy to match actual logic (free)
                 await ctx.replyWithHTML(
                     `🏰 <b>CONFIRM GUILD CREATION</b>\n\n` +
                     `Please review your loyalty infrastructure setup:\n\n` +
@@ -4499,6 +4553,7 @@ bot.on("text", async (ctx, next) => {
 
     return next();
 });
+
 
 // 🟢 GAP 3 FIX: Seamlessly route the user from the "Watch Price" button directly into the Guard Flow
 bot.action(/^confirm_watch_(.+)$/, async (ctx) => {
