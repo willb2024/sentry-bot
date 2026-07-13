@@ -3314,7 +3314,43 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
 });
 
 // Helper function to handle the actual sending logic
+// Helper function to handle the actual sending logic
 async function executeWithdrawalProcess(user: any, targetAddress: string, requestedAmount: number, isMax: boolean, telegramId: string, ctx: any, withdrawLockKey: string) {
+    
+    // --- 🎮 SIMULATION INTERCEPT ---
+    const { isSimulationActive, getSimBalance } = await import('./services/simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        const loader = await ctx.replyWithHTML(`<i>⏳ Submitting transaction to Solana validators. Sweeping in progress...</i>`);
+        await new Promise(r => setTimeout(r, 1500 + Math.random() * 2000)); // Fake network delay
+        
+        const currentBal = parseFloat(await getSimBalance(telegramId));
+        const gasBuffer = 0.00005; // tiny fake gas buffer
+        
+        let withdrawAmount = isMax ? currentBal - gasBuffer : requestedAmount;
+        
+        // Check simulated balance limits
+        if (withdrawAmount <= 0 || withdrawAmount > currentBal) {
+            await redis.del(withdrawLockKey);
+            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Insufficient balance in your vault to cover the network transfer fee.`, { parse_mode: 'HTML' });
+        }
+        
+        // Deduct from simulated balance
+        const newBal = (currentBal - withdrawAmount).toFixed(4);
+        await redis.set(`sim:balance:${telegramId}`, newBal);
+        
+        const { generateSimSignature } = await import('./services/simulation.service.js');
+        
+        // Exact replica of the real success message (No simulation tags)
+        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
+            `🟢 <b>WITHDRAWAL INITIATED</b>\n\n<b>Total Swept:</b> ~<code>${withdrawAmount.toFixed(4)} SOL</code>\n<b>Destination:</b> <code>${targetAddress}</code>\n\n🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View Latest Receipt on Solscan</a>`, 
+            { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+        );
+        
+        await redis.del(withdrawLockKey);
+        return;
+    }
+    // --- END SIMULATION INTERCEPT ---
+
     const targetPubkey = new PublicKey(targetAddress);
     const loader = await ctx.replyWithHTML(`<i>⏳ Submitting transaction to Solana validators. Sweeping in progress...</i>`);
 
