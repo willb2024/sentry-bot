@@ -199,24 +199,66 @@ export function generateSimCallerAlert(filters: {
     minVolume24h: number;
     blockMev: boolean;
 }): (ReturnType<typeof computeTokenScore> & { mint: string; symbol: string; ageMins: number; priceChangeM5: number; liquidity: number; volume: number }) | null {
-    const symbols = ['DOGE', 'BONK', 'WIF', 'MYRO', 'POPCAT', 'ZEUS', 'BOME', 'MEW', 'SLERF'];
+    
+    // 🟢 Procedural Ticker Generator (Creates fake but realistic crypto symbols)
+    const generateFakeTicker = () => {
+        const consonants = 'BCDFGHJKLMNPRSTVWXYZ';
+        const vowels = 'AEIOU';
+        let ticker = '';
+        const length = Math.floor(Math.random() * 2) + 3; // 3 to 4 letters usually
+        for (let i = 0; i < length; i++) {
+            ticker += (i % 2 === 0) 
+                ? consonants.charAt(Math.floor(Math.random() * consonants.length))
+                : vowels.charAt(Math.floor(Math.random() * vowels.length));
+        }
+        // 15% chance to append a number to the end (e.g., PEPE2 -> VUX2)
+        if (Math.random() > 0.85) ticker += Math.floor(Math.random() * 9) + 1;
+        return ticker;
+    };
 
-    // Simulate scanning a small pool of candidate tokens
-    const poolSize = 8;
+    // Simulate scanning a pool of candidate tokens
+    const poolSize = 15; 
     const candidates = Array.from({ length: poolSize }, () => {
-        const ageMins = Math.floor(Math.random() * 90) + 1;
+        const ageMins = Math.floor(Math.random() * 120) + 1; 
+
+        // 🟢 Realistic Liquidity Tiers (Mimics Pump.fun & Raydium realities)
+        const liqRand = Math.random();
+        let liquidity = 0;
+        if (liqRand < 0.70) liquidity = Math.random() * 7000 + 3000;         // 70% chance: Trench ($3k - $10k)
+        else if (liqRand < 0.95) liquidity = Math.random() * 15000 + 10000;  // 25% chance: Strong ($10k - $25k)
+        else liquidity = Math.random() * 55000 + 25000;                      // 5% chance: Whale/Raydium ($25k - $80k)
+
+        // 🟢 Realistic Volume Tiers (Correlates to Liquidity)
+        const volRand = Math.random();
+        let volume24h = 0;
+        if (volRand < 0.60) volume24h = liquidity * (Math.random() * 2 + 0.5);      // Normal chop (0.5x to 2.5x liq)
+        else if (volRand < 0.90) volume24h = liquidity * (Math.random() * 5 + 2);   // Active trading (2x to 7x liq)
+        else volume24h = liquidity * (Math.random() * 15 + 5);                      // Parabolic breakout (5x to 20x liq)
+
+        // 🟢 Realistic Momentum (5-minute price change)
+        const momRand = Math.random();
+        let priceChangeM5 = 0;
+        if (momRand < 0.60) priceChangeM5 = (Math.random() * 15) - 10;        // 60% chance: Bleeding/Chopping (-10% to +5%)
+        else if (momRand < 0.90) priceChangeM5 = (Math.random() * 25) + 5;    // 30% chance: Pumping (+5% to +30%)
+        else priceChangeM5 = (Math.random() * 120) + 30;                      // 10% chance: Mooning (+30% to +150%)
+
+        const hasSocials = Math.random() > 0.40; // 60% chance of socials
+        const isRug = Math.random() < 0.08; // 8% chance of being a rug/honeypot
+
         const stats: TokenStats = {
-            ageMins,
-            volume24h: Math.random() * 500000 + 5000,
-            liquidity: Math.random() * 80000 + 2000,
-            priceChangeM5: parseFloat((Math.random() * 220 + 1).toFixed(1)),
-            hasSocials: Math.random() > 0.3,
-            isRug: Math.random() < 0.08
+            ageMins, volume24h, liquidity, priceChangeM5: parseFloat(priceChangeM5.toFixed(1)), hasSocials, isRug
         };
-        const { score, reasons } = computeTokenScore(stats);
+        
+        let { score, reasons } = computeTokenScore(stats);
+
+        // 🟢 PREVENT EXACT 100 SCORES. Clamp high scores to 92-98 to maintain realism.
+        if (score >= 100) {
+            score = Math.floor(Math.random() * 7) + 92; 
+        }
+
         return {
             mint: generateSimTokenCA(),
-            symbol: symbols[Math.floor(Math.random() * symbols.length)],
+            symbol: generateFakeTicker(),
             score, reasons, ageMins, priceChangeM5: stats.priceChangeM5,
             mevRisk: stats.isRug ? -100 : 0,
             liquidity: stats.liquidity, 
@@ -225,7 +267,7 @@ export function generateSimCallerAlert(filters: {
     });
 
     // Apply the SAME filter logic the real scoreTokens()/startCoinCaller() flow uses
-    const match = candidates.find(t =>
+    const matching = candidates.filter(t =>
         t.score >= filters.minScore &&
         t.ageMins <= filters.maxAgeMins &&
         t.priceChangeM5 >= filters.minPctChange &&
@@ -235,7 +277,12 @@ export function generateSimCallerAlert(filters: {
         (!filters.blockMev || t.mevRisk >= 0)
     );
 
-    return match || null;
+    // If multiple tokens clear the filter, pick one at random to keep it dynamic
+    if (matching.length > 0) {
+        return matching[Math.floor(Math.random() * matching.length)];
+    }
+    
+    return null;
 }
 
 // 🟢 D3 FIX: Biased by score with light momentum streaks
