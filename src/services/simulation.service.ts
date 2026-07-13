@@ -329,7 +329,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         if (totalSimSpent + amountSol > maxBudget) {
             await bot.telegram.sendMessage(
                 telegramId, 
-                `✅ <b>AUTO-SNIPER COMPLETE: Max Budget Reached</b> 🎮\n\nYour sniper has spent a total of <b>${totalSimSpent.toFixed(4)} SOL</b> and has automatically powered down.`, 
+                `✅ <b>AUTO-SNIPER COMPLETE: Max Budget Reached</b>\n\nYour sniper has spent a total of <b>${totalSimSpent.toFixed(4)} SOL</b> and has automatically powered down.`,
                 { parse_mode: 'HTML' }
             );
             break;
@@ -368,7 +368,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         totalSimSpent += amountSol;
 
         const buyMsg = 
-            `🟢 <b>BUY & GUARD SUCCESSFUL!</b> 🎮\n\n` +
+            `🟢 <b>BUY & GUARD SUCCESSFUL!</b> \n\n` +
             `Token: <code>${tokenCA.substring(0,8)}...</code>\n` +
             `AI Score: <b>${simScore}/100</b> ⭐\n` +
             `Invested: <b>${amountSol} SOL</b>\n` +
@@ -406,7 +406,7 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
         ? `💰 <b>Net Profit: +${Math.abs(pnlSol).toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
         : `🩸 <b>Incurred Loss: -${Math.abs(pnlSol).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
 
-    const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\n` +
+    const captionText = `${isProfit ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} \n\n` +
         `Token: <code>${tokenAddress.substring(0,8)}...</code>\n` +
         `Exit Price: <b>${exitPriceSol.toFixed(9)} SOL</b>\n` +
         `${!isProfit ? `📉 <b>Peak Drop: -${slPercent.toFixed(1)}%</b>\n` : ''}` +

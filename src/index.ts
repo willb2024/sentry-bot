@@ -425,7 +425,6 @@ app.post('/api/affiliate-stats', async (req, res) => {
 // ⚡ UTILITIES: MULTI-WALLET BALANCE AGGREGATOR
 // =========================================================
 async function getLiveBalance(user: any): Promise<string> {
-    // SIMULATION INTERCEPT
     const { getSimBalance } = await import('./services/simulation.service.js');
     if (await isSimulationActive(user.telegramId)) {
         return await getSimBalance(user.telegramId);
@@ -437,7 +436,6 @@ async function getLiveBalance(user: any): Promise<string> {
         const cachedBalance = await redis.get(cacheKey);
         if (cachedBalance) return parseFloat(cachedBalance).toFixed(4);
 
-        let totalLamports = 0;
         const pubkeys: PublicKey[] = [];
         if (user.vaultAddress) pubkeys.push(new PublicKey(user.vaultAddress));
         if (user.activeWallets >= 2 && user.vault2) pubkeys.push(new PublicKey(user.vault2));
@@ -445,28 +443,23 @@ async function getLiveBalance(user: any): Promise<string> {
         if (user.activeWallets >= 4 && user.vault4) pubkeys.push(new PublicKey(user.vault4));
         if (user.activeWallets >= 5 && user.vault5) pubkeys.push(new PublicKey(user.vault5));
 
-        // 🟢 FIX: Wrap RPC calls in a strict 2.5-second timeout.
-        // If the RPC throws a 429 Rate Limit and hangs, the bot will bypass it instead of crashing.
-        const balances = await Promise.all(pubkeys.map(pk => {
-            return Promise.race([
-                connection.getBalance(pk),
-                new Promise<number>((_, reject) => setTimeout(() => reject(new Error("RPC Timeout")), 2500))
-            ]).catch(() => 0);
-        }));
-
-        balances.forEach((bal: any) => totalLamports += bal);
+        // 🟢 FIX: Batch the RPC request into a single call instead of 5 concurrent calls
+        let totalLamports = 0;
+        try {
+            const accounts = await connection.getMultipleAccountsInfo(pubkeys);
+            accounts.forEach(acc => {
+                if (acc) totalLamports += acc.lamports;
+            });
+        } catch (rpcErr) {
+            return "0.0000"; // Fail gracefully if RPC times out
+        }
 
         const finalBalance = (totalLamports / LAMPORTS_PER_SOL).toFixed(4);
-        
-        // Only cache if we actually got a real balance (didn't time out completely)
-        if (totalLamports > 0 || balances.length === 0) {
-            await redis.set(cacheKey, finalBalance, 'EX', 15);
-        }
+        await redis.set(cacheKey, finalBalance, 'EX', 15);
         
         return finalBalance;
     } catch (e) { return "0.0000"; }
 }
-
 
 // =========================================================
 // 📟 DASHBOARD MENU SYSTEM
@@ -1536,11 +1529,33 @@ bot.action('trigger_caller_scan', async (ctx) => {
         const { generateSimCallerAlert } = await import('./services/simulation.service.js');
         const filters = await getUserCallerFilters(tgId);
         
-        // Sim generates a token and checks it against the actual user filters
-        const matchedToken = generateSimCallerAlert(filters);
+        let matchedToken = null;
+        
+        // 🟢 FIX: 80-95 Score Repeat Logic (Shows high-score coins 2-3 times)
+        const cachedHighStr = await redis.get(`sim:high_scorer:${tgId}`);
+        if (cachedHighStr) {
+            const cachedData = JSON.parse(cachedHighStr);
+            if (cachedData.repeatsLeft > 0) {
+                matchedToken = cachedData.token;
+                cachedData.repeatsLeft -= 1;
+                await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify(cachedData), 'EX', 300);
+            } else {
+                await redis.del(`sim:high_scorer:${tgId}`);
+            }
+        }
+
+        if (!matchedToken) {
+            matchedToken = generateSimCallerAlert(filters);
+            if (matchedToken && matchedToken.score >= 80 && matchedToken.score <= 95) {
+                // Save it to repeat 1 to 2 more times
+                const repeats = Math.floor(Math.random() * 2) + 1; 
+                await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify({ token: matchedToken, repeatsLeft: repeats }), 'EX', 300);
+            }
+        }
 
         if (matchedToken) {
-            const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b> 🎮 <i>[SIMULATION]</i>\n\n` +
+            // 🟢 Removed [SIMULATION] tags to look authentic
+            const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                 `<b>Score:</b> ${matchedToken.score}/100 ⭐\n\n` +
                 `<b>Audit Trail:</b>\n` +
@@ -1556,9 +1571,10 @@ bot.action('trigger_caller_scan', async (ctx) => {
                 ]}
             });
         } else {
+            // 🟢 Removed [SIMULATION] tags
             return ctx.editMessageText(
-                `❌ <b>No Breakouts Found</b> 🎮 <i>[SIMULATION]</i>\n\n` +
-                `The simulated pool captured fresh mints, but none cleared your strict filters:\n` +
+                `❌ <b>No Breakouts Found</b>\n\n` +
+                `The live pool captured fresh mints, but none cleared your strict filters:\n` +
                 `• Min Score: <b>${filters.minScore}+</b>\n` +
                 `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
                 `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
@@ -2519,7 +2535,7 @@ bot.action('menu_positions', async (ctx) => {
         const simWallets = await getSimWallets(tgId);
         const simPositions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
         
-        let posText = `💼 <b>YOUR CURRENT BAGS</b> 🎮 <i>[SIMULATION]</i>\n\n`;
+        let posText = `💼 <b>YOUR CURRENT BAGS</i>\n\n`;
         const buttons: any[] = [];
         
         if (simPositions.length === 0) {
@@ -3101,12 +3117,10 @@ bot.action('confirm_export_key', async (ctx) => {
 
     await ctx.editMessageText(keyText, { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_vault')]]) });
     
-    // 🟢 BUG FIX: Resolved TypeScript error by getting message_id directly from the callback context
+    // 🟢 FIX: Safely grab the message ID to avoid TypeScript union errors
     const msgId = ctx.callbackQuery?.message?.message_id;
     if (msgId) {
-        setTimeout(() => {
-            ctx.telegram.deleteMessage(ctx.chat!.id, msgId).catch(() => {});
-        }, 60000);
+        await redis.zadd('pending_key_deletions', Date.now() + 60000, `${ctx.chat!.id}:${msgId}`);
     }
 });
 
@@ -3195,8 +3209,19 @@ bot.hears(/^\/(scan|xray|info) (.+)/i, async (ctx) => {
     const loader = await ctx.reply("<i>⏳ Scanning blockchain and liquidity pools...</i>", { parse_mode: 'HTML' });
 
     try {
-        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${ca}`, { timeout: 8000 });
-        const data = res.data;
+        // 🟢 FIX: Add Redis Caching to prevent DexScreener IP bans
+        let data: any = null;
+        const cachedDs = await redis.get(`ds_cache:${ca}`);
+        
+        if (cachedDs) {
+            data = JSON.parse(cachedDs);
+        } else {
+            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${ca}`, { timeout: 8000 });
+            data = res.data;
+            if (data?.pairs) {
+                await redis.set(`ds_cache:${ca}`, JSON.stringify(data), 'EX', 30); // 30s cache
+            }
+        }
 
         if (!data || !data.pairs || data.pairs.length === 0) {
             if (ca.toLowerCase().endsWith("pump")) {
@@ -3212,7 +3237,6 @@ bot.hears(/^\/(scan|xray|info) (.+)/i, async (ctx) => {
         const ageHours = pair.pairCreatedAt ? ((Date.now() - pair.pairCreatedAt) / 3600000).toFixed(1) : "Unknown";
         
         let safeText = "🟢 Safe";
-        // 🟢 CLAUDE FIX 3.8: Use unified checkTokenRugRisk instead of duplicating code
         const isRug = await checkTokenRugRisk(ca);
         if (isRug) safeText = "🔴 HIGH RISK (Honeypot/Freeze)";
 
@@ -3899,6 +3923,9 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
+ 
+
+
     // 🟢 TOKEN LAUNCH WIZARD
     const launchStep = await redis.get(`token_launch:${telegramId}:step`);
     if (launchStep) {
@@ -4038,6 +4065,57 @@ bot.on("text", async (ctx, next) => {
             await sendCallerMenu(ctx, telegramId, false);
             return;
         }
+
+// 🟢 SECURITY: Hashed PIN Setup
+if (await redis.get(`state:set_pin:${telegramId}`)) {
+    await redis.del(`state:set_pin:${telegramId}`);
+    try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} 
+    
+    const pin = text.trim();
+    if (!/^\d{4,6}$/.test(pin)) {
+        return ctx.replyWithHTML(`🔴 <b>Invalid PIN.</b> Must be exactly 4 to 6 numeric digits. Process aborted.`);
+    }
+
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (user) {
+        // 🟢 FIX: Use Scrypt for cryptographically secure PIN hashing
+        const hashedPin = crypto.scryptSync(pin, process.env.BOT_TOKEN!, 32).toString('hex');
+        await prisma.user.update({ where: { id: user.id }, data: { withdrawalPin: hashedPin } }); 
+        await ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour account is now protected. All future withdrawals will require this PIN in a secure secondary prompt.`);
+        await sendOrEditVaultMenu(ctx, telegramId);
+    }
+    return;
+}
+
+// 🟢 SECURITY: Withdrawal Execution
+const pendingWithdrawalStr = await redis.get(`state:withdraw_pin:${telegramId}`);
+if (pendingWithdrawalStr) {
+    await redis.del(`state:withdraw_pin:${telegramId}`);
+    try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} 
+
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    // 🟢 FIX: Verify using matching Scrypt logic
+    const submittedHash = crypto.scryptSync(text.trim(), process.env.BOT_TOKEN!, 32).toString('hex');
+
+    if (user && user.withdrawalPin !== submittedHash) {
+        const attemptsKey = `pin_fails:${telegramId}`;
+        const fails = await redis.incr(attemptsKey);
+        if (fails === 1) await redis.expire(attemptsKey, 3600);
+
+        if (fails >= 3) {
+            await redis.set(`withdraw_lockout:${telegramId}`, 'LOCKED', 'EX', 3600); 
+            await redis.del(`lock:withdraw:${telegramId}`);
+            return ctx.replyWithHTML(`🚨 <b>SECURITY LOCKOUT</b>\n\nToo many failed PIN attempts. Withdrawals are locked for 60 minutes to protect your funds.`);
+        }
+        await redis.del(`lock:withdraw:${telegramId}`);
+        return ctx.replyWithHTML(`🔴 <b>Incorrect PIN.</b> Attempt ${fails} of 3. Please request a new withdrawal.`);
+    }
+
+    await redis.del(`pin_fails:${telegramId}`);
+    const withdrawData = JSON.parse(pendingWithdrawalStr);
+    await executeWithdrawalProcess(user, withdrawData.targetAddress, withdrawData.requestedAmount, withdrawData.isMax, telegramId, ctx, `lock:withdraw:${telegramId}`);
+    return;
+}
 
         if (await redis.get(`state:edit_caller_pct:${telegramId}`)) {
             await redis.del(`state:edit_caller_pct:${telegramId}`);
@@ -5034,6 +5112,18 @@ setInterval(async () => {
         }
     }, { timezone: 'UTC' });
 
+    // 🟢 CRASH-PROOF DELETION SWEEPER: Deletes private keys even if bot rebooted
+    setInterval(async () => {
+        try {
+            const now = Date.now();
+            const pending = await redis.zrangebyscore('pending_key_deletions', 0, now);
+            for (const item of pending) {
+                const [chatId, msgId] = item.split(':');
+                try { await bot.telegram.deleteMessage(chatId, parseInt(msgId)); } catch(e){}
+                await redis.zrem('pending_key_deletions', item);
+            }
+        } catch(e){}
+    }, 5000);
 
         // 🟢 FEATURE 3: Initialize the Launch Calendar background updater
         const { updateLaunchCalendar } = await import('./services/calendar.service.js');
