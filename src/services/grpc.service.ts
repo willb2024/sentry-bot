@@ -4,7 +4,6 @@ import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, g
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
-import { scoreTokens } from './caller.service.js'; 
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
@@ -15,7 +14,6 @@ import crypto from 'crypto';
 import { subscribeToMintPrice, unsubscribeFromMintPrice, getLivePriceSol } from './guard-price-feed.service.js';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
-import FormData from 'form-data'; 
 
 dotenv.config();
 const prisma = new PrismaClient();
@@ -34,7 +32,7 @@ const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 const recentlySnipedTokens = new Set<string>();
 let pollerStarted  = false;
-let isGrpcDisabled = false;
+export let isGrpcDisabled = false;
 let raydiumWsFallbackStarted = false;
 
 const lockedGuards      = new Set<string>();
@@ -44,7 +42,7 @@ let isPolling = false;
 let globalCurvePdas = new Set<string>(); 
 
 export let cachedSolUsdPrice = 150.0;
-let isPriceReady = false; 
+export let isPriceReady = false; 
 
 // 🟢 D1 FIX: Live WebSocket In-Memory Ring Buffer for AI Coin Caller
 export const recentNewMints: { mint: string, symbol: string, firstSeenAt: number }[] = [];
@@ -127,7 +125,6 @@ setInterval(async () => {
 export function releaseGuardSubscription(tokenAddress: string) {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
     try {
-        // Catch fake simulation mints that cause 'Invalid public key' noise
         const curvePda = getBondingCurveAddress(tokenAddress); 
         if (!cachedActiveGuards.some(g => g.tokenAddress === tokenAddress) && !cachedLimitOrders.some(l => l.tokenAddress === tokenAddress)) {
             const subId = activeSubscriptions.get(curvePda);
@@ -136,38 +133,7 @@ export function releaseGuardSubscription(tokenAddress: string) {
                 activeSubscriptions.delete(curvePda);
             }
         }
-    } catch (_) { /* fake sim mint, nothing to release, ignore silently */ }
-}
-
-async function sendPriceAlertWithChart(
-    telegramId: string, tokenMint: string, symbol: string, currentPrice: number, targetPrice: number, entryPrice: number, bot: any
-) {
-    try {
-        const { fetchDexScreenerCandles } = await import('./price.service.js');
-        const { generatePriceAlertChart } = await import('./image.service.js');
-
-        const candles = await fetchDexScreenerCandles(tokenMint);
-        const pnlVsEntry = entryPrice > 0 ? (((currentPrice - entryPrice) / entryPrice) * 100).toFixed(2) : null;
-
-        const caption = `🎯 <b>PRICE ALERT TRIGGERED</b>\n\n🪙 Token: <b>${symbol}</b>\n💰 Current: <b>$${currentPrice.toFixed(8)}</b>\n🎯 Your Target: <b>$${targetPrice.toFixed(8)}</b>\n` +
-            (pnlVsEntry ? `📈 vs Entry: <b>${parseFloat(pnlVsEntry) >= 0 ? '+' : ''}${pnlVsEntry}%</b>\n` : '') +
-            `\n<i>Chart shows last 60 minutes of price action.</i>`;
-
-        const { Markup } = await import('telegraf');
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback(`⚡ Buy Now`, `quick_buy_${tokenMint}`)],
-            [Markup.button.callback(`👀 Add to Watchlist`, `watch_add_${tokenMint}`), Markup.button.callback(`❌ Remove Alert`, `watch_remove_${tokenMint}`)]
-        ]);
-
-        if (candles.length > 0) {
-            const chartBuffer = await generatePriceAlertChart(symbol, candles, targetPrice, currentPrice);
-            await bot.telegram.sendPhoto(telegramId, { source: chartBuffer }, { caption, parse_mode: 'HTML', ...keyboard });
-        } else {
-            await bot.telegram.sendMessage(telegramId, caption, { parse_mode: 'HTML', ...keyboard });
-        }
-    } catch (e: any) {
-        await bot.telegram.sendMessage(telegramId, `🎯 <b>${symbol}</b> hit your target of $${targetPrice.toFixed(8)}! Current: $${currentPrice.toFixed(8)}`, { parse_mode: 'HTML' });
-    }
+    } catch (_) {}
 }
 
 async function fetchFreshGuard(guardId: string): Promise<TrailingOrder | null> {
@@ -220,7 +186,6 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
 }
 
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
-
     const { isSimulationActive, generateSimSignature, simExecuteExit, applySimSlippage, getNextSimOutcome } = await import('./simulation.service.js');
     
     // ==============================================
@@ -237,13 +202,13 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         }
         const elapsedMs = Date.now() - parseInt(createdAtStr);
 
-        const MIN_DELAY_MS = 3000;   // never resolve before 3 seconds
-        const RAMP_WINDOW_MS = 9000; // probability ramps to ~100% by ~12s total
+        const MIN_DELAY_MS = 3000;   
+        const RAMP_WINDOW_MS = 9000; 
 
         if (elapsedMs < MIN_DELAY_MS) return;
 
         const rampProgress = Math.min(1, (elapsedMs - MIN_DELAY_MS) / RAMP_WINDOW_MS);
-        const triggerProbability = 0.15 + rampProgress * 0.85; // starts at 15%, climbs to 100%
+        const triggerProbability = 0.15 + rampProgress * 0.85; 
 
         if (Math.random() > triggerProbability) return;
 
@@ -255,8 +220,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         const pnlPercent = applySimSlippage(targetPnl);
 
         await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
-
-        // Always clear the guard regardless of whether the notification succeeds
         await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
 
         try {
@@ -272,7 +235,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
                 : `🩸 <b>Incurred Loss: -${Math.abs(solPnl).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
             
-            // 🟢 FIX: Correctly used guardSnapshot.trailingPercent instead of undefined dropPercent
             const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n${pnlPercent < 0 ? `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` : ''}${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
 
             const imgId = crypto.randomBytes(8).toString('hex');
@@ -282,7 +244,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             const tweetText = encodeURIComponent(`Just secured a verified ${pnlPercent >= 0 ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${guardSnapshot.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\nVerified details: ${shareUrl}`);
             const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
 
-            // 🟢 FIX: Send via native bot method, bypass form-data errors
             await bot.telegram.sendPhoto(
                 guardSnapshot.telegramId,
                 { source: imageBuffer },
@@ -367,7 +328,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
                             const captionText = `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n💰 <b>Net Profit: +${profitSol.toFixed(4)} SOL</b> (+${profitPercent.toFixed(1)}%)\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            // 🟢 FIX: Send via native bot method, bypass form-data errors
                             await bot.telegram.sendPhoto(
                                 guard.telegramId,
                                 { source: imageBuffer },
@@ -430,7 +390,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
                             const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n📉 <b>Peak Drop: -${dropPercent.toFixed(1)}%</b>\n${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                            // 🟢 FIX: Send via native bot method, bypass form-data errors
                             await bot.telegram.sendPhoto(
                                 guard.telegramId,
                                 { source: imageBuffer },
@@ -453,14 +412,12 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 export function startUniversalGuardPoller(bot: any) {
     console.log("🛡️ [GUARD ENGINE] Push-Based Subscription Poller Initialized.");
 
-    // Fast, ultra-cheap tick: evaluate active guards using ALREADY-CACHED prices.
-    // NO Helius RPC calls are executed in this interval block.
     setInterval(async () => {
         try {
             const activeGuards = await getAllActiveGuards();
             for (const guard of activeGuards) {
                 const livePrice = getLivePriceSol(guard.tokenAddress);
-                if (livePrice === null) continue; // Skip if no push update cached yet
+                if (livePrice === null) continue; 
                 await checkAndTriggerGuard(guard, livePrice, bot);
             }
         } catch (e: any) {
@@ -468,14 +425,12 @@ export function startUniversalGuardPoller(bot: any) {
         }
     }, 1000);
 
-    // Slow, resilient reconciliation pass: automatically handles non-pump tokens
-    // and re-subscribes dropped WebSocket listeners every 15s instead of 1s.
     setInterval(async () => {
         try {
             const activeGuards = await getAllActiveGuards();
             const pumpMints = new Set(activeGuards.filter(g => g.tokenAddress.toLowerCase().endsWith('pump')).map(g => g.tokenAddress));
             for (const mint of pumpMints) {
-                await subscribeToMintPrice(mint, `reconcile:${mint}`); // No-op if already active
+                await subscribeToMintPrice(mint, `reconcile:${mint}`); 
             }
         } catch (e: any) {
             console.error(`🔴 [GUARD POLLER] Reconcile pass failed: ${e.message}`);
@@ -484,10 +439,9 @@ export function startUniversalGuardPoller(bot: any) {
 }
 
 // 🟢 REST FALLBACK LOGIC
-let pollingStarted = false;
 export function startPumpFunPolling() {
-    if (pollingStarted) return;
-    pollingStarted = true;
+    if (pollerStarted) return;
+    pollerStarted = true;
     console.log("🔁 [PUMP POLL] Starting REST polling fallback (10s interval).");
 
     setInterval(async () => {
@@ -532,7 +486,6 @@ function connectPumpPortalStream(bot: any) {
         lastMessageAt = Date.now();
         if (wsHeartbeat) clearInterval(wsHeartbeat);
         
-        // 🟢 B.1 FIX: 30-second Proof-of-life heartbeat
         wsHeartbeat = setInterval(() => {
             const secondsSinceLastMsg = Math.floor((Date.now() - lastMessageAt) / 1000);
             console.log(`💓 [PUMP WS] Alive check. Last msg ${secondsSinceLastMsg}s ago. Buffer size: ${recentNewMints.length}`);
@@ -556,7 +509,6 @@ function connectPumpPortalStream(bot: any) {
 
                 const devInitialBuySol = parsed.initialBuy || 0;
                 
-                // Execute Auto-Snipers
                 await triggerAutoSnipes(bot, parsed.mint, parsed.symbol || "UNKNOWN", devInitialBuySol, 'PUMP');
             }
         } catch (_) {}
@@ -639,6 +591,38 @@ async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
+                // 🟢 Pre-flight balance check
+                try {
+                    const balanceLamports = await connection.getBalance(new PublicKey(liveConfig.user.vaultAddress));
+                    const neededLamports = (liveConfig.amountSol * 1_000_000_000) + 5_000_000;
+                    if (balanceLamports < neededLamports) {
+                        const alertKey = `alert:lowbal:${liveConfig.id}`;
+                        const alreadyAlerted = await redis.set(alertKey, '1', 'EX', 600, 'NX');
+                        if (alreadyAlerted) {
+                            try {
+                                await bot.telegram.sendMessage(liveConfig.user.telegramId,
+                                    `🔴 <b>SNIPE SKIPPED — LOW BALANCE</b>\n\n` +
+                                    `Your sniper tried to buy <code>${mintCa.substring(0,8)}...</code> but your wallet only has <b>${(balanceLamports / 1_000_000_000).toFixed(4)} SOL</b>, and needs at least <b>${(neededLamports / 1_000_000_000).toFixed(4)} SOL</b> (spend + gas).\n\n` +
+                                    `<i>Fund your wallet or lower your spend amount. This alert won't repeat for 10 minutes.</i>`,
+                                    { parse_mode: 'HTML' }
+                                );
+                            } catch (_) {}
+                        }
+                        return;
+                    }
+                } catch (balErr: any) {
+                    const alertKey = `alert:rpcfail:${liveConfig.id}`;
+                    const alreadyAlerted = await redis.set(alertKey, '1', 'EX', 600, 'NX');
+                    if (alreadyAlerted) {
+                        try {
+                            await bot.telegram.sendMessage(liveConfig.user.telegramId,
+                                `🟡 <b>RPC WARNING</b>\n\nCouldn't check your wallet balance before sniping <code>${mintCa.substring(0,8)}...</code> (RPC error: ${balErr.message}). Sniper is still running but may be degraded.`,
+                                { parse_mode: 'HTML' }
+                            );
+                        } catch (_) {}
+                    }
+                }
+
                 // 🟢 Single DexScreener fetch shared by score filter + social requirement (RAYDIUM/BOTH only)
                 let dexPairCache: any = null;
                 let dexFetchAttempted = false;
@@ -653,7 +637,7 @@ async function triggerAutoSnipes(
                     return dexPairCache;
                 };
 
-                // 🟢 LIVE AI CALLER SCORE FILTER (Uses real age, real liq/vol for both modes, real socials, real rug check)
+                // 🟢 LIVE AI CALLER SCORE FILTER
                 if (liveConfig.minScore > 0) {
                     let score = 0;
                     try {
@@ -743,7 +727,7 @@ async function triggerAutoSnipes(
                             const hasSocials = pairs.some((p: any) => p.info?.socials && p.info.socials.length > 0);
                             if (!hasSocials) return;
                         } else {
-                            const pair = await getDexPair(); // Reuses the active memoized fetch
+                            const pair = await getDexPair();
                             const hasSocials = (pair?.info?.socials?.length || 0) > 0;
                             if (!hasSocials) return;
                         }
@@ -792,12 +776,39 @@ async function triggerAutoSnipes(
                     } catch (_) {}
 
                 } else {
+                    await redis.del(sniperLockKey);
+
                     if (result.message.includes("Insufficient Funds") || result.message.includes("Custom\":1") || result.message.includes("InsufficientFundsForRent")) {
                         await prisma.autoSnipeConfig.update({ where: { id: sniper.id }, data: { isActive: false } });
                         try { await bot.telegram.sendMessage(sniper.user.telegramId, `🛑 <b>AUTO-SNIPER DISABLED</b>\n\nYour wallet is out of SOL. Auto-Sniper paused.`, { parse_mode: 'HTML' }); } catch (_) {}
+                    } else {
+                        const failAlertKey = `alert:snipefail:${liveConfig.id}`;
+                        const shouldAlert = await redis.set(failAlertKey, '1', 'EX', 300, 'NX');
+                        if (shouldAlert) {
+                            try {
+                                await bot.telegram.sendMessage(liveConfig.user.telegramId,
+                                    `🔴 <b>SNIPE FAILED</b>\n\n` +
+                                    `Token: <code>${mintCa.substring(0,8)}...</code>\n` +
+                                    `Reason: <code>${(result.message || 'Unknown error').substring(0, 300)}</code>\n\n` +
+                                    `<i>Sniper is still active and will keep trying. This alert is rate-limited to once per 5 min.</i>`,
+                                    { parse_mode: 'HTML' }
+                                );
+                            } catch (_) {}
+                        }
                     }
                 }
-            } catch (_) {}
+            } catch (e: any) {
+                const crashAlertKey = `alert:snipecrash:${sniper.id}`;
+                const shouldAlert = await redis.set(crashAlertKey, '1', 'EX', 300, 'NX');
+                if (shouldAlert) {
+                    try {
+                        await bot.telegram.sendMessage(sniper.user.telegramId,
+                            `🔴 <b>SNIPER ENGINE ERROR</b>\n\nSomething crashed while trying to snipe <code>${mintCa.substring(0,8)}...</code>: <code>${e.message?.substring(0, 200)}</code>\n\n<i>Sniper is still active.</i>`,
+                            { parse_mode: 'HTML' }
+                        );
+                    } catch (_) {}
+                }
+            }
         }, delayMs);
     }
 }
