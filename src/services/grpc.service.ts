@@ -412,23 +412,44 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 export function startUniversalGuardPoller(bot: any) {
     console.log("🛡️ [GUARD ENGINE] Push-Based Subscription Poller Initialized.");
 
+    // Fast evaluation loop
     setInterval(async () => {
         try {
             const activeGuards = await getAllActiveGuards();
+            const { isSimulationActive } = await import('./simulation.service.js');
+            
             for (const guard of activeGuards) {
-                const livePrice = getLivePriceSol(guard.tokenAddress);
-                if (livePrice === null) continue; 
-                await checkAndTriggerGuard(guard, livePrice, bot);
+                const isSim = await isSimulationActive(guard.telegramId);
+                
+                if (isSim) {
+                    // 🟢 FIX: Simulation guards bypass the live-price check since they trigger on timed probability
+                    await checkAndTriggerGuard(guard, 1.0, bot);
+                } else {
+                    const livePrice = getLivePriceSol(guard.tokenAddress);
+                    if (livePrice === null) continue; 
+                    await checkAndTriggerGuard(guard, livePrice, bot);
+                }
             }
         } catch (e: any) {
             console.error(`🔴 [GUARD POLLER] Tick failed: ${e.message}`);
         }
     }, 1000);
 
+    // Reconcile loop
     setInterval(async () => {
         try {
             const activeGuards = await getAllActiveGuards();
-            const pumpMints = new Set(activeGuards.filter(g => g.tokenAddress.toLowerCase().endsWith('pump')).map(g => g.tokenAddress));
+            const { isSimulationActive } = await import('./simulation.service.js');
+            
+            // 🟢 FIX: Reconcile live price subscriptions ONLY for real mainnet accounts
+            const liveGuards = [];
+            for (const g of activeGuards) {
+                if (!(await isSimulationActive(g.telegramId))) {
+                    liveGuards.push(g);
+                }
+            }
+            
+            const pumpMints = new Set(liveGuards.filter(g => g.tokenAddress.toLowerCase().endsWith('pump')).map(g => g.tokenAddress));
             for (const mint of pumpMints) {
                 await subscribeToMintPrice(mint, `reconcile:${mint}`); 
             }
