@@ -653,7 +653,7 @@ async function triggerAutoSnipes(
                     return dexPairCache;
                 };
 
-                // 🟢 LIVE AI CALLER SCORE FILTER (real age, real liq/vol for both modes, real socials, real rug check)
+                // 🟢 LIVE AI CALLER SCORE FILTER (Uses real age, real liq/vol for both modes, real socials, real rug check)
                 if (liveConfig.minScore > 0) {
                     let score = 0;
                     try {
@@ -696,7 +696,7 @@ async function triggerAutoSnipes(
                         const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials, isRug };
                         score = computeTokenScore(stats).score;
                     } catch (e) {
-                        return; // fail closed
+                        return; // fail closed if error occurs during analysis
                     }
 
                     if (score < liveConfig.minScore) return;
@@ -743,7 +743,7 @@ async function triggerAutoSnipes(
                             const hasSocials = pairs.some((p: any) => p.info?.socials && p.info.socials.length > 0);
                             if (!hasSocials) return;
                         } else {
-                            const pair = await getDexPair(); // reuses the fetch from the score check above
+                            const pair = await getDexPair(); // Reuses the active memoized fetch
                             const hasSocials = (pair?.info?.socials?.length || 0) > 0;
                             if (!hasSocials) return;
                         }
