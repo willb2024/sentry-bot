@@ -148,6 +148,25 @@ function extractTelegramId(initData: string): string | null {
     return null;
 }
 
+// 🟢 NEW: Global Currency Converter (Allows buying in $USD or SOL)
+function parseSolAmount(input: string, allowZero = false): number | null {
+    if (input === undefined || input === null) return null;
+    const trimmed = input.trim().replace(/,/g, ''); 
+    
+    if (trimmed === '0' && allowZero) return 0;
+
+    if (trimmed.startsWith('$')) {
+        const usdVal = parseFloat(trimmed.substring(1));
+        if (isNaN(usdVal) || (!allowZero && usdVal <= 0)) return null;
+        if (!cachedSolUsdPrice || cachedSolUsdPrice <= 0) return null; // Failsafe
+        return parseFloat((usdVal / cachedSolUsdPrice).toFixed(4));
+    }
+    
+    const solVal = parseFloat(trimmed);
+    if (isNaN(solVal) || (!allowZero && solVal <= 0)) return null;
+    return solVal;
+}
+
 app.post('/api/analytics', async (req, res) => {
     const initData = req.body.initData;
     if (!initData) return res.status(401).json({ error: "No initData" });
@@ -462,7 +481,7 @@ async function getLiveBalance(user: any): Promise<string> {
 }
 
 // =========================================================
-// 📟 DASHBOARD MENU SYSTEM
+// 📟 DASHBOARD MENU SYSTEM (WITH USD EQUIVALENT & SPACE TUNING)
 // =========================================================
 async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean = false) {
     const userPromise = prisma.user.findUnique({ 
@@ -493,7 +512,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     const recruitText = user._count.recruits > 0 ? `\n• Network Bonus: <b>+${recruitBonus.toLocaleString()} PTS</b> <i>(${user._count.recruits} Recruits)</i>` : ``;
 
     const botName = process.env.BOT_NAME || 'Sentry Terminal';
-    const botEmoji = process.env.BOT_EMOJI || '⚡';
     
     let guildDisplay = `🏰 <b>Active Guild:</b> <i>None</i>\n`;
     if (userGuilds.length > 0) {
@@ -502,24 +520,52 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Your Rank:</b> <b>${rankDisplay}</b> (${primaryGuild.loyaltyPoints.toLocaleString()} GLP)\n`;
     }
 
-    const layoutTxt = `${botEmoji} <b>${botName.toUpperCase()} </b> ${botEmoji}  \n` +
-        `👛 <b>Primary Deposit Node:</b>\n<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
-        `💰 <b>Total Balance:</b> <code>${liveBalance} SOL</code>\n${whaleModeText}\n\n` +
-        `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n${guildDisplay}\n` + 
-        `• Your Points: <b>${sentryPoints} PTS</b>\n<i>(1 SOL traded = 10k PTS | 1 Invite = 2k PTS)</i>${welcomeText}${recruitText}\n\n` +  
-        `📊 <b>Your Economics:</b>\n• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n• Affiliate Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
-        `<i>Forward a call here, paste a Token CA, or select a module below.</i>`;
+    // 🟢 OPTIMIZATION: Convert the active SOL balance into its real-time USD value
+    const balanceNum = parseFloat(liveBalance) || 0;
+    const usdValue = balanceNum * cachedSolUsdPrice;
+    const usdBalanceFormatted = usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-        const UI = Markup.inlineKeyboard([
-            [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
-            [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
-            [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-            [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
-            [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-            [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
-            [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All Automations', 'action_global_cancel')],
-            [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
-        ]);
+    // 🟢 DESIGN: Beautifully spaced, structural dividers and margins
+    const divider = `━━━━━━━━━━━━━━━━━━━━━━`;
+
+    const layoutTxt = 
+        `⚡ <b>${botName.toUpperCase()}</b> ⚡\n\n` +
+        
+        `👛 <b>Primary Deposit Node:</b>\n` +
+        `<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
+        
+        `${divider}\n\n` +
+        
+        `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
+        `└ ${whaleModeText}\n\n` +
+        
+        `${divider}\n\n` +
+        
+        `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
+        `${guildDisplay}` + 
+        `• Your Points: <b>${sentryPoints} PTS</b>\n` +
+        `<i>(1 SOL traded = 10k PTS | 1 Invite = 2k PTS)</i>${welcomeText}${recruitText}\n\n` +  
+        
+        `${divider}\n\n` +
+        
+        `📊 <b>Your Economics:</b>\n` +
+        `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
+        `• Affiliate Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
+        
+        `${divider}\n\n` +
+        
+        `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
+
+    const UI = Markup.inlineKeyboard([
+        [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+        [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
+        [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
+        [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+        [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+        [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
+        [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All Automations', 'action_global_cancel')],
+        [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
+    ]);
 
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
     else await ctx.replyWithHTML(layoutTxt, UI);
@@ -1348,7 +1394,7 @@ const TRADE_GUIDE_PAGES: string[] = [
 
     `⚡ <b>STEP 2 — INSTANT BUY</b>\n` +
     `Paste any Solana token contract address (CA) directly into the chat. Sentry pulls the token info, runs a rug check, and shows you a confirm card.\n` +
-    `• <i>Custom Size Snipe:</i> Paste <code>[CA] [AMOUNT]</code> (e.g. <code>7xKXtg... 0.5</code>)\n\n` +
+    `• <i>Custom Size Snipe:</i> Paste <code>[CA] [AMOUNT]</code>. You can trade using SOL or the $USD equivalent! (e.g. <code>7xKXtg... 0.5</code> or <code>7xKXtg... $50</code>)\n\n` +
 
     `🔍 <b>STEP 3 — X-RAY SCANNER</b>\n` +
     `Type <code>/scan [CA]</code> for a full market cap, volume, momentum, and rug-risk report before you commit.\n\n` +
@@ -1693,23 +1739,24 @@ bot.action('trigger_caller_scan', async (ctx) => {
 
 
 // 🟢 NEW: Direct, auto-filled Guard prompt from a called coin
-bot.action(/^caller_guard_(.+)$/, async (ctx) => {
+
+
+bot.action('action_deploy_limit', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    const mint = ctx.match[1];
-    const tgId = ctx.from?.id.toString()!;
-    await redis.set(`state:caller_guard_input:${tgId}`, mint, 'EX', 300);
-    await ctx.replyWithHTML(
-        `🛡️ <b>DEPLOY GUARD & TAKE PROFIT</b>\n\n` +
-        `Token: <code>${mint}</code>\n\n` +
-        `Reply to this message with your guard parameters (excluding the CA):\n` +
-        `<code>[DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>\n\n` +
-        `<i>Example (15% trailing drop, 0.1 SOL buy, 50% Take Profit):</i>\n` +
-        `<code>15 0.1 50</code>\n\n` +
-        `<i>Type /cancel at any time to abort.</i>`
-    );
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await redis.set(`state:limit:${tgId}`, 'AWAITING', 'EX', 300);
+    await ctx.replyWithHTML(`⏳ <b>DEPLOY LIMIT ORDER</b>\n\nPaste parameters:\n<code>[CA] [TARGET PRICE USD] [AMOUNT SOL OR $USD]</code>\n\n<i>Example (Buy $50 when token hits $0.005):</i>\n<code>JUPyiw... 0.005 $50</code>\n\n<i>Type /cancel to abort.</i>`);
 });
 
-// 🟢 NEW: Direct, auto-filled DCA prompt from a called coin
+bot.action('action_deploy_dca', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await redis.set(`state:dca:${tgId}`, 'AWAITING', 'EX', 300);
+    await ctx.replyWithHTML(`⏳ <b>DEPLOY TWAP / DCA ENGINE</b>\n\nPaste parameters:\n<code>[CA] [INTERVAL MINS] [AMOUNT SOL OR $USD] [DROP %] [OPTIONAL TP %] [OPTIONAL MAX BUDGET]</code>\n\n<i>Example (Buy $15 every 60 mins):</i>\n<code>JUPyiw... 60 $15 5 50 $200</code>\n\n<i>Type /cancel to abort.</i>`, { parse_mode: 'HTML' });
+});
+
 bot.action(/^caller_dca_(.+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const mint = ctx.match[1];
@@ -1719,12 +1766,13 @@ bot.action(/^caller_dca_(.+)$/, async (ctx) => {
         `⏳ <b>START TWAP / DCA ENGINE</b>\n\n` +
         `Token: <code>${mint}</code>\n\n` +
         `Reply to this message with your DCA parameters (excluding the CA):\n` +
-        `<code>[INTERVAL MINS] [AMOUNT SOL] [DROP %] [OPTIONAL TP %] [OPTIONAL MAX BUDGET SOL]</code>\n\n` +
-        `<i>Example (Buy 0.05 SOL every 60 mins, 10% drop, max 2.0 SOL budget):</i>\n` +
-        `<code>60 0.05 10 50 2.0</code>\n\n` +
+        `<code>[INTERVAL MINS] [AMOUNT SOL OR $USD] [DROP %] [OPTIONAL TP %] [OPTIONAL MAX BUDGET]</code>\n\n` +
+        `<i>Example (Buy $10 every 60 mins, 10% drop, max $100 budget):</i>\n` +
+        `<code>60 $10 10 50 $100</code>\n\n` +
         `<i>Type /cancel at any time to abort.</i>`
     );
 });
+
 // =========================================================
 // 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
 // =========================================================
@@ -2488,11 +2536,7 @@ bot.action('edit_snipe_delay', async (ctx) => {
     await ctx.replyWithHTML(`⏱️ <b>EDIT BLOCK DELAY</b>\nReply with the number of seconds to wait before buying.\n<i>Example: 3</i>`);
 });
 
-bot.action('edit_snipe_amt', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await redis.set(`state:autosnipe_amt:${ctx.from?.id.toString()}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(`💰 <b>EDIT SNIPE AMOUNT</b>\nReply with the amount of SOL to spend per Auto-Snipe.\n<i>Example: 0.2</i>`);
-});
+
 
 bot.action('edit_snipe_sl', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -2512,10 +2556,16 @@ bot.action('edit_snipe_mc', async (ctx) => {
     await ctx.replyWithHTML(`📊 <b>EDIT MC FILTER</b>\nReply with: <code>[MIN_MC] [MAX_MC]</code>\n<i>Example: 20000 60000</i>`);
 });
 
+bot.action('edit_snipe_amt', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await redis.set(`state:autosnipe_amt:${ctx.from?.id.toString()}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`💰 <b>EDIT SNIPE AMOUNT</b>\nReply with the amount of SOL (e.g. <code>0.2</code>) or USD (e.g. <code>$50</code>) to spend per Auto-Snipe.`);
+});
+
 bot.action('edit_snipe_budget', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     await redis.set(`state:autosnipe_budget:${ctx.from?.id.toString()}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(`💳 <b>EDIT MAX BUDGET</b>\nReply with the Maximum amount of SOL to spend overall (0 for Infinite).\n<i>Example: 2.5</i>`);
+    await ctx.replyWithHTML(`💳 <b>EDIT MAX BUDGET</b>\nReply with the Maximum amount of SOL or USD to spend overall (0 for Infinite).\n<i>Example: 2.5 or $500</i>`);
 });
 
 // =========================================================
@@ -2966,21 +3016,7 @@ bot.action('menu_dca', async (ctx) => {
     await safeEditMessageText(ctx, dcaText, UI);
 });
 
-bot.action('action_deploy_limit', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    await redis.set(`state:limit:${tgId}`, 'AWAITING', 'EX', 300);
-    await ctx.replyWithHTML(`⏳ <b>DEPLOY LIMIT ORDER</b>\n\nPaste parameters:\n<code>[CA] [TARGET PRICE USD] [AMOUNT SOL]</code>\n\n<i>Example (Buy 0.5 SOL when token hits $0.005):</i>\n<code>JUPyiw... 0.005 0.5</code>\n\n<i>Type /cancel to abort.</i>`);
-});
 
-bot.action('action_deploy_dca', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    await redis.set(`state:dca:${tgId}`, 'AWAITING', 'EX', 300);
-    await ctx.replyWithHTML(`⏳ <b>DEPLOY TWAP / DCA ENGINE</b>\n\nPaste parameters:\n<code>[CA] [INTERVAL MINS] [AMOUNT SOL] [DROP %] [OPTIONAL TP %] [OPTIONAL MAX BUDGET SOL]</code>\n\n<i>Example:</i>\n<code>JUPyiw... 60 0.05 5 50 2.0</code>\n\n<i>Type /cancel to abort.</i>`, { parse_mode: 'HTML' });
-});
 
 bot.action('action_cancel_dca', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3007,13 +3043,7 @@ bot.action('menu_trailing', async (ctx) => {
     await safeEditMessageText(ctx, text, UI);
 });
 
-bot.action('action_deploy_guard', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    await redis.set(`state:guard:${tgId}`, 'AWAITING', 'EX', 300);
-    await ctx.replyWithHTML(`🛡️ <b>DEPLOY GUARD & TAKE PROFIT</b>\nPaste parameters:\n<code>[CA] [DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>\n\n<i>Example 2 (With +50% Take Profit):</i>\n<code>JUPyiw... 15 0.1 50</code>\n\n<i>Type /cancel at any time to abort.</i>`);
-});
+
 
 bot.action('action_cancel_guards', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3178,10 +3208,34 @@ bot.action('action_view_directory', async (ctx) => {
     await safeEditMessageText(ctx, directoryText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Copy Trade', 'menu_copytrade')]]));
 });
 
+bot.action('action_deploy_guard', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await redis.set(`state:guard:${tgId}`, 'AWAITING', 'EX', 300);
+    await ctx.replyWithHTML(`🛡️ <b>DEPLOY GUARD & TAKE PROFIT</b>\nPaste parameters:\n<code>[CA] [DROP %] [AMOUNT SOL OR $USD] [OPTIONAL TP %]</code>\n\n<i>Example (Buy $50 with +50% Take Profit):</i>\n<code>JUPyiw... 15 $50 50</code>\n\n<i>Type /cancel at any time to abort.</i>`);
+});
+
+bot.action(/^caller_guard_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const mint = ctx.match[1];
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:caller_guard_input:${tgId}`, mint, 'EX', 300);
+    await ctx.replyWithHTML(
+        `🛡️ <b>DEPLOY GUARD & TAKE PROFIT</b>\n\n` +
+        `Token: <code>${mint}</code>\n\n` +
+        `Reply to this message with your guard parameters (excluding the CA):\n` +
+        `<code>[DROP %] [AMOUNT SOL OR $USD] [OPTIONAL TP %]</code>\n\n` +
+        `<i>Example (15% trailing drop, $25 buy, 50% Take Profit):</i>\n` +
+        `<code>15 $25 50</code>\n\n` +
+        `<i>Type /cancel at any time to abort.</i>`
+    );
+});
+
 bot.action('action_add_copytrade', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     await redis.set(`state:copytrade:${ctx.from?.id.toString()}`, 'AWAITING', 'EX', 300);
-    await ctx.replyWithHTML(`👥 <b>NEW COPY TRADE</b>\n\nPaste parameters:\n<code>[TARGET_WALLET] [AMOUNT_SOL] [DROP_GUARD %] [OPTIONAL_TP %]</code>\n\n<i>Example:</i>\n<code>5Q544fKrFoe... 0.1 20 50</code>\n\n<i>Type /cancel to abort.</i>`);
+    await ctx.replyWithHTML(`👥 <b>NEW COPY TRADE</b>\n\nPaste parameters:\n<code>[TARGET_WALLET] [AMOUNT SOL OR $USD] [DROP_GUARD %] [OPTIONAL_TP %]</code>\n\n<i>Example:</i>\n<code>5Q544fKrFoe... $50 20 50</code>\n\n<i>Type /cancel to abort.</i>`);
 });
 
 bot.action('action_clear_copytrade', async (ctx) => {
@@ -3839,6 +3893,10 @@ bot.action(/^launch_nuke_(.+)$/, async (ctx) => {
 // ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
 // =========================================================
 
+// =========================================================
+// ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
+// =========================================================
+
 async function deleteKeysPattern(pattern: string) {
     const { redis } = await import('./lib/redis.js');
     let cursor = '0';
@@ -3912,7 +3970,7 @@ bot.on("text", async (ctx, next) => {
     // 🟢 SECURITY: Hashed PIN Setup
     if (await redis.get(`state:set_pin:${telegramId}`)) {
         await redis.del(`state:set_pin:${telegramId}`);
-        try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} // Delete evidence
+        try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} 
         
         const pin = text.trim();
         if (!/^\d{4,6}$/.test(pin)) {
@@ -3921,7 +3979,7 @@ bot.on("text", async (ctx, next) => {
 
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
-            const hashedPin = crypto.createHash('sha256').update(pin + process.env.BOT_TOKEN).digest('hex');
+            const hashedPin = crypto.scryptSync(pin, process.env.BOT_TOKEN!, 32).toString('hex');
             await prisma.user.update({ where: { id: user.id }, data: { withdrawalPin: hashedPin } }); 
             await ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour account is now protected. All future withdrawals will require this PIN in a secure secondary prompt.`);
             await sendOrEditVaultMenu(ctx, telegramId);
@@ -3933,10 +3991,10 @@ bot.on("text", async (ctx, next) => {
     const pendingWithdrawalStr = await redis.get(`state:withdraw_pin:${telegramId}`);
     if (pendingWithdrawalStr) {
         await redis.del(`state:withdraw_pin:${telegramId}`);
-        try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} // Delete evidence
+        try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} 
 
         const user = await prisma.user.findUnique({ where: { telegramId } });
-        const submittedHash = crypto.createHash('sha256').update(text.trim() + process.env.BOT_TOKEN).digest('hex');
+        const submittedHash = crypto.scryptSync(text.trim(), process.env.BOT_TOKEN!, 32).toString('hex');
 
         if (user && user.withdrawalPin !== submittedHash) {
             const attemptsKey = `pin_fails:${telegramId}`;
@@ -3944,7 +4002,7 @@ bot.on("text", async (ctx, next) => {
             if (fails === 1) await redis.expire(attemptsKey, 3600);
 
             if (fails >= 3) {
-                await redis.set(`withdraw_lockout:${telegramId}`, 'LOCKED', 'EX', 3600); // 1 hr lockout
+                await redis.set(`withdraw_lockout:${telegramId}`, 'LOCKED', 'EX', 3600); 
                 await redis.del(`lock:withdraw:${telegramId}`);
                 return ctx.replyWithHTML(`🚨 <b>SECURITY LOCKOUT</b>\n\nToo many failed PIN attempts. Withdrawals are locked for 60 minutes to protect your funds.`);
             }
@@ -3952,15 +4010,11 @@ bot.on("text", async (ctx, next) => {
             return ctx.replyWithHTML(`🔴 <b>Incorrect PIN.</b> Attempt ${fails} of 3. Please request a new withdrawal.`);
         }
 
-        // PIN Correct - Proceed
         await redis.del(`pin_fails:${telegramId}`);
         const withdrawData = JSON.parse(pendingWithdrawalStr);
         await executeWithdrawalProcess(user, withdrawData.targetAddress, withdrawData.requestedAmount, withdrawData.isMax, telegramId, ctx, `lock:withdraw:${telegramId}`);
         return;
     }
-
- 
-
 
     // 🟢 TOKEN LAUNCH WIZARD
     const launchStep = await redis.get(`token_launch:${telegramId}:step`);
@@ -4043,10 +4097,12 @@ bot.on("text", async (ctx, next) => {
         if (callerGuardCA) {
             await redis.del(`state:caller_guard_input:${telegramId}`);
             const parts = text.trim().split(/\s+/);
-            if (parts.length !== 2 && parts.length !== 3) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>");
+            if (parts.length !== 2 && parts.length !== 3) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[DROP %] [AMOUNT SOL OR $USD] [OPTIONAL TP %]</code>");
             
-            const trailPct = parseFloat(parts[0]); const solAmt = parseFloat(parts[1]); const tpPct = parts.length === 3 ? parseFloat(parts[2]) : undefined;
-            if (isNaN(trailPct) || isNaN(solAmt) || (tpPct !== undefined && isNaN(tpPct))) return ctx.reply("🔴 Invalid numbers provided.");
+            const trailPct = parseFloat(parts[0]); 
+            const solAmt = parseSolAmount(parts[1]); 
+            const tpPct = parts.length === 3 ? parseFloat(parts[2]) : undefined;
+            if (isNaN(trailPct) || solAmt === null || (tpPct !== undefined && isNaN(tpPct))) return ctx.reply("🔴 Invalid numbers provided. Example: 15 $50 50");
 
             const loader = await ctx.replyWithHTML(`<i>⏳ Executing Jito Trade & Syncing Guard...</i>`);
             try {
@@ -4073,13 +4129,15 @@ bot.on("text", async (ctx, next) => {
             await redis.del(`state:caller_dca_input:${telegramId}`);
             try {
                 const parts = text.trim().split(/\s+/);
-                if (parts.length < 3 || parts.length > 5) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[INTERVAL] [AMOUNT] [DROP %] [OPTIONAL TP] [OPTIONAL BUDGET]</code>");
+                if (parts.length < 3 || parts.length > 5) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Please reply with: <code>[INTERVAL] [AMOUNT SOL OR $USD] [DROP %] [OPTIONAL TP] [OPTIONAL BUDGET]</code>");
 
-                const intervalMins = parseInt(parts[0]); const solAmt = parseFloat(parts[1]); const dropPct = parseFloat(parts[2]);
+                const intervalMins = parseInt(parts[0]); 
+                const solAmt = parseSolAmount(parts[1]); 
+                const dropPct = parseFloat(parts[2]);
                 const tpPct = (parts.length >= 4 && parseFloat(parts[3]) !== 0) ? parseFloat(parts[3]) : undefined;
-                const maxBudget = parts.length === 5 ? parseFloat(parts[4]) : undefined;
+                const maxBudget = parts.length === 5 ? parseSolAmount(parts[4], true) : undefined;
 
-                if (isNaN(intervalMins) || isNaN(solAmt) || isNaN(dropPct)) return ctx.reply("🔴 Invalid numbers provided.");
+                if (isNaN(intervalMins) || solAmt === null || isNaN(dropPct)) return ctx.reply("🔴 Invalid numbers provided. Example amount: 0.5 or $50");
                 const user = await prisma.user.findUnique({ where: { telegramId } });
                 if (!user) return ctx.reply("🔴 User not found.");
 
@@ -4102,57 +4160,6 @@ bot.on("text", async (ctx, next) => {
             return;
         }
 
-// 🟢 SECURITY: Hashed PIN Setup
-if (await redis.get(`state:set_pin:${telegramId}`)) {
-    await redis.del(`state:set_pin:${telegramId}`);
-    try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} 
-    
-    const pin = text.trim();
-    if (!/^\d{4,6}$/.test(pin)) {
-        return ctx.replyWithHTML(`🔴 <b>Invalid PIN.</b> Must be exactly 4 to 6 numeric digits. Process aborted.`);
-    }
-
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    if (user) {
-        // 🟢 FIX: Use Scrypt for cryptographically secure PIN hashing
-        const hashedPin = crypto.scryptSync(pin, process.env.BOT_TOKEN!, 32).toString('hex');
-        await prisma.user.update({ where: { id: user.id }, data: { withdrawalPin: hashedPin } }); 
-        await ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour account is now protected. All future withdrawals will require this PIN in a secure secondary prompt.`);
-        await sendOrEditVaultMenu(ctx, telegramId);
-    }
-    return;
-}
-
-// 🟢 SECURITY: Withdrawal Execution
-const pendingWithdrawalStr = await redis.get(`state:withdraw_pin:${telegramId}`);
-if (pendingWithdrawalStr) {
-    await redis.del(`state:withdraw_pin:${telegramId}`);
-    try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} 
-
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    // 🟢 FIX: Verify using matching Scrypt logic
-    const submittedHash = crypto.scryptSync(text.trim(), process.env.BOT_TOKEN!, 32).toString('hex');
-
-    if (user && user.withdrawalPin !== submittedHash) {
-        const attemptsKey = `pin_fails:${telegramId}`;
-        const fails = await redis.incr(attemptsKey);
-        if (fails === 1) await redis.expire(attemptsKey, 3600);
-
-        if (fails >= 3) {
-            await redis.set(`withdraw_lockout:${telegramId}`, 'LOCKED', 'EX', 3600); 
-            await redis.del(`lock:withdraw:${telegramId}`);
-            return ctx.replyWithHTML(`🚨 <b>SECURITY LOCKOUT</b>\n\nToo many failed PIN attempts. Withdrawals are locked for 60 minutes to protect your funds.`);
-        }
-        await redis.del(`lock:withdraw:${telegramId}`);
-        return ctx.replyWithHTML(`🔴 <b>Incorrect PIN.</b> Attempt ${fails} of 3. Please request a new withdrawal.`);
-    }
-
-    await redis.del(`pin_fails:${telegramId}`);
-    const withdrawData = JSON.parse(pendingWithdrawalStr);
-    await executeWithdrawalProcess(user, withdrawData.targetAddress, withdrawData.requestedAmount, withdrawData.isMax, telegramId, ctx, `lock:withdraw:${telegramId}`);
-    return;
-}
-
         if (await redis.get(`state:edit_caller_pct:${telegramId}`)) {
             await redis.del(`state:edit_caller_pct:${telegramId}`);
             const parts = text.trim().split(/\s+/);
@@ -4162,7 +4169,6 @@ if (pendingWithdrawalStr) {
             const { setUserCallerFilters } = await import('./services/caller.service.js');
             await setUserCallerFilters(telegramId, { minPctChange: min, maxPctChange: max });
             await ctx.replyWithHTML(`✅ <b>Percentage Range updated to ${min}% - ${max}%!</b>`);
-            await sendCallerMenu(ctx, telegramId, false);
             return;
         }
 
@@ -4173,11 +4179,9 @@ if (pendingWithdrawalStr) {
             const { setUserCallerFilters } = await import('./services/caller.service.js');
             await setUserCallerFilters(telegramId, { minScore: val });
             await ctx.replyWithHTML(`✅ <b>Minimum Score updated to ${val}!</b>`);
-            await sendCallerMenu(ctx, telegramId, false);
             return;
         }
 
-        // 🟢 NEW INPUT: Liquidity Filter
         if (await redis.get(`state:edit_caller_liq:${telegramId}`)) {
             await redis.del(`state:edit_caller_liq:${telegramId}`);
             const val = parseInt(text.trim());
@@ -4185,11 +4189,9 @@ if (pendingWithdrawalStr) {
             const { setUserCallerFilters } = await import('./services/caller.service.js'); 
             await setUserCallerFilters(telegramId, { minLiquidity: val });
             await ctx.replyWithHTML(`✅ <b>Min Liquidity updated to $${val.toLocaleString()}!</b>`);
-            await sendCallerMenu(ctx, telegramId, false); 
             return;
         }
 
-        // 🟢 NEW INPUT: Volume Filter
         if (await redis.get(`state:edit_caller_vol:${telegramId}`)) {
             await redis.del(`state:edit_caller_vol:${telegramId}`);
             const val = parseInt(text.trim());
@@ -4197,7 +4199,6 @@ if (pendingWithdrawalStr) {
             const { setUserCallerFilters } = await import('./services/caller.service.js');
             await setUserCallerFilters(telegramId, { minVolume24h: val });
             await ctx.replyWithHTML(`✅ <b>Min 24h Volume updated to $${val.toLocaleString()}!</b>`);
-            await sendCallerMenu(ctx, telegramId, false); 
             return;
         }
         
@@ -4270,10 +4271,11 @@ if (pendingWithdrawalStr) {
             return;
         }
 
+        // 🟢 FIX: USE PARSE-SOL-AMOUNT FOR ALL THESE
         if (await redis.get(`state:autosnipe_amt:${telegramId}`)) {
             await redis.del(`state:autosnipe_amt:${telegramId}`);
-            const val = parseFloat(text);
-            if (isNaN(val) || val <= 0) return ctx.reply("🔴 Invalid amount.");
+            const val = parseSolAmount(text);
+            if (val === null) return ctx.reply("🔴 Invalid amount. Use a number (e.g. 0.2) or USD (e.g. $50).");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { amountSol: val } });
             await ctx.replyWithHTML(`✅ <b>Sniper Amount set to ${val} SOL.</b>`);
             return;
@@ -4281,19 +4283,10 @@ if (pendingWithdrawalStr) {
 
         if (await redis.get(`state:autosnipe_budget:${telegramId}`)) {
             await redis.del(`state:autosnipe_budget:${telegramId}`);
-            const val = parseFloat(text);
-            if (isNaN(val) || val < 0) return ctx.reply("🔴 Invalid amount.");
+            const val = parseSolAmount(text, true); // allowZero
+            if (val === null) return ctx.reply("🔴 Invalid amount. Use a number (e.g. 2.5) or USD (e.g. $500).");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { maxBudgetSol: val === 0 ? null : val } });
             await ctx.replyWithHTML(`✅ <b>Max Budget set to ${val === 0 ? 'Infinite' : val + ' SOL'}.</b>`);
-            return;
-        }
-
-        if (await redis.get(`state:autosnipe_score:${telegramId}`)) {
-            await redis.del(`state:autosnipe_score:${telegramId}`);
-            const val = parseInt(text);
-            if (isNaN(val) || val < 0 || val > 100) return ctx.reply("🔴 Invalid score. Must be between 0 and 100.");
-            await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { minScore: val } });
-            await ctx.replyWithHTML(`✅ <b>AI Min Score set to ${val === 0 ? 'OFF' : val + '/100'}.</b>`);
             return;
         }
 
@@ -4303,6 +4296,15 @@ if (pendingWithdrawalStr) {
             if (isNaN(val) || val < 0 || val > 100) return ctx.reply("🔴 Invalid percentage.");
             await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { maxDevBuyPercent: val } });
             await ctx.replyWithHTML(`✅ <b>Max Dev Bag set to ${val}%.</b>`);
+            return;
+        }
+
+        if (await redis.get(`state:autosnipe_score:${telegramId}`)) {
+            await redis.del(`state:autosnipe_score:${telegramId}`);
+            const val = parseInt(text);
+            if (isNaN(val) || val < 0 || val > 100) return ctx.reply("🔴 Invalid score. Must be between 0 and 100.");
+            await prisma.autoSnipeConfig.update({ where: { userId: (await prisma.user.findUnique({where:{telegramId}}))!.id }, data: { minScore: val } });
+            await ctx.replyWithHTML(`✅ <b>AI Min Score set to ${val === 0 ? 'OFF' : val + '/100'}.</b>`);
             return;
         }
 
@@ -4373,11 +4375,15 @@ if (pendingWithdrawalStr) {
 
             const parts = text.trim().split(/\s+/);
             
-            if (parts.length !== 4) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Use: <code>[CA] [TRADE_SIZE_SOL] [MAX_FEE_BUDGET] [DELAY_SECONDS]</code>");
+            if (parts.length !== 4) return ctx.replyWithHTML("🔴 <b>Format Error.</b> Use: <code>[CA] [TRADE_SIZE] [MAX_FEE_BUDGET] [DELAY_SECONDS]</code>");
 
-            const ca = parts[0]; const tradeSize = parseFloat(parts[1]); const maxBudget = parseFloat(parts[2]); const delaySecs = parseInt(parts[3]);
+            const ca = parts[0]; 
+            const tradeSize = parseSolAmount(parts[1]); 
+            const maxBudget = parseSolAmount(parts[2]); 
+            const delaySecs = parseInt(parts[3]);
+
             if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ca)) return ctx.reply("🔴 Invalid Contract Address.");
-            if (isNaN(tradeSize) || isNaN(maxBudget) || isNaN(delaySecs) || delaySecs < 1) return ctx.reply("🔴 Invalid numbers. Delay must be at least 1 second.");
+            if (tradeSize === null || maxBudget === null || isNaN(delaySecs) || delaySecs < 1) return ctx.reply("🔴 Invalid numbers. Example sizes: 0.02 or $10");
 
             await redis.set(`active_bumper:${telegramId}`, ca);
             const statusMsg = await ctx.replyWithHTML(`📈 <b>AUTOMATED TRADING UTILITY INITIALIZING...</b>\n\n<i>Connecting to Jito block engine...</i>`);
@@ -4437,14 +4443,16 @@ if (pendingWithdrawalStr) {
             return;
         }
 
-        // LIMIT ORDER LOGIC
+        // 🟢 FIX: LIMIT ORDER - Uses parseSolAmount
         if (await redis.get(`state:limit:${telegramId}`)) {
            await redis.del(`state:limit:${telegramId}`);
            const parts = text.split(/\s+/);
-           if (parts.length !== 3) return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Use: <code>[CA] [TARGET PRICE USD] [AMOUNT SOL]</code>`);
+           if (parts.length !== 3) return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Use: <code>[CA] [TARGET PRICE USD] [AMOUNT SOL OR $USD]</code>`);
 
-           const targetCA = parts[0]!; const targetPrice = parseFloat(parts[1]!); const solAmt = parseFloat(parts[2]!);
-           if (isNaN(targetPrice) || isNaN(solAmt)) return ctx.reply("🔴 Invalid numbers provided.");
+           const targetCA = parts[0]!; const targetPrice = parseFloat(parts[1]!); 
+           const solAmt = parseSolAmount(parts[2]!);
+           
+           if (isNaN(targetPrice) || solAmt === null) return ctx.reply("🔴 Invalid numbers provided. Example amount: 0.5 or $50");
 
            const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
            if (!user) return;
@@ -4456,13 +4464,19 @@ if (pendingWithdrawalStr) {
            return ctx.replyWithHTML(`🟢 <b>LIMIT ORDER DEPLOYED</b>\n\nToken: <code>${targetCA.substring(0,8)}...</code>\nTarget Price: <b>$${targetPrice}</b>\nAmount: <b>${solAmt} SOL</b>\n<i>The engine will monitor the price and execute automatically via Jito.</i>`, { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]]) });
         }
 
+        // 🟢 FIX: COPY TRADE - Uses parseSolAmount
         if (await redis.get(`state:copytrade:${telegramId}`)) {
             await redis.del(`state:copytrade:${telegramId}`);
             const parts = text.split(/\s+/);
-            if (parts.length < 3 || parts.length > 4) return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Use: <code>[WALLET] [AMOUNT SOL] [DROP %] [OPTIONAL TP %]</code>`);
-            const targetWallet = parts[0]!; const solAmt = parseFloat(parts[1]!); const dropPct = parseFloat(parts[2]!); const tpPct = parts.length === 4 ? parseFloat(parts[3]!) : undefined;
+            if (parts.length < 3 || parts.length > 4) return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Use: <code>[WALLET] [AMOUNT SOL OR $USD] [DROP %] [OPTIONAL TP %]</code>`);
+            const targetWallet = parts[0]!; 
+            const solAmt = parseSolAmount(parts[1]!); 
+            const dropPct = parseFloat(parts[2]!); 
+            const tpPct = parts.length === 4 ? parseFloat(parts[3]!) : undefined;
 
             if (targetWallet.length < 32 || targetWallet.length > 44) return ctx.reply("🔴 Invalid Solana Wallet Address.");
+            if (solAmt === null || isNaN(dropPct)) return ctx.reply("🔴 Invalid numbers provided. Example amount: 0.5 or $50");
+            
             const user = await prisma.user.findUnique({ where: { telegramId } });
             if (!user) return;
 
@@ -4479,7 +4493,7 @@ if (pendingWithdrawalStr) {
             );
         }
 
-        // GUARD
+        // 🟢 FIX: GUARD - Uses parseSolAmount
         if (await redis.get(`state:guard:${telegramId}`)) {
             await redis.del(`state:guard:${telegramId}`);
             
@@ -4488,10 +4502,14 @@ if (pendingWithdrawalStr) {
             if (stashedCa) { textToParse = `${stashedCa} ${textToParse}`; await redis.del(`state:guard_ca:${telegramId}`); }
 
             const parts = textToParse.split(/\s+/);
-            if (parts.length !== 3 && parts.length !== 4) return ctx.replyWithHTML(`🔴 <b>Format Error.</b> <code>[CA] [DROP %] [AMOUNT SOL] [OPTIONAL TP %]</code>`);
+            if (parts.length !== 3 && parts.length !== 4) return ctx.replyWithHTML(`🔴 <b>Format Error.</b> <code>[CA] [DROP %] [AMOUNT SOL OR $USD] [OPTIONAL TP %]</code>`);
 
-            const targetCA = parts[0]!; const trailPct = parseFloat(parts[1]!); const solAmt = parseFloat(parts[2]!); const tpPct = parts.length === 4 ? parseFloat(parts[3]!) : undefined; 
-            if (isNaN(trailPct) || isNaN(solAmt) || (tpPct !== undefined && isNaN(tpPct))) return ctx.reply("🔴 Invalid numbers provided.");
+            const targetCA = parts[0]!; 
+            const trailPct = parseFloat(parts[1]!); 
+            const solAmt = parseSolAmount(parts[2]!); 
+            const tpPct = parts.length === 4 ? parseFloat(parts[3]!) : undefined; 
+            
+            if (isNaN(trailPct) || solAmt === null || (tpPct !== undefined && isNaN(tpPct))) return ctx.reply("🔴 Invalid numbers provided. Example amount: 0.5 or $50");
 
             const loader = await ctx.replyWithHTML(`<i>⏳ Executing Jito Trade & Syncing Guard...</i>`, { parse_mode: 'HTML' });
 
@@ -4521,18 +4539,20 @@ if (pendingWithdrawalStr) {
             return;
         }
 
-       // DCA
+       // 🟢 FIX: DCA - Uses parseSolAmount
        if (await redis.get(`state:dca:${telegramId}`)) {
            await redis.del(`state:dca:${telegramId}`);
            try {
                const parts = text.split(/\s+/);
-               if (parts.length < 4 || parts.length > 6) return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Use: <code>[CA] [INTERVAL] [AMOUNT] [DROP %] [OPTIONAL TP] [OPTIONAL BUDGET]</code>`);
+               if (parts.length < 4 || parts.length > 6) return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Use: <code>[CA] [INTERVAL] [AMOUNT SOL OR $USD] [DROP %] [OPTIONAL TP] [OPTIONAL BUDGET]</code>`);
 
-               const targetCA = parts[0]!; const intervalMins = parseInt(parts[1]!); const solAmt = parseFloat(parts[2]!); const dropPct = parseFloat(parts[3]!);
+               const targetCA = parts[0]!; const intervalMins = parseInt(parts[1]!); 
+               const solAmt = parseSolAmount(parts[2]!); 
+               const dropPct = parseFloat(parts[3]!);
                const tpPct = (parts.length >= 5 && parseFloat(parts[4]!) !== 0) ? parseFloat(parts[4]!) : undefined;
-               const maxBudget = parts.length === 6 ? parseFloat(parts[5]!) : undefined; 
+               const maxBudget = parts.length === 6 ? parseSolAmount(parts[5]!, true) : undefined; 
                
-               if (isNaN(intervalMins) || isNaN(solAmt) || isNaN(dropPct)) return ctx.reply("🔴 Invalid numbers provided.");
+               if (isNaN(intervalMins) || solAmt === null || isNaN(dropPct)) return ctx.reply("🔴 Invalid numbers provided. Example amount: 0.5 or $50");
 
                const user = await prisma.user.findUnique({ where: { telegramId } });
                if (!user) return ctx.reply("🔴 User not found.");
@@ -4613,7 +4633,7 @@ if (pendingWithdrawalStr) {
 
     } catch (redisErr) {}
  
-    // Quick Snipe / Watch via Regex
+    // 🟢 FIX: Manual Snipe - Uses parseSolAmount
     const caRegex = /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/;
     const match = text.match(caRegex);
 
@@ -4639,13 +4659,14 @@ if (pendingWithdrawalStr) {
         ) {
             return next();
         }
+        
         let tradeAmountSol = 0.01; 
         
         const parts = text.split(/\s+/);
         if (parts.length === 2 && parts[0] === possibleCA) {
-            const parsedAmt = parseFloat(parts[1]!);
-            if (!isNaN(parsedAmt) && parsedAmt > 0) tradeAmountSol = parsedAmt;
-            else return ctx.reply("🔴 Invalid amount specified.");
+            const parsedAmt = parseSolAmount(parts[1]!);
+            if (parsedAmt !== null && parsedAmt > 0) tradeAmountSol = parsedAmt;
+            else return ctx.reply("🔴 Invalid amount specified. Use a number (e.g. 0.5) or USD (e.g. $50).");
         } else {
             const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
             if (user?.autoSnipeConfig?.amountSol) tradeAmountSol = user.autoSnipeConfig.amountSol;
@@ -4657,7 +4678,6 @@ if (pendingWithdrawalStr) {
         const loader = await ctx.replyWithHTML(`⚡ <b>SNIPE ENGAGED</b>\n\nTarget: <code>${possibleCA.substring(0,8)}...</code>\nAmount: <b>${tradeAmountSol} SOL</b>\n<i>⏳ Running security scan & fetching Token Info...</i>`);
         
         try {
-            // 🟢 C5: Fast Cached RugCheck!
             const { checkTokenRugRisk } = await import('./services/price.service.js');
             const isRug = await checkTokenRugRisk(possibleCA);
             if (isRug) {
