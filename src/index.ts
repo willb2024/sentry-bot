@@ -481,7 +481,7 @@ async function getLiveBalance(user: any): Promise<string> {
 }
 
 // =========================================================
-// 📟 DASHBOARD MENU SYSTEM (WITH USD EQUIVALENT & SPACE TUNING)
+// 📟 DASHBOARD MENU SYSTEM (CLEAN & AESTHETIC STYLE)
 // =========================================================
 async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean = false) {
     const userPromise = prisma.user.findUnique({ 
@@ -520,39 +520,28 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Your Rank:</b> <b>${rankDisplay}</b> (${primaryGuild.loyaltyPoints.toLocaleString()} GLP)\n`;
     }
 
-    // 🟢 OPTIMIZATION: Convert the active SOL balance into its real-time USD value
+    // 🟢 Convert SOL to live USD format
     const balanceNum = parseFloat(liveBalance) || 0;
     const usdValue = balanceNum * cachedSolUsdPrice;
     const usdBalanceFormatted = usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    // 🟢 DESIGN: Beautifully spaced, structural dividers and margins
-    const divider = `━━━━━━━━━━━━━━━━━━━━━━`;
-
+    // 🟢 Evenly spaced, tight line breaks designed for mobile-first readability
     const layoutTxt = 
         `⚡ <b>${botName.toUpperCase()}</b> ⚡\n\n` +
         
         `👛 <b>Primary Deposit Node:</b>\n` +
         `<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
         
-        `${divider}\n\n` +
-        
         `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
         `└ ${whaleModeText}\n\n` +
         
-        `${divider}\n\n` +
-        
         `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
         `${guildDisplay}` + 
-        `• Your Points: <b>${sentryPoints} PTS</b>\n` +
-        `<i>(1 SOL traded = 10k PTS | 1 Invite = 2k PTS)</i>${welcomeText}${recruitText}\n\n` +  
-        
-        `${divider}\n\n` +
+        `• Your Points: <b>${sentryPoints} PTS</b> <i>(1 SOL = 10k PTS)</i>${welcomeText}${recruitText}\n\n` +  
         
         `📊 <b>Your Economics:</b>\n` +
         `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
         `• Affiliate Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
-        
-        `${divider}\n\n` +
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
