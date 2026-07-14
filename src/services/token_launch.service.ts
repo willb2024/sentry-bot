@@ -14,19 +14,6 @@ const prisma = new PrismaClient();
 
 export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.05;
 
-export async function setLaunchWizardField(telegramId: string, field: string, value: string) {
-    await redis.set(`token_launch:${telegramId}:${field}`, value, 'EX', 900);
-}
-
-export async function getLaunchWizardField(telegramId: string, field: string) {
-    return await redis.get(`token_launch:${telegramId}:${field}`);
-}
-
-export async function clearLaunchWizard(telegramId: string) {
-    const keys = await redis.keys(`token_launch:${telegramId}:*`);
-    if (keys.length > 0) await redis.del(...keys);
-}
-
 export async function uploadImageToIpfs(imageBuffer: Buffer, filename: string): Promise<string | null> {
     try {
         const form = new FormData();

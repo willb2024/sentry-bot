@@ -19,9 +19,8 @@ export async function createGuild(
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
         
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
-        const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
 
-        // 🟢 FIX: Removed the 2.0 SOL on-chain charge completely.
+        // 🟢 P0 FIX #1 (Option A): Guild creation is now completely free. No Dev Suite requirement, no SOL charge.
         const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
         const randomTwoDigit = Math.floor(10 + Math.random() * 90);
         const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
@@ -39,7 +38,6 @@ export async function getLeaderboard(guildId: string, limit: number = 50) {
         const rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, limit - 1, 'WITHSCORES');
         if (rawLb.length === 0) return [];
         
-        // 🟢 FIX: Eliminated the N+1 query bug with batched fetching
         const userIds: string[] = [];
         const scoreMap: Record<string, number> = {};
         for (let i = 0; i < rawLb.length; i += 2) {
@@ -91,8 +89,11 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user) return;
-        const memberships = await prisma.guildMembership.findMany({ where: { userId: user.id } });
+        
+        // 🟢 P0 FIX #4: User only earns points for their ONE active guild to prevent multi-guild farming.
+        const memberships = await prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true } });
         if (memberships.length === 0) return;
+        
         const points = volumeSol / 0.1;
         for (const membership of memberships) {
             await prisma.guildMembership.update({
@@ -126,11 +127,11 @@ export async function updateRankCache(guildId: string) {
     } catch (e) {}
 }
 
-
-
 // =========================================================
-// 🟢 SWITCH ACTIVE GUILD
+// 🟢 P0 FIX #2: MISSING GUILD FUNCTIONS FULLY IMPLEMENTED
 // =========================================================
+
+// SWITCH ACTIVE GUILD
 export async function switchActiveGuild(
     telegramId: string,
     membershipId: string
@@ -147,7 +148,6 @@ export async function switchActiveGuild(
             return { success: false, message: "Membership not found or does not belong to you." };
         }
 
-        // Deactivate all other memberships for this user, activate the target one
         await prisma.$transaction([
             prisma.guildMembership.updateMany({
                 where: { userId: user.id },
@@ -165,9 +165,7 @@ export async function switchActiveGuild(
     }
 }
 
-// =========================================================
-// 🟢 SHARED HELPER: Build + send a multi-recipient SOL payout from the guild owner's W1
-// =========================================================
+// SHARED HELPER: Build + send multi-recipient SOL payout from the guild owner's W1
 async function sendGuildPayout(
     telegramId: string,
     recipients: Array<{ pubkey: string; lamports: number }>
@@ -187,16 +185,14 @@ async function sendGuildPayout(
         const vaultPubkey = new PublicKey(user.vaultAddress);
         const balance = await connection.getBalance(vaultPubkey);
 
-        if (balance < totalLamports + 500000) {
-            return { success: false, message: `Insufficient Funds: You need ${((totalLamports + 500000) / LAMPORTS_PER_SOL).toFixed(4)} SOL in your Main Wallet (W1) to cover this payout + gas.` };
+        if (balance < totalLamports + 50000) {
+            return { success: false, message: `Insufficient Funds: You need ${((totalLamports + 50000) / LAMPORTS_PER_SOL).toFixed(4)} SOL in your Main Wallet (W1) to cover this payout + gas.` };
         }
 
         const rawPk = decryptKey(user.turnkeySubOrgId);
         if (!rawPk) return { success: false, message: "Decryption Fault." };
         const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
 
-        // Solana caps a single tx around ~20-25 simple transfer instructions safely.
-        // Batch in chunks of 20 and submit sequentially if needed.
         const CHUNK_SIZE = 20;
         let lastSig = "";
 
@@ -224,7 +220,7 @@ async function sendGuildPayout(
             }
 
             if (!isConfirmed) {
-                return { success: false, message: `Batch ${Math.floor(i / CHUNK_SIZE) + 1} dropped by the network. Some payouts may not have landed — check Solscan before retrying.` };
+                return { success: false, message: `Batch ${Math.floor(i / CHUNK_SIZE) + 1} dropped by the network. Check Solscan before retrying.` };
             }
             lastSig = sig;
         }
@@ -239,19 +235,14 @@ async function sendGuildPayout(
     }
 }
 
-// =========================================================
-// 🟢 TIERED AIRDROP (Top 3 / Next 7 / Ranks 11-50)
-// =========================================================
+// TIERED AIRDROP
 export async function executeTieredAirdrop(
-    telegramId: string,
-    guildId: string,
-    amtTop3: number,
-    amtNext7: number,
-    amtRanks11to50: number
+    telegramId: string, guildId: string, amtTop3: number, amtNext7: number, amtRanks11to50: number
 ): Promise<{ success: boolean; message: string; signature?: string }> {
     try {
         const guild = await prisma.guild.findFirst({ where: { id: guildId, owner: { telegramId } } });
         if (!guild) return { success: false, message: "You do not own this Guild." };
+        if (amtTop3 < 0 || amtNext7 < 0 || amtRanks11to50 < 0) return { success: false, message: "Amounts must be positive." };
 
         const lb = await getLeaderboard(guildId, 50);
         if (lb.length === 0) return { success: false, message: "No ranked members found to pay out." };
@@ -270,7 +261,6 @@ export async function executeTieredAirdrop(
         const result = await sendGuildPayout(telegramId, recipients);
         if (!result.success) return result;
 
-        // Track cumulative airdrops received per member
         await Promise.all(recipients.map(async (r) => {
             const membership = lb.find((row: any) => row.walletAddress === r.pubkey);
             if (membership) {
@@ -287,29 +277,21 @@ export async function executeTieredAirdrop(
     }
 }
 
-// =========================================================
-// 🟢 INDIVIDUAL PAYOUT (Pay one specific ranked member)
-// =========================================================
+// INDIVIDUAL PAYOUT
 export async function executeIndividualAirdrop(
-    telegramId: string,
-    guildId: string,
-    targetRank: number,
-    amountSol: number
+    telegramId: string, guildId: string, targetRank: number, amountSol: number
 ): Promise<{ success: boolean; message: string; signature?: string }> {
     try {
         const guild = await prisma.guild.findFirst({ where: { id: guildId, owner: { telegramId } } });
         if (!guild) return { success: false, message: "You do not own this Guild." };
+        if (targetRank <= 0 || amountSol <= 0) return { success: false, message: "Rank and Amount must be > 0." };
 
         const lb = await getLeaderboard(guildId, Math.max(targetRank, 50));
         const target = lb.find((row: any) => row.rank === targetRank);
         if (!target) return { success: false, message: `No member found at rank #${targetRank}.` };
-        if (!target.walletAddress || target.walletAddress === "Unknown") {
-            return { success: false, message: `Rank #${targetRank}'s wallet address could not be resolved.` };
-        }
+        if (!target.walletAddress || target.walletAddress === "Unknown") return { success: false, message: `Rank #${targetRank}'s wallet address could not be resolved.` };
 
-        const result = await sendGuildPayout(telegramId, [
-            { pubkey: target.walletAddress, lamports: Math.floor(amountSol * LAMPORTS_PER_SOL) }
-        ]);
+        const result = await sendGuildPayout(telegramId, [{ pubkey: target.walletAddress, lamports: Math.floor(amountSol * LAMPORTS_PER_SOL) }]);
         if (!result.success) return result;
 
         await prisma.guildMembership.updateMany({
@@ -323,17 +305,14 @@ export async function executeIndividualAirdrop(
     }
 }
 
-// =========================================================
-// 🟢 BULK AIRDROP (Split total evenly across Top 50)
-// =========================================================
+// BULK AIRDROP
 export async function executeGuildAirdrop(
-    telegramId: string,
-    guildId: string,
-    totalSol: number
+    telegramId: string, guildId: string, totalSol: number
 ): Promise<{ success: boolean; message: string; signature?: string }> {
     try {
         const guild = await prisma.guild.findFirst({ where: { id: guildId, owner: { telegramId } } });
         if (!guild) return { success: false, message: "You do not own this Guild." };
+        if (totalSol <= 0) return { success: false, message: "Amount must be > 0." };
 
         const lb = await getLeaderboard(guildId, 50);
         const eligible = lb.filter((row: any) => row.walletAddress && row.walletAddress !== "Unknown");
@@ -341,7 +320,7 @@ export async function executeGuildAirdrop(
 
         const perMemberSol = totalSol / eligible.length;
         const perMemberLamports = Math.floor(perMemberSol * LAMPORTS_PER_SOL);
-        if (perMemberLamports <= 0) return { success: false, message: "Amount too small to split across all members (rounds to 0 per wallet)." };
+        if (perMemberLamports <= 0) return { success: false, message: "Amount too small to split across all members." };
 
         const recipients = eligible.map((row: any) => ({ pubkey: row.walletAddress, lamports: perMemberLamports }));
 

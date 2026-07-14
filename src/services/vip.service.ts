@@ -45,32 +45,28 @@ export type VipTierKey = keyof typeof VIP_TIERS;
 // =========================================================
 // CHECK IF USER IS ACTIVE VIP
 // =========================================================
+import { getVipStatus as getPromoVipStatus } from './vip_promo.service.js';
+
+// =========================================================
+// CHECK IF USER IS ACTIVE VIP
+// =========================================================
 export async function checkVipStatus(telegramId: string): Promise<{
     isVip: boolean;
     tier: VipTierKey | null;
     expiresAt: Date | null;
     daysRemaining: number;
 }> {
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    if (!user || !user.isVip) return { isVip: false, tier: null, expiresAt: null, daysRemaining: 0 };
-
-    if (user.vipExpiresAt && new Date() > user.vipExpiresAt) {
-        await prisma.user.update({
-            where: { telegramId },
-            data: { isVip: false, vipTier: null }
-        });
-        return { isVip: false, tier: null, expiresAt: null, daysRemaining: 0 };
-    }
-
-    const daysRemaining = user.vipExpiresAt
-        ? Math.ceil((user.vipExpiresAt.getTime() - Date.now()) / 86400000)
-        : 36500;
-
+    // 🟢 P1 FIX #6: Use single source of truth for expiry/demotion logic
+    const promoStatus = await getPromoVipStatus(telegramId);
+    
+    // We still need the specific user tier ('standard', 'pro', 'lifetime') for this service's consumers
+    const user = await prisma.user.findUnique({ where: { telegramId }, select: { vipTier: true } });
+    
     return {
-        isVip: true,
-        tier: (user.vipTier as VipTierKey) || 'standard',
-        expiresAt: user.vipExpiresAt,
-        daysRemaining
+        isVip: promoStatus.isVip,
+        tier: (user?.vipTier as VipTierKey) || null,
+        expiresAt: promoStatus.expiresAt,
+        daysRemaining: promoStatus.daysRemaining || 0
     };
 }
 

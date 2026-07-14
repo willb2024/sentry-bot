@@ -2076,7 +2076,7 @@ bot.action('menu_affiliate', async (ctx) => {
         `Turn your influence into massive passive income. As you accumulate <b>$SENTRY Points</b>, your affiliate revenue share increases automatically!\n\n` +
         
         `💰 <b>INSTANT VIP UPGRADE BONUS:</b>\n` +
-        `Every time one of your recruits upgrades to the Dev Suite (PRO/VIP), you instantly receive <b>1.0 SOL</b> deposited directly to your withdrawable balance. No limits!\n\n` +
+        `Every time one of your recruits upgrades to the Dev Suite (PRO/VIP), you instantly receive <b>1.5 SOL</b> deposited directly to your withdrawable balance. No limits!\n\n` +
 
         `🎯 <b>HOW TO EARN POINTS (CONDITIONS):</b>\n` +
         `• <b>Trade Volume:</b> 1 SOL Traded = <b>10,000 PTS</b>\n` +
@@ -2785,44 +2785,6 @@ bot.action('menu_caller', async (ctx) => {
 
 
 // 🟢 CLAUDE FIX 3.1 & 3.6: Unified VIP Handler
-async function sendVipStatus(ctx: any, tgId: string, isEdit: boolean = false) {
-    const loader = isEdit ? null : await ctx.reply("<i>⏳ Checking your VIP credentials...</i>", { parse_mode: 'HTML' });
-    try {
-        const status = await getVipStatus(tgId);
-        
-        let msg = '';
-        if (status.isVip && !status.isExpired) {
-            const typeLabel = status.expiresAt ? `${status.source === 'PROMO' ? 'Promo' : 'Paid'} VIP (${status.daysRemaining} days remaining)` : 'Permanent VIP';
-            msg = `👑 <b>YOUR VIP STATUS</b>\n\nStatus: 🟢 <b>ACTIVE</b>\nType: <b>${typeLabel}</b>\n\n<b>Active Benefits:</b>\n• 0% trading fees\n• Turbo Jito priority\n• Whale alpha directory\n• ${status.badge} Custom VIP badge\n\n<i>Note: Dev Suite requires separate purchase.</i>`;
-        } else if (status.source === 'EXPIRED') {
-            msg = `👑 <b>YOUR VIP STATUS</b>\n\nStatus: ⚪ <b>EXPIRED</b>\n\nYour previous VIP pass ended on ${status.expiresAt ? status.expiresAt.toLocaleDateString() : 'recently'}.\n\nYou are now a standard member trading at normal fees. <i>Promo VIP cannot be re-claimed.</i>`;
-        } else {
-            const slotsLeft = await getSlotsRemaining();
-            const promoActive = (await redis.get('vip_promo:active')) === 'true';
-            msg = `👑 <b>YOUR VIP STATUS</b>\n\nStatus: ⚫ <b>Standard Member</b>\n\n` +
-                (promoActive && slotsLeft > 0 ? 
-                    `🎁 <b>${slotsLeft} VIP slots available today!</b>\nShare your referral link and the first 10 people who click it get a free 10-day VIP pass.\nYour referral link earns you 50% of their fees too.` : 
-                    `<i>Check back tomorrow for daily VIP slots, or wait for the next promo cycle.</i>`);
-        }
-
-        const keyboard = status.isVip ? 
-            Markup.inlineKeyboard([[Markup.button.callback('🔄 Extend / Upgrade Plan', 'vip_upgrade_menu')], [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]) :
-            Markup.inlineKeyboard([
-                [Markup.button.callback('🟡 Trial — 0.1 SOL / 7 Days', 'vip_select_trial')],
-                [Markup.button.callback('🟢 Standard — 0.3 SOL / 30 Days', 'vip_select_standard')],
-                [Markup.button.callback('🔵 Pro — 1.0 SOL / 90 Days', 'vip_select_pro')],
-                [Markup.button.callback('💎 Lifetime — 3.0 SOL', 'vip_select_lifetime')],
-                [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-            ]);
-
-        if (isEdit) await safeEditMessageText(ctx, msg, keyboard);
-        else await ctx.telegram.editMessageText(ctx.chat.id, loader!.message_id, undefined, msg, { parse_mode: 'HTML', ...keyboard });
-    } catch (e: any) {
-        if (loader) await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Error:</b> Could not fetch VIP status.`, { parse_mode: 'HTML' });
-    }
-}
-
-
 
 
 // 🟢 VIP PROMO ADMIN CONTROLS
@@ -3505,6 +3467,32 @@ bot.command('vip', async (ctx) => {
 
     } catch (e: any) {
         await ctx.reply(`🔴 Error: ${e.message}`);
+    }
+});
+
+// 🟢 P0 FIX #3: AI Caller Instant Buy Button execution
+bot.action(/^forcebuy_(.+)_([\d.]+)$/, async (ctx) => {
+    const tokenAddress = ctx.match[1];
+    const amountSol = parseFloat(ctx.match[2]);
+    const telegramId = ctx.from?.id.toString()!;
+    await ctx.answerCbQuery();
+
+    const snipeLockKey = `lock:global_snipe:${telegramId}`;
+    if (!(await redis.set(snipeLockKey, 'LOCKED', 'EX', 3, 'NX'))) {
+        return ctx.replyWithHTML("⏳ <b>Rate Limit Exceeded:</b> Please wait 3 seconds before executing another snipe.");
+    }
+
+    const loader = await ctx.replyWithHTML(`⚡ <b>EXECUTING SNIPE</b>\n\nTarget: <code>${tokenAddress.substring(0,8)}...</code>\nAmount: <b>${amountSol} SOL</b>`);
+    const result = await executeSnipe(telegramId, tokenAddress, amountSol);
+
+    if (result.success) {
+        await redis.del(`balance_cache:${telegramId}`);
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `🟢 <b>SNIPE SUCCESSFUL!</b>\n\n<b>Token:</b> <code>${tokenAddress}</code>\n<b>Invested:</b> ${amountSol} SOL\n<b>Status:</b> ${result.message}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
+            { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...Markup.inlineKeyboard([[Markup.button.callback('💼 View Positions', 'menu_positions')]]) }
+        );
+    } else {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>SNIPE FAILED:</b> ${result.message}`, { parse_mode: 'HTML' });
     }
 });
 
