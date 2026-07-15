@@ -39,10 +39,16 @@ function recordPrimaryFailure() {
     }
 }
 
-const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 8);
+// 🟢 SPEED FIX: Raised MAX concurrent RPCs drastically from 8 to 40
+const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 40);
 let activeCount = 0;
 
-// 🟢 PART 4.6 FIX: Priority Queue implementation
+// 🟢 SPEED FIX: These NEVER wait in the queue — trade submission and blockhash must be instant
+const BYPASS_QUEUE_METHODS = new Set([
+    'sendRawTransaction', 'sendTransaction', 'getLatestBlockhash',
+    'getSignatureStatus', 'getBalance'
+]);
+
 const waitQueueHigh: Array<() => void> = [];
 const waitQueueLow: Array<() => void> = [];
 
@@ -71,6 +77,8 @@ async function withSlot<T>(highPriority: boolean, fn: () => Promise<T>): Promise
 
 export const connection = new Proxy(primaryConnection, {
     get(target, prop, receiver) {
+        if (prop === 'rpcEndpoint') return target.rpcEndpoint;
+        
         const value = Reflect.get(target, prop, receiver);
         if (typeof value !== 'function') return value;
 
@@ -88,9 +96,29 @@ export const connection = new Proxy(primaryConnection, {
         }
 
         return function (...args: any[]) {
-            // Priority heuristic: If it's sending a transaction, push it to High Priority
             const isHighPriority = methodName.includes('sendRawTransaction') || methodName.includes('getLatestBlockhash');
-            
+
+            // 🟢 FAST PATH: Skip the semaphore completely for hot-path methods
+            if (BYPASS_QUEUE_METHODS.has(methodName)) {
+                return (async () => {
+                    if (isCircuitOpen()) {
+                        const backupValue = Reflect.get(backupConnection, prop);
+                        if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
+                    }
+                    try {
+                        const result = await value.apply(target, args);
+                        recordPrimarySuccess();
+                        return result;
+                    } catch (error: any) {
+                        recordPrimaryFailure();
+                        const backupValue = Reflect.get(backupConnection, prop);
+                        if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
+                        throw error;
+                    }
+                })();
+            }
+
+            // STANDARD PATH: Queue background tasks
             return withSlot(isHighPriority, async () => {
                 if (isCircuitOpen()) {
                     const backupValue = Reflect.get(backupConnection, prop);
@@ -110,5 +138,6 @@ export const connection = new Proxy(primaryConnection, {
         };
     }
 }) as unknown as Connection;
+
 // 🟢 COLD CONNECTION: Non-latency critical read paths
 export const coldConnection = backupConnection;

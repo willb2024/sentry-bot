@@ -109,16 +109,17 @@ setInterval(async () => {
 }, 2_000);
 
 setInterval(async () => {
-    for (const guard of cachedActiveGuards) {
-        if (lockedGuards.has(guard.id)) continue;
+    // 🟢 Parallel instead of sequential — computes all pre-signed exits at once
+    await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
+        if (lockedGuards.has(guard.id)) return;
         try {
             const payload = await generatePreSignedExitTx(guard.telegramId, guard.tokenAddress);
             if (payload) {
                 const valueToStore = typeof payload === 'string' ? payload : JSON.stringify(payload);
-                await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 10); 
+                await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 10);
             }
-        } catch(e) {}
-    }
+        } catch (e) {}
+    }));
 }, 5_000);
 
 // 🟢 C3 FIX: Prevent WebSocket Memory Leaks
@@ -432,20 +433,28 @@ export function startUniversalGuardPoller(bot: any) {
     setInterval(async () => {
         try {
             const activeGuards = await getAllActiveGuards();
-            const { isSimulationActive } = await import('./simulation.service.js');
-            
-            for (const guard of activeGuards) {
-                const isSim = await isSimulationActive(guard.telegramId);
-                
+            const { isSimulationActive, walkSimPositionPrices } = await import('./simulation.service.js');
+
+            // 🟢 Batch-check sim status once
+            const uniqueTgIds = [...new Set(activeGuards.map(g => g.telegramId))];
+            const simFlags = new Map<string, boolean>();
+            await Promise.all(uniqueTgIds.map(async (id) => {
+                const isSim = await isSimulationActive(id);
+                simFlags.set(id, isSim);
+                if (isSim) walkSimPositionPrices(id).catch(() => {}); // 🟢 NEW: drift open positions realistically
+            }));
+
+            // 🟢 Fire all guard checks in parallel
+            await Promise.allSettled(activeGuards.map(guard => {
+                const isSim = simFlags.get(guard.telegramId);
                 if (isSim) {
-                    // 🟢 FIX: Simulation guards bypass the live-price check since they trigger on timed probability
-                    await checkAndTriggerGuard(guard, 1.0, bot);
+                    return checkAndTriggerGuard(guard, 1.0, bot); // livePrice doesn't matter for sim triggers
                 } else {
                     const livePrice = getLivePriceSol(guard.tokenAddress);
-                    if (livePrice === null) continue; 
-                    await checkAndTriggerGuard(guard, livePrice, bot);
+                    if (livePrice === null) return Promise.resolve();
+                    return checkAndTriggerGuard(guard, livePrice, bot);
                 }
-            }
+            }));
         } catch (e: any) {
             console.error(`🔴 [GUARD POLLER] Tick failed: ${e.message}`);
         }
@@ -457,7 +466,7 @@ export function startUniversalGuardPoller(bot: any) {
             const activeGuards = await getAllActiveGuards();
             const { isSimulationActive } = await import('./simulation.service.js');
             
-            // 🟢 FIX: Reconcile live price subscriptions ONLY for real mainnet accounts
+            // 🟢 Reconcile live price subscriptions ONLY for real mainnet accounts
             const liveGuards = [];
             for (const g of activeGuards) {
                 if (!(await isSimulationActive(g.telegramId))) {

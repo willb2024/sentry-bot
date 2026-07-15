@@ -15,36 +15,9 @@ import https from 'https';
 
 dotenv.config();
 
-// Keep HTTP connections alive for massive speed boost to external API calls
-const httpsAgent = new https.Agent({ keepAlive: true });
-const axiosClient = axios.create({ httpsAgent });
-
 // 🟢 PERFORMANCE: Cache priority fees so 'FAST' default doesn't block on RPC
 let cachedPriorityFee = 1_000_000;
 let lastPriorityFeeFetch = 0;
-
-export async function getDynamicPriorityFee(priorityLevel: string, customPriorityFee: number): Promise<number> {
-    if (priorityLevel === 'ECO') return 500_000;
-    if (priorityLevel === 'CUSTOM') return Math.floor(customPriorityFee * 1_000_000_000);
-    if (priorityLevel === 'TURBO') return 5_000_000;
-    
-    const now = Date.now();
-    if (now - lastPriorityFeeFetch > 10000) {
-        lastPriorityFeeFetch = now;
-        try {
-            const rpcUrl = process.env.HELIUS_RPC_URL || connection.rpcEndpoint;
-            axiosClient.post(rpcUrl, {
-                jsonrpc: "2.0", id: 1, method: "getPriorityFeeEstimate",
-                params: [{ "targetOptions": { "defaultLevel": "high" } }]
-            }, { timeout: 2000 }).then(res => {
-                if (res.data?.result?.priorityFeeEstimate) {
-                    cachedPriorityFee = Math.max(1_000_000, res.data.result.priorityFeeEstimate);
-                }
-            }).catch(() => {});
-        } catch (_) {}
-    }
-    return cachedPriorityFee;
-}
 
 dns.setDefaultResultOrder('ipv4first');
 
@@ -117,6 +90,32 @@ const activeAgent = new https.Agent({
     family: 4,
     keepAlive: true,
 });
+
+// 🟢 SPEED FIX: Apply the DoH-resolved agent to ALL outbound calls, including Jupiter and PumpPortal
+const axiosClient = axios.create({ httpsAgent: activeAgent });
+
+export async function getDynamicPriorityFee(priorityLevel: string, customPriorityFee: number): Promise<number> {
+    if (priorityLevel === 'ECO') return 500_000;
+    if (priorityLevel === 'CUSTOM') return Math.floor(customPriorityFee * 1_000_000_000);
+    if (priorityLevel === 'TURBO') return 5_000_000;
+    
+    const now = Date.now();
+    if (now - lastPriorityFeeFetch > 10000) {
+        lastPriorityFeeFetch = now;
+        try {
+            const rpcUrl = process.env.HELIUS_RPC_URL || connection.rpcEndpoint;
+            axiosClient.post(rpcUrl, {
+                jsonrpc: "2.0", id: 1, method: "getPriorityFeeEstimate",
+                params: [{ "targetOptions": { "defaultLevel": "high" } }]
+            }, { timeout: 2000 }).then(res => {
+                if (res.data?.result?.priorityFeeEstimate) {
+                    cachedPriorityFee = Math.max(1_000_000, res.data.result.priorityFeeEstimate);
+                }
+            }).catch(() => {});
+        } catch (_) {}
+    }
+    return cachedPriorityFee;
+}
 
 const API_HEADERS = {
     'User-Agent': 'Mozilla/5.0',
@@ -208,11 +207,16 @@ export async function checkRecentMevActivityCached(tokenMint: string): Promise<b
     }
 }
 
-// 🟢 C8 FIX: Fan-out Jito Bundle Submission to all global regions concurrently
-export async function sendToJitoBundle(swapTx: VersionedTransaction, tipTx: VersionedTransaction): Promise<boolean> {
+// 🟢 SPEED FIX: Fire raw send AT THE SAME TIME as Jito, don't wait for Jito to fail first
+export async function sendToJitoBundle(
+    swapTx: VersionedTransaction, 
+    tipTx: VersionedTransaction,
+    allowRawFallback: boolean = true
+): Promise<boolean> {
     try {
         const base64Swap = Buffer.from(swapTx.serialize()).toString('base64');
         const base64Tip = Buffer.from(tipTx.serialize()).toString('base64');
+        const bundledTxs = [base64Swap, base64Tip];
 
         const JITO_REGIONS = [
             'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
@@ -222,25 +226,29 @@ export async function sendToJitoBundle(swapTx: VersionedTransaction, tipTx: Vers
             'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
         ];
 
-        const bundledTxs = [base64Swap, base64Tip];
-
         const requests = JITO_REGIONS.map(url => 
             axiosClient.post(url, {
-                jsonrpc: "2.0", 
-                id: 1, 
-                method: "sendBundle", 
-                params: [bundledTxs] 
+                jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] 
             }, { 
                 headers: { 'Content-Type': 'application/json', ...API_HEADERS },
-                httpsAgent: activeAgent,
                 timeout: 3000
             })
         );
 
-        // We race the regions and accept the first successful response to maximize block submission speed
-        const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
+        // 🟢 FIRE RAW SEND IN PARALLEL
+        const rawSendPromise = allowRawFallback
+            ? connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null)
+            : Promise.resolve(null);
 
-        if (jitoRes?.data?.error) {
+        const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
+        const rawSig = await rawSendPromise;
+
+        // If raw hit, attempt to tip anyway just in case
+        if (rawSig) {
+            connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
+        }
+
+        if (jitoRes?.data?.error && !rawSig) {
             console.error("🔴 [JITO BUNDLE REJECTED]:", JSON.stringify(jitoRes.data.error));
             return false;
         }
@@ -498,7 +506,6 @@ export async function executeSnipe(
         const latestBlockhash = await getLatestBlockhashWithCache();
 
         const executionPromises = wallets.map(async (w, index) => {
-            // 🟢 D3 FIX: Per-wallet balance pre-check restored
             let wBal = getLiveWalletBalance(w.publicKey.toBase58());
             if (wBal === null) {
                 wBal = (await connection.getBalance(w.publicKey).catch(()=>0)) / LAMPORTS_PER_SOL;
@@ -521,19 +528,12 @@ export async function executeSnipe(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
-            // D5 FIX: Utilizing the shared sendToJitoBundle function for fan-out
-            const bundleOk = await sendToJitoBundle(swapTx, tipTx);
+            // 🟢 SPEED FIX: Parallel execution via updated sendToJitoBundle. Maintains slippage safety.
+            const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
             if (!bundleOk) {
-                if (slippage > 25.0) {
-                    walletErrors[index] = "Jito Bundle dropped. High slippage fallback aborted."; walletReport[index] = `W${index + 1}: 🔴 Jito`; return;
-                } else {
-                    try {
-                        txSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true });
-                        await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => null);
-                    } catch (e: any) {
-                        walletErrors[index] = `Direct Send Failed`; walletReport[index] = `W${index+1}: 🔴 Drop`; return;
-                    }
-                }
+                walletErrors[index] = "Transaction dropped. High slippage fallback aborted or network congested."; 
+                walletReport[index] = `W${index + 1}: 🔴 Drop`; 
+                return;
             }
 
             // 🟢 PERFORMANCE: DO NOT AWAIT CONFIRMATION! Assume submission success to speed up Telegram response.
@@ -547,12 +547,11 @@ export async function executeSnipe(
                 if (confirmed) {
                     const feeCharged = amountSol * 0.01; // FLAT 1%
                     
-                    // 🟢 ECONOMICS FIX: Protocol always retains at least 30% of feeCharged
                     const maxDistributable = feeCharged * 0.70;
 
                     let affiliateCut = 0;
                     if (user.referredById) {
-                        const dynamicRate = await getDynamicAffiliateRate(user.referredById); // 0.4 to 0.7
+                        const dynamicRate = await getDynamicAffiliateRate(user.referredById); 
                         affiliateCut = feeCharged * dynamicRate;
                         await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } }).catch(()=>{});
                     }
@@ -675,18 +674,12 @@ export async function executeExit(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
             
-            // 🟢 D5 FIX: Substituted the redundant inline array fan-out with the existing sendToJitoBundle helper
-            const bundleOk = await sendToJitoBundle(swapTx, tipTx);
-            
+            // 🟢 SPEED FIX: Parallel execution via updated sendToJitoBundle. Maintains slippage safety.
+            const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
             if (!bundleOk) {
-                if (slippage > 25.0 && sellPercentage !== 100) {
-                    walletErrors[index] = "Jito Bundle dropped. High slippage fallback aborted."; walletReport[index] = `W${index + 1}: 🔴 Jito`; return;
-                } else {
-                    try {
-                        txSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true });
-                        await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => null);
-                    } catch (e: any) { walletErrors[index] = `Direct Send Failed`; walletReport[index] = `W${index+1}: 🔴 Drop`; return; }
-                }
+                walletErrors[index] = "Transaction dropped. High slippage fallback aborted or network congested."; 
+                walletReport[index] = `W${index + 1}: 🔴 Drop`; 
+                return;
             }
 
             if (!firstSignature) firstSignature = txSig;
@@ -733,7 +726,6 @@ export async function executeExit(
                         }
                     }).catch(() => {});
 
-                    // 🟢 FIX: Send live PnL card via Axios directly (Bypasses stream errors in native node-fetch)
                     if (!isBumper) {
                         const captionHtml = `${profitPercent >= 0 ? '🟢' : '🔴'} <b>SELL CONFIRMED</b>\n\n` +
                                 `Token: <code>${targetCA.substring(0,8)}...</code>\n` +
@@ -743,7 +735,6 @@ export async function executeExit(
                             const { generatePnlCard } = await import('./image.service.js');
                             const imageBuffer = await generatePnlCard(targetCA, profitPercent, user.referralCode ?? undefined);
                             
-                            // 🟢 FIX: Flawless REST posting using Axios + form-data avoiding export/import races
                             const FormData = (await import('form-data')).default || await import('form-data');
                             const form: any = new FormData();
                             form.append('chat_id', telegramId);
@@ -807,8 +798,6 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return null;
         
-        // 🟢 PART 2.5 FIX: If user runs Multiple Wallets, force fallback to slow path 
-        // to ensure ALL wallets are sold during a stop-loss, not just Wallet 1.
         if (user.activeWallets > 1) return null;
 
         const slippage = 100.0; 
