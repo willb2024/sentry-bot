@@ -1874,52 +1874,7 @@ bot.action(/^caller_dca_(.+)$/, async (ctx) => {
     );
 });
 
-// =========================================================
-// 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
-// =========================================================
-// 🟢 UPGRADED: Added "Scan Mainnet Now" to the top of the menu layout
-async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
-    const filters = await getUserCallerFilters(tgId);
-    
-    const statusText = filters.isActive 
-        ? "🟢 <b>ACTIVE & SCANNING</b> 🔍\n<i>(Searching mempool for matches every 15s...)</i>" 
-        : "🔴 <b>OFFLINE</b>";
-        
-    const mevText = filters.blockMev ? "🟢 Yes (Protected)" : "🔴 No (Risky)";
 
-    const text = `🎯 <b>AI COIN CALLER ENGINE</b>\n\n` +
-        `Sentry scans DexScreener every 15 seconds and DMs you the highest-scoring tokens before they pump.\n\n` +
-        `<b>Engine Status:</b> ${statusText}\n\n` +
-        `⚙️ <b>CURRENT FILTERS:</b>\n` +
-        `• <b>Minimum Score:</b> ${filters.minScore} / 100\n` +
-        `• <b>Max Token Age:</b> ${filters.maxAgeMins} Mins\n` +
-        `• <b>Momentum % Range:</b> ${filters.minPctChange}% to ${filters.maxPctChange}%\n` +
-        `• <b>Min Liquidity:</b> $${filters.minLiquidity.toLocaleString()}\n` +
-        `• <b>Min 24h Volume:</b> $${filters.minVolume24h.toLocaleString()}\n` +
-        `• <b>Block MEV:</b> ${mevText}\n\n` +
-        `<i>Adjust your scanner parameters below:</i>`;
-
-    const ui = Markup.inlineKeyboard([
-        [Markup.button.callback('🔍 Scan Mainnet Now', 'trigger_caller_scan')], 
-        [Markup.button.callback(filters.isActive ? '🛑 TURN OFF CALLER' : '⚡ TURN ON CALLER', 'toggle_caller_status')],
-        [
-            Markup.button.callback(`⏱️ Max Age (${filters.maxAgeMins}m)`, 'edit_caller_age'),
-            Markup.button.callback(`📈 % Range (${filters.minPctChange} - ${filters.maxPctChange}%)`, 'edit_caller_pct')
-        ],
-        [
-            Markup.button.callback(`💧 Min Liq ($${(filters.minLiquidity/1000).toFixed(0)}k)`, 'edit_caller_liq'),
-            Markup.button.callback(`📊 Min Vol ($${(filters.minVolume24h/1000).toFixed(0)}k)`, 'edit_caller_vol')
-        ],
-        [
-            Markup.button.callback(`✏️ Min Score (${filters.minScore})`, 'edit_caller_score'), 
-            Markup.button.callback(filters.blockMev ? '🛡️ MEV Block: ON' : '⚠️ MEV Block: OFF', 'toggle_caller_mev')
-        ],
-        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-    ]);
-
-    if (isEdit) await safeEditMessageText(ctx, text, ui);
-    else await ctx.replyWithHTML(text, ui);
-}
 
 // 🟢 NEW BUTTON ACTIONS: Add these right below your other edit_caller_* actions
 bot.action('edit_caller_liq', async (ctx) => {
