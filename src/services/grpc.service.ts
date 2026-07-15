@@ -219,6 +219,22 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         const targetPnl = isProfit ? (guardSnapshot.takeProfitPercent || 50) : -Math.abs(guardSnapshot.trailingPercent);
         const pnlPercent = applySimSlippage(targetPnl);
 
+        // 🟢 FIX: Calculate realistic peak drop for narrative sync from the walked prices
+        let actualPeakDrop = guardSnapshot.trailingPercent;
+        if (!isProfit) {
+            try {
+                const rawPos = await redis.get(`sim:positions:${guardSnapshot.telegramId}`);
+                if (rawPos) {
+                    const positions = JSON.parse(rawPos);
+                    const pos = positions.find((p: any) => p.mint === guardSnapshot.tokenAddress);
+                    if (pos && pos.highestSeenPrice && pos.priceUsd) {
+                        const drop = ((pos.highestSeenPrice - pos.priceUsd) / pos.highestSeenPrice) * 100;
+                        if (drop > 0) actualPeakDrop = parseFloat(drop.toFixed(1));
+                    }
+                }
+            } catch (_) {}
+        }
+
         await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
         await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
 
@@ -235,7 +251,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
                 : `🩸 <b>Incurred Loss: -${Math.abs(solPnl).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
             
-            const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n${pnlPercent < 0 ? `📉 <b>Peak Drop: -${guardSnapshot.trailingPercent.toFixed(1)}%</b>\n` : ''}${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
+            const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n${pnlPercent < 0 ? `📉 <b>Peak Drop: -${actualPeakDrop}%</b>\n` : ''}${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
 
             const imgId = crypto.randomBytes(8).toString('hex');
             await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
@@ -255,7 +271,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             try {
                 await bot.telegram.sendMessage(
                     guardSnapshot.telegramId,
-                    `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'} 🎮\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\nPnL: <b>${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%</b>`,
+                    `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\nPnL: <b>${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%</b>`,
                     { parse_mode: 'HTML' }
                 );
             } catch (_) {}

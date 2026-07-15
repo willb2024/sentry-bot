@@ -38,6 +38,35 @@ export async function getCachedMintInfo(mint: string): Promise<{ decimals: numbe
     }
 }
 
+
+export async function getTokenRiskDetails(tokenMint: string): Promise<{
+    isUnsafe: boolean; isHoneypot: boolean; isMintable: boolean; top10Pct: number; score: number;
+}> {
+    const key = `rugdetails:${tokenMint}`;
+    try {
+        const cached = await redis.get(key);
+        if (cached) return JSON.parse(cached);
+
+        const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
+            { signal: AbortSignal.timeout(2000) });
+        if (!res.ok) return { isUnsafe: false, isHoneypot: false, isMintable: false, top10Pct: 0, score: 0 };
+
+        const data = (await res.json()) as any;
+        const risks = data.risks || [];
+        const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
+        const isMintable = !!(data.token && data.token.mintAuthority);
+        const topHolders = data.topHolders || [];
+        const top10Pct = topHolders.reduce((acc: number, h: any) => acc + (h.pct || 0), 0);
+        const isUnsafe = isHoneypot || isMintable || (data.score > 500) || top10Pct > 40.0;
+
+        const payload = { isUnsafe, isHoneypot, isMintable, top10Pct, score: data.score || 0 };
+        await redis.set(key, JSON.stringify(payload), 'EX', 600);
+        return payload;
+    } catch (_) {
+        return { isUnsafe: false, isHoneypot: false, isMintable: false, top10Pct: 0, score: 0 };
+    }
+}
+
 export function decodePumpCurvePrice(base64Data: string): number {
     try {
         const buffer = Buffer.from(base64Data, 'base64');

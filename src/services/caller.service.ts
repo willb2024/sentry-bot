@@ -142,12 +142,10 @@ export async function setUserCallerFilters(telegramId: string, updates: Partial<
     return updated;
 }
 
-async function getCachedRugStatus(mint: string): Promise<boolean> {
-    const cached = await redis.get(`rugcheck:${mint}`);
-    if (cached) return cached === 'true';
-    const isRug = await checkTokenRugRisk(mint);
-    await redis.set(`rugcheck:${mint}`, isRug ? 'true' : 'false', 'EX', 600);
-    return isRug;
+async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number }> {
+    const { getTokenRiskDetails } = await import('./price.service.js');
+    const details = await getTokenRiskDetails(mint);
+    return { isRug: details.isUnsafe, top10Pct: details.top10Pct };
 }
 
 // 🟢 PIPELINE 1: WebSocket Buffer
@@ -340,25 +338,36 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     if (stats.volume24h > 100000) score += 25; 
     else if (stats.volume24h > 20000) score += 10;
 
+    // 🟢 FIX: Wash-trade / bot-volume detector
+    if (stats.liquidity > 0) {
+        const volToLiqRatio = stats.volume24h / stats.liquidity;
+        if (volToLiqRatio > 25) {
+            score -= 25;
+            reasons.push(`🚨 Vol/Liq ratio ${volToLiqRatio.toFixed(1)}x — likely wash-traded`);
+        } else if (volToLiqRatio > 12) {
+            score -= 10;
+            reasons.push(`⚠️ High Vol/Liq ratio ${volToLiqRatio.toFixed(1)}x`);
+        }
+    }
+
+    // 🟢 FIX: Graduated Momentum & Parabolic warnings
     reasons.push(`📈 Mom: +${stats.priceChangeM5.toFixed(1)}%`);
-    if (stats.priceChangeM5 > 15) score += 20;
+    if (stats.priceChangeM5 > 15 && stats.priceChangeM5 <= 60) score += 20;
+    else if (stats.priceChangeM5 > 60 && stats.priceChangeM5 <= 150) score += 12;
+    else if (stats.priceChangeM5 > 150) { score += 3; reasons.push(`⚠️ Parabolic — elevated reversal risk`); }
 
     reasons.push(`💧 Liq: $${(stats.liquidity/1000).toFixed(1)}k`);
     if (stats.liquidity > 20000) score += 15;
+    else if (stats.liquidity < 3000) { score -= 10; reasons.push(`⚠️ Thin liquidity — high slippage risk`); }
 
-    if (stats.hasSocials) { 
-        score += 10; 
-        reasons.push(`🌐 Socials present`); 
-    }
+    if (stats.hasSocials) { score += 10; reasons.push(`🌐 Socials present`); }
 
-    if (stats.isRug) { 
-        score -= 100; 
-        reasons.push(`🚨 Rug risk flagged`); 
-    }
+    if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
 
+    // 🟢 FIX: Penalty for unverified onchain-only, not a bonus
     if (stats.sourceQuality === 'onchain-only') {
-        score += 15; 
-        reasons.push(`⛓️ Pre-Index High Reserves`);
+        score -= 8;
+        reasons.push(`⛓️ Unindexed (early, unverified)`);
     }
 
     return { score: Math.max(0, score), reasons };
@@ -377,15 +386,23 @@ export async function scoreTokens() {
 
         const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...trending, ...boosted];
         
-        // Deduplicate by Mint
-        const uniquePairs = Array.from(new Map(allPairs.map(item => [item.mint, item])).values());
+        // 🟢 FIX: Deduplicate by Mint, keeping the HIGHEST source quality
+        const sourceRank: Record<string, number> = { 'dexscreener': 3, 'pump-fallback': 3, 'rest-fallback': 2, 'onchain-only': 1 };
+        const mergedMap = new Map<string, any>();
+        
+        for (const item of allPairs) {
+            const existing = mergedMap.get(item.mint);
+            if (!existing || (sourceRank[item.sourceQuality || 'onchain-only'] || 1) > (sourceRank[existing.sourceQuality || 'onchain-only'] || 1)) {
+                mergedMap.set(item.mint, item);
+            }
+        }
+        const uniquePairs = Array.from(mergedMap.values());
 
         const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
         const { cachedSolUsdPrice } = await import('./grpc.service.js');
 
-        // 🟢 UNIVERSAL ZERO-FIXER
         const needsFix = uniquePairs.filter(p => (p.liquidity === 0 || p.volume === 0) && p.mint.toLowerCase().endsWith('pump'));
 
         if (needsFix.length > 0) {
@@ -418,7 +435,7 @@ export async function scoreTokens() {
         }
 
         const scored = await Promise.all(uniquePairs.map(async (pair) => {
-            const isRug = await getCachedRugStatus(pair.mint);
+            const { isRug, top10Pct } = await getCachedRugStatus(pair.mint);
             const stats: TokenStats = {
                 ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
                 volume24h: pair.volume,
@@ -430,11 +447,18 @@ export async function scoreTokens() {
             };
 
             const { score, reasons } = computeTokenScore(stats);
-            return { ...pair, totalScore: score, ageMins: stats.ageMins, reasons, breakdown: { mevRisk: isRug ? -100 : 0 } };
+
+            // 🟢 FIX: Graduated concentration penalty
+            let concentrationAdjustedScore = score;
+            if (!isRug && top10Pct > 25) {
+                concentrationAdjustedScore -= Math.floor((top10Pct - 25) * 1.5);
+                reasons.push(`⚠️ Top 10 holders own ${top10Pct.toFixed(1)}%`);
+            }
+
+            return { ...pair, totalScore: Math.max(0, concentrationAdjustedScore), ageMins: stats.ageMins, reasons, breakdown: { mevRisk: isRug ? -100 : 0 } };
         }));
 
         const topScorers = scored.filter(t => t.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore);
-        
         console.log(`🎯 [CALLER] Funnel: WS=${newMints.length} | PumpAPI=${pumpFallback.length} | DSRest=${restFallback.length} | Unique=${uniquePairs.length} | Scored>0=${topScorers.length}`);
 
         await redis.set('caller:hot_scored_tokens', JSON.stringify(topScorers), 'EX', 30);

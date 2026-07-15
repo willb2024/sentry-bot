@@ -153,7 +153,6 @@ export async function simExecuteExit(
     forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
     
-    // 🟢 D4 FIX: Match realistic Jito execution latency for selling
     const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
     await new Promise(r => setTimeout(r, delay));
 
@@ -161,9 +160,18 @@ export async function simExecuteExit(
     const positions = JSON.parse(await redis.get(posKey) || '[]');
     const pos = positions.find((p: any) => p.mint === tokenAddress);
 
-    let pnlPercent = forcedPnlPercent !== undefined 
-        ? forcedPnlPercent 
-        : parseFloat((Math.random() * 325 + 15).toFixed(2));
+    let pnlPercent: number;
+    if (forcedPnlPercent !== undefined) {
+        pnlPercent = forcedPnlPercent;
+    } else {
+        // 🟢 FIX: Manual sells now use the same win/loss model as guards — realistic mix of outcomes
+        const isProfit = await getNextSimOutcome(telegramId, 'guard');
+        if (isProfit) {
+            pnlPercent = parseFloat((Math.random() * 180 + 10).toFixed(2)); // +10% to +190%
+        } else {
+            pnlPercent = parseFloat((-(Math.random() * 45 + 5)).toFixed(2)); // -5% to -50%
+        }
+    }
 
     if (pos) {
         const soldSol = pos.amountInSol * (percent / 100);
@@ -440,4 +448,30 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
             await bot.telegram.sendMessage(telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
         } catch (_) {}
     }
+}
+
+// 🟢 NEW: Drifts open sim positions so they fluctuate realistically instead of sitting at 0% PnL
+export async function walkSimPositionPrices(telegramId: string): Promise<void> {
+    const posKey = `sim:positions:${telegramId}`;
+    const raw = await redis.get(posKey);
+    if (!raw) return;
+
+    const positions = JSON.parse(raw);
+    if (positions.length === 0) return;
+
+    let changed = false;
+    for (const p of positions) {
+        const trendSeed = (p.mint.charCodeAt(0) + p.mint.charCodeAt(p.mint.length - 1)) % 100;
+        const bias = trendSeed > 55 ? 0.4 : -0.3; 
+
+        const stepPct = (Math.random() - 0.5 + bias * 0.3) * 6; 
+        const newPriceUsd = Math.max(p.entryPriceUsd * 0.05, p.priceUsd * (1 + stepPct / 100));
+
+        p.priceUsd = newPriceUsd;
+        p.valueUsd = p.amount * newPriceUsd;
+        if (newPriceUsd > (p.highestSeenPrice || 0)) p.highestSeenPrice = newPriceUsd;
+        changed = true;
+    }
+
+    if (changed) await redis.set(posKey, JSON.stringify(positions), 'EX', 3600);
 }
