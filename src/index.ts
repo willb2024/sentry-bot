@@ -578,7 +578,7 @@ const handleLaunchPadMenu = async (ctx: any) => {
                     `• <b>Portfolio Allocation:</b> Distribute your purchase across up to 4 distinct wallets concurrently within Block-0 to split execution risk.\n` +
                     `• <b>Downside Risk Controls:</b> Configure an automatic stop-loss guard on your initial allocation to help manage capital risk if market conditions drop.\n` +
                     `• <b>Transparency Audits:</b> Verify post-launch distribution metrics instantly to analyze the top holder landscape for due diligence.\n\n` +
-                    `💳 <b>Platform Fee:</b> 0.05 SOL (+ Standard Pump Fee)\n\n` +
+                    `💳 <b>Platform Fee:</b> 0.04 SOL (+ 0.02 SOL Pump.fun fee)\n\n` +
                     `<i>The platform fee directly funds Sentry's defensive Jito block-building infrastructure.</i>`;
 
         await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
@@ -1954,7 +1954,7 @@ bot.command('admin', async (ctx) => {
         const totalVol = volumeObj._sum.totalVolumeSol || 0;
         
         const tradeFees = totalVol * 0.01; 
-        const upgradeRev = (devSuites * 1.5) + (vips * 0.2); 
+        const upgradeRev = (devSuites * 6.2) + (vips * 0.2); // 🟢 Uses new 6.2 multiplier
         const totalRev = tradeFees + upgradeRev;
 
         const activeDca = await prisma.activeOrder.count({ where: { orderType: 'DCA', isActive: true } });
@@ -2139,36 +2139,33 @@ bot.action('menu_affiliate', async (ctx) => {
     }
 
     const text = 
-        `💸 <b>SENTRY PARTNERSHIP & REWARDS</b>\n\n` +
-        `Turn your influence into massive passive income. As you accumulate <b>$SENTRY Points</b>, your affiliate revenue share increases automatically!\n\n` +
-        
-        `💰 <b>INSTANT VIP UPGRADE BONUS:</b>\n` +
-        `Every time one of your recruits upgrades to the Dev Suite (PRO/VIP), you instantly receive <b>1.5 SOL</b> deposited directly to your withdrawable balance. No limits!\n\n` +
-
-        `🎯 <b>HOW TO EARN POINTS (CONDITIONS):</b>\n` +
-        `• <b>Trade Volume:</b> 1 SOL Traded = <b>10,000 PTS</b>\n` +
-        `• <b>Recruiting:</b> 1 Active Invite = <b>2,000 PTS</b>\n` +
-        `• <b>Onboarding:</b> Sign up via a partner link = <b>+10,000 PTS</b> head-start\n\n` +
-        
-        `👑 <b>TRADING FEE TIERS:</b>\n` +
-        `• 🥉 <b>Bronze (0 - 49k PTS):</b> 40% of recruit trading fees.\n` +
-        `• 🥈 <b>Silver (50k - 249k PTS):</b> 50% of recruit trading fees.\n` +
-        `• 🥇 <b>Gold (250k - 999k PTS):</b> 60% of fees + access to private Alpha.\n` +
-        `• 💎 <b>Diamond (1M+ PTS):</b> 70% of fees + Lifetime 0% fee VIP status.\n\n` +
-        
-        `🎁 <b>YOUR RECRUIT'S BONUS:</b>\n` +
-        `Anyone who uses your link gets a permanent <b>10% fee discount</b> and a 10,000 PTS airdrop head-start!\n\n` +
-        
-        `📊 <b>YOUR LIVE STATS:</b>\n` +
-        `• <b>Total Points:</b> ${totalPoints.toLocaleString()} PTS\n` +
-        `• <b>Current Tier:</b> ${currentTier}\n` +
-        `• <b>Next Tier At:</b> ${nextTier}\n` +
-        `• <b>Active Recruits:</b> ${user._count.recruits}\n` +
-        `• <b>Pending Yield:</b> ${Number(user.pendingRewardsSol||0).toFixed(4)} SOL <i>(Min claim: 0.1 SOL)</i>\n\n` +
-        
-        `🔗 <b>Your Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=${user.referralCode}</code>\n\n` +
-        
-        `<b>Link Status:</b>\n${referredByText}`;
+    `💸 <b>SENTRY PARTNERSHIP & REWARDS</b>\n\n` +
+    `Turn your influence into massive passive income. As you accumulate <b>$SENTRY Points</b>, your affiliate revenue share increases automatically!\n\n` +
+    
+    `🎯 <b>HOW TO EARN POINTS (CONDITIONS):</b>\n` +
+    `• <b>Trade Volume:</b> 1 SOL Traded = <b>10,000 PTS</b>\n` +
+    `• <b>Recruiting:</b> 1 Active Invite = <b>2,000 PTS</b>\n` +
+    `• <b>Onboarding:</b> Sign up via a partner link = <b>+10,000 PTS</b> head-start\n\n` +
+    
+    `👑 <b>TRADING FEE TIERS:</b>\n` +
+    `• 🥉 <b>Bronze (0 - 49k PTS):</b> 40% of recruit trading fees.\n` +
+    `• 🥈 <b>Silver (50k - 249k PTS):</b> 50% of recruit trading fees.\n` +
+    `• 🥇 <b>Gold (250k - 999k PTS):</b> 60% of fees + access to private Alpha.\n` +
+    `• 💎 <b>Diamond (1M+ PTS):</b> 70% of fees + Lifetime 0% fee VIP status.\n\n` +
+    
+    `🎁 <b>YOUR RECRUIT'S BONUS:</b>\n` +
+    `Anyone who uses your link gets a permanent <b>10% fee discount</b> and a 10,000 PTS airdrop head-start!\n\n` +
+    
+    `📊 <b>YOUR LIVE STATS:</b>\n` +
+    `• <b>Total Points:</b> ${totalPoints.toLocaleString()} PTS\n` +
+    `• <b>Current Tier:</b> ${currentTier}\n` +
+    `• <b>Next Tier At:</b> ${nextTier}\n` +
+    `• <b>Active Recruits:</b> ${user._count.recruits}\n` +
+    `• <b>Pending Yield:</b> ${Number(user.pendingRewardsSol||0).toFixed(4)} SOL <i>(Min claim: 0.1 SOL)</i>\n\n` +
+    
+    `🔗 <b>Your Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=${user.referralCode}</code>\n\n` +
+    
+    `<b>Link Status:</b>\n${referredByText}`;
 
     await safeEditMessageText(ctx, text, { 
         parse_mode: 'HTML',
@@ -2182,9 +2179,7 @@ bot.action('menu_affiliate', async (ctx) => {
 // =========================================================
 // 🛠️ SENTRY DEV SUITE & 50/50 KOL PAYWALL (1.5 SOL)
 // =========================================================
-// =========================================================
-// 🛠️ SENTRY DEV SUITE & 50/50 KOL PAYWALL (2.0 SOL)
-// =========================================================
+
 bot.action('menu_devsuite', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -2215,14 +2210,16 @@ bot.action('menu_devsuite', async (ctx) => {
             `💥 <b>2. The Nuke Button (Maximum Liquidity Exit)</b>\n` +
             `<i>The Problem:</i> Smart devs split their token supply across multiple wallets. But selling 5 wallets one by one crashes your own chart and loses you thousands to slippage and sandwich bots.\n` +
             `<i>The Solution:</i> The Nuke button compiles the sell orders from all 5 of your wallets into a single, encrypted Jito block. You exit your entire supply in the exact same millisecond at the absolute peak price.\n\n` +
-            `<i>Unlock lifetime access to both institutional tools for a one-time fee of <b>3.0 SOL</b>.</i>`;
+            `<i>Unlock lifetime access to both institutional tools for a one-time fee of <b>6.2 SOL</b>.</i>`;
             
         await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
-            [Markup.button.callback('🔓 Unlock Dev Suite (3.0 SOL)', 'action_unlock_devsuite')],
+            [Markup.button.callback('🔓 Unlock Dev Suite (6.2 SOL)', 'action_unlock_devsuite')],
             [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
         ]));
     }
 });
+
+
 bot.action('action_unlock_devsuite', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
@@ -2233,7 +2230,7 @@ bot.action('action_unlock_devsuite', async (ctx) => {
         return ctx.replyWithHTML("⚠️ <b>Upgrade Active:</b> You already have lifetime access to the Developer Suite!");
     }
 
-    const PRICE_SOL = 3.0; // 🟢 UPDATED TO 3.0 SOL
+    const PRICE_SOL = 6.2; // 🟢 UPDATED TO 6.2 SOL
     const priceLamports = PRICE_SOL * LAMPORTS_PER_SOL;
 
     try {
@@ -2314,25 +2311,18 @@ bot.action('action_unlock_devsuite', async (ctx) => {
         }
 
         try {
+            // 🟢 UPDATED: Only unlocks Dev Suite. No more affiliate increment block here.
             await prisma.user.update({ where: { id: user.id }, data: { isDevSuiteUnlocked: true } });
-            if (user.referredById) {
-                const affiliateCut = PRICE_SOL * 0.50; 
-                await prisma.user.update({
-                    where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } }
-                });
-            }
-            // 🟢 UPDATED: 3.0 SOL Display
-            await ctx.replyWithHTML(`✅ <b>DEV SUITE UNLOCKED!</b>\n\n3.0 SOL compiled from your wallets and processed.\n🔗 <a href="https://solscan.io/tx/${sig}">Receipt</a>`, { link_preview_options: { is_disabled: true } });
+            
+            await ctx.replyWithHTML(`✅ <b>DEV SUITE UNLOCKED!</b>\n\n6.2 SOL compiled from your wallets and processed.\n🔗 <a href="https://solscan.io/tx/${sig}">Receipt</a>`, { link_preview_options: { is_disabled: true } });
             bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_devsuite' } } as any);
         } catch (e: any) {
             console.error("CRITICAL DB WRITE ERROR AFTER PAYMENT:", e.message);
-            // 🟢 UPDATED: 3.0 SOL Display
-            await ctx.replyWithHTML(`⚠️ <b>Payment Confirmed but Activation Failed!</b>\n\nYour 3.0 SOL payment succeeded, but the database update failed. Please contact support immediately and provide this signature:\n<code>${sig}</code>`);
+            await ctx.replyWithHTML(`⚠️ <b>Payment Confirmed but Activation Failed!</b>\n\nYour 6.2 SOL payment succeeded, but the database update failed. Please contact support immediately and provide this signature:\n<code>${sig}</code>`);
         }
         
     } catch (e) { await ctx.replyWithHTML(`🔴 <b>Error processing multi-wallet transaction.</b>`); }
 });
-
 bot.action('action_enter_ref_code', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();

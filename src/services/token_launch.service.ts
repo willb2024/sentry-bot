@@ -12,7 +12,7 @@ import axios from 'axios';
 dotenv.config();
 const prisma = new PrismaClient();
 
-export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.05;
+export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.04;
 
 export async function uploadImageToIpfs(imageBuffer: Buffer, filename: string): Promise<string | null> {
     try {
