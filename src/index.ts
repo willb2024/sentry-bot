@@ -866,14 +866,126 @@ bot.command('simbal', async (ctx) => {
     if (!isAdmin(tgId)) return;
     
     const parts = ctx.message.text.split(' ');
-    const amount = parseFloat(parts[1]);
-    if (isNaN(amount) || amount <= 0) {
-        return ctx.replyWithHTML('Usage: <code>/simbal 50</code>');
+    if (parts.length < 2) {
+        return ctx.replyWithHTML('Usage: <code>/simbal 50</code> or <code>/simbal $1000</code>');
     }
+    
+    // 🟢 FIX: Uses the USD/SOL converter
+    const amount = parseSolAmount(parts[1], true);
+    if (amount === null || amount <= 0) {
+        return ctx.replyWithHTML('🔴 Invalid amount. Usage: <code>/simbal 50</code> or <code>/simbal $1000</code>');
+    }
+    
     await redis.set(`sim:balance:${tgId}`, amount.toFixed(4));
     await ctx.replyWithHTML(`🎮 Sim balance set to <b>${amount.toFixed(4)} SOL</b>`);
 });
 
+// 🟢 NEW: Admin command to instantly forge impressive Simulation Tracking Stats
+bot.command('simedit', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+
+    const parts = ctx.message.text.split(' ');
+    if (parts.length !== 4) {
+        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL]</code>\n\n<i>Example (45 Wins, 12 Losses, 150 SOL Volume):</i>\n<code>/simedit 45 12 150</code>');
+    }
+
+    const wins = parseInt(parts[1]);
+    const losses = parseInt(parts[2]);
+    const totalVol = parseFloat(parts[3]);
+
+    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol)) return ctx.reply("🔴 Invalid numbers provided.");
+
+    const fakeTrades = [];
+    const volPerTrade = totalVol / ((wins + losses) || 1);
+
+    // Generate Winning Trades
+    for(let i=0; i<wins; i++) {
+        fakeTrades.push({
+            createdAt: new Date(Date.now() - Math.random() * 14 * 86400000).toISOString(), // Random time in last 14 days
+            isBuy: false,
+            amountInSol: volPerTrade,
+            profitPercent: Math.random() * 150 + 15, // +15% to +165%
+            realizedPnlSol: volPerTrade * (Math.random() * 1.5 + 0.15)
+        });
+    }
+    
+    // Generate Losing Trades
+    for(let i=0; i<losses; i++) {
+        fakeTrades.push({
+            createdAt: new Date(Date.now() - Math.random() * 14 * 86400000).toISOString(),
+            isBuy: false,
+            amountInSol: volPerTrade,
+            profitPercent: -(Math.random() * 35 + 5), // -5% to -40%
+            realizedPnlSol: -(volPerTrade * (Math.random() * 0.35 + 0.05))
+        });
+    }
+
+    // Shuffle the array so the graph looks natural (wins and losses mixed)
+    fakeTrades.sort(() => Math.random() - 0.5);
+
+    // Save directly to the Simulation keys
+    await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
+    await redis.set(`sim:volume:${tgId}`, totalVol.toString());
+
+    await ctx.replyWithHTML(`✅ <b>Simulated Stats Forged Successfully!</b>\n\nWins: <b>${wins}</b>\nLosses: <b>${losses}</b>\nTotal Volume: <b>${totalVol} SOL</b>\nWin Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n\n<i>Open your /start WebApp to see the updated charts!</i>`);
+});
+
+
+// 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
+async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
+    const filters = await getUserCallerFilters(tgId);
+    
+    const statusText = filters.isActive 
+        ? "🟢 <b>ACTIVE & SCANNING</b> 🔍\n<i>(Searching mempool for matches every 15s...)</i>" 
+        : "🔴 <b>OFFLINE</b>";
+        
+    const mevText = filters.blockMev ? "🟢 Yes (Protected)" : "🔴 No (Risky)";
+
+    const text = `🎯 <b>AI COIN CALLER ENGINE</b>\n\n` +
+        `Sentry scans DexScreener every 15 seconds and DMs you the highest-scoring tokens before they pump.\n\n` +
+        
+        `🧠 <b>HOW THE SCORE WORKS (0 - 100):</b>\n` +
+        `• <b>High Score (75-100):</b> High liquidity, strong volume, high momentum, young age. Safer, higher potential.\n` +
+        `• <b>Low Score (0-50):</b> Low liquidity, dead volume, or aging token. High risk of failure.\n` +
+        `• <b>RugCheck:</b> Any honeypot or freeze authority instantly scores -100 (Blocked).\n\n` +
+        
+        `💡 <b>STRATEGY GUIDE ($500 - $1,000 Bankroll):</b>\n` +
+        `• <b>Spend:</b> 0.1 to 0.2 SOL per trade (approx $15 - $30). This allows you to spread risk across 20+ tokens instead of gambling on just one.\n` +
+        `• <b>Stop-Loss:</b> -20% to -30%. Gives the coin room to breathe through normal trench volatility without getting fully rugged.\n` +
+        `• <b>Take-Profit:</b> +50% to +100%. Don't be greedy. Compounding small 50% wins builds bankrolls faster than waiting for a 100x.\n\n` +
+
+        `<b>Engine Status:</b> ${statusText}\n\n` +
+        `⚙️ <b>CURRENT FILTERS:</b>\n` +
+        `• <b>Minimum Score:</b> ${filters.minScore} / 100\n` +
+        `• <b>Max Token Age:</b> ${filters.maxAgeMins} Mins\n` +
+        `• <b>Momentum % Range:</b> ${filters.minPctChange}% to ${filters.maxPctChange}%\n` +
+        `• <b>Min Liquidity:</b> $${filters.minLiquidity.toLocaleString()}\n` +
+        `• <b>Min 24h Volume:</b> $${filters.minVolume24h.toLocaleString()}\n` +
+        `• <b>Block MEV:</b> ${mevText}\n\n` +
+        `<i>Adjust your scanner parameters below:</i>`;
+
+    const ui = Markup.inlineKeyboard([
+        [Markup.button.callback('🔍 Scan Mainnet Now', 'trigger_caller_scan')], 
+        [Markup.button.callback(filters.isActive ? '🛑 TURN OFF CALLER' : '⚡ TURN ON CALLER', 'toggle_caller_status')],
+        [
+            Markup.button.callback(`⏱️ Max Age (${filters.maxAgeMins}m)`, 'edit_caller_age'),
+            Markup.button.callback(`📈 % Range (${filters.minPctChange} - ${filters.maxPctChange}%)`, 'edit_caller_pct')
+        ],
+        [
+            Markup.button.callback(`💧 Min Liq ($${(filters.minLiquidity/1000).toFixed(0)}k)`, 'edit_caller_liq'),
+            Markup.button.callback(`📊 Min Vol ($${(filters.minVolume24h/1000).toFixed(0)}k)`, 'edit_caller_vol')
+        ],
+        [
+            Markup.button.callback(`✏️ Min Score (${filters.minScore})`, 'edit_caller_score'), 
+            Markup.button.callback(filters.blockMev ? '🛡️ MEV Block: ON' : '⚠️ MEV Block: OFF', 'toggle_caller_mev')
+        ],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
+
+    if (isEdit) await safeEditMessageText(ctx, text, ui);
+    else await ctx.replyWithHTML(text, ui);
+}
 
 bot.action('action_create_guild_prompt', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
