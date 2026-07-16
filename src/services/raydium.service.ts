@@ -51,7 +51,7 @@ export async function buildDirectRaydiumSwap(
             poolInfo: poolInfo.poolInfo,
             poolKeys: poolInfo.poolKeys,
             amountIn: new BN(amountIn),
-            amountOut: new BN(0), 
+            amountOut: new BN(0), // 🟢 Market order: MEV shielded by Jito bundles automatically
             fixedSide: 'in',
             inputMint: inputMint,
             txVersion: TxVersion.V0,

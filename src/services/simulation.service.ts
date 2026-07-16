@@ -153,8 +153,8 @@ export async function simExecuteExit(
     forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
     
-    const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
-    await new Promise(r => setTimeout(r, delay));
+    // 🟢 FIX: Exactly 2 second delay to mimic fast Jito execution
+    await new Promise(r => setTimeout(r, 2000));
 
     const posKey = `sim:positions:${telegramId}`;
     const positions = JSON.parse(await redis.get(posKey) || '[]');
@@ -164,12 +164,11 @@ export async function simExecuteExit(
     if (forcedPnlPercent !== undefined) {
         pnlPercent = forcedPnlPercent;
     } else {
-        // 🟢 FIX: Manual sells now use the same win/loss model as guards — realistic mix of outcomes
         const isProfit = await getNextSimOutcome(telegramId, 'guard');
         if (isProfit) {
-            pnlPercent = parseFloat((Math.random() * 180 + 10).toFixed(2)); // +10% to +190%
+            pnlPercent = parseFloat((Math.random() * 180 + 10).toFixed(2)); 
         } else {
-            pnlPercent = parseFloat((-(Math.random() * 45 + 5)).toFixed(2)); // -5% to -50%
+            pnlPercent = parseFloat((-(Math.random() * 45 + 5)).toFixed(2)); 
         }
     }
 
@@ -197,7 +196,6 @@ export async function simExecuteExit(
         message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
     };
 }
-
 export function generateSimCallerAlert(filters: {
     minScore: number;
     maxAgeMins: number;

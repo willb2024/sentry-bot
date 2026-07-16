@@ -155,29 +155,35 @@ async function fetchRecentNewMints() {
 
     const enrichedTokens: any[] = [];
     const mintsOnly = rawMints.map((m: any) => m.mint);
-
+    
+    // 🟢 FIX: Parallelize chunk fetching instead of awaiting in a loop
+    const chunks: string[] = [];
     for (let i = 0; i < mintsOnly.length; i += 30) {
-        const chunk = mintsOnly.slice(i, i + 30).join(',');
-        try {
-            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { timeout: 3000 });
-            if (res.data?.pairs) {
-                res.data.pairs.forEach((pair: any) => {
-                    enrichedTokens.push({
-                        mint: pair.baseToken.address,
-                        symbol: pair.baseToken.symbol,
-                        price: parseFloat(pair.priceUsd || "0"),
-                        volume: pair.volume?.h24 || 0,
-                        liquidity: pair.liquidity?.usd || 0,
-                        priceChangeM5: pair.priceChange?.m5 || 0,
-                        priceChangeH1: pair.priceChange?.h1 || 0,
-                        pairCreatedAt: pair.pairCreatedAt || Date.now(),
-                        socials: pair.info?.socials || [],
-                        sourceQuality: 'dexscreener'
-                    });
-                });
-            }
-        } catch (_) {}
+        chunks.push(mintsOnly.slice(i, i + 30).join(','));
     }
+
+    const results = await Promise.all(chunks.map(chunk =>
+        axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { timeout: 3000 }).catch(() => null)
+    ));
+
+    results.forEach(res => {
+        if (res?.data?.pairs) {
+            res.data.pairs.forEach((pair: any) => {
+                enrichedTokens.push({
+                    mint: pair.baseToken.address,
+                    symbol: pair.baseToken.symbol,
+                    price: parseFloat(pair.priceUsd || "0"),
+                    volume: pair.volume?.h24 || 0,
+                    liquidity: pair.liquidity?.usd || 0,
+                    priceChangeM5: pair.priceChange?.m5 || 0,
+                    priceChangeH1: pair.priceChange?.h1 || 0,
+                    pairCreatedAt: pair.pairCreatedAt || Date.now(),
+                    socials: pair.info?.socials || [],
+                    sourceQuality: 'dexscreener'
+                });
+            });
+        }
+    });
 
     const missing = mintsOnly.filter(m => !enrichedTokens.some(e => e.mint === m));
     if (missing.length > 0) {
@@ -376,17 +382,17 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
 // 🟢 MERGE AND SCORE (WITH UNIVERSAL ZERO-FIXER)
 export async function scoreTokens() {
     try {
-        const [newMints, pumpFallback, restFallback, trending, boosted] = await Promise.all([
+        // 🟢 FIX: Removed fetchTrendingPairs to eliminate duplicate API requests
+        const [newMints, pumpFallback, restFallback, boosted] = await Promise.all([
             fetchRecentNewMints(),
             fetchFreshPumpTokens(),
             fetchFreshViaRest().catch(()=>[]),
-            fetchTrendingPairs().catch(()=>[]),
             fetchBoostedPairs().catch(()=>[])
         ]);
 
-        const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...trending, ...boosted];
+        const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...boosted];
         
-        // 🟢 FIX: Deduplicate by Mint, keeping the HIGHEST source quality
+        // 🟢 FIX: Keep the best quality source on dedup, not just the last one
         const sourceRank: Record<string, number> = { 'dexscreener': 3, 'pump-fallback': 3, 'rest-fallback': 2, 'onchain-only': 1 };
         const mergedMap = new Map<string, any>();
         
@@ -448,7 +454,6 @@ export async function scoreTokens() {
 
             const { score, reasons } = computeTokenScore(stats);
 
-            // 🟢 FIX: Graduated concentration penalty
             let concentrationAdjustedScore = score;
             if (!isRug && top10Pct > 25) {
                 concentrationAdjustedScore -= Math.floor((top10Pct - 25) * 1.5);
@@ -459,8 +464,7 @@ export async function scoreTokens() {
         }));
 
         const topScorers = scored.filter(t => t.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore);
-        console.log(`🎯 [CALLER] Funnel: WS=${newMints.length} | PumpAPI=${pumpFallback.length} | DSRest=${restFallback.length} | Unique=${uniquePairs.length} | Scored>0=${topScorers.length}`);
-
+        
         await redis.set('caller:hot_scored_tokens', JSON.stringify(topScorers), 'EX', 30);
         return topScorers;
     } catch (e: any) {

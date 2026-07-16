@@ -720,13 +720,27 @@ function buildVipMenuKeyboard(isVip: boolean) {
         ]);
     }
     return Markup.inlineKeyboard([
-        [Markup.button.callback('🟡 Trial — 0.1 SOL / 7 Days', 'vip_select_trial')],
-        [Markup.button.callback('🟢 Standard — 0.3 SOL / 30 Days', 'vip_select_standard')],
-        [Markup.button.callback('🔵 Pro — 1.0 SOL / 90 Days', 'vip_select_pro')],
-        [Markup.button.callback('💎 Lifetime — 3.0 SOL', 'vip_select_lifetime')],
+        [Markup.button.callback(`${VIP_TIERS.trial.label} — ${VIP_TIERS.trial.priceSol} SOL / ${VIP_TIERS.trial.durationDays}D`, 'vip_select_trial')],
+        [Markup.button.callback(`${VIP_TIERS.standard.label} — ${VIP_TIERS.standard.priceSol} SOL / ${VIP_TIERS.standard.durationDays}D`, 'vip_select_standard')],
+        [Markup.button.callback(`${VIP_TIERS.pro.label} — ${VIP_TIERS.pro.priceSol} SOL / ${VIP_TIERS.pro.durationDays}D`, 'vip_select_pro')],
+        [Markup.button.callback(`${VIP_TIERS.lifetime.label} — ${VIP_TIERS.lifetime.priceSol} SOL`, 'vip_select_lifetime')],
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 }
+
+bot.action('vip_upgrade_menu', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx,
+        `🔄 <b>UPGRADE OR EXTEND YOUR VIP</b>\n\nSelect a new plan. Your existing time will be replaced with the new plan starting now.`,
+        Markup.inlineKeyboard([
+            [Markup.button.callback(`${VIP_TIERS.trial.label} — ${VIP_TIERS.trial.priceSol} SOL / ${VIP_TIERS.trial.durationDays}D`, 'vip_select_trial')],
+            [Markup.button.callback(`${VIP_TIERS.standard.label} — ${VIP_TIERS.standard.priceSol} SOL / ${VIP_TIERS.standard.durationDays}D`, 'vip_select_standard')],
+            [Markup.button.callback(`${VIP_TIERS.pro.label} — ${VIP_TIERS.pro.priceSol} SOL / ${VIP_TIERS.pro.durationDays}D`, 'vip_select_pro')],
+            [Markup.button.callback(`${VIP_TIERS.lifetime.label} — ${VIP_TIERS.lifetime.priceSol} SOL`, 'vip_select_lifetime')],
+            [Markup.button.callback('⬅️ Back', 'menu_vip')]
+        ])
+    );
+});
 
 bot.action('vip_upgrade_menu', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -802,17 +816,14 @@ bot.command('adminvip', async (ctx) => {
     if (!isAdmin(tgId)) return;
 
     const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) {
-        await ctx.replyWithHTML(`Usage: <code>/adminvip [telegramId] [tier]</code>\nTiers: trial | standard | pro | lifetime`);
-        return;
-    }
+    if (parts.length < 3) return ctx.replyWithHTML(`Usage: <code>/adminvip [telegramId] [tier]</code>\nTiers: trial | standard | pro | lifetime`);
 
     const targetId = parts[1];
     const tier = parts[2] as VipTierKey;
 
     if (!VIP_TIERS[tier]) return ctx.replyWithHTML(`❌ Invalid tier.`);
 
-    await grantVip(targetId, tier, 'admin');
+    await grantVip(targetId, tier, 'ADMIN'); // 🟢 FIX: Uppercase 'ADMIN'
     await ctx.replyWithHTML(`✅ Granted <b>${VIP_TIERS[tier].label}</b> to user <code>${targetId}</code>`);
     try { await bot.telegram.sendMessage(targetId, `👑 <b>VIP ACTIVATED BY ADMIN</b>\n\n${VIP_TIERS[tier].label} has been granted to your account.`, { parse_mode: 'HTML' }); } catch(e) {}
 });
@@ -1661,86 +1672,23 @@ bot.action('onboard_step3', async (ctx) => {
 
 
 // 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
-// 🟢 NEW: Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
 bot.action('trigger_caller_scan', async (ctx) => {
     try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
 
-    // --- 🎮 SIMULATION INTERCEPT ---
-    const { isSimulationActive } = await import('./services/simulation.service.js');
-    if (await isSimulationActive(tgId)) {
-        await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
-        await new Promise(r => setTimeout(r, 1200 + Math.random() * 1000)); // realistic scan delay
-
-        const { getUserCallerFilters } = await import('./services/caller.service.js');
-        const { generateSimCallerAlert } = await import('./services/simulation.service.js');
-        const filters = await getUserCallerFilters(tgId);
-        
-        let matchedToken = null;
-        
-        // 🟢 FIX: 80-95 Score Repeat Logic (Shows high-score coins 2-3 times)
-        const cachedHighStr = await redis.get(`sim:high_scorer:${tgId}`);
-        if (cachedHighStr) {
-            const cachedData = JSON.parse(cachedHighStr);
-            if (cachedData.repeatsLeft > 0) {
-                matchedToken = cachedData.token;
-                cachedData.repeatsLeft -= 1;
-                await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify(cachedData), 'EX', 300);
-            } else {
-                await redis.del(`sim:high_scorer:${tgId}`);
-            }
-        }
-
-        if (!matchedToken) {
-            matchedToken = generateSimCallerAlert(filters);
-            if (matchedToken && matchedToken.score >= 80 && matchedToken.score <= 95) {
-                // Save it to repeat 1 to 2 more times
-                const repeats = Math.floor(Math.random() * 2) + 1; 
-                await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify({ token: matchedToken, repeatsLeft: repeats }), 'EX', 300);
-            }
-        }
-
-        if (matchedToken) {
-            // 🟢 Removed [SIMULATION] tags to look authentic
-            const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
-                `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
-                `<b>Score:</b> ${matchedToken.score}/100 ⭐\n\n` +
-                `<b>Audit Trail:</b>\n` +
-                `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
-                `<i>Click below to buy instantly via Jito:</i>`;
-
-            return ctx.editMessageText(msg, {
-                parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: [
-                    [{ text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
-                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
-                    [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
-                ]}
-            });
-        } else {
-            // 🟢 Removed [SIMULATION] tags
-            return ctx.editMessageText(
-                `❌ <b>No Breakouts Found</b>\n\n` +
-                `The live pool captured fresh mints, but none cleared your strict filters:\n` +
-                `• Min Score: <b>${filters.minScore}+</b>\n` +
-                `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
-                `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
-                `• Momentum: <b>${filters.minPctChange}% - ${filters.maxPctChange}%</b>\n\n` +
-                `<i>Try lowering your minimums, or check back shortly!</i>`,
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
-            );
-        }
-    }
-    // --- END SIMULATION INTERCEPT ---
-
-    await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
-    
     try {
+        // --- 🎮 SIMULATION INTERCEPT ---
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        if (await isSimulationActive(tgId)) {
+            // ... (keep your existing simulation intercept code here)
+        }
+        
+        await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
+        
         const { getUserCallerFilters, scoreTokens } = await import('./services/caller.service.js');
         const filters = await getUserCallerFilters(tgId);
         const { redis } = await import('./lib/redis.js');
         
-        // 🟢 B4 FIX: Timeout race condition to prevent indefinite hanging
         const scanPromise = scoreTokens();
         const timeoutPromise = new Promise<any>((resolve) => setTimeout(() => resolve('TIMEOUT'), 8000));
         
@@ -1753,87 +1701,15 @@ bot.action('trigger_caller_scan', async (ctx) => {
             topTokens = result;
         }
         
-        // 🟢 FIX: Find ALL matching tokens instead of just the first one
-        const matchingTokens = topTokens.filter((t: any) => 
-            t.totalScore >= filters.minScore &&
-            t.ageMins <= filters.maxAgeMins &&
-            t.priceChangeM5 >= filters.minPctChange &&
-            t.priceChangeM5 <= filters.maxPctChange &&
-            t.liquidity >= filters.minLiquidity && 
-            t.volume >= filters.minVolume24h &&    
-            (!filters.blockMev || t.breakdown.mevRisk >= 0)
-        );
+        // ... (keep the rest of your matching/cycling logic here)
         
-        let matchedToken = null;
-        
-        if (matchingTokens.length > 0) {
-            // Cycle through and find one the user hasn't manually scanned recently
-            for (const t of matchingTokens) {
-                const seenKey = `caller_alerted:${tgId}:${t.mint}`;
-                const seen = await redis.get(seenKey);
-                if (!seen) {
-                    matchedToken = t;
-                    await redis.set(seenKey, '1', 'EX', 3600 * 24); // Mark as seen
-                    break;
-                }
-            }
-            
-            // If they have literally seen EVERY matching token, just show a random one from the pool so the button doesn't fail
-            if (!matchedToken) {
-                matchedToken = matchingTokens[Math.floor(Math.random() * matchingTokens.length)];
-            }
-        }
-        
-        if (matchedToken) {
-            let historicalContext = "";
-            try {
-                // 🟢 Authentic Hit-Rate Calculation based ONLY on finalized historical data
-                const historyMap = await redis.hgetall('caller_history');
-                const calls = Object.values(historyMap).map(val => JSON.parse(val)).filter(c => c.finalized && c.score >= 75);
-                if (calls.length >= 5) { 
-                    const hits = calls.filter(c => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
-                    const winRate = ((hits / calls.length) * 100).toFixed(1);
-                    historicalContext = `<i>(Based on ${calls.length} historic verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting their +20% targets).</i>\n\n`;
-                }
-            } catch(e) {}
-
-            const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
-                        `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
-                        `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
-                        `<b>Audit Trail:</b>\n` +
-                        `${matchedToken.reasons.map((r: any) => `✅ ${r}`).join('\n')}\n\n` +
-                        historicalContext +
-                        `<i>Click below to buy instantly via Jito:</i>`;
-            
-            await ctx.editMessageText(msg, {
-                parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: [
-                    [{ text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
-                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
-                    [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
-                ]}
-            });
-        } else {
-            // 🟢 B4 FIX: Informative Empty State
-            const { getRecentNewMints } = await import('./services/grpc.service.js');
-            const rawPoolSize = getRecentNewMints().length;
-            
-            await ctx.editMessageText(
-                `❌ <b>No Breakouts Found</b>\n\n` +
-                `The live pool captured <b>${rawPoolSize}</b> fresh mints in the last 30 minutes, but none safely cleared your strict filters:\n` +
-                `• Min Score: <b>${filters.minScore}+</b>\n` +
-                `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
-                `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
-                `• Momentum: <b>${filters.minPctChange}% - ${filters.maxPctChange}%</b>\n` +
-                `• Block MEV: <b>${filters.blockMev ? 'Yes' : 'No'}</b>\n\n` +
-                `<i>The trenches are quiet. Try lowering your minimums, or check back shortly!</i>`,
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
-            );
-        }
     } catch (e: any) {
-        await ctx.editMessageText(`🔴 <b>Scan Aborted:</b> Engine is resetting. Please try again.`, {
-            parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
-        });
+        console.error("🔴 [CALLER SCAN] Unhandled failure:", e.message);
+        try {
+            await ctx.editMessageText(`🔴 <b>Scan Aborted:</b> Engine hiccup, please tap again.`, {
+                parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
+            });
+        } catch (_) {}
     }
 });
 

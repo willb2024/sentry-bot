@@ -55,11 +55,10 @@ export function getRecentNewMints() {
     return [...recentNewMints];
 }
 
+// 🟢 FIX: Remove the .has(mint) check since it was just added to the set above it
 function trackNewMint(mint: string, symbol: string = "UNKNOWN") {
-    if (!recentlySnipedTokens.has(mint)) {
-        recentNewMints.push({ mint, symbol, firstSeenAt: Date.now() });
-        if (recentNewMints.length > 300) recentNewMints.shift(); // Keep buffer light
-    }
+    recentNewMints.push({ mint, symbol, firstSeenAt: Date.now() });
+    if (recentNewMints.length > 300) recentNewMints.shift(); 
 }
 
 export async function syncInitialSolPrice() {
@@ -461,28 +460,32 @@ export function startUniversalGuardPoller(bot: any) {
     }, 1000);
 
     // Reconcile loop
-    setInterval(async () => {
-        try {
-            const activeGuards = await getAllActiveGuards();
-            const { isSimulationActive } = await import('./simulation.service.js');
-            
-            // 🟢 Reconcile live price subscriptions ONLY for real mainnet accounts
-            const liveGuards = [];
-            for (const g of activeGuards) {
-                if (!(await isSimulationActive(g.telegramId))) {
-                    liveGuards.push(g);
-                }
+  // Reconcile loop
+  setInterval(async () => {
+    try {
+        const activeGuards = await getAllActiveGuards();
+        const { isSimulationActive } = await import('./simulation.service.js');
+        
+        const liveGuards = [];
+        for (const g of activeGuards) {
+            if (!(await isSimulationActive(g.telegramId))) {
+                liveGuards.push(g);
             }
-            
-            const pumpMints = new Set(liveGuards.filter(g => g.tokenAddress.toLowerCase().endsWith('pump')).map(g => g.tokenAddress));
-            for (const mint of pumpMints) {
-                await subscribeToMintPrice(mint, `reconcile:${mint}`); 
-            }
-        } catch (e: any) {
-            console.error(`🔴 [GUARD POLLER] Reconcile pass failed: ${e.message}`);
         }
-    }, 15000); 
+        
+        // 🟢 FIX: Use real guard IDs instead of a synthetic memory leak ID
+        for (const g of liveGuards) {
+            if (g.tokenAddress.toLowerCase().endsWith('pump')) {
+                await subscribeToMintPrice(g.tokenAddress, g.id); 
+            }
+        }
+    } catch (e: any) {
+        console.error(`🔴 [GUARD POLLER] Reconcile pass failed: ${e.message}`);
+    }
+}, 15000);
 }
+
+
 
 // 🟢 REST FALLBACK LOGIC
 export function startPumpFunPolling() {

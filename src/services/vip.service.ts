@@ -72,11 +72,10 @@ export async function checkVipStatus(telegramId: string): Promise<{
 
 // =========================================================
 // GRANT VIP TO USER
-// =========================================================
 export async function grantVip(
     telegramId: string,
     tier: VipTierKey,
-    source: string = 'purchased',
+    source: string = 'PAID', // 🟢 FIX: Use uppercase standard
     txSignature?: string
 ): Promise<void> {
     const tierDef = VIP_TIERS[tier];

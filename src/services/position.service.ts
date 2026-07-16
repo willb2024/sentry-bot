@@ -60,31 +60,30 @@ export async function getUserPositions(telegramId: string) {
         const uniqueMints = rawPositions.map(p => p.mint);
         let tokenMetadata: Record<string, { price: number, symbol: string, name: string }> = {};
 
-        for (let i = 0; i < uniqueMints.length; i += 30) {
-            const chunk = uniqueMints.slice(i, i + 30).join(',');
+        // 🟢 FIX: Parallel chunk fetching for massive speed boost
+        const chunks: string[] = [];
+        for (let i = 0; i < uniqueMints.length; i += 30) chunks.push(uniqueMints.slice(i, i + 30).join(','));
+
+        await Promise.all(chunks.map(async (chunk) => {
             try {
-                const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, {
-                    signal: AbortSignal.timeout(8000)
-                });
+                const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { signal: AbortSignal.timeout(8000) });
                 if (res.ok) {
                     const data = (await res.json()) as any;
-                    if (data.pairs) {
-                        data.pairs.forEach((pair: any) => {
-                            const baseAddress = pair.baseToken.address;
-                            if (!tokenMetadata[baseAddress]) {
-                                tokenMetadata[baseAddress] = {
-                                    price: parseFloat(pair.priceUsd || "0"),
-                                    symbol: pair.baseToken.symbol || "UNKNOWN",
-                                    name: pair.baseToken.name || "Unknown Token"
-                                };
-                            }
-                        });
-                    }
+                    (data.pairs || []).forEach((pair: any) => {
+                        const baseAddress = pair.baseToken.address;
+                        if (!tokenMetadata[baseAddress]) {
+                            tokenMetadata[baseAddress] = {
+                                price: parseFloat(pair.priceUsd || "0"),
+                                symbol: pair.baseToken.symbol || "UNKNOWN",
+                                name: pair.baseToken.name || "Unknown Token"
+                            };
+                        }
+                    });
                 }
             } catch (e) {
                 console.warn("⚠️ [POSITIONS] DexScreener chunk fetch timeout.");
             }
-        }
+        }));
 
         const mappedPositions = rawPositions.map(p => {
             const meta = tokenMetadata[p.mint] || { price: 0, symbol: "UNKNOWN", name: "Unknown Token" };
