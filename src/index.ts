@@ -728,19 +728,7 @@ function buildVipMenuKeyboard(isVip: boolean) {
     ]);
 }
 
-bot.action('vip_upgrade_menu', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx,
-        `🔄 <b>UPGRADE OR EXTEND YOUR VIP</b>\n\nSelect a new plan. Your existing time will be replaced with the new plan starting now.`,
-        Markup.inlineKeyboard([
-            [Markup.button.callback(`${VIP_TIERS.trial.label} — ${VIP_TIERS.trial.priceSol} SOL / ${VIP_TIERS.trial.durationDays}D`, 'vip_select_trial')],
-            [Markup.button.callback(`${VIP_TIERS.standard.label} — ${VIP_TIERS.standard.priceSol} SOL / ${VIP_TIERS.standard.durationDays}D`, 'vip_select_standard')],
-            [Markup.button.callback(`${VIP_TIERS.pro.label} — ${VIP_TIERS.pro.priceSol} SOL / ${VIP_TIERS.pro.durationDays}D`, 'vip_select_pro')],
-            [Markup.button.callback(`${VIP_TIERS.lifetime.label} — ${VIP_TIERS.lifetime.priceSol} SOL`, 'vip_select_lifetime')],
-            [Markup.button.callback('⬅️ Back', 'menu_vip')]
-        ])
-    );
-});
+
 
 bot.action('vip_upgrade_menu', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
