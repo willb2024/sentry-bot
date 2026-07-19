@@ -1680,29 +1680,84 @@ bot.action('trigger_caller_scan', async (ctx) => {
         // --- 🎮 SIMULATION INTERCEPT ---
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (await isSimulationActive(tgId)) {
-            // ... (keep your existing simulation intercept code here)
+            // ... keep your existing simulation branch here
+            return;
         }
-        
+
         await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
-        
+
         const { getUserCallerFilters, scoreTokens } = await import('./services/caller.service.js');
         const filters = await getUserCallerFilters(tgId);
         const { redis } = await import('./lib/redis.js');
-        
+
         const scanPromise = scoreTokens();
         const timeoutPromise = new Promise<any>((resolve) => setTimeout(() => resolve('TIMEOUT'), 8000));
-        
+
         let topTokens = await redis.get('caller:hot_scored_tokens').then(res => res ? JSON.parse(res) : []);
         if (topTokens.length === 0) {
             const result = await Promise.race([scanPromise, timeoutPromise]);
             if (result === 'TIMEOUT') {
-                return ctx.editMessageText(`🔴 <b>Scan Timed Out</b>\n\nThe scanner is taking longer than expected (data sources may be degraded). Try again in a moment.`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] } });
+                return ctx.editMessageText(`🔴 <b>Scan Timed Out</b>\n\nThe scanner is taking longer than expected. Try again in a moment.`, {
+                    parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
+                });
             }
             topTokens = result;
         }
-        
-        // ... (keep the rest of your matching/cycling logic here)
-        
+
+        // 🟢 THE MISSING PIECE — filter + pick + reply
+        const matchingTokens = topTokens.filter((t: any) =>
+            t.totalScore >= filters.minScore &&
+            t.ageMins <= filters.maxAgeMins &&
+            t.priceChangeM5 >= filters.minPctChange &&
+            t.priceChangeM5 <= filters.maxPctChange &&
+            t.liquidity >= filters.minLiquidity &&
+            t.volume >= filters.minVolume24h &&
+            (!filters.blockMev || t.breakdown.mevRisk >= 0)
+        );
+
+        let matchedToken = null;
+        for (const t of matchingTokens) {
+            const seenKey = `caller_alerted:${tgId}:${t.mint}`;
+            const seen = await redis.get(seenKey);
+            if (!seen) {
+                matchedToken = t;
+                await redis.set(seenKey, '1', 'EX', 3600 * 24);
+                break;
+            }
+        }
+        if (!matchedToken && matchingTokens.length > 0) {
+            matchedToken = matchingTokens[Math.floor(Math.random() * matchingTokens.length)];
+        }
+
+        if (matchedToken) {
+            const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
+                `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
+                `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
+                `<b>Audit Trail:</b>\n${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
+                `<i>Click below to buy instantly via Jito:</i>`;
+
+            await ctx.editMessageText(msg, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
+                        [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
+                        [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
+                    ]
+                }
+            });
+        } else {
+            await ctx.editMessageText(
+                `❌ <b>No Breakouts Found</b>\n\n` +
+                `Scanned ${topTokens.length} tokens but none cleared your filters:\n` +
+                `• Min Score: <b>${filters.minScore}+</b>\n` +
+                `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
+                `• Min Liq/Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n\n` +
+                `<i>Try lowering your minimums, or check back shortly!</i>`,
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
+            );
+        }
+
     } catch (e: any) {
         console.error("🔴 [CALLER SCAN] Unhandled failure:", e.message);
         try {
