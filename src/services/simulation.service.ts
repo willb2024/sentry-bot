@@ -55,6 +55,15 @@ export async function isSimulationActive(telegramId: string): Promise<boolean> {
     return val === 'true';
 }
 
+export async function getSimStartingBalance(telegramId: string): Promise<number> {
+    const val = await redis.get(`sim:starting_balance:${telegramId}`);
+    return val ? parseFloat(val) : 1000;
+}
+
+export async function setSimStartingBalance(telegramId: string, amount: number): Promise<void> {
+    await redis.set(`sim:starting_balance:${telegramId}`, amount.toFixed(4));
+}
+
 export async function getSimBalance(telegramId: string): Promise<string> {
     const bal = await redis.get(`sim:balance:${telegramId}`);
     return bal || '12.4521';

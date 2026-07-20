@@ -177,7 +177,7 @@
                 </div>
             </div>
 
-            <!-- 🟢 NEW: Total Trading Days Banner -->
+            <!-- 🟢 Total Trading Days Banner -->
             <div class="card-flat p-4 flex items-center justify-between">
                 <div class="flex items-center gap-3">
                     <div class="bg-gray-800 text-gray-400 h-8 w-8 rounded-lg flex items-center justify-center border border-white/5">
@@ -803,7 +803,7 @@
         document.getElementById('stat-winrate-sub').innerText = stats.winLossText;
         document.getElementById('stat-volume').innerText = stats.volume;
 
-        // 🟢 NEW: Calculate and Inject Total Trading Days
+        // 🟢 Calculate and Inject Total Trading Days
         let tradingDays = 1;
         if (userTrades && userTrades.length > 0) {
             const oldestTrade = new Date(Math.min(...userTrades.map(t => new Date(t.createdAt).getTime())));
@@ -831,12 +831,19 @@
                 const simStats = await simRes.json();
 
                 if (simStats.isActive) {
+                    const startingBalance = simStats.startingBalance || 1000; // 🟢 FIX: real baseline from server
+                    const solPriceRes = await fetch('/api/sol-price', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ initData: tg.initData || "" })
+                    }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
+                    const liveSolPrice = solPriceRes.price || 160;
+
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint,
                         symbol: p.symbol,
                         amount: p.amount,
-                        priceUsd: p.priceUsd || (p.entryPriceUsd * 150),
-                        valueUsd: p.valueUsd || (p.amountInSol * 150),
+                        priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
+                        valueUsd: p.valueUsd || (p.amountInSol * liveSolPrice),
                         entryPrice: p.entryPriceUsd || p.entryPrice
                     }));
 
@@ -853,13 +860,12 @@
 
                     const totalValueUsd = simPositions.reduce((sum, p) => sum + (p.valueUsd || 0), 0);
                     const simBalanceSol = parseFloat(simStats.balance) || 0;
-                    const networthUsd = Math.max(totalValueUsd, simBalanceSol * 150);
+                    const networthUsd = Math.max(totalValueUsd, simBalanceSol * liveSolPrice); // 🟢 live price, not 150
                     const networthSol = simBalanceSol.toFixed(4) + " SOL";
 
-                    const startingBalance = 12.4521;
                     const pnlSol = simBalanceSol - startingBalance;
                     const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00";
-                    const pnlUsd = pnlSol * 150;
+                    const pnlUsd = pnlSol * liveSolPrice;
 
                     const winRate = (wins + losses) > 0
                         ? ((wins / (wins + losses)) * 100).toFixed(1)
@@ -1060,4 +1066,3 @@
 </script>
 </body>
 </html>
---- END OF FILE Paste July 15, 2026 - 1:21AM ---

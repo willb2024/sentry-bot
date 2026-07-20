@@ -288,26 +288,18 @@ app.post('/api/sim-trades', async (req, res) => {
 });
 
 // 🎮 SIMULATION INTERCEPT: Fetch simulated balance, volume, positions, and win/loss rates
+// 🎮 SIMULATION INTERCEPT: Fetch simulated balance, volume, positions, and win/loss rates
 app.post('/api/sim-stats', async (req, res) => {
     try {
-        if (!verifyTelegramAuth(req.body.initData))
-            return res.status(403).json({ error: 'Unauthorized' });
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
+        if (telegramId !== process.env.ADMIN_TELEGRAM_ID) return res.status(403).json({ error: 'Admin only' });
 
-        const telegramId = JSON.parse(
-            new URLSearchParams(req.body.initData).get('user')!
-        ).id.toString();
-
-        // Strict security: Only the admin can access simulated statistics
-        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
-            return res.status(403).json({ error: 'Admin only' });
-
-        const { isSimulationActive, getSimBalance, getSimVolume } = 
-            await import('./services/simulation.service.js');
-
-        if (!await isSimulationActive(telegramId))
-            return res.json({ isActive: false });
+        const { isSimulationActive, getSimBalance, getSimVolume, getSimStartingBalance } = await import('./services/simulation.service.js');
+        if (!await isSimulationActive(telegramId)) return res.json({ isActive: false });
 
         const balance = await getSimBalance(telegramId);
+        const startingBalance = await getSimStartingBalance(telegramId); // 🟢 NEW
         const volume = await getSimVolume(telegramId);
         const posRaw = await redis.get(`sim:positions:${telegramId}`);
         const positions = posRaw ? JSON.parse(posRaw) : [];
@@ -316,25 +308,16 @@ app.post('/api/sim-stats', async (req, res) => {
 
         let wins = 0, losses = 0;
         trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
-            if (t.profitPercent > 0) wins++;
-            else losses++;
+            if (t.profitPercent > 0) wins++; else losses++;
         });
 
         res.json({
-            isActive: true,
-            balance: parseFloat(balance),
-            volume,
-            positions,
-            trades,
-            wins,
-            losses,
+            isActive: true, balance: parseFloat(balance), startingBalance, // 🟢 NEW
+            volume, positions, trades, wins, losses,
             winRate: (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0"
         });
-    } catch (e: any) {
-        res.status(500).json({ isActive: false });
-    }
+    } catch (e: any) { res.status(500).json({ isActive: false }); }
 });
-
 app.post('/api/positions', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) {
@@ -658,20 +641,18 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
 bot.command('sim', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
-
     try {
         const current = await redis.get(`sim:active:${tgId}`);
         const newState = current === 'true' ? 'false' : 'true';
         await redis.set(`sim:active:${tgId}`, newState);
 
-   // Replace this inside the /sim command:
-   if (newState === 'true') {
-    const existing = await redis.get(`sim:balance:${tgId}`);
-    if (!existing) {
-        await redis.set(`sim:balance:${tgId}`, '1000'); // 🟢 BOOSTED TO 1000 SOL
-    }
+        if (newState === 'true') {
+            const { setSimStartingBalance, generateSimWallets } = await import('./services/simulation.service.js');
+            const existing = await redis.get(`sim:balance:${tgId}`);
+            const startBal = existing ? parseFloat(existing) : 1000;
+            if (!existing) await redis.set(`sim:balance:${tgId}`, startBal.toFixed(4));
+            await setSimStartingBalance(tgId, startBal); // 🟢 baseline ALWAYS matches actual starting balance
 
-            const { generateSimWallets } = await import('./services/simulation.service.js');
             const wallets = generateSimWallets();
             await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
         } else {
@@ -679,12 +660,13 @@ bot.command('sim', async (ctx) => {
             if (keys.length > 0) await redis.del(...keys);
         }
 
+        const displayBal = await redis.get(`sim:balance:${tgId}`) || '1000';
         await ctx.replyWithHTML(
             `🎮 <b>SIMULATION MODE: ${newState === 'true' ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
             `${newState === 'true'
-                ? `⚠️ <i>All trades, balances, and alerts are now simulated.\nNo real transactions will occur.</i>\n\n` +
-                  `💰 Starting balance: <b>12.4521 SOL</b>\n` +
-                  `🎯 Type <code>/simbal [amount]</code> to set a custom balance.`
+                ? `⚠️ <i>All trades, balances, and alerts are now simulated.</i>\n\n` +
+                  `💰 Starting balance: <b>${displayBal} SOL</b>\n` +  // 🟢 dynamic now, no more mismatch
+                  `🎯 Type <code>/simbal [amount]</code> to change it (also resets your PnL% baseline).`
                 : `<i>Platform returned to live mode. All sim data cleared.</i>`
             }`
         );
@@ -919,22 +901,19 @@ bot.command('stats', async (ctx) => {
     }
 });
 
-// Admin command to instantly forge impressive Simulation Tracking Stats & Trading Days
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
 
     const parts = ctx.message.text.split(' ');
-    // 🟢 NEW: Now requires 4 inputs, including DAYS_ACTIVE
     if (parts.length !== 5) {
-        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE]</code>\n\n<i>Example (45 Wins, 12 Losses, 150 SOL Volume, 42 Days Active):</i>\n<code>/simedit 45 12 150 42</code>');
+        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE]</code>\n\n<i>Example:</i>\n<code>/simedit 185 64 1250 42</code>');
     }
 
     const wins = parseInt(parts[1]);
     const losses = parseInt(parts[2]);
     const totalVol = parseFloat(parts[3]);
     const daysActive = parseInt(parts[4]);
-
     if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive) || daysActive < 1) {
         return ctx.reply("🔴 Invalid numbers provided.");
     }
@@ -942,44 +921,48 @@ bot.command('simedit', async (ctx) => {
     const fakeTrades = [];
     const volPerTrade = totalVol / ((wins + losses) || 1);
     const now = Date.now();
+    let totalRealizedPnl = 0; // 🟢 track so balance stays consistent with the forged wins/losses
 
-    // Generate Winning Trades distributed across the chosen days
-    for(let i = 0; i < wins; i++) {
+    for (let i = 0; i < wins; i++) {
+        const pnlPercent = Math.random() * 150 + 15;
+        const realizedPnlSol = volPerTrade * (pnlPercent / 100);
+        totalRealizedPnl += realizedPnlSol;
         fakeTrades.push({
             createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false,
-            amountInSol: volPerTrade,
-            profitPercent: Math.random() * 150 + 15,
-            realizedPnlSol: volPerTrade * (Math.random() * 1.5 + 0.15)
+            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol
         });
     }
-    
-    // Generate Losing Trades
-    for(let i = 0; i < losses; i++) {
+    for (let i = 0; i < losses; i++) {
+        const pnlPercent = -(Math.random() * 35 + 5);
+        const realizedPnlSol = volPerTrade * (pnlPercent / 100);
+        totalRealizedPnl += realizedPnlSol;
         fakeTrades.push({
             createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false,
-            amountInSol: volPerTrade,
-            profitPercent: -(Math.random() * 35 + 5),
-            realizedPnlSol: -(volPerTrade * (Math.random() * 0.35 + 0.05))
+            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol
         });
     }
 
-    // 🟢 FIX: Force exactly one trade to sit perfectly on the max day boundary so the UI calculates "Total Trading Days" flawlessly
-    if (fakeTrades.length > 0) {
-        fakeTrades[0].createdAt = new Date(now - daysActive * 86400000).toISOString();
-    }
-
-    // Shuffle the array so the graph looks natural
+    if (fakeTrades.length > 0) fakeTrades[0].createdAt = new Date(now - daysActive * 86400000).toISOString();
     fakeTrades.sort(() => Math.random() - 0.5);
 
-    // Save directly to the Simulation keys
     await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
     await redis.set(`sim:volume:${tgId}`, totalVol.toString());
 
-    await ctx.replyWithHTML(`✅ <b>Simulated Stats Forged Successfully!</b>\n\nWins: <b>${wins}</b>\nLosses: <b>${losses}</b>\nTotal Volume: <b>${totalVol} SOL</b>\nDays Active: <b>${daysActive} Days</b>\nWin Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n\n<i>Open your /start WebApp to see the updated charts!</i>`);
-});
+    // 🟢 THE FIX: forged trades now actually move the balance the dashboard reads
+    const { getSimStartingBalance } = await import('./services/simulation.service.js');
+    const startBal = await getSimStartingBalance(tgId);
+    const newBalance = Math.max(0, startBal + totalRealizedPnl);
+    await redis.set(`sim:balance:${tgId}`, newBalance.toFixed(4));
 
+    await ctx.replyWithHTML(
+        `✅ <b>Simulated Stats Forged & Aligned!</b>\n\n` +
+        `Wins: <b>${wins}</b> | Losses: <b>${losses}</b>\n` +
+        `Volume: <b>${totalVol} SOL</b> | Days: <b>${daysActive}</b>\n` +
+        `Win Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n` +
+        `New Balance: <b>${newBalance.toFixed(4)} SOL</b>\n\n` +
+        `<i>Dashboard PnL, Net Worth, and Win Rate are now fully consistent.</i>`
+    );
+});
 
 
 bot.action('action_abort_token_launch', async (ctx) => {
@@ -993,83 +976,19 @@ bot.action('action_abort_token_launch', async (ctx) => {
 bot.command('simbal', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
-    
     const parts = ctx.message.text.split(' ');
-    if (parts.length < 2) {
-        return ctx.replyWithHTML('Usage: <code>/simbal 50</code> or <code>/simbal $1000</code>');
-    }
-    
-    // 🟢 FIX: Uses the USD/SOL converter
+    if (parts.length < 2) return ctx.replyWithHTML('Usage: <code>/simbal 50</code> or <code>/simbal $1000</code>');
     const amount = parseSolAmount(parts[1], true);
-    if (amount === null || amount <= 0) {
-        return ctx.replyWithHTML('🔴 Invalid amount. Usage: <code>/simbal 50</code> or <code>/simbal $1000</code>');
-    }
-    
+    if (amount === null || amount <= 0) return ctx.replyWithHTML('🔴 Invalid amount.');
+
     await redis.set(`sim:balance:${tgId}`, amount.toFixed(4));
-    await ctx.replyWithHTML(`🎮 Sim balance set to <b>${amount.toFixed(4)} SOL</b>`);
+    const { setSimStartingBalance } = await import('./services/simulation.service.js');
+    await setSimStartingBalance(tgId, amount); // 🟢 resets baseline — PnL% now reads 0% from this point
+    await ctx.replyWithHTML(`🎮 Sim balance set to <b>${amount.toFixed(4)} SOL</b> and PnL baseline reset to match.`);
 });
 
-// 🟢 NEW: Admin command to instantly forge impressive Simulation Tracking Stats
-// 🟢 NEW: Admin command to instantly forge impressive Simulation Tracking Stats & Trading Days
-bot.command('simedit', async (ctx) => {
-    const tgId = ctx.from?.id?.toString();
-    if (!isAdmin(tgId)) return;
 
-    const parts = ctx.message.text.split(' ');
-    // 🟢 FIX: Now requires 4 inputs, including DAYS_ACTIVE
-    if (parts.length !== 5) {
-        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE]</code>\n\n<i>Example (185 Wins, 64 Losses, 1250 SOL Volume, 42 Days Active):</i>\n<code>/simedit 185 64 1250 42</code>');
-    }
 
-    const wins = parseInt(parts[1]);
-    const losses = parseInt(parts[2]);
-    const totalVol = parseFloat(parts[3]);
-    const daysActive = parseInt(parts[4]);
-
-    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive) || daysActive < 1) {
-        return ctx.reply("🔴 Invalid numbers provided.");
-    }
-
-    const fakeTrades = [];
-    const volPerTrade = totalVol / ((wins + losses) || 1);
-    const now = Date.now();
-
-    // Generate Winning Trades distributed across the chosen days
-    for(let i = 0; i < wins; i++) {
-        fakeTrades.push({
-            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false,
-            amountInSol: volPerTrade,
-            profitPercent: Math.random() * 150 + 15, // +15% to +165%
-            realizedPnlSol: volPerTrade * (Math.random() * 1.5 + 0.15)
-        });
-    }
-    
-    // Generate Losing Trades
-    for(let i = 0; i < losses; i++) {
-        fakeTrades.push({
-            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false,
-            amountInSol: volPerTrade,
-            profitPercent: -(Math.random() * 35 + 5), // -5% to -40%
-            realizedPnlSol: -(volPerTrade * (Math.random() * 0.35 + 0.05))
-        });
-    }
-
-    // 🟢 FIX: Force exactly one trade to sit perfectly on the max day boundary so the UI calculates "Total Trading Days" flawlessly
-    if (fakeTrades.length > 0) {
-        fakeTrades[0].createdAt = new Date(now - daysActive * 86400000).toISOString();
-    }
-
-    // Shuffle the array so the graph looks natural
-    fakeTrades.sort(() => Math.random() - 0.5);
-
-    // Save directly to the Simulation keys
-    await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
-    await redis.set(`sim:volume:${tgId}`, totalVol.toString());
-
-    await ctx.replyWithHTML(`✅ <b>Simulated Stats Forged Successfully!</b>\n\nWins: <b>${wins}</b>\nLosses: <b>${losses}</b>\nTotal Volume: <b>${totalVol} SOL</b>\nDays Active: <b>${daysActive} Days</b>\nWin Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n\n<i>Open your /start WebApp to see the updated charts!</i>`);
-});
 
 
 // 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
