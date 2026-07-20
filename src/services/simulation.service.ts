@@ -99,13 +99,17 @@ export async function simExecuteSnipe(
     amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
     
-    // 🟢 CHECK SIMULATED BALANCE BEFORE ALLOWING SNIPE
+    // 🟢 FIX: Detailed error message showing exact balance
     const currentBal = parseFloat(await getSimBalance(telegramId));
     if (currentBal < amountSol + 0.001) {
-        return { success: false, signature: '', message: '🔴 Insufficient Funds.', volumeSpent: 0 };
+        return { 
+            success: false, 
+            signature: '', 
+            message: `🔴 <b>Insufficient Funds.</b>\nYour simulated balance is only <b>${currentBal.toFixed(4)} SOL</b>. Use <code>/simbal $150000</code> to add more funds.`, 
+            volumeSpent: 0 
+        };
     }
 
-    // 🟢 D4 FIX: Match realistic network/RPC/Jito latency (1.5s - 4.5s typical, 5% long tail)
     const delay = Math.random() > 0.95 ? (4000 + Math.random() * 6000) : (1500 + Math.random() * 3000);
     await new Promise(r => setTimeout(r, delay));
 
@@ -145,7 +149,6 @@ export async function simExecuteSnipe(
         volumeSpent: amountSol
     };
 }
-
 export async function simExecuteExit(
     telegramId: string,
     tokenAddress: string,

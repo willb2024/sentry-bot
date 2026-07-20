@@ -664,11 +664,13 @@ bot.command('sim', async (ctx) => {
         const newState = current === 'true' ? 'false' : 'true';
         await redis.set(`sim:active:${tgId}`, newState);
 
-        if (newState === 'true') {
-            const existing = await redis.get(`sim:balance:${tgId}`);
-            if (!existing) {
-                await redis.set(`sim:balance:${tgId}`, '12.4521');
-            }
+   // Replace this inside the /sim command:
+   if (newState === 'true') {
+    const existing = await redis.get(`sim:balance:${tgId}`);
+    if (!existing) {
+        await redis.set(`sim:balance:${tgId}`, '1000'); // 🟢 BOOSTED TO 1000 SOL
+    }
+
             const { generateSimWallets } = await import('./services/simulation.service.js');
             const wallets = generateSimWallets();
             await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
