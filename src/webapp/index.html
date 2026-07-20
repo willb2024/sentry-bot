@@ -28,12 +28,6 @@
                     },
                     animation: {
                         'shimmer': 'shimmer 2s infinite linear',
-                    },
-                    keyframes: {
-                        shimmer: {
-                            '0%': { transform: 'translateX(-100%)' },
-                            '100%': { transform: 'translateX(100%)' }
-                        }
                     }
                 }
             }
@@ -84,9 +78,6 @@
             border: 1px solid rgba(16, 185, 129, 0.3);
             color: #10b981;
         }
-
-        .toggle-checkbox:checked { right: 0; border-color: #10b981; }
-        .toggle-checkbox:checked + .toggle-label { background-color: #10b981; }
         
         .skeleton { background: #1e293b; position: relative; border-radius: 0.5rem; overflow: hidden; }
         .skeleton::after {
@@ -133,15 +124,6 @@
                         <span class="h-1.5 w-1.5 rounded-full bg-jupGreen animate-pulse"></span> LIVE
                     </span>
                 </div>
-                <!-- 🟢 FIX 1: Clean hidden container for simulation banner state -->
-                <div id="sim-mode-banner" class="hidden"></div>
-            </div>
-        </div>
-        <div class="flex flex-col items-end gap-1">
-            <span class="text-[10px] font-bold text-gray-500 tracking-wider">SIMULATION</span>
-            <div class="relative inline-block w-10 mr-2 align-middle select-none">
-                <input type="checkbox" name="toggle" id="demo-toggle" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-2 border-slateDark appearance-none cursor-pointer z-10 transition-transform duration-200"/>
-                <label for="demo-toggle" class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-700 cursor-pointer transition-colors duration-200"></label>
             </div>
         </div>
     </header>
@@ -151,7 +133,7 @@
         <div class="bg-[#121826] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
             <button id="tab-dashboard" onclick="switchView('dashboard')" class="px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Terminal Dashboard</button>
             <button id="tab-leaderboard" onclick="switchView('leaderboard')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
-            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
+            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Affiliate Hub</button>
         </div>
     </div>
 
@@ -195,6 +177,17 @@
                 </div>
             </div>
 
+            <!-- 🟢 NEW: Total Trading Days Banner -->
+            <div class="card-flat p-4 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="bg-gray-800 text-gray-400 h-8 w-8 rounded-lg flex items-center justify-center border border-white/5">
+                        <i class="fa-solid fa-calendar-days text-sm"></i>
+                    </div>
+                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider">Total Trading Days</span>
+                </div>
+                <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">1</span>
+            </div>
+
             <div class="space-y-3">
                 <div class="flex items-center justify-between px-1 pt-2 pb-2">
                     <h3 class="text-sm text-gray-300 font-semibold tracking-wide">VERIFIED HOLDINGS</h3>
@@ -212,9 +205,7 @@
             
             <div class="card-flat p-5">
                 <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">
-                        FLOW ANALYTICS <span id="sim-chart-label" class="hidden text-yellow-400 ml-1">🎮 SIM</span>
-                    </h3>
+                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">FLOW ANALYTICS</h3>
                     <div class="flex gap-1 bg-black/50 p-1 rounded-lg border border-white/5 text-[10px]">
                         <button onclick="setFilter('1H')" id="btn-1H" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1H</button>
                         <button onclick="setFilter('1D')" id="btn-1D" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1D</button>
@@ -252,7 +243,6 @@
                 <span>Loyalty Stats</span>
             </div>
             <div id="leaderboard-container" class="space-y-3">
-                <!-- Data injected here -->
                 <div class="card-flat h-16 skeleton"></div>
                 <div class="card-flat h-16 skeleton"></div>
                 <div class="card-flat h-16 skeleton"></div>
@@ -262,9 +252,7 @@
 
     <!-- VIEW 3: AFFILIATES -->
     <main id="view-affiliates" class="hidden-view max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <!-- Left Column -->
         <section class="xl:col-span-2 space-y-6">
-            <!-- Section 1: Partner Stats -->
             <div class="grid grid-cols-2 gap-3 sm:gap-4">
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-user-plus text-gray-500"></i> Total Recruits</span>
@@ -294,7 +282,6 @@
                 </div>
             </div>
 
-            <!-- Section 2: Referral Link Card -->
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4">YOUR INVITE LINK</h3>
                 <div class="flex items-center gap-3">
@@ -304,7 +291,6 @@
                 <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn up to 70% of their trading fees for life.</p>
             </div>
 
-            <!-- Section 3: Recruits Feed -->
             <div class="space-y-3">
                 <div class="flex items-center justify-between px-1 pt-2 pb-2">
                     <h3 class="text-sm text-gray-300 font-semibold tracking-wide">ACTIVE RECRUITS</h3>
@@ -315,9 +301,7 @@
             </div>
         </section>
 
-        <!-- Right Column -->
         <section class="space-y-6">
-            <!-- Section 4: Earnings Chart -->
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">AFFILIATE REVENUE</h3>
                 <div class="h-64 relative w-full">
@@ -325,7 +309,6 @@
                 </div>
             </div>
 
-            <!-- Section 5: Projected Earnings -->
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4 uppercase">Projected Earnings</h3>
                 <p class="text-xs text-gray-400 mb-4">If your recruits maintain current volume:</p>
@@ -350,14 +333,12 @@
 
 </div>
 
-<!-- Simple Toast -->
 <div id="toast"><i class="fa-solid fa-check text-jupGreen mr-2"></i> <span id="toast-msg">Copied!</span></div>
 
 <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
 
-    // VIEW TOGGLE LOGIC
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
         
@@ -408,48 +389,9 @@
     
     let userTrades = []; 
     let currentFilter = '30D'; 
-    let livePositionsForSynth = [];
     
-    // 🟢 States
     let liveLeaderboardData = { guild: null, members: [] };
     let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
-
-    // 🟢 Demo Data Arrays
-    const demoPositions = [
-        { mint: "So11111111111111111111111111111111111111112", symbol: "SOL", amount: 145.2, priceUsd: 158.42, valueUsd: 23002.58, entryPrice: 130.50 },
-        { mint: "EKpQGSJfe9992...pump", symbol: "WIF", amount: 5240.20, priceUsd: 3.12, valueUsd: 16349.42, entryPrice: 1.10 },
-        { mint: "JUPyiwrY1PI...pump", symbol: "JUP", amount: 8100.00, priceUsd: 1.08, valueUsd: 8748.00, entryPrice: 1.25 },
-        { mint: "DezXAZ...pump", symbol: "BONK", amount: 125000000, priceUsd: 0.000028, valueUsd: 3500.00, entryPrice: 0.000015 }
-    ];
-
-    const demoLeaderboard = {
-        guild: { name: "Alpha Wolves Community", reward: "Top 5 wallets get guaranteed whitelist allocation", code: "GUILD-ALPHA-99" },
-        members: [
-            { rank: 1, username: "Oracle_01", walletAddress: "3yFomLQyHj3Y2bWmK1XG9p5uBEwF6PQcaQSkeBpn782T", glp: 14520.50, volumeSol: 145.2, airdropsReceived: 5.5 },
-            { rank: 2, username: "DeFi_Chad", walletAddress: "7kPxoM4TzVU4EoHEpgzq1VV7AbicfhtW4xC9iMCe6TQq", glp: 9840.00, volumeSol: 98.4, airdropsReceived: 2.0 },
-            { rank: 3, username: "SniperPro", walletAddress: "5Q544fKrFoe6tsEbD7S8EmxjnzVU4EoHEpgzq1VV7Abic", glp: 7120.25, volumeSol: 71.2, airdropsReceived: 1.0 },
-            { rank: 4, username: "Anon_8271", walletAddress: "A1foGxGHK3nasjjnr7jxW14VNCe6TQqeHC9p8KetsN6J", glp: 4500.00, volumeSol: 45.0, airdropsReceived: 0.5 },
-            { rank: 5, username: "WhaleWallet", walletAddress: "9xZzYv8N7v8N7v8N7v8N7v8N7v8N7v8N7v8N7v8N", glp: 3100.00, volumeSol: 31.0, airdropsReceived: 0.0 }
-        ]
-    };
-
-    const demoAffiliates = {
-        recruits: 7,
-        pendingYieldSol: 0.21,
-        lifetimeEarnedSol: 1.45,
-        referralLink: "https://t.me/SentryBot?start=REF-DEMO123",
-        totalPoints: 64000,
-        currentTier: "Silver",
-        currentRate: 0.50,
-        recruitList: [
-            { username: "whale_hunter", volumeSol: 145.2, yourEarningSol: 0.726, lastActiveDaysAgo: 0 },
-            { username: "degen_chad", volumeSol: 82.4, yourEarningSol: 0.412, lastActiveDaysAgo: 1 },
-            { username: "anon_992", volumeSol: 45.0, yourEarningSol: 0.225, lastActiveDaysAgo: 5 },
-            { username: "sniper_god", volumeSol: 12.1, yourEarningSol: 0.060, lastActiveDaysAgo: 12 },
-            { username: "3yFomLQy...", volumeSol: 5.5, yourEarningSol: 0.027, lastActiveDaysAgo: 20 },
-        ],
-        dailyEarnings: Array.from({length: 30}, () => Math.random() * 0.05)
-    };
 
     function formatNumber(num) {
         if (num >= 1000000000) return (num / 1000000000).toFixed(2) + 'B';
@@ -471,26 +413,6 @@
         }
         document.getElementById('ticker-strip').innerHTML = stripHTML;
     }, 2500);
-
-    function synthesizeTradesFromPositions(positions) {
-        if(!positions || positions.length === 0) return [];
-        const synth = [];
-        const now = new Date();
-        const fakePoints = [0.5, 2, 10, 24, 48, 120, 240, 500, 720]; 
-        let totalValue = positions.reduce((sum, p) => sum + (p.valueUsd/150), 0); 
-        
-        fakePoints.forEach((hours) => {
-            const isBuy = Math.random() > 0.3;
-            const amt = totalValue * (Math.random() * 0.4); 
-            synth.push({
-                createdAt: new Date(now.getTime() - (hours * 60 * 60 * 1000)).toISOString(),
-                isBuy: isBuy,
-                amountInSol: amt,
-                profitPercent: isBuy ? 0 : (Math.random() * 100 - 20)
-            });
-        });
-        return synth;
-    }
 
     function aggregatePnlData(timeframe) {
         const now = new Date();
@@ -519,9 +441,7 @@
             profitData.push(0); lossData.push(0);
         }
 
-        let tradesToUse = userTrades.length > 0 ? userTrades : synthesizeTradesFromPositions(livePositionsForSynth);
-
-        tradesToUse.forEach(trade => {
+        userTrades.forEach(trade => {
             const tradeDate = new Date(trade.createdAt);
             if (tradeDate >= cutoff && tradeDate <= now) {
                 const diffMs = tradeDate.getTime() - cutoff.getTime();
@@ -533,13 +453,6 @@
                 }
             }
         });
-
-        if (profitData.every(v => v === 0) && lossData.every(v=> v===0)) {
-            for(let i=0; i<bucketCount; i++) {
-               if(Math.random()>0.5) profitData[i] = Math.random() * 2;
-               else lossData[i] = Math.random() * 2;
-            }
-        }
 
         return { labels, profitData, lossData };
     }
@@ -668,11 +581,8 @@
         }).join('');
     }
 
-    // 🟢 RENDER LEADERBOARD
     function renderLeaderboard() {
-        const isDemo = document.getElementById('demo-toggle').checked;
-        const data = isDemo ? demoLeaderboard : liveLeaderboardData;
-        
+        const data = liveLeaderboardData;
         const container = document.getElementById('leaderboard-container');
         
         if (!data.guild) {
@@ -720,10 +630,8 @@
         }).join('');
     }
 
-    // 🟢 RENDER AFFILIATES
     function renderAffiliates() {
-        const isDemo = document.getElementById('demo-toggle').checked;
-        const data = isDemo ? demoAffiliates : liveAffiliateData;
+        const data = liveAffiliateData;
         
         document.getElementById('aff-stat-recruits').innerText = data.recruits;
         document.getElementById('aff-stat-pending').innerText = data.pendingYieldSol.toFixed(4);
@@ -798,7 +706,6 @@
             }).join('');
         }
         
-        // Render Chart
         const affCtx = document.getElementById('affiliateChart').getContext('2d');
         const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
         gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.3)'); 
@@ -833,7 +740,6 @@
             }
         });
 
-        // Calculate Projections
         const last7dEarnings = data.dailyEarnings.slice(23).reduce((a, b) => a + b, 0);
         const dailyAvg = last7dEarnings / 7;
         
@@ -897,6 +803,15 @@
         document.getElementById('stat-winrate-sub').innerText = stats.winLossText;
         document.getElementById('stat-volume').innerText = stats.volume;
 
+        // 🟢 NEW: Calculate and Inject Total Trading Days
+        let tradingDays = 1;
+        if (userTrades && userTrades.length > 0) {
+            const oldestTrade = new Date(Math.min(...userTrades.map(t => new Date(t.createdAt).getTime())));
+            const diffTime = Math.abs(new Date() - oldestTrade);
+            tradingDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+        }
+        document.getElementById('stat-trading-days').innerText = tradingDays;
+
         const chartData = aggregatePnlData(currentFilter);
         initCharts(chartData.labels, chartData.profitData, chartData.lossData, allocLabels, allocData);
         renderPositions(positions);
@@ -904,9 +819,7 @@
     }
 
     async function fetchLiveData() {
-        if (document.getElementById('demo-toggle').checked) return;
-
-        // 🎮 SIMULATION CHECK FIRST — must run before any real data fetch
+        // 🎮 SIMULATION FETCH
         try {
             const simRes = await fetch('/api/sim-stats', {
                 method: 'POST',
@@ -918,9 +831,6 @@
                 const simStats = await simRes.json();
 
                 if (simStats.isActive) {
-                    document.getElementById('sim-mode-banner').classList.add('hidden');
-                    document.getElementById('sim-chart-label').classList.remove('hidden');
-
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint,
                         symbol: p.symbol,
@@ -936,8 +846,6 @@
                         amountInSol: t.amountInSol,
                         profitPercent: t.profitPercent || 0
                     }));
-
-                    livePositionsForSynth = simPositions;
 
                     let wins = simStats.wins || 0;
                     let losses = simStats.losses || 0;
@@ -974,19 +882,6 @@
                         volume: totalVolumeSol.toFixed(4) + " SOL"
                     }, allocLabels, allocData, simPositions);
 
-                    setFilter(currentFilter);
-
-                    if (simPositions.length === 0) {
-                        document.getElementById('positions-container').innerHTML = `
-                            <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                                <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                                <div class="text-sm font-semibold">No Active Deployments</div>
-                                <span class="text-xs font-mono mt-1">Awaiting target.</span>
-                            </div>`;
-                    } else {
-                        renderPositions(simPositions);
-                    }
-
                     fetch('/api/my-leaderboard', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ initData: tg.initData || "" })
@@ -1000,16 +895,13 @@
                       .then(data => { if (data) liveAffiliateData = data; }).catch(() => {});
 
                     setTimeout(() => {
-                        if (!document.getElementById('demo-toggle').checked) fetchLiveData();
+                        fetchLiveData();
                     }, 4000);
 
                     return; 
                 }
             }
         } catch (_) {}
-
-        document.getElementById('sim-chart-label').classList.add('hidden');
-        document.getElementById('sim-mode-banner').classList.add('hidden');
 
         document.getElementById('positions-container').innerHTML = `
             <div class="space-y-3">
@@ -1031,18 +923,13 @@
             .then(res => res.ok ? res.json() : [])
             .catch(() => [])
             .then(async trades => {
-                if (document.getElementById('demo-toggle').checked) return;
-
                 userTrades = trades || [];
                 const posArray = positions || [];
-                livePositionsForSynth = posArray;
 
                 const solRes = await fetch('/api/sol-price', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ initData: tg.initData })
                 }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
-
-                if (document.getElementById('demo-toggle').checked) return;
 
                 const currentSolPrice = solRes.price || 160;
                 let totalValueUsd = 0, totalInvestedUsd = 0, allocLabels = [], allocData = [];
@@ -1057,22 +944,17 @@
 
                 const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
 
-                // 🟢 FIX: Realized PnL Calculation
                 let wins = 0, losses = 0, totalVolumeSol = 0;
                 let totalRealizedPnlSol = 0; 
-                let tradesForStats = userTrades.length > 0 ? userTrades : synthesizeTradesFromPositions(posArray);
 
-                tradesForStats.forEach(t => {
+                userTrades.forEach(t => {
                     totalVolumeSol += parseFloat(t.amountInSol || 0);
                     if (!t.isBuy) {
-                        // 🟢 FIX: Tighten win/loss logic for real numbers
                         if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) {
                             wins++;
                         } else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) {
                             losses++;
                         }
-                        
-                        // 🟢 FIX: Sum actual realized PnL
                         totalRealizedPnlSol += (t.realizedPnlSol || 0);
                     }
                 });
@@ -1080,7 +962,6 @@
                 const totalClosed = wins + losses;
                 const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
                 
-                // 🟢 FIX: Push realized USD into the display
                 const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
                 const finalPnlPercent = totalInvestedUsd > 0 ? (realizedPnlUsd / totalInvestedUsd) * 100 : 0;
 
@@ -1096,7 +977,6 @@
             });
         })
         .catch(() => {
-            if (document.getElementById('demo-toggle').checked) return;
             populateDashboard({
                 networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0,
                 winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL"
@@ -1117,8 +997,7 @@
         .then(r => r.ok ? r.json() : { guild: null, members: [] })
         .then(data => {
             liveLeaderboardData = data;
-            if (!document.getElementById('demo-toggle').checked &&
-                !document.getElementById('view-leaderboard').classList.contains('hidden-view')) {
+            if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) {
                 renderLeaderboard();
             }
         }).catch(() => {});
@@ -1130,47 +1009,14 @@
         .then(r => r.ok ? r.json() : null)
         .then(data => {
             if (data) liveAffiliateData = data;
-            if (!document.getElementById('demo-toggle').checked &&
-                !document.getElementById('view-affiliates').classList.contains('hidden-view')) {
+            if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) {
                 renderAffiliates();
             }
         }).catch(() => {});
     }
 
-    document.getElementById('demo-toggle').addEventListener('change', function(e) {
-        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-        if (e.target.checked) {
-            userTrades = synthesizeTradesFromPositions(demoPositions); 
-            let tVol = 0, tWins = 0, tLoss = 0;
-            userTrades.forEach(t => { 
-                tVol += t.amountInSol;
-                if(!t.isBuy) { if(t.profitPercent>0) tWins++; else tLoss++; }
-            });
-            
-            populateDashboard({
-                networth: 53256.88, networthSol: "336.18 SOL",
-                pnlPercent: 242.60, pnlUsd: 37083.50,
-                winrate: ((tWins/(tWins+tLoss))*100).toFixed(1) || 75.5,
-                winLossText: `${tWins} Wins / ${tLoss} Losses`,
-                volume: `${tVol.toFixed(2)} SOL`
-            }, demoPositions.map(p=>p.symbol), demoPositions.map(p=>p.valueUsd), demoPositions);
-            
-            setFilter('30D');
-            renderLeaderboard();
-            renderAffiliates();
-        } else {
-            userTrades = []; 
-            document.getElementById('leaderboard-container').innerHTML = `
-                <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
-            `;
-            document.getElementById('recruits-container').innerHTML = `
-                <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
-            `;
-            fetchLiveData();
-        }
-    });
-
     fetchLiveData();
 </script>
 </body>
 </html>
+--- END OF FILE Paste July 15, 2026 - 1:21AM ---

@@ -7,6 +7,7 @@ import axios from 'axios';
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { awardGuildPoints } from './guild.service.js';
+import { getPlatformFeeRate } from './vip.service.js';
 import { checkRecentMevActivity } from './price.service.js'; 
 import { redis } from '../lib/redis.js'; 
 import dns from 'dns';
@@ -371,7 +372,8 @@ async function buildTipAndFeeTransaction(
     isBumper: boolean = false, blockhash: string
 ): Promise<VersionedTransaction | null> {
     try {
-        const feeRate = 0.01; // 🟢 FLAT 1% REGARDLESS OF VIP OR VOLUME
+        // 🟢 CRITICAL FIX: Dynamically fetch fee rate (0% for VIPs, 1% for standard)
+        const feeRate = await getPlatformFeeRate(telegramId); 
         const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
 
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
@@ -403,7 +405,6 @@ async function buildTipAndFeeTransaction(
         return tx;
     } catch (_) { return null; }
 }
-
 export async function executeSnipe(
     telegramId: string, targetCA: string, amountSol: number,
     side: 'buy' | 'sell' = 'buy', tokenAmount?: number,
@@ -545,7 +546,8 @@ export async function executeSnipe(
             // 🟢 BACKGROUND: Polling and DB writes
             pollSignatureConfirmation(txSig).then(async (confirmed) => {
                 if (confirmed) {
-                    const feeCharged = amountSol * 0.01; // FLAT 1%
+                    const feeRate = await getPlatformFeeRate(user.telegramId);
+                    const feeCharged = amountSol * feeRate;
                     
                     const maxDistributable = feeCharged * 0.70;
 
@@ -697,7 +699,8 @@ export async function executeExit(
                         }
                     } catch (e) {}
 
-                    const feeCharged = actualSolReceived * 0.01; 
+                    const feeRate = await getPlatformFeeRate(user.telegramId);
+                    const feeCharged = actualSolReceived * feeRate;
                     let affiliateCut = 0;
                     if (user.referredById) {
                         const dynamicRate = await getDynamicAffiliateRate(user.referredById);

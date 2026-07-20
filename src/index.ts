@@ -838,17 +838,145 @@ bot.action(/^watch_remove_(.+)$/, async (ctx) => {
 bot.command('stats', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!tgId) return;
+    
+    let loader: any; // 🟢 FIX: Declared outside the try-block to fix TypeScript scope error
+
     try {
-        await ctx.replyWithHTML('⏳ Computing your stats...');
+        loader = await ctx.replyWithHTML('⏳ <i>Auditing active engines and computing stats...</i>');
+        
+        // Calculate Short-Term Live PnL (30s / 1m / 30m / 1h)
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+        const now = Date.now();
+        let pnl30s = 0, pnl1m = 0, pnl30m = 0, pnl1h = 0;
+
+        if (isSim) {
+            const raw = await redis.get(`sim:trades:${tgId}`);
+            const trades = raw ? JSON.parse(raw) : [];
+            trades.forEach((t: any) => {
+                if (!t.isBuy) {
+                    const tradeTime = new Date(t.createdAt).getTime();
+                    const diffMins = (now - tradeTime) / 60000;
+                    const pnl = t.realizedPnlSol || 0;
+                    
+                    if (diffMins <= 0.5) pnl30s += pnl; 
+                    if (diffMins <= 1) pnl1m += pnl;    
+                    if (diffMins <= 30) pnl30m += pnl;  
+                    if (diffMins <= 60) pnl1h += pnl;   
+                }
+            });
+        } else {
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+            if (user) {
+                const trades = await prisma.trade.findMany({
+                    where: { userId: user.id, isBuy: false, createdAt: { gte: new Date(now - 3600000) } }
+                });
+                trades.forEach(t => {
+                    const diffMins = (now - t.createdAt.getTime()) / 60000;
+                    const pnl = t.realizedPnlSol || 0;
+                    
+                    if (diffMins <= 0.5) pnl30s += pnl; 
+                    if (diffMins <= 1) pnl1m += pnl;    
+                    if (diffMins <= 30) pnl30m += pnl;  
+                    if (diffMins <= 60) pnl1h += pnl;   
+                });
+            }
+        }
+
         const stats = await computeWeeklyStats(tgId);
-        if (!stats) return ctx.replyWithHTML('❌ No account found. Use /start first.');
-        const msg = formatWeeklyReport(stats);
-        await ctx.replyWithHTML(msg);
+        if (!stats) {
+            if (loader) await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, '❌ No account found. Use /start first.');
+            return;
+        }
+        
+        let msg = formatWeeklyReport(stats);
+
+        const formatDualPnl = (solAmount: number) => {
+            const usdAmount = solAmount * cachedSolUsdPrice;
+            const usdStr = `$${Math.abs(usdAmount).toFixed(2)}`;
+            const solStr = `${Math.abs(solAmount).toFixed(4)} SOL`;
+            return solAmount >= 0 
+                ? `<b>+${usdStr} (+${solStr})</b>` 
+                : `<b>-${usdStr} (-${solStr})</b>`;
+        };
+        
+        const shortTermStats = 
+            `\n━━━━━━━━━━━━━━━\n` +
+            `⏱️ <b>SHORT-TERM AUTOMATION PNL</b>\n` +
+            `<i>Tracks recent Guard, Sniper & DCA exits</i>\n\n` +
+            `• Last 30 Secs:  ${formatDualPnl(pnl30s)}\n` +
+            `• Last 1 Min:    ${formatDualPnl(pnl1m)}\n` +
+            `• Last 30 Mins:  ${formatDualPnl(pnl30m)}\n` +
+            `• Last 1 Hour:   ${formatDualPnl(pnl1h)}\n`;
+        
+        msg = msg.replace('━━━━━━━━━━━━━━━\n🎯 <b>TOP TRADES</b>', shortTermStats + '━━━━━━━━━━━━━━━\n🎯 <b>TOP TRADES</b>');
+
+        if (loader) await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { parse_mode: 'HTML' });
     } catch (e: any) {
-        await ctx.replyWithHTML('❌ Error fetching stats. Try again.');
+        if (loader) await ctx.telegram.editMessageText(ctx.chat?.id || tgId, loader.message_id, undefined, '❌ Error fetching stats. Try again.', { parse_mode: 'HTML' }).catch(()=>{});
     }
 });
 
+// Admin command to instantly forge impressive Simulation Tracking Stats & Trading Days
+bot.command('simedit', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+
+    const parts = ctx.message.text.split(' ');
+    // 🟢 NEW: Now requires 4 inputs, including DAYS_ACTIVE
+    if (parts.length !== 5) {
+        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE]</code>\n\n<i>Example (45 Wins, 12 Losses, 150 SOL Volume, 42 Days Active):</i>\n<code>/simedit 45 12 150 42</code>');
+    }
+
+    const wins = parseInt(parts[1]);
+    const losses = parseInt(parts[2]);
+    const totalVol = parseFloat(parts[3]);
+    const daysActive = parseInt(parts[4]);
+
+    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive) || daysActive < 1) {
+        return ctx.reply("🔴 Invalid numbers provided.");
+    }
+
+    const fakeTrades = [];
+    const volPerTrade = totalVol / ((wins + losses) || 1);
+    const now = Date.now();
+
+    // Generate Winning Trades distributed across the chosen days
+    for(let i = 0; i < wins; i++) {
+        fakeTrades.push({
+            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
+            isBuy: false,
+            amountInSol: volPerTrade,
+            profitPercent: Math.random() * 150 + 15,
+            realizedPnlSol: volPerTrade * (Math.random() * 1.5 + 0.15)
+        });
+    }
+    
+    // Generate Losing Trades
+    for(let i = 0; i < losses; i++) {
+        fakeTrades.push({
+            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
+            isBuy: false,
+            amountInSol: volPerTrade,
+            profitPercent: -(Math.random() * 35 + 5),
+            realizedPnlSol: -(volPerTrade * (Math.random() * 0.35 + 0.05))
+        });
+    }
+
+    // 🟢 FIX: Force exactly one trade to sit perfectly on the max day boundary so the UI calculates "Total Trading Days" flawlessly
+    if (fakeTrades.length > 0) {
+        fakeTrades[0].createdAt = new Date(now - daysActive * 86400000).toISOString();
+    }
+
+    // Shuffle the array so the graph looks natural
+    fakeTrades.sort(() => Math.random() - 0.5);
+
+    // Save directly to the Simulation keys
+    await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
+    await redis.set(`sim:volume:${tgId}`, totalVol.toString());
+
+    await ctx.replyWithHTML(`✅ <b>Simulated Stats Forged Successfully!</b>\n\nWins: <b>${wins}</b>\nLosses: <b>${losses}</b>\nTotal Volume: <b>${totalVol} SOL</b>\nDays Active: <b>${daysActive} Days</b>\nWin Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n\n<i>Open your /start WebApp to see the updated charts!</i>`);
+});
 
 
 
