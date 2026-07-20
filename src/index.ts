@@ -1144,6 +1144,30 @@ bot.action('action_create_guild_prompt', async (ctx) => {
     ]));
 });
 
+// 🟢 NEW: Endpoint to sync WebApp toggle with Backend Simulation state
+app.post('/api/toggle-sim', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: "Invalid initData" });
+        
+        const newState = req.body.active ? 'true' : 'false';
+        await redis.set(`sim:active:${tgId}`, newState);
+
+        if (newState === 'true') {
+            const existing = await redis.get(`sim:balance:${tgId}`);
+            if (!existing) await redis.set(`sim:balance:${tgId}`, '12.4521');
+            const { generateSimWallets } = await import('./services/simulation.service.js');
+            const wallets = generateSimWallets();
+            await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
+        } else {
+            const keys = await redis.keys(`sim:*:${tgId}`);
+            if (keys.length > 0) await redis.del(...keys);
+        }
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
+});
+
 bot.action('action_start_guild_wizard', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
@@ -1490,7 +1514,7 @@ bot.start(async (ctx: Context) => {
 // =========================================================
 
 bot.command('calendar', async (ctx) => {
-    const { redis } = await import('./lib/redis.js');
+    
     const raw = await redis.get('calendar:launches');
     const launches = raw ? JSON.parse(raw) : [];
 
@@ -1537,7 +1561,7 @@ bot.command('unwatch', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     const ca = ctx.message.text.split(' ')[1];
     if (!tgId || !ca) return;
-    const { redis } = await import('./lib/redis.js');
+    
     await redis.hdel(`watchlist:${tgId}`, ca);
     ctx.reply(`✅ Removed ${ca} from watchlist.`);
 });
@@ -1545,7 +1569,7 @@ bot.command('unwatch', async (ctx) => {
 bot.command('clearwatch', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
-    const { redis } = await import('./lib/redis.js');
+    
     await redis.del(`watchlist:${tgId}`);
     ctx.reply(`✅ Watchlist cleared.`);
 });
@@ -1554,7 +1578,7 @@ bot.command('watchlist', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    const { redis } = await import('./lib/redis.js');
+    
     const items = await redis.hgetall(`watchlist:${tgId}`);
     const cas = Object.keys(items);
     if (cas.length === 0) return ctx.reply("👀 Your watchlist is empty. Use /watch [CA] to add tokens.");
@@ -1807,31 +1831,88 @@ bot.action('trigger_caller_scan', async (ctx) => {
         // --- 🎮 SIMULATION INTERCEPT ---
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (await isSimulationActive(tgId)) {
-            // ... keep your existing simulation branch here
-            return;
+            await safeEditMessageText(ctx, `🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
+            await new Promise(r => setTimeout(r, 1200 + Math.random() * 1000)); 
+
+            const { getUserCallerFilters } = await import('./services/caller.service.js');
+            const { generateSimCallerAlert } = await import('./services/simulation.service.js');
+            const filters = await getUserCallerFilters(tgId);
+            
+            let matchedToken = null;
+            
+            const cachedHighStr = await redis.get(`sim:high_scorer:${tgId}`);
+            if (cachedHighStr) {
+                const cachedData = JSON.parse(cachedHighStr);
+                if (cachedData.repeatsLeft > 0) {
+                    matchedToken = cachedData.token;
+                    cachedData.repeatsLeft -= 1;
+                    await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify(cachedData), 'EX', 300);
+                } else {
+                    await redis.del(`sim:high_scorer:${tgId}`);
+                }
+            }
+
+            if (!matchedToken) {
+                matchedToken = generateSimCallerAlert(filters);
+                if (matchedToken && matchedToken.score >= 80 && matchedToken.score <= 95) {
+                    const repeats = Math.floor(Math.random() * 2) + 1; 
+                    await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify({ token: matchedToken, repeatsLeft: repeats }), 'EX', 300);
+                }
+            }
+
+            if (matchedToken) {
+                const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
+                    `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
+                    `<b>Score:</b> ${matchedToken.score}/100 ⭐\n\n` +
+                    `<b>Audit Trail:</b>\n` +
+                    `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
+                    `<i>Click below to buy instantly via Jito:</i>`;
+
+                return safeEditMessageText(ctx, msg, {
+                    parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: [
+                        [{ text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
+                        [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
+                        [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
+                    ]}
+                });
+            } else {
+                // 🟢 FIX: Added Timestamp so the message is always unique to bypass Telegram's freeze block
+                return safeEditMessageText(ctx,
+                    `❌ <b>No Breakouts Found</b>\n\n` +
+                    `The simulated pool captured fresh mints, but none cleared your strict filters:\n` +
+                    `• Min Score: <b>${filters.minScore}+</b>\n` +
+                    `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
+                    `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
+                    `• Momentum: <b>${filters.minPctChange}% - ${filters.maxPctChange}%</b>\n\n` +
+                    `<i>Try lowering your minimums, or check back shortly!</i>\n` +
+                    `<code>Last checked: ${new Date().toLocaleTimeString()}</code>`, 
+                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
+                );
+            }
         }
+        // --- END SIMULATION INTERCEPT ---
 
-        await ctx.editMessageText(`🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
-
+        await safeEditMessageText(ctx, `🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
+        
         const { getUserCallerFilters, scoreTokens } = await import('./services/caller.service.js');
         const filters = await getUserCallerFilters(tgId);
-        const { redis } = await import('./lib/redis.js');
-
+        
+        
         const scanPromise = scoreTokens();
         const timeoutPromise = new Promise<any>((resolve) => setTimeout(() => resolve('TIMEOUT'), 8000));
-
+        
         let topTokens = await redis.get('caller:hot_scored_tokens').then(res => res ? JSON.parse(res) : []);
         if (topTokens.length === 0) {
             const result = await Promise.race([scanPromise, timeoutPromise]);
             if (result === 'TIMEOUT') {
-                return ctx.editMessageText(`🔴 <b>Scan Timed Out</b>\n\nThe scanner is taking longer than expected. Try again in a moment.`, {
+                return safeEditMessageText(ctx, `🔴 <b>Scan Timed Out</b>\n\nThe scanner is taking longer than expected. Try again in a moment.`, {
                     parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
                 });
             }
             topTokens = result;
         }
 
-        // 🟢 THE MISSING PIECE — filter + pick + reply
         const matchingTokens = topTokens.filter((t: any) =>
             t.totalScore >= filters.minScore &&
             t.ageMins <= filters.maxAgeMins &&
@@ -1857,13 +1938,25 @@ bot.action('trigger_caller_scan', async (ctx) => {
         }
 
         if (matchedToken) {
+            let historicalContext = "";
+            try {
+                const historyMap = await redis.hgetall('caller_history');
+                const calls = Object.values(historyMap).map(val => JSON.parse(val)).filter(c => c.finalized && c.score >= 75);
+                if (calls.length >= 5) { 
+                    const hits = calls.filter(c => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
+                    const winRate = ((hits / calls.length) * 100).toFixed(1);
+                    historicalContext = `<i>(Based on ${calls.length} historic verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting their +20% targets).</i>\n\n`;
+                }
+            } catch(e) {}
+
             const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                 `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
                 `<b>Audit Trail:</b>\n${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
+                historicalContext +
                 `<i>Click below to buy instantly via Jito:</i>`;
 
-            await ctx.editMessageText(msg, {
+            await safeEditMessageText(ctx, msg, {
                 parse_mode: 'HTML',
                 reply_markup: {
                     inline_keyboard: [
@@ -1874,13 +1967,15 @@ bot.action('trigger_caller_scan', async (ctx) => {
                 }
             });
         } else {
-            await ctx.editMessageText(
+            // 🟢 FIX: Added Timestamp so the message is always unique
+            await safeEditMessageText(ctx,
                 `❌ <b>No Breakouts Found</b>\n\n` +
                 `Scanned ${topTokens.length} tokens but none cleared your filters:\n` +
                 `• Min Score: <b>${filters.minScore}+</b>\n` +
                 `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
                 `• Min Liq/Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n\n` +
-                `<i>Try lowering your minimums, or check back shortly!</i>`,
+                `<i>Try lowering your minimums, or check back shortly!</i>\n` +
+                `<code>Last checked: ${new Date().toLocaleTimeString()}</code>`, 
                 { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
             );
         }
@@ -1888,7 +1983,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
     } catch (e: any) {
         console.error("🔴 [CALLER SCAN] Unhandled failure:", e.message);
         try {
-            await ctx.editMessageText(`🔴 <b>Scan Aborted:</b> Engine hiccup, please tap again.`, {
+            await safeEditMessageText(ctx, `🔴 <b>Scan Aborted:</b> Engine hiccup, please tap again.`, {
                 parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
             });
         } catch (_) {}
@@ -3658,7 +3753,7 @@ bot.on('photo', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
     
-    const { redis } = await import('./lib/redis.js');
+    
     const launchStep = await redis.get(`token_launch:${tgId}:step`);
 
     if (launchStep === 'AWAITING_IMAGE') {
@@ -3990,7 +4085,7 @@ bot.action(/^launch_nuke_(.+)$/, async (ctx) => {
 // =========================================================
 
 async function deleteKeysPattern(pattern: string) {
-    const { redis } = await import('./lib/redis.js');
+    
     let cursor = '0';
     do {
         const [nextCursor, elements] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
@@ -4004,7 +4099,7 @@ bot.on("text", async (ctx, next) => {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return next();
 
-    const { redis } = await import('./lib/redis.js');
+    
 
     // 🟢 GLOBAL CANCEL
     if (text.toLowerCase() === '/cancel' || text.toLowerCase() === 'cancel') {

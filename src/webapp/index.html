@@ -1002,6 +1002,47 @@
             }
         }).catch(() => {});
 
+        document.getElementById('demo-toggle').addEventListener('change', function(e) {
+        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+        
+        // 🟢 FIX: Actually notify the backend that Simulation mode was toggled!
+        fetch('/api/toggle-sim', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: tg.initData || "", active: e.target.checked })
+        }).catch(()=>{});
+
+        if (e.target.checked) {
+            userTrades = synthesizeTradesFromPositions(demoPositions); 
+            let tVol = 0, tWins = 0, tLoss = 0;
+            userTrades.forEach(t => { 
+                tVol += t.amountInSol;
+                if(!t.isBuy) { if(t.profitPercent>0) tWins++; else tLoss++; }
+            });
+            
+            populateDashboard({
+                networth: 53256.88, networthSol: "336.18 SOL",
+                pnlPercent: 242.60, pnlUsd: 37083.50,
+                winrate: ((tWins/(tWins+tLoss))*100).toFixed(1) || 75.5,
+                winLossText: `${tWins} Wins / ${tLoss} Losses`,
+                volume: `${tVol.toFixed(2)} SOL`
+            }, demoPositions.map(p=>p.symbol), demoPositions.map(p=>p.valueUsd), demoPositions);
+            
+            setFilter('30D');
+            renderLeaderboard();
+            renderAffiliates();
+        } else {
+            userTrades = []; 
+            document.getElementById('leaderboard-container').innerHTML = `
+                <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
+            `;
+            document.getElementById('recruits-container').innerHTML = `
+                <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
+            `;
+            fetchLiveData();
+        }
+    });
+
         fetch('/api/affiliate-stats', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ initData: tg.initData || "" })

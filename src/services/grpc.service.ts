@@ -202,8 +202,8 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         }
         const elapsedMs = Date.now() - parseInt(createdAtStr);
 
-        const MIN_DELAY_MS = 3000;   
-        const RAMP_WINDOW_MS = 9000; 
+        const MIN_DELAY_MS = 1200;   
+        const RAMP_WINDOW_MS = 2000; 
 
         if (elapsedMs < MIN_DELAY_MS) return;
 
