@@ -1008,28 +1008,34 @@ bot.command('simbal', async (ctx) => {
 });
 
 // 🟢 NEW: Admin command to instantly forge impressive Simulation Tracking Stats
+// 🟢 NEW: Admin command to instantly forge impressive Simulation Tracking Stats & Trading Days
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
 
     const parts = ctx.message.text.split(' ');
-    if (parts.length !== 4) {
-        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL]</code>\n\n<i>Example (45 Wins, 12 Losses, 150 SOL Volume):</i>\n<code>/simedit 45 12 150</code>');
+    // 🟢 FIX: Now requires 4 inputs, including DAYS_ACTIVE
+    if (parts.length !== 5) {
+        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE]</code>\n\n<i>Example (185 Wins, 64 Losses, 1250 SOL Volume, 42 Days Active):</i>\n<code>/simedit 185 64 1250 42</code>');
     }
 
     const wins = parseInt(parts[1]);
     const losses = parseInt(parts[2]);
     const totalVol = parseFloat(parts[3]);
+    const daysActive = parseInt(parts[4]);
 
-    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol)) return ctx.reply("🔴 Invalid numbers provided.");
+    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive) || daysActive < 1) {
+        return ctx.reply("🔴 Invalid numbers provided.");
+    }
 
     const fakeTrades = [];
     const volPerTrade = totalVol / ((wins + losses) || 1);
+    const now = Date.now();
 
-    // Generate Winning Trades
-    for(let i=0; i<wins; i++) {
+    // Generate Winning Trades distributed across the chosen days
+    for(let i = 0; i < wins; i++) {
         fakeTrades.push({
-            createdAt: new Date(Date.now() - Math.random() * 14 * 86400000).toISOString(), // Random time in last 14 days
+            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
             isBuy: false,
             amountInSol: volPerTrade,
             profitPercent: Math.random() * 150 + 15, // +15% to +165%
@@ -1038,9 +1044,9 @@ bot.command('simedit', async (ctx) => {
     }
     
     // Generate Losing Trades
-    for(let i=0; i<losses; i++) {
+    for(let i = 0; i < losses; i++) {
         fakeTrades.push({
-            createdAt: new Date(Date.now() - Math.random() * 14 * 86400000).toISOString(),
+            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
             isBuy: false,
             amountInSol: volPerTrade,
             profitPercent: -(Math.random() * 35 + 5), // -5% to -40%
@@ -1048,14 +1054,19 @@ bot.command('simedit', async (ctx) => {
         });
     }
 
-    // Shuffle the array so the graph looks natural (wins and losses mixed)
+    // 🟢 FIX: Force exactly one trade to sit perfectly on the max day boundary so the UI calculates "Total Trading Days" flawlessly
+    if (fakeTrades.length > 0) {
+        fakeTrades[0].createdAt = new Date(now - daysActive * 86400000).toISOString();
+    }
+
+    // Shuffle the array so the graph looks natural
     fakeTrades.sort(() => Math.random() - 0.5);
 
     // Save directly to the Simulation keys
     await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
     await redis.set(`sim:volume:${tgId}`, totalVol.toString());
 
-    await ctx.replyWithHTML(`✅ <b>Simulated Stats Forged Successfully!</b>\n\nWins: <b>${wins}</b>\nLosses: <b>${losses}</b>\nTotal Volume: <b>${totalVol} SOL</b>\nWin Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n\n<i>Open your /start WebApp to see the updated charts!</i>`);
+    await ctx.replyWithHTML(`✅ <b>Simulated Stats Forged Successfully!</b>\n\nWins: <b>${wins}</b>\nLosses: <b>${losses}</b>\nTotal Volume: <b>${totalVol} SOL</b>\nDays Active: <b>${daysActive} Days</b>\nWin Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n\n<i>Open your /start WebApp to see the updated charts!</i>`);
 });
 
 
