@@ -830,34 +830,142 @@ bot.action(/^watch_remove_(.+)$/, async (ctx) => {
 });
 
 // 🟢 CLAUDE FIX 4: Rolling time window stats for live & sim
+// 🟢 UPGRADED STATS ENGINE (Supports Text Args & Buttons for Live + Sim)
 bot.command('stats', async (ctx) => {
-    const tgId = ctx.from!.id.toString();
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const args = ctx.message.text.split(' ');
+    const customSeconds = args.length > 1 ? parseInt(args[1]) : null;
+
     const { isSimulationActive } = await import('./services/simulation.service.js');
-    const mode = (await isSimulationActive(tgId)) ? 'sim' : 'live';
-    
+    const isSim = await isSimulationActive(tgId);
+    const mode = isSim ? 'sim' : 'live';
+
+    // If user types /stats 30 or /stats 60
+    if (customSeconds && !isNaN(customSeconds) && customSeconds > 0) {
+        let tradeCount = 0, wins = 0, losses = 0, totalPnl = 0;
+        const now = Date.now();
+
+        if (isSim) {
+            const raw = await redis.get(`sim:trades:${tgId}`);
+            const trades = raw ? JSON.parse(raw) : [];
+            trades.forEach((t: any) => {
+                if (!t.isBuy) {
+                    const tradeTime = new Date(t.createdAt).getTime();
+                    if ((now - tradeTime) / 1000 <= customSeconds) {
+                        tradeCount++;
+                        const pnl = t.realizedPnlSol || 0;
+                        totalPnl += pnl;
+                        if (pnl > 0) wins++;
+                        else losses++;
+                    }
+                }
+            });
+        } else {
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+            if (user) {
+                const sinceDate = new Date(now - customSeconds * 1000);
+                const trades = await prisma.trade.findMany({
+                    where: { userId: user.id, isBuy: false, createdAt: { gte: sinceDate } }
+                });
+                trades.forEach(t => {
+                    tradeCount++;
+                    const pnl = t.realizedPnlSol || 0;
+                    totalPnl += pnl;
+                    if (pnl > 0) wins++;
+                    else losses++;
+                });
+            }
+        }
+
+        return ctx.replyWithHTML(
+            `📊 <b>${mode.toUpperCase()} MODE — Last ${customSeconds}s</b>\n\n` +
+            `Trades Executed: <b>${tradeCount}</b>\n` +
+            `Win Rate: <b>${tradeCount > 0 ? ((wins/tradeCount)*100).toFixed(1) : '0.0'}%</b> (${wins}W / ${losses}L)\n\n` +
+            `Net PnL: <b>${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(4)} SOL</b>`,
+            { reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]] } }
+        );
+    }
+
+    // Default /stats behavior (Shows buttons)
     await ctx.replyWithHTML(`📊 <b>Select a rolling window to analyze your active PnL:</b>`, {
         reply_markup: { inline_keyboard: [[
             { text: 'Last 30s', callback_data: `stats_${mode}_30` },
             { text: 'Last 60s', callback_data: `stats_${mode}_60` },
             { text: 'Last 5m', callback_data: `stats_${mode}_300` }
+        ], [
+            { text: '📅 Full Weekly Report', callback_data: 'stats_full_report' }
         ]] }
     });
 });
 
 bot.action(/^stats_(live|sim)_(\d+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    const [, mode, secs] = ctx.match!;
-    const { getStatsForWindow } = await import('./services/simulation.service.js');
-    
-    const s = await getStatsForWindow(ctx.from!.id.toString(), mode as 'live'|'sim', parseInt(secs));
-    
+    const tgId = ctx.from!.id.toString();
+    const [, mode, secsStr] = ctx.match!;
+    const customSeconds = parseInt(secsStr);
+    const isSim = mode === 'sim';
+
+    let tradeCount = 0, wins = 0, losses = 0, totalPnl = 0;
+    const now = Date.now();
+
+    if (isSim) {
+        const raw = await redis.get(`sim:trades:${tgId}`);
+        const trades = raw ? JSON.parse(raw) : [];
+        trades.forEach((t: any) => {
+            if (!t.isBuy) {
+                const tradeTime = new Date(t.createdAt).getTime();
+                if ((now - tradeTime) / 1000 <= customSeconds) {
+                    tradeCount++;
+                    const pnl = t.realizedPnlSol || 0;
+                    totalPnl += pnl;
+                    if (pnl > 0) wins++;
+                    else losses++;
+                }
+            }
+        });
+    } else {
+        const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+        if (user) {
+            const sinceDate = new Date(now - customSeconds * 1000);
+            const trades = await prisma.trade.findMany({
+                where: { userId: user.id, isBuy: false, createdAt: { gte: sinceDate } }
+            });
+            trades.forEach(t => {
+                tradeCount++;
+                const pnl = t.realizedPnlSol || 0;
+                totalPnl += pnl;
+                if (pnl > 0) wins++;
+                else losses++;
+            });
+        }
+    }
+
     await safeEditMessageText(ctx,
-        `📊 <b>${mode.toUpperCase()} MODE — Last ${secs}s</b>\n\n` +
-        `Trades Executed: <b>${s.tradeCount}</b>\n` +
-        `Win Rate: <b>${s.tradeCount > 0 ? ((s.wins/s.tradeCount)*100).toFixed(1) : '0.0'}%</b> (${s.wins}W / ${s.losses}L)\n\n` +
-        `Net PnL: <b>${s.totalPnl >= 0 ? '+' : ''}${s.totalPnl.toFixed(4)} SOL</b>`,
-        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]] } }
+        `📊 <b>${mode.toUpperCase()} MODE — Last ${customSeconds}s</b>\n\n` +
+        `Trades Executed: <b>${tradeCount}</b>\n` +
+        `Win Rate: <b>${tradeCount > 0 ? ((wins/tradeCount)*100).toFixed(1) : '0.0'}%</b> (${wins}W / ${losses}L)\n\n` +
+        `Net PnL: <b>${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(4)} SOL</b>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'btn_dashboard' }]] } }
     );
+});
+
+bot.action('stats_full_report', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const loader = await ctx.replyWithHTML('⏳ <i>Computing weekly stats...</i>');
+    try {
+        const stats = await computeWeeklyStats(tgId);
+        if (!stats) return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, '❌ No account found. Use /start first.');
+        
+        const msg = formatWeeklyReport(stats);
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'btn_dashboard' }]]} });
+    } catch (e) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, '❌ Error fetching stats.');
+    }
 });
 
 bot.command('simedit', async (ctx) => {
@@ -1796,11 +1904,13 @@ bot.action('trigger_caller_scan', async (ctx) => {
         const matchingTokens = topTokens.filter((t: any) =>
             t.totalScore >= filters.minScore &&
             t.ageMins <= filters.maxAgeMins &&
-            t.priceChangeM5 >= filters.minPctChange &&
-            t.priceChangeM5 <= filters.maxPctChange &&
-            t.liquidity >= filters.minLiquidity &&
-            t.volume >= filters.minVolume24h &&
-            (!filters.blockMev || t.breakdown.mevRisk >= 0)
+            // 🟢 MOMENTUM FIX: Exempt fresh on-chain tokens since they don't have 5-min candles yet
+            (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= filters.minPctChange && t.priceChangeM5 <= filters.maxPctChange)) &&
+            // 🟢 VOLUME FIX: Exempt on-chain tokens from volume, check liquidity instead
+            ((t.sourceQuality !== 'onchain-only' && t.volume >= filters.minVolume24h) || 
+             (t.sourceQuality === 'onchain-only' && t.liquidity >= filters.minLiquidity)) &&
+            t.liquidity >= filters.minLiquidity && // Global minimum liquidity check
+            (!filters.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0))
         );
 
         let matchedToken = null;

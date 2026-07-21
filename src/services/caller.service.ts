@@ -58,13 +58,13 @@ export async function startCoinCaller(bot: any) {
                 const matchingTokens = tokens.filter(t => 
                     t.totalScore >= filters.minScore &&
                     t.ageMins <= filters.maxAgeMins &&
-                    t.priceChangeM5 >= filters.minPctChange &&
-                    t.priceChangeM5 <= filters.maxPctChange &&
-                    // 🟢 CLAUDE FIX 1: Don't reject on-chain tokens for 0 volume, check liquidity instead
+                    // 🟢 MOMENTUM FIX: Exempt fresh on-chain tokens since they don't have 5-min candles yet
+                    (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= filters.minPctChange && t.priceChangeM5 <= filters.maxPctChange)) &&
+                    // 🟢 VOLUME FIX: Exempt on-chain tokens from volume, check liquidity instead
                     ((t.sourceQuality !== 'onchain-only' && t.volume >= filters.minVolume24h) || 
                      (t.sourceQuality === 'onchain-only' && t.liquidity >= filters.minLiquidity)) &&
                     t.liquidity >= filters.minLiquidity && // Global minimum liquidity check
-                    (!filters.blockMev || t.breakdown.mevRisk >= 0)
+                    (!filters.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0))
                 );
 
                 let matchedToken = null;
