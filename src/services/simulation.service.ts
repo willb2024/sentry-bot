@@ -108,7 +108,6 @@ export async function simExecuteSnipe(
     amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
     
-    // 🟢 FIX: Detailed error message showing exact balance
     const currentBal = parseFloat(await getSimBalance(telegramId));
     if (currentBal < amountSol + 0.001) {
         return { 
@@ -128,13 +127,34 @@ export async function simExecuteSnipe(
     const posKey = `sim:positions:${telegramId}`;
     const existing = JSON.parse(await redis.get(posKey) || '[]');
 
-    const entryPriceSol = parseFloat((Math.random() * 0.000008 + 0.0000005).toFixed(12));
-    const solUsdPrice = 150;
-    const entryPriceUsd = entryPriceSol * solUsdPrice;
-    const tokenAmount = Math.floor(amountSol / entryPriceSol);
+    // 🟢 FETCH REAL TOKEN DATA FOR SIMULATION
+    let symbol = 'UNKNOWN';
+    let entryPriceSol = 0;
+    let entryPriceUsd = 0;
+    const solUsdPrice = 160;
 
-    const tokenNames = ['DEGEN', 'CHAD', 'PEPE', 'BONK', 'WIF', 'POPCAT', 'GIGA', 'MYRO', 'BOME', 'SLERF'];
-    const symbol = tokenNames[Math.floor(Math.random() * tokenNames.length)];
+    try {
+        const { default: axios } = await import('axios');
+        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+        if (res.data?.pairs?.length > 0) {
+            symbol = res.data.pairs[0].baseToken.symbol;
+            entryPriceUsd = parseFloat(res.data.pairs[0].priceUsd || "0");
+        }
+        const { getCachedTokenPrice } = await import('./engine.service.js');
+        entryPriceSol = await getCachedTokenPrice(tokenAddress);
+    } catch (e) {}
+
+    // Fallback if token is totally dead or fake
+    if (entryPriceSol === 0) {
+        entryPriceSol = parseFloat((Math.random() * 0.000008 + 0.0000005).toFixed(12));
+        if (symbol === 'UNKNOWN') {
+            const tokenNames = ['DEGEN', 'CHAD', 'PEPE', 'BONK', 'WIF', 'POPCAT', 'GIGA'];
+            symbol = tokenNames[Math.floor(Math.random() * tokenNames.length)];
+        }
+    }
+    if (entryPriceUsd === 0) entryPriceUsd = entryPriceSol * solUsdPrice;
+
+    const tokenAmount = Math.floor(amountSol / entryPriceSol);
 
     existing.push({
         mint: tokenAddress,
@@ -158,6 +178,7 @@ export async function simExecuteSnipe(
         volumeSpent: amountSol
     };
 }
+
 export async function simExecuteExit(
     telegramId: string,
     tokenAddress: string,
@@ -208,7 +229,8 @@ export async function simExecuteExit(
         message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
     };
 }
-export function generateSimCallerAlert(filters: {
+
+export async function generateSimCallerAlert(filters: {
     minScore: number;
     maxAgeMins: number;
     minPctChange: number;
@@ -216,94 +238,100 @@ export function generateSimCallerAlert(filters: {
     minLiquidity: number;
     minVolume24h: number;
     blockMev: boolean;
-}): (ReturnType<typeof computeTokenScore> & { mint: string; symbol: string; ageMins: number; priceChangeM5: number; liquidity: number; volume: number }) | null {
+}): Promise<(ReturnType<typeof computeTokenScore> & { mint: string; symbol: string; ageMins: number; priceChangeM5: number; liquidity: number; volume: number; mevRisk: number; }) | null> {
     
-    // 🟢 Procedural Ticker Generator (Creates fake but realistic crypto symbols)
+    // 🟢 FETCH REAL HOT TOKENS FOR ALERTS INSTEAD OF FAKE ONES
+    try {
+        const hotRaw = await redis.get('caller:hot_scored_tokens');
+        if (hotRaw) {
+            const hotTokens = JSON.parse(hotRaw);
+            const matching = hotTokens.filter((t: any) =>
+                t.totalScore >= filters.minScore &&
+                t.ageMins <= filters.maxAgeMins &&
+                t.priceChangeM5 >= filters.minPctChange &&
+                t.priceChangeM5 <= filters.maxPctChange &&
+                t.liquidity >= filters.minLiquidity &&
+                t.volume >= filters.minVolume24h &&
+                (!filters.blockMev || t.breakdown?.mevRisk >= 0)
+            );
+            
+            if (matching.length > 0) {
+                const t = matching[Math.floor(Math.random() * matching.length)];
+                return {
+                    mint: t.mint,
+                    symbol: t.symbol,
+                    score: t.totalScore,
+                    reasons: t.reasons || [],
+                    ageMins: t.ageMins,
+                    priceChangeM5: t.priceChangeM5 || 0,
+                    mevRisk: t.breakdown?.mevRisk || 0,
+                    liquidity: t.liquidity,
+                    volume: t.volume
+                };
+            }
+        }
+    } catch(e) {}
+
+    // Fallback to fake simulation if no real tokens match the strict filters
     const generateFakeTicker = () => {
         const consonants = 'BCDFGHJKLMNPRSTVWXYZ';
         const vowels = 'AEIOU';
         let ticker = '';
-        const length = Math.floor(Math.random() * 2) + 3; // 3 to 4 letters usually
+        const length = Math.floor(Math.random() * 2) + 3; 
         for (let i = 0; i < length; i++) {
             ticker += (i % 2 === 0) 
                 ? consonants.charAt(Math.floor(Math.random() * consonants.length))
                 : vowels.charAt(Math.floor(Math.random() * vowels.length));
         }
-        // 15% chance to append a number to the end (e.g., PEPE2 -> VUX2)
         if (Math.random() > 0.85) ticker += Math.floor(Math.random() * 9) + 1;
         return ticker;
     };
 
-    // Simulate scanning a pool of candidate tokens
     const poolSize = 15; 
     const candidates = Array.from({ length: poolSize }, () => {
         const ageMins = Math.floor(Math.random() * 120) + 1; 
-
-        // 🟢 Realistic Liquidity Tiers (Mimics Pump.fun & Raydium realities)
         const liqRand = Math.random();
         let liquidity = 0;
-        if (liqRand < 0.70) liquidity = Math.random() * 7000 + 3000;         // 70% chance: Trench ($3k - $10k)
-        else if (liqRand < 0.95) liquidity = Math.random() * 15000 + 10000;  // 25% chance: Strong ($10k - $25k)
-        else liquidity = Math.random() * 55000 + 25000;                      // 5% chance: Whale/Raydium ($25k - $80k)
+        if (liqRand < 0.70) liquidity = Math.random() * 7000 + 3000;         
+        else if (liqRand < 0.95) liquidity = Math.random() * 15000 + 10000;  
+        else liquidity = Math.random() * 55000 + 25000;                      
 
-        // 🟢 Realistic Volume Tiers (Correlates to Liquidity)
         const volRand = Math.random();
         let volume24h = 0;
-        if (volRand < 0.60) volume24h = liquidity * (Math.random() * 2 + 0.5);      // Normal chop (0.5x to 2.5x liq)
-        else if (volRand < 0.90) volume24h = liquidity * (Math.random() * 5 + 2);   // Active trading (2x to 7x liq)
-        else volume24h = liquidity * (Math.random() * 15 + 5);                      // Parabolic breakout (5x to 20x liq)
+        if (volRand < 0.60) volume24h = liquidity * (Math.random() * 2 + 0.5);      
+        else if (volRand < 0.90) volume24h = liquidity * (Math.random() * 5 + 2);   
+        else volume24h = liquidity * (Math.random() * 15 + 5);                      
 
-        // 🟢 Realistic Momentum (5-minute price change)
         const momRand = Math.random();
         let priceChangeM5 = 0;
-        if (momRand < 0.60) priceChangeM5 = (Math.random() * 15) - 10;        // 60% chance: Bleeding/Chopping (-10% to +5%)
-        else if (momRand < 0.90) priceChangeM5 = (Math.random() * 25) + 5;    // 30% chance: Pumping (+5% to +30%)
-        else priceChangeM5 = (Math.random() * 120) + 30;                      // 10% chance: Mooning (+30% to +150%)
+        if (momRand < 0.60) priceChangeM5 = (Math.random() * 15) - 10;        
+        else if (momRand < 0.90) priceChangeM5 = (Math.random() * 25) + 5;    
+        else priceChangeM5 = (Math.random() * 120) + 30;                      
 
-        const hasSocials = Math.random() > 0.40; // 60% chance of socials
-        const isRug = Math.random() < 0.08; // 8% chance of being a rug/honeypot
+        const hasSocials = Math.random() > 0.40; 
+        const isRug = Math.random() < 0.08; 
 
-        const stats: TokenStats = {
-            ageMins, volume24h, liquidity, priceChangeM5: parseFloat(priceChangeM5.toFixed(1)), hasSocials, isRug
-        };
-        
+        const stats: TokenStats = { ageMins, volume24h, liquidity, priceChangeM5: parseFloat(priceChangeM5.toFixed(1)), hasSocials, isRug };
         let { score, reasons } = computeTokenScore(stats);
-
-        // 🟢 PREVENT EXACT 100 SCORES. Clamp high scores to 92-98 to maintain realism.
-        if (score >= 100) {
-            score = Math.floor(Math.random() * 7) + 92; 
-        }
+        if (score >= 100) score = Math.floor(Math.random() * 7) + 92; 
 
         return {
-            mint: generateSimTokenCA(),
-            symbol: generateFakeTicker(),
-            score, reasons, ageMins, priceChangeM5: stats.priceChangeM5,
-            mevRisk: stats.isRug ? -100 : 0,
-            liquidity: stats.liquidity, 
-            volume: stats.volume24h     
+            mint: generateSimTokenCA(), symbol: generateFakeTicker(), score, reasons, ageMins, priceChangeM5: stats.priceChangeM5,
+            mevRisk: stats.isRug ? -100 : 0, liquidity: stats.liquidity, volume: stats.volume24h     
         };
     });
 
-    // Apply the SAME filter logic the real scoreTokens()/startCoinCaller() flow uses
     const matching = candidates.filter(t =>
-        t.score >= filters.minScore &&
-        t.ageMins <= filters.maxAgeMins &&
-        t.priceChangeM5 >= filters.minPctChange &&
-        t.priceChangeM5 <= filters.maxPctChange &&
-        t.liquidity >= filters.minLiquidity &&
-        t.volume >= filters.minVolume24h &&
+        t.score >= filters.minScore && t.ageMins <= filters.maxAgeMins &&
+        t.priceChangeM5 >= filters.minPctChange && t.priceChangeM5 <= filters.maxPctChange &&
+        t.liquidity >= filters.minLiquidity && t.volume >= filters.minVolume24h &&
         (!filters.blockMev || t.mevRisk >= 0)
     );
 
-    // If multiple tokens clear the filter, pick one at random to keep it dynamic
-    if (matching.length > 0) {
-        return matching[Math.floor(Math.random() * matching.length)];
-    }
-    
+    if (matching.length > 0) return matching[Math.floor(Math.random() * matching.length)];
     return null;
 }
 
-// 🟢 D3 FIX: Biased by score with light momentum streaks
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
     const baseProb = score !== undefined ? 0.30 + (score / 100) * 0.45 : 0.5;
 
@@ -353,22 +381,37 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             break;
         }
 
-        // 🟢 GENERATE REALISTIC CALLER SCORE FOR SIMULATION
-        // 60% chance for 30-50 (average), 30% chance for 50-70 (good), 10% chance for 70-90 (golden)
-        const rand = Math.random();
+        // 🟢 PULL REAL HOT TOKENS FOR SIM AUTO-SNIPER
+        let tokenCA = '';
         let simScore = 0;
-        if (rand < 0.6) simScore = Math.floor(Math.random() * 21) + 30;
-        else if (rand < 0.9) simScore = Math.floor(Math.random() * 21) + 50;
-        else simScore = Math.floor(Math.random() * 21) + 70;
+        
+        try {
+            const hotRaw = await redis.get('caller:hot_scored_tokens');
+            if (hotRaw) {
+                const hotTokens = JSON.parse(hotRaw).filter((t:any) => t.totalScore >= minScore);
+                if (hotTokens.length > 0) {
+                    const pick = hotTokens[Math.floor(Math.random() * hotTokens.length)];
+                    tokenCA = pick.mint;
+                    simScore = pick.totalScore;
+                }
+            }
+        } catch(e) {}
 
-        // 🟢 FILTER LOGIC: If the simulated coin is too weak, skip it and keep scanning
-        if (simScore < minScore) {
-            await new Promise(r => setTimeout(r, 1500)); // Wait before finding next coin
-            continue; 
+        // Fallback if no live tokens meet your score criteria
+        if (!tokenCA) {
+            const rand = Math.random();
+            if (rand < 0.6) simScore = Math.floor(Math.random() * 21) + 30;
+            else if (rand < 0.9) simScore = Math.floor(Math.random() * 21) + 50;
+            else simScore = Math.floor(Math.random() * 21) + 70;
+
+            if (simScore < minScore) {
+                await new Promise(r => setTimeout(r, 1500)); 
+                continue; 
+            }
+            tokenCA = generateSimTokenCA();
         }
 
         const isProfit = await getNextSimOutcome(telegramId, 'guard');
-        const tokenCA = generateSimTokenCA();
         const targetPnl = isProfit ? tpPercent : -Math.abs(slPercent);
         const finalPnl = applySimSlippage(targetPnl);
 

@@ -148,6 +148,12 @@ function extractTelegramId(initData: string): string | null {
     return null;
 }
 
+function maskWallet(address: string | null | undefined, hide: boolean): string {
+    if (!address) return "None";
+    if (hide) return `${address.substring(0, 4)}••••••••••••••••••••••••••••${address.slice(-4)}`;
+    return address;
+}
+
 // 🟢 NEW: Global Currency Converter (Allows buying in $USD or SOL)
 function parseSolAmount(input: string, allowZero = false): number | null {
     if (input === undefined || input === null) return null;
@@ -480,6 +486,8 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         getLiveBalance(user), prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } }), checkVipStatus(user.telegramId)
     ]);
 
+    const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
+
     const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
 
     const { getSimVolume } = await import('./services/simulation.service.js');
@@ -513,7 +521,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         `⚡ <b>${botName.toUpperCase()}</b> ⚡\n\n` +
         
         `👛 <b>Primary Deposit Node:</b>\n` +
-        `<code>${user.vaultAddress || "No Vault Generated"}</code>\n\n` +
+        `<code>${maskWallet(user.vaultAddress, hideWallets)}</code>\n\n` +
         
         `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
         `└ ${whaleModeText}\n\n` +
@@ -598,7 +606,6 @@ bot.action('start_token_wizard', async (ctx) => {
 });
 
 
-
 // 🟢 NEW: Separate Vault Menu renderer to prevent fake bot.handleUpdate latency
 async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -606,13 +613,14 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
     
     // 🟢 FIX: Uses the 15-second cached aggregator instead of blocking on 5 RPC calls
     let liveBalance = await getLiveBalance(user);
+    const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
     let walletText = `🔑 <b>VAULT & KEYS</b>\n\n<b>Total Balance:</b> <code>${liveBalance} SOL</code>\n\n`;
-    walletText += `<b>W1 (Main):</b> <code>${user.vaultAddress}</code>\n`;
-    if (user.activeWallets >= 2 && user.vault2) walletText += `<b>W2:</b> <code>${user.vault2}</code>\n`;
-    if (user.activeWallets >= 3 && user.vault3) walletText += `<b>W3:</b> <code>${user.vault3}</code>\n`;
-    if (user.activeWallets >= 4 && user.vault4) walletText += `<b>W4:</b> <code>${user.vault4}</code>\n`;
-    if (user.activeWallets >= 5 && user.vault5) walletText += `<b>W5:</b> <code>${user.vault5}</code>\n\n`;
+    walletText += `<b>W1 (Main):</b> <code>${maskWallet(user.vaultAddress, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 2 && user.vault2) walletText += `<b>W2:</b> <code>${maskWallet(user.vault2, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 3 && user.vault3) walletText += `<b>W3:</b> <code>${maskWallet(user.vault3, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 4 && user.vault4) walletText += `<b>W4:</b> <code>${maskWallet(user.vault4, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 5 && user.vault5) walletText += `<b>W5:</b> <code>${maskWallet(user.vault5, hideWallets)}</code>\n\n`;
     walletText += `🐙 <b>WHY USE MULTI-WALLET (WHALE MODE)?</b>\nPump.fun restricts how many tokens a single wallet can buy at launch. By activating multiple wallets, Sentry fires simultaneous transactions in the exact same millisecond via Jito. <b>You bypass the limits, secure a massive bag at Block-0, and dump on the timeline.</b>\n\n<i>⚠️ NOTE: You MUST send SOL to each individual address above!</i>\n\n<b>Active Wallets:</b> ${user.activeWallets} / 5\n`;
 
     const UI = Markup.inlineKeyboard([
@@ -823,47 +831,45 @@ bot.command('stats', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!tgId) return;
     
-    let loader: any; // 🟢 FIX: Declared outside the try-block to fix TypeScript scope error
+    const args = ctx.message.text.split(' ');
+    const customSeconds = args.length > 1 ? parseInt(args[1]) : null;
+
+    let loader: any; 
 
     try {
         loader = await ctx.replyWithHTML('⏳ <i>Auditing active engines and computing stats...</i>');
         
-        // Calculate Short-Term Live PnL (30s / 1m / 30m / 1h)
         const { isSimulationActive } = await import('./services/simulation.service.js');
         const isSim = await isSimulationActive(tgId);
         const now = Date.now();
         let pnl30s = 0, pnl1m = 0, pnl30m = 0, pnl1h = 0;
+        let pnlCustom = 0;
+
+        const processTrade = (t: any) => {
+            if (!t.isBuy) {
+                const tradeTime = new Date(t.createdAt).getTime();
+                const diffSecs = (now - tradeTime) / 1000;
+                const pnl = t.realizedPnlSol || 0;
+                
+                if (diffSecs <= 30) pnl30s += pnl; 
+                if (diffSecs <= 60) pnl1m += pnl;    
+                if (diffSecs <= 1800) pnl30m += pnl;  
+                if (diffSecs <= 3600) pnl1h += pnl;
+                if (customSeconds && diffSecs <= customSeconds) pnlCustom += pnl;
+            }
+        };
 
         if (isSim) {
             const raw = await redis.get(`sim:trades:${tgId}`);
             const trades = raw ? JSON.parse(raw) : [];
-            trades.forEach((t: any) => {
-                if (!t.isBuy) {
-                    const tradeTime = new Date(t.createdAt).getTime();
-                    const diffMins = (now - tradeTime) / 60000;
-                    const pnl = t.realizedPnlSol || 0;
-                    
-                    if (diffMins <= 0.5) pnl30s += pnl; 
-                    if (diffMins <= 1) pnl1m += pnl;    
-                    if (diffMins <= 30) pnl30m += pnl;  
-                    if (diffMins <= 60) pnl1h += pnl;   
-                }
-            });
+            trades.forEach(processTrade);
         } else {
             const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
             if (user) {
                 const trades = await prisma.trade.findMany({
                     where: { userId: user.id, isBuy: false, createdAt: { gte: new Date(now - 3600000) } }
                 });
-                trades.forEach(t => {
-                    const diffMins = (now - t.createdAt.getTime()) / 60000;
-                    const pnl = t.realizedPnlSol || 0;
-                    
-                    if (diffMins <= 0.5) pnl30s += pnl; 
-                    if (diffMins <= 1) pnl1m += pnl;    
-                    if (diffMins <= 30) pnl30m += pnl;  
-                    if (diffMins <= 60) pnl1h += pnl;   
-                });
+                trades.forEach(processTrade);
             }
         }
 
@@ -884,14 +890,20 @@ bot.command('stats', async (ctx) => {
                 : `<b>-${usdStr} (-${solStr})</b>`;
         };
         
-        const shortTermStats = 
+        let shortTermStats = 
             `\n━━━━━━━━━━━━━━━\n` +
             `⏱️ <b>SHORT-TERM AUTOMATION PNL</b>\n` +
-            `<i>Tracks recent Guard, Sniper & DCA exits</i>\n\n` +
-            `• Last 30 Secs:  ${formatDualPnl(pnl30s)}\n` +
-            `• Last 1 Min:    ${formatDualPnl(pnl1m)}\n` +
-            `• Last 30 Mins:  ${formatDualPnl(pnl30m)}\n` +
-            `• Last 1 Hour:   ${formatDualPnl(pnl1h)}\n`;
+            `<i>Tracks recent Guard, Sniper & DCA exits</i>\n\n`;
+            
+        if (customSeconds) {
+            shortTermStats += `• Last ${customSeconds} Secs: ${formatDualPnl(pnlCustom)}\n`;
+        } else {
+            shortTermStats += 
+                `• Last 30 Secs:  ${formatDualPnl(pnl30s)}\n` +
+                `• Last 1 Min:    ${formatDualPnl(pnl1m)}\n` +
+                `• Last 30 Mins:  ${formatDualPnl(pnl30m)}\n` +
+                `• Last 1 Hour:   ${formatDualPnl(pnl1h)}\n`;
+        }
         
         msg = msg.replace('━━━━━━━━━━━━━━━\n🎯 <b>TOP TRADES</b>', shortTermStats + '━━━━━━━━━━━━━━━\n🎯 <b>TOP TRADES</b>');
 
@@ -1774,7 +1786,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
             }
 
             if (!matchedToken) {
-                matchedToken = generateSimCallerAlert(filters);
+                matchedToken =  await generateSimCallerAlert(filters);
                 if (matchedToken && matchedToken.score >= 80 && matchedToken.score <= 95) {
                     const repeats = Math.floor(Math.random() * 2) + 1; 
                     await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify({ token: matchedToken, repeatsLeft: repeats }), 'EX', 300);
@@ -2438,6 +2450,8 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
     else if (level === 'TURBO') currentFeeDisplay = "0.005 SOL";
     else if (level === 'CUSTOM') currentFeeDisplay = `${user.customPriorityFee} SOL`;
 
+    const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
+
     const levelText = `⚙️ <b>SENTRY CONFIGURATION</b>\n\n` +
         `👛 <b>Current Slippage:</b> ${currentSlippage}%\n` +
         `🚀 <b>Transaction Speed (Jito Bribe):</b> <b>${level}</b> (${currentFeeDisplay})\n\n` +
@@ -2453,7 +2467,8 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
                 Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
             ],
             [
-                Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed')
+                Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed'),
+                Markup.button.callback(hideWallets ? '👁️ Show Wallets' : '🙈 Hide Wallets', 'toggle_hide_wallets')
             ],
             [Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')],
             [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
@@ -2504,6 +2519,14 @@ bot.action('action_edit_slippage', async (ctx) => {
     await ctx.replyWithHTML(`✏️ <b>EDIT SLIPPAGE</b>\n\nReply with your new slippage percentage (e.g., 25 for 25%).\n\n<i>Type /cancel to abort.</i>`);
 });
 
+bot.action('toggle_hide_wallets', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    const current = await redis.get(`user_settings:hide_wallets:${tgId}`);
+    await redis.set(`user_settings:hide_wallets:${tgId}`, current === 'true' ? 'false' : 'true');
+    await sendOrEditSettings(ctx, tgId, true);
+});
 // =========================================================
 // 🎯 AUTO-SNIPER MENU CONTROLLER (PURE PUMP.FUN)
 // =========================================================

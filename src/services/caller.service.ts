@@ -25,8 +25,8 @@ export async function getUserCallerFilters(telegramId: string): Promise<CallerFi
         maxAgeMins: 60,
         minPctChange: 10,
         maxPctChange: 500,
-        minLiquidity: 3000, // 🟢 FIX: Lowered default for fresh tokens
-        minVolume24h: 5000, // 🟢 FIX: Lowered default for fresh tokens
+        minLiquidity: 3000, 
+        minVolume24h: 5000, 
         blockMev: true
     };
 
@@ -156,7 +156,6 @@ async function fetchRecentNewMints() {
     const enrichedTokens: any[] = [];
     const mintsOnly = rawMints.map((m: any) => m.mint);
     
-    // 🟢 FIX: Parallelize chunk fetching instead of awaiting in a loop
     const chunks: string[] = [];
     for (let i = 0; i < mintsOnly.length; i += 30) {
         chunks.push(mintsOnly.slice(i, i + 30).join(','));
@@ -322,6 +321,123 @@ async function fetchBoostedPairs() {
     } catch (_) { return []; }
 }
 
+// --- NEW DEFENSIVE PIPELINES ---
+
+export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean }> {
+    const cacheKey = `dev_rep:${creatorWallet}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    try {
+        const { connection } = await import('../lib/connection.js');
+        const { PublicKey } = await import('@solana/web3.js');
+        const sigs = await connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 20 });
+
+        let rugCount = 0;
+        for (const sig of sigs) {
+            const tx = await connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null);
+            if (!tx?.meta) continue;
+            // crude proxy: if this wallet's SOL balance dropped >90% within the tx window shortly after, flag as rug-like
+            const pre = tx.meta.preBalances?.[0] || 0;
+            const post = tx.meta.postBalances?.[0] || 0;
+            if (pre > 0 && (pre - post) / pre > 0.9) rugCount++;
+        }
+
+        const result = {
+            launchCount: sigs.length,
+            avgRugScore: sigs.length > 0 ? rugCount / sigs.length : 0,
+            isKnownRugger: rugCount >= 2
+        };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 3600);
+        return result;
+    } catch (_) {
+        return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
+    }
+}
+
+export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: boolean; burned: boolean; lockPct: number }> {
+    const cacheKey = `lp_lock:${mintAddress}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    const BURN_ADDRESS = "11111111111111111111111111111111";
+    const STREAMFLOW_PROGRAM = "strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m";
+
+    try {
+        const { connection } = await import('../lib/connection.js');
+        const { PublicKey } = await import('@solana/web3.js');
+        // requires the LP mint address for the pool — assume resolved upstream and passed in via lpMint
+        const largest = await connection.getTokenLargestAccounts(new PublicKey(mintAddress));
+        const top = largest.value[0];
+        if (!top) return { locked: false, burned: false, lockPct: 0 };
+
+        const ownerInfo = await connection.getParsedAccountInfo(top.address);
+        const owner = (ownerInfo.value?.data as any)?.parsed?.info?.owner || '';
+        const pct = (top.uiAmount || 0) / (largest.value.reduce((s, v) => s + (v.uiAmount || 0), 0) || 1) * 100;
+
+        const result = {
+            burned: owner === BURN_ADDRESS,
+            locked: owner === STREAMFLOW_PROGRAM,
+            lockPct: pct
+        };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
+        return result;
+    } catch (_) {
+        return { locked: false, burned: false, lockPct: 0 };
+    }
+}
+
+export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
+    try {
+        const { connection } = await import('../lib/connection.js');
+        const { PublicKey } = await import('@solana/web3.js');
+        const largest = await connection.getTokenLargestAccounts(new PublicKey(mintAddress));
+        const currentCount = largest.value.filter(v => (v.uiAmount || 0) > 0).length;
+
+        const snapshotKey = `holder_snapshots:${mintAddress}`;
+        const now = Date.now();
+        await redis.zadd(snapshotKey, now, `${now}:${currentCount}`);
+        await redis.expire(snapshotKey, 3600);
+
+        const fiveMinAgo = now - 5 * 60 * 1000;
+        const oldEntries = await redis.zrangebyscore(snapshotKey, fiveMinAgo, fiveMinAgo + 60000);
+        const oldCount = oldEntries.length > 0 ? parseInt(oldEntries[0].split(':')[1]) : currentCount;
+
+        const growthRate = oldCount > 0 ? ((currentCount - oldCount) / oldCount) * 100 : 0;
+        return { growthRate, uniqueBuyers5m: Math.max(0, currentCount - oldCount) };
+    } catch (_) {
+        return { growthRate: 0, uniqueBuyers5m: 0 };
+    }
+}
+
+export async function simulateSellability(mintAddress: string): Promise<{ sellable: boolean; estimatedTaxPct: number }> {
+    const cacheKey = `sellable:${mintAddress}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    try {
+        const axios = (await import('axios')).default;
+        const testAmount = "1000"; // tiny raw unit sell
+        const quoteRes = await axios.get(
+            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${testAmount}&autoSlippage=true`,
+            { timeout: 3500 }
+        ).catch(() => null);
+
+        if (!quoteRes?.data?.outAmount) {
+            const result = { sellable: false, estimatedTaxPct: 100 };
+            await redis.set(cacheKey, JSON.stringify(result), 'EX', 300);
+            return result;
+        }
+
+        const priceImpact = parseFloat(quoteRes.data.priceImpactPct || "0") * 100;
+        const result = { sellable: priceImpact < 15, estimatedTaxPct: priceImpact };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 300);
+        return result;
+    } catch (_) {
+        return { sellable: false, estimatedTaxPct: 100 };
+    }
+}
+
 export interface TokenStats {
     ageMins: number;
     volume24h: number;
@@ -344,7 +460,6 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     if (stats.volume24h > 100000) score += 25; 
     else if (stats.volume24h > 20000) score += 10;
 
-    // 🟢 FIX: Wash-trade / bot-volume detector
     if (stats.liquidity > 0) {
         const volToLiqRatio = stats.volume24h / stats.liquidity;
         if (volToLiqRatio > 25) {
@@ -356,7 +471,6 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
         }
     }
 
-    // 🟢 FIX: Graduated Momentum & Parabolic warnings
     reasons.push(`📈 Mom: +${stats.priceChangeM5.toFixed(1)}%`);
     if (stats.priceChangeM5 > 15 && stats.priceChangeM5 <= 60) score += 20;
     else if (stats.priceChangeM5 > 60 && stats.priceChangeM5 <= 150) score += 12;
@@ -370,7 +484,6 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
 
     if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
 
-    // 🟢 FIX: Penalty for unverified onchain-only, not a bonus
     if (stats.sourceQuality === 'onchain-only') {
         score -= 8;
         reasons.push(`⛓️ Unindexed (early, unverified)`);
@@ -382,7 +495,6 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
 // 🟢 MERGE AND SCORE (WITH UNIVERSAL ZERO-FIXER)
 export async function scoreTokens() {
     try {
-        // 🟢 FIX: Removed fetchTrendingPairs to eliminate duplicate API requests
         const [newMints, pumpFallback, restFallback, boosted] = await Promise.all([
             fetchRecentNewMints(),
             fetchFreshPumpTokens(),
@@ -392,7 +504,6 @@ export async function scoreTokens() {
 
         const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...boosted];
         
-        // 🟢 FIX: Keep the best quality source on dedup, not just the last one
         const sourceRank: Record<string, number> = { 'dexscreener': 3, 'pump-fallback': 3, 'rest-fallback': 2, 'onchain-only': 1 };
         const mergedMap = new Map<string, any>();
         
@@ -463,10 +574,27 @@ export async function scoreTokens() {
             return { ...pair, totalScore: Math.max(0, concentrationAdjustedScore), ageMins: stats.ageMins, reasons, breakdown: { mevRisk: isRug ? -100 : 0 } };
         }));
 
-        const topScorers = scored.filter(t => t.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore);
-        
-        await redis.set('caller:hot_scored_tokens', JSON.stringify(topScorers), 'EX', 30);
-        return topScorers;
+        const topScorers = scored.filter(t => t.totalScore >= 40).sort((a, b) => b.totalScore - a.totalScore);
+
+        // Stage 2: expensive checks only on tokens that already cleared 40
+        const enriched = await Promise.all(topScorers.slice(0, 20).map(async (t) => {
+            const [sellability] = await Promise.all([
+                simulateSellability(t.mint)
+                // dev reputation & LP lock require creator wallet / lp mint resolution upstream;
+                // wire in here once those addresses are available from the pair source
+            ]);
+
+            if (!sellability.sellable) {
+                return { ...t, totalScore: 0, reasons: [...t.reasons, `🚨 Honeypot/unsellable (tax ${sellability.estimatedTaxPct.toFixed(0)}%)`] };
+            }
+            return t;
+        }));
+
+        const final = [...enriched, ...scored.filter(t => t.totalScore > 0 && t.totalScore < 40)]
+            .sort((a, b) => b.totalScore - a.totalScore);
+
+        await redis.set('caller:hot_scored_tokens', JSON.stringify(final), 'EX', 30);
+        return final;
     } catch (e: any) {
         console.error("🔴 [CALLER] Engine Error:", e.message);
         return [];
