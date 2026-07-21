@@ -60,8 +60,10 @@ export async function startCoinCaller(bot: any) {
                     t.ageMins <= filters.maxAgeMins &&
                     t.priceChangeM5 >= filters.minPctChange &&
                     t.priceChangeM5 <= filters.maxPctChange &&
-                    t.liquidity >= filters.minLiquidity && 
-                    t.volume >= filters.minVolume24h &&    
+                    // 🟢 CLAUDE FIX 1: Don't reject on-chain tokens for 0 volume, check liquidity instead
+                    ((t.sourceQuality !== 'onchain-only' && t.volume >= filters.minVolume24h) || 
+                     (t.sourceQuality === 'onchain-only' && t.liquidity >= filters.minLiquidity)) &&
+                    t.liquidity >= filters.minLiquidity && // Global minimum liquidity check
                     (!filters.blockMev || t.breakdown.mevRisk >= 0)
                 );
 

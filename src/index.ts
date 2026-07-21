@@ -87,7 +87,11 @@ export async function safeSendMessage(tgId: string, text: string, options: any =
 }
 
 
-
+export function maskAddress(address: string | null | undefined, hidden: boolean): string {
+    if (!address) return "None";
+    if (hidden && address.length > 8) return `${address.substring(0, 4)}...${address.slice(-4)}`;
+    return address;
+}
 
 export async function safeEditMessageText(ctx: any, text: string, options: any = {}) {
     let retries = 3;
@@ -469,6 +473,7 @@ async function getLiveBalance(user: any): Promise<string> {
     } catch (e) { return "0.0000"; }
 }
 
+
 // =========================================================
 // 📟 DASHBOARD MENU SYSTEM (CLEAN & AESTHETIC STYLE)
 // =========================================================
@@ -486,6 +491,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         getLiveBalance(user), prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } }), checkVipStatus(user.telegramId)
     ]);
 
+    // 🟢 CLAUDE FIX 3: Check hide wallets setting
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
     const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
@@ -511,17 +517,15 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Your Rank:</b> <b>${rankDisplay}</b> (${primaryGuild.loyaltyPoints.toLocaleString()} GLP)\n`;
     }
 
-    // 🟢 Convert SOL to live USD format
     const balanceNum = parseFloat(liveBalance) || 0;
     const usdValue = balanceNum * cachedSolUsdPrice;
     const usdBalanceFormatted = usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    // 🟢 Evenly spaced, tight line breaks designed for mobile-first readability
     const layoutTxt = 
         `⚡ <b>${botName.toUpperCase()}</b> ⚡\n\n` +
         
         `👛 <b>Primary Deposit Node:</b>\n` +
-        `<code>${maskWallet(user.vaultAddress, hideWallets)}</code>\n\n` +
+        `<code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n\n` +
         
         `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
         `└ ${whaleModeText}\n\n` +
@@ -606,21 +610,19 @@ bot.action('start_token_wizard', async (ctx) => {
 });
 
 
-// 🟢 NEW: Separate Vault Menu renderer to prevent fake bot.handleUpdate latency
 async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
     
-    // 🟢 FIX: Uses the 15-second cached aggregator instead of blocking on 5 RPC calls
     let liveBalance = await getLiveBalance(user);
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
     let walletText = `🔑 <b>VAULT & KEYS</b>\n\n<b>Total Balance:</b> <code>${liveBalance} SOL</code>\n\n`;
-    walletText += `<b>W1 (Main):</b> <code>${maskWallet(user.vaultAddress, hideWallets)}</code>\n`;
-    if (user.activeWallets >= 2 && user.vault2) walletText += `<b>W2:</b> <code>${maskWallet(user.vault2, hideWallets)}</code>\n`;
-    if (user.activeWallets >= 3 && user.vault3) walletText += `<b>W3:</b> <code>${maskWallet(user.vault3, hideWallets)}</code>\n`;
-    if (user.activeWallets >= 4 && user.vault4) walletText += `<b>W4:</b> <code>${maskWallet(user.vault4, hideWallets)}</code>\n`;
-    if (user.activeWallets >= 5 && user.vault5) walletText += `<b>W5:</b> <code>${maskWallet(user.vault5, hideWallets)}</code>\n\n`;
+    walletText += `<b>W1 (Main):</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 2 && user.vault2) walletText += `<b>W2:</b> <code>${maskAddress(user.vault2, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 3 && user.vault3) walletText += `<b>W3:</b> <code>${maskAddress(user.vault3, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 4 && user.vault4) walletText += `<b>W4:</b> <code>${maskAddress(user.vault4, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 5 && user.vault5) walletText += `<b>W5:</b> <code>${maskAddress(user.vault5, hideWallets)}</code>\n\n`;
     walletText += `🐙 <b>WHY USE MULTI-WALLET (WHALE MODE)?</b>\nPump.fun restricts how many tokens a single wallet can buy at launch. By activating multiple wallets, Sentry fires simultaneous transactions in the exact same millisecond via Jito. <b>You bypass the limits, secure a massive bag at Block-0, and dump on the timeline.</b>\n\n<i>⚠️ NOTE: You MUST send SOL to each individual address above!</i>\n\n<b>Active Wallets:</b> ${user.activeWallets} / 5\n`;
 
     const UI = Markup.inlineKeyboard([
@@ -634,7 +636,7 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
         [Markup.button.callback('🧹 Sweep All Sub-Wallets to W1', 'action_consolidate_wallets')],
         [Markup.button.callback('📤 Export Keys', 'action_export_key'),
              Markup.button.callback('📥 Import Key', 'action_import_key')],
-             [Markup.button.callback('🔒 Set Withdrawal PIN', 'action_set_pin')], // 🟢 NEW BUTTON
+             [Markup.button.callback('🔒 Set Withdrawal PIN', 'action_set_pin')],
         [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
     ]);
 
@@ -827,90 +829,35 @@ bot.action(/^watch_remove_(.+)$/, async (ctx) => {
     await ctx.replyWithHTML(`✅ Alert removed for <code>${mint}</code>`);
 });
 
+// 🟢 CLAUDE FIX 4: Rolling time window stats for live & sim
 bot.command('stats', async (ctx) => {
-    const tgId = ctx.from?.id?.toString();
-    if (!tgId) return;
+    const tgId = ctx.from!.id.toString();
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const mode = (await isSimulationActive(tgId)) ? 'sim' : 'live';
     
-    const args = ctx.message.text.split(' ');
-    const customSeconds = args.length > 1 ? parseInt(args[1]) : null;
+    await ctx.replyWithHTML(`📊 <b>Select a rolling window to analyze your active PnL:</b>`, {
+        reply_markup: { inline_keyboard: [[
+            { text: 'Last 30s', callback_data: `stats_${mode}_30` },
+            { text: 'Last 60s', callback_data: `stats_${mode}_60` },
+            { text: 'Last 5m', callback_data: `stats_${mode}_300` }
+        ]] }
+    });
+});
 
-    let loader: any; 
-
-    try {
-        loader = await ctx.replyWithHTML('⏳ <i>Auditing active engines and computing stats...</i>');
-        
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        const isSim = await isSimulationActive(tgId);
-        const now = Date.now();
-        let pnl30s = 0, pnl1m = 0, pnl30m = 0, pnl1h = 0;
-        let pnlCustom = 0;
-
-        const processTrade = (t: any) => {
-            if (!t.isBuy) {
-                const tradeTime = new Date(t.createdAt).getTime();
-                const diffSecs = (now - tradeTime) / 1000;
-                const pnl = t.realizedPnlSol || 0;
-                
-                if (diffSecs <= 30) pnl30s += pnl; 
-                if (diffSecs <= 60) pnl1m += pnl;    
-                if (diffSecs <= 1800) pnl30m += pnl;  
-                if (diffSecs <= 3600) pnl1h += pnl;
-                if (customSeconds && diffSecs <= customSeconds) pnlCustom += pnl;
-            }
-        };
-
-        if (isSim) {
-            const raw = await redis.get(`sim:trades:${tgId}`);
-            const trades = raw ? JSON.parse(raw) : [];
-            trades.forEach(processTrade);
-        } else {
-            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-            if (user) {
-                const trades = await prisma.trade.findMany({
-                    where: { userId: user.id, isBuy: false, createdAt: { gte: new Date(now - 3600000) } }
-                });
-                trades.forEach(processTrade);
-            }
-        }
-
-        const stats = await computeWeeklyStats(tgId);
-        if (!stats) {
-            if (loader) await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, '❌ No account found. Use /start first.');
-            return;
-        }
-        
-        let msg = formatWeeklyReport(stats);
-
-        const formatDualPnl = (solAmount: number) => {
-            const usdAmount = solAmount * cachedSolUsdPrice;
-            const usdStr = `$${Math.abs(usdAmount).toFixed(2)}`;
-            const solStr = `${Math.abs(solAmount).toFixed(4)} SOL`;
-            return solAmount >= 0 
-                ? `<b>+${usdStr} (+${solStr})</b>` 
-                : `<b>-${usdStr} (-${solStr})</b>`;
-        };
-        
-        let shortTermStats = 
-            `\n━━━━━━━━━━━━━━━\n` +
-            `⏱️ <b>SHORT-TERM AUTOMATION PNL</b>\n` +
-            `<i>Tracks recent Guard, Sniper & DCA exits</i>\n\n`;
-            
-        if (customSeconds) {
-            shortTermStats += `• Last ${customSeconds} Secs: ${formatDualPnl(pnlCustom)}\n`;
-        } else {
-            shortTermStats += 
-                `• Last 30 Secs:  ${formatDualPnl(pnl30s)}\n` +
-                `• Last 1 Min:    ${formatDualPnl(pnl1m)}\n` +
-                `• Last 30 Mins:  ${formatDualPnl(pnl30m)}\n` +
-                `• Last 1 Hour:   ${formatDualPnl(pnl1h)}\n`;
-        }
-        
-        msg = msg.replace('━━━━━━━━━━━━━━━\n🎯 <b>TOP TRADES</b>', shortTermStats + '━━━━━━━━━━━━━━━\n🎯 <b>TOP TRADES</b>');
-
-        if (loader) await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { parse_mode: 'HTML' });
-    } catch (e: any) {
-        if (loader) await ctx.telegram.editMessageText(ctx.chat?.id || tgId, loader.message_id, undefined, '❌ Error fetching stats. Try again.', { parse_mode: 'HTML' }).catch(()=>{});
-    }
+bot.action(/^stats_(live|sim)_(\d+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const [, mode, secs] = ctx.match!;
+    const { getStatsForWindow } = await import('./services/simulation.service.js');
+    
+    const s = await getStatsForWindow(ctx.from!.id.toString(), mode as 'live'|'sim', parseInt(secs));
+    
+    await safeEditMessageText(ctx,
+        `📊 <b>${mode.toUpperCase()} MODE — Last ${secs}s</b>\n\n` +
+        `Trades Executed: <b>${s.tradeCount}</b>\n` +
+        `Win Rate: <b>${s.tradeCount > 0 ? ((s.wins/s.tradeCount)*100).toFixed(1) : '0.0'}%</b> (${s.wins}W / ${s.losses}L)\n\n` +
+        `Net PnL: <b>${s.totalPnl >= 0 ? '+' : ''}${s.totalPnl.toFixed(4)} SOL</b>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Dashboard', callback_data: 'btn_dashboard' }]] } }
+    );
 });
 
 bot.command('simedit', async (ctx) => {
