@@ -241,7 +241,8 @@ export async function simExecuteExit(
     return { success: true, signature: generateSimSignature(), message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };
 }
 
-export async function generateSimCallerAlert(filters: {
+// 🟢 FIX: Generate Caller Alert correctly using telegramId for deduplication
+export async function generateSimCallerAlert(telegramId: string, filters: {
     minScore: number; maxAgeMins: number; minPctChange: number; maxPctChange: number; minLiquidity: number; minVolume24h: number; blockMev: boolean;
 }): Promise<(ReturnType<typeof computeTokenScore> & { mint: string; symbol: string; ageMins: number; priceChangeM5: number; liquidity: number; volume: number; mevRisk: number; }) | null> {
     
@@ -259,17 +260,44 @@ export async function generateSimCallerAlert(filters: {
             );
             
             if (matching.length > 0) {
-                const t = matching[Math.floor(Math.random() * matching.length)];
+                // 🟢 Deduplication logic to force variety
+                let bestMatch = null;
+                for (const t of matching) {
+                    const seen = await redis.get(`sim_alerted:${telegramId}:${t.mint}`);
+                    if (!seen) {
+                        bestMatch = t;
+                        await redis.set(`sim_alerted:${telegramId}:${t.mint}`, '1', 'EX', 300); // Hide for 5 mins
+                        break;
+                    }
+                }
+                
+                // If they have seen every single matching token in the snapshot, return null to wait for fresh blocks
+                if (!bestMatch) return null;
+
                 return {
-                    mint: t.mint, symbol: t.symbol, score: t.totalScore, reasons: t.reasons || [],
-                    ageMins: t.ageMins, priceChangeM5: t.priceChangeM5 || 0, mevRisk: t.breakdown?.mevRisk || 0,
-                    liquidity: t.liquidity, volume: t.volume
+                    mint: bestMatch.mint, symbol: bestMatch.symbol, score: bestMatch.totalScore, reasons: bestMatch.reasons || [],
+                    ageMins: bestMatch.ageMins, priceChangeM5: bestMatch.priceChangeM5 || 0, mevRisk: bestMatch.breakdown?.mevRisk || 0,
+                    liquidity: bestMatch.liquidity, volume: bestMatch.volume
                 };
             }
         }
     } catch(e) {}
 
     // Fallback: Generate candidates but use REAL token identities so DexScreener links work
+    const generateFakeTicker = () => {
+        const consonants = 'BCDFGHJKLMNPRSTVWXYZ';
+        const vowels = 'AEIOU';
+        let ticker = '';
+        const length = Math.floor(Math.random() * 2) + 3; 
+        for (let i = 0; i < length; i++) {
+            ticker += (i % 2 === 0) 
+                ? consonants.charAt(Math.floor(Math.random() * consonants.length))
+                : vowels.charAt(Math.floor(Math.random() * vowels.length));
+        }
+        if (Math.random() > 0.85) ticker += Math.floor(Math.random() * 9) + 1;
+        return ticker;
+    };
+
     const poolSize = 15; 
     const candidates = [];
     
@@ -300,7 +328,7 @@ export async function generateSimCallerAlert(filters: {
         let { score, reasons } = computeTokenScore(stats);
         if (score >= 100) score = Math.floor(Math.random() * 7) + 92; 
 
-        // 🟢 CLAUDE FIX 2: Attach a real token identity
+        // 🟢 Attach a real token identity
         const realToken = await getRealTokenForSimDisplay();
 
         candidates.push({
@@ -316,7 +344,20 @@ export async function generateSimCallerAlert(filters: {
         (!filters.blockMev || t.mevRisk >= 0)
     );
 
-    if (matching.length > 0) return matching[Math.floor(Math.random() * matching.length)];
+    if (matching.length > 0) {
+        // 🟢 Apply deduplication to the fallback candidates as well
+        let bestMatch = null;
+        for (const t of matching) {
+            const seen = await redis.get(`sim_alerted:${telegramId}:${t.mint}`);
+            if (!seen) {
+                bestMatch = t;
+                await redis.set(`sim_alerted:${telegramId}:${t.mint}`, '1', 'EX', 300);
+                break;
+            }
+        }
+        return bestMatch; // Can be null if all are seen, mimicking live behavior
+    }
+    
     return null;
 }
 
@@ -380,7 +421,6 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
 
             if (simScore < minScore) { await new Promise(r => setTimeout(r, 1500)); continue; }
             
-            // 🟢 CLAUDE FIX 2: Use Real ID
             const realTok = await getRealTokenForSimDisplay();
             tokenCA = realTok.mint;
         }
