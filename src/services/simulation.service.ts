@@ -182,7 +182,8 @@ export async function simExecuteSnipe(
     existing.push({
         mint: tokenAddress, symbol, amount: tokenAmount, entryPrice: entryPriceSol,
         entryPriceUsd, priceUsd: entryPriceUsd, valueUsd: amountSol * solUsdPrice,
-        amountInSol: amountSol, highestSeenPrice: entryPriceSol
+        amountInSol: amountSol, highestSeenPrice: entryPriceSol,
+        entryScore: 75 // Default entry score for manual snipes so they have a slight positive bias
     });
     
     await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
@@ -362,6 +363,28 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
 }
 
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
+    // 🟢 FIX 9: Tie simulator win rate directly to real engine historical accuracy
+    try {
+        const historyMap = await redis.hgetall('caller_history');
+        const calls = Object.values(historyMap).map((v: any) => JSON.parse(v)).filter((c: any) => c.finalized);
+        const nearScore = calls.filter((c: any) => Math.abs(c.score - (score ?? 50)) <= 10);
+        
+        if (nearScore.length >= 5) {
+            const hits = nearScore.filter((c: any) => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
+            const empiricalProb = hits / nearScore.length;
+            
+            const lastKey = `sim:last_outcome:${type}:${telegramId}`;
+            const last = await redis.get(lastKey);
+            const streakNudge = last === 'true' ? 0.05 : last === 'false' ? -0.05 : 0;
+            
+            const finalProb = Math.min(0.9, Math.max(0.1, empiricalProb + streakNudge));
+            const outcome = Math.random() < finalProb;
+            await redis.set(lastKey, outcome ? 'true' : 'false', 'EX', 3600);
+            return outcome;
+        }
+    } catch(e) {}
+
+    // Fallback formula if not enough history
     const baseProb = score !== undefined ? 0.30 + (score / 100) * 0.45 : 0.5;
     const lastKey = `sim:last_outcome:${type}:${telegramId}`;
     const last = await redis.get(lastKey);
@@ -515,10 +538,12 @@ export async function walkSimPositionPrices(telegramId: string): Promise<void> {
 
     let changed = false;
     for (const p of positions) {
-        const trendSeed = (p.mint.charCodeAt(0) + p.mint.charCodeAt(p.mint.length - 1)) % 100;
-        const bias = trendSeed > 55 ? 0.4 : -0.3; 
-        const stepPct = (Math.random() - 0.5 + bias * 0.3) * 6; 
+        // 🟢 FIX 10: Score-aware drift logic. High AI scores mathematically drift upwards more often.
+        const scoreBias = ((p.entryScore ?? 50) - 50) / 50; // Returns -1.0 to +1.0
+        const stepPct = (Math.random() - 0.5 + scoreBias * 0.4) * 6; 
+
         const newPriceUsd = Math.max(p.entryPriceUsd * 0.05, p.priceUsd * (1 + stepPct / 100));
+
 
         p.priceUsd = newPriceUsd;
         p.valueUsd = p.amount * newPriceUsd;

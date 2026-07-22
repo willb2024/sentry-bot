@@ -1715,12 +1715,15 @@ function calculateAIProjection(token: any) {
     };
 }
 
+
 // 🟢 Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
 bot.action('trigger_caller_scan', async (ctx) => {
     try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
 
     try {
+        const { getCalibratedProjection } = await import('./services/caller.service.js');
+
         // --- 🎮 SIMULATION INTERCEPT ---
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (await isSimulationActive(tgId)) {
@@ -1755,13 +1758,14 @@ bot.action('trigger_caller_scan', async (ctx) => {
             }
 
             if (matchedToken) {
-                const projection = calculateAIProjection(matchedToken); // 🟢 SIMULATION PROJECTION
+                const projection = await getCalibratedProjection(matchedToken); 
+                const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
 
                 const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                     `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                     `<b>Score:</b> ${matchedToken.score}/100 ⭐\n\n` +
-                    `🔮 <b>AI PROJECTION MODEL:</b>\n` +
-                    `• Volatility: <b>${projection.volatility}</b>\n` +
+                    `${projLabel}\n` +
+                    `• Confidence: <b>${projection.volatility}</b>\n` +
                     `• Target Peak: <b>${projection.target}</b>\n` +
                     `• Est. Timeframe: <b>${projection.timeframe}</b>\n\n` +
                     `<b>Audit Trail:</b>\n` +
@@ -1780,11 +1784,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
             } else {
                 return safeEditMessageText(ctx,
                     `⏳ <b>Waiting for fresh blocks...</b>\n\n` +
-                    `The simulated pool captured fresh mints, but you have either reviewed them all or none cleared your strict filters:\n` +
-                    `• Min Score: <b>${filters.minScore}+</b>\n` +
-                    `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
-                    `• Min Liq & Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n` +
-                    `• Momentum: <b>${filters.minPctChange}% - ${filters.maxPctChange}%</b>\n\n` +
+                    `The simulated pool captured fresh mints, but you have either reviewed them all or none cleared your strict filters.\n\n` +
                     `<i>Sentry is scanning the mempool. Tap 'Scan Again' shortly!</i>\n` +
                     `<code>Last checked: ${new Date().toLocaleTimeString()}</code>`, 
                     { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }], [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
@@ -1836,28 +1836,26 @@ bot.action('trigger_caller_scan', async (ctx) => {
         }
 
         if (matchedToken) {
-            let historicalContext = "";
-            try {
-                const historyMap = await redis.hgetall('caller_history');
-                const calls = Object.values(historyMap).map(val => JSON.parse(val)).filter(c => c.finalized && c.score >= 75);
-                if (calls.length >= 5) { 
-                    const hits = calls.filter(c => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
-                    const winRate = ((hits / calls.length) * 100).toFixed(1);
-                    historicalContext = `<i>(Based on ${calls.length} historic verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting their +20% targets).</i>\n\n`;
-                }
-            } catch(e) {}
+            const projection = await getCalibratedProjection(matchedToken); 
+            
+            // 🟢 Store projection history for accuracy loop tracking
+            const historyData = {
+                mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
+                priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
+                predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
+            };
+            await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
 
-            const projection = calculateAIProjection(matchedToken); // 🟢 LIVE PROJECTION
+            const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
 
             const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                 `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
-                `🔮 <b>AI PROJECTION MODEL:</b>\n` +
-                `• Volatility: <b>${projection.volatility}</b>\n` +
+                `${projLabel}\n` +
+                `• Confidence: <b>${projection.volatility}</b>\n` +
                 `• Target Peak: <b>${projection.target}</b>\n` +
                 `• Est. Timeframe: <b>${projection.timeframe}</b>\n\n` +
                 `<b>Audit Trail:</b>\n${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
-                historicalContext +
                 `<i>Click below to buy instantly via Jito:</i>`;
 
             await safeEditMessageText(ctx, msg, {
@@ -1895,6 +1893,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
         }
 
     } catch (e: any) {
+        console.error("🔴 [CALLER SCAN] Unhandled failure:", e.message);
         try {
             await safeEditMessageText(ctx, `🔴 <b>Scan Aborted:</b> Engine hiccup, please tap again.`, {
                 parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
@@ -1903,8 +1902,25 @@ bot.action('trigger_caller_scan', async (ctx) => {
     }
 });
 
+bot.command('projectionstats', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
 
-// 🟢 NEW: Direct, auto-filled Guard prompt from a called coin
+    const hits = parseInt(await redis.get('projection:hits') || '0');
+    const misses = parseInt(await redis.get('projection:misses') || '0');
+    const total = hits + misses;
+
+    const accuracy = total > 0 ? ((hits / total) * 100).toFixed(1) : '0.0';
+
+    await ctx.replyWithHTML(
+        `🔮 <b>AI PROJECTION CALIBRATION STATS</b>\n\n` +
+        `<i>Measures how often the actual peak price lands exactly inside our projected target range.</i>\n\n` +
+        `• <b>Total Finalized Projections:</b> ${total}\n` +
+        `• <b>Hits (Inside Range):</b> ${hits}\n` +
+        `• <b>Misses (Outside Range):</b> ${misses}\n\n` +
+        `🎯 <b>Model Accuracy: ${accuracy}%</b>`
+    );
+});
 
 
 bot.action('action_deploy_limit', async (ctx) => {
