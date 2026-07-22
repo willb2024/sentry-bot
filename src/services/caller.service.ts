@@ -424,9 +424,9 @@ export async function simulateSellability(mintAddress: string): Promise<{ sellab
             `https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${testAmount}&autoSlippage=true`,
             { timeout: 3500 }
         ).catch(() => null);
-
         if (!quoteRes?.data?.outAmount) {
-            const result = { sellable: false, estimatedTaxPct: 100 };
+            // 🟢 FIX: unknown ≠ honeypot; let rug-check handle real risk for tokens Jupiter hasn't routed yet
+            const result = { sellable: true, estimatedTaxPct: 0 }; 
             await redis.set(cacheKey, JSON.stringify(result), 'EX', 300);
             return result;
         }
@@ -577,20 +577,28 @@ export async function scoreTokens() {
         }));
 
         const topScorers = scored.filter(t => t.totalScore >= 40).sort((a, b) => b.totalScore - a.totalScore);
+        
 
-        // Stage 2: expensive checks only on tokens that already cleared 40
-        const enriched = await Promise.all(topScorers.slice(0, 20).map(async (t) => {
-            const [sellability] = await Promise.all([
-                simulateSellability(t.mint)
-                // dev reputation & LP lock require creator wallet / lp mint resolution upstream;
-                // wire in here once those addresses are available from the pair source
-            ]);
+      // Stage 2: expensive checks only on tokens that already cleared 40
+      const enriched = await Promise.all(topScorers.slice(0, 20).map(async (t) => {
+        // 🟢 FIX: Jupiter has no route for tokens still on the pump.fun bonding curve —
+        // don't let a "no route" response masquerade as a honeypot flag.
+        const stillOnCurve = t.mint.toLowerCase().endsWith('pump') && t.sourceQuality !== 'dexscreener' && t.sourceQuality !== 'pump-fallback';
+        if (stillOnCurve) return t; // trust the rug/score checks already applied, skip sellability gate
 
-            if (!sellability.sellable) {
-                return { ...t, totalScore: 0, reasons: [...t.reasons, `🚨 Honeypot/unsellable (tax ${sellability.estimatedTaxPct.toFixed(0)}%)`] };
-            }
-            return t;
-        }));
+        const [sellability] = await Promise.all([
+            simulateSellability(t.mint)
+            // dev reputation & LP lock require creator wallet / lp mint resolution upstream;
+            // wire in here once those addresses are available from the pair source
+        ]);
+
+        if (!sellability.sellable) {
+            return { ...t, totalScore: 0, reasons: [...t.reasons, `🚨 Honeypot/unsellable (tax ${sellability.estimatedTaxPct.toFixed(0)}%)`] };
+        }
+        return t;
+    }));
+
+
 
         const final = [...enriched, ...scored.filter(t => t.totalScore > 0 && t.totalScore < 40)]
             .sort((a, b) => b.totalScore - a.totalScore);

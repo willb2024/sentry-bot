@@ -204,6 +204,11 @@ export async function simExecuteExit(
     const positions = JSON.parse(await redis.get(posKey) || '[]');
     const pos = positions.find((p: any) => p.mint === tokenAddress);
 
+    // 🟢 FIX: Deny success if the position was already closed by a concurrent trigger
+    if (!pos) {
+        return { success: false, signature: '', message: '⚠️ No open simulated position found for this token (already closed).' };
+    }
+
     let pnlPercent: number;
     if (forcedPnlPercent !== undefined) {
         pnlPercent = forcedPnlPercent;
@@ -213,27 +218,25 @@ export async function simExecuteExit(
         else pnlPercent = parseFloat((-(Math.random() * 45 + 5)).toFixed(2)); 
     }
 
-    if (pos) {
-        const soldSol = pos.amountInSol * (percent / 100);
-        const rawReturn = soldSol * (1 + pnlPercent / 100);
-        const platformFee = rawReturn * 0.01;
-        const jitoTip = 0.0015;
-        const netReturnSol = rawReturn - platformFee - jitoTip;
+    const soldSol = pos.amountInSol * (percent / 100);
+    const rawReturn = soldSol * (1 + pnlPercent / 100);
+    const platformFee = rawReturn * 0.01;
+    const jitoTip = 0.0015;
+    const netReturnSol = rawReturn - platformFee - jitoTip;
 
-        const currentBal = parseFloat(await getSimBalance(telegramId));
-        await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
+    const currentBal = parseFloat(await getSimBalance(telegramId));
+    await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
 
-        if (percent === 100) {
-            const updated = positions.filter((p: any) => p.mint !== tokenAddress);
-            await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
-        }
-        
-        await recordSimTrade(telegramId, false, soldSol, pnlPercent);
-        
-        // 🟢 CLAUDE FIX 4: Record stats natively to the rolling window
-        const realizedPnlSol = netReturnSol - soldSol;
-        await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
+    if (percent === 100) {
+        const updated = positions.filter((p: any) => p.mint !== tokenAddress);
+        await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
     }
+    
+    await recordSimTrade(telegramId, false, soldSol, pnlPercent);
+    
+    // 🟢 CLAUDE FIX 4: Record stats natively to the rolling window
+    const realizedPnlSol = netReturnSol - soldSol;
+    await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
 
     return { success: true, signature: generateSimSignature(), message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };
 }

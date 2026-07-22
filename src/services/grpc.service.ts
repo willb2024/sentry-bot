@@ -215,6 +215,10 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         await redis.del(createdKey);
         lockedGuards.add(guardSnapshot.id);
 
+        // 🟢 FIX: remove sibling guards for this token FIRST so a concurrent trigger
+        // can't call simExecuteExit() after the position is already closed
+        await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
+
         const isProfit = await getNextSimOutcome(guardSnapshot.telegramId, 'guard');
         const targetPnl = isProfit ? (guardSnapshot.takeProfitPercent || 50) : -Math.abs(guardSnapshot.trailingPercent);
         const pnlPercent = applySimSlippage(targetPnl);
