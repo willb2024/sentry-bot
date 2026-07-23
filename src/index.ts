@@ -1822,7 +1822,8 @@ bot.action('trigger_caller_scan', async (ctx) => {
         
         if (topTokens.length === 0) {
             const scanPromise = scoreTokens();
-            const timeoutPromise = new Promise<any>((resolve) => setTimeout(() => resolve('TIMEOUT'), 6000)); 
+            // 🟢 FIX: 18s timeout to accommodate the new safe pacing delays without throwing false errors
+            const timeoutPromise = new Promise<any>((resolve) => setTimeout(() => resolve('TIMEOUT'), 18000)); 
             const result = await Promise.race([scanPromise, timeoutPromise]);
             if (result === 'TIMEOUT') {
                 return safeEditMessageText(ctx, `🔴 <b>Scan Timed Out</b>\n\nThe scanner is taking longer than expected. Try again in a moment.`, {

@@ -17,6 +17,7 @@ export interface CallerFilters {
     blockMev: boolean;
 }
 
+// 🟢 Relaxed Default Filters to expand pool size
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
     const defaultFilters: CallerFilters = {
         isActive: false,
@@ -131,7 +132,6 @@ export async function startCoinCaller(bot: any) {
 
     setInterval(async () => {
         if (isScoring) {
-            // 🟢 FIX: Log warning instead of silently dropping
             console.warn("⚠️ [CALLER ENGINE] Overlapping scan tick skipped. Previous scan still processing.");
             return;
         }
@@ -157,6 +157,7 @@ export async function startCoinCaller(bot: any) {
                     (!filters.blockMev || t.breakdown.mevRisk >= 0)
                 );
 
+                // 🟢 Progressive Relaxation with Hard Safety Floors
                 let isRelaxed = false;
                 if (matchingTokens.length === 0) {
                     const relaxedFilters = {
@@ -248,6 +249,7 @@ export async function startCoinCaller(bot: any) {
     }, 15000);
 }
 
+// 🟢 Extended RugCheck Status with 4000ms timeout
 async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
     try {
@@ -271,6 +273,7 @@ async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10
     }
 }
 
+// 🟢 DEDICATED SAFE FETCHER (PREVENTS 429 API BANS)
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     if (mints.length === 0) return [];
     const chunks = chunkArray(mints, 30);
@@ -280,15 +283,17 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
         try {
             const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 });
             if (res.data?.pairs) allPairs.push(...res.data.pairs);
-        } catch (e: any) {}
-        await new Promise(r => setTimeout(r, 250)); 
+        } catch (e: any) {
+            // Silent fail to keep scanner moving
+        }
+        await new Promise(r => setTimeout(r, 250)); // Stagger to prevent 429s
     }
     return allPairs;
 }
 
 // 🟢 PIPELINE 1: WebSocket Buffer
 async function fetchRecentNewMints() {
-    const rawMints = getRecentNewMints().slice(0, 120) as any[]; // 🟢 FIX: Extended slice buffer to 120
+    const rawMints = getRecentNewMints().slice(0, 120) as any[];
     if (rawMints.length === 0) return [];
 
     const enrichedTokens: any[] = [];
@@ -415,7 +420,7 @@ async function fetchBoostedPairs() {
         return dsPairs.map((pair: any) => ({
             mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"),
             volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
-            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || [], sourceQuality: 'dexscreener'
+            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
         }));
     } catch (e: any) {
         console.warn('[CALLER] boosted pipeline failed:', e.message);
@@ -452,6 +457,8 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
     try {
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
+        
+        // Parallelized fetches for speed
         const sigs = await connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 8 }).catch(() => []);
 
         const txs = await Promise.all(
@@ -547,7 +554,7 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
             return result;
         }
 
-        const sellQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
+        const sellQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
 
         if (!sellQuote?.data?.outAmount) {
             const result = { sellable: true, estimatedTaxPct: 0 }; 
@@ -662,13 +669,12 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
 // 🟢 MERGE AND SCORE (WITH PARALLEL PIPELINES & FAST CHUNKING)
 export async function scoreTokens() {
     try {
-        // 🟢 FIX 2: Run all 5 pipelines concurrently to cut scan time by 60-75%
         const [newMints, pumpFallback, restFallback, boosted, raydiumPairs] = await Promise.all([
             fetchRecentNewMints(),
             fetchFreshPumpTokens(),
             fetchFreshViaRest(),
             fetchBoostedPairs(),
-            fetchFreshRaydiumPairs() // 🟢 5th Pipeline
+            fetchFreshRaydiumPairs() 
         ]);
 
         const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...boosted, ...raydiumPairs];
@@ -722,15 +728,25 @@ export async function scoreTokens() {
 
         // STAGE 1: Basic Scoring (Staggered to protect RugCheck limits)
         const stage1Scored: any[] = [];
-        const stage1Chunks = chunkArray(uniquePairs, 15);
+        // 🟢 MEV / 429 FIX: Smaller chunk size to prevent API throttling
+        const stage1Chunks = chunkArray(uniquePairs, 8);
         
         for (const chunk of stage1Chunks) {
             const results = await Promise.all(chunk.map(async (pair) => {
                 const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
                 const observedVolStr = await redis.get(`observed_vol:${pair.mint}`);
                 
-                const { checkRecentMevActivity } = await import('./price.service.js');
-                const hasMev = await checkRecentMevActivity(pair.mint);
+                // 🟢 MEV / 429 FIX: 5 Minute Cache
+                const mevCacheKey = `mev_check:${pair.mint}`;
+                const cachedMev = await redis.get(mevCacheKey);
+                let hasMev = false;
+                if (cachedMev !== null) {
+                    hasMev = cachedMev === 'true';
+                } else {
+                    const { checkRecentMevActivity } = await import('./price.service.js');
+                    hasMev = await checkRecentMevActivity(pair.mint);
+                    await redis.set(mevCacheKey, hasMev ? 'true' : 'false', 'EX', 300);
+                }
 
                 const stats: TokenStats = {
                     ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
@@ -748,7 +764,8 @@ export async function scoreTokens() {
                 return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
             }));
             stage1Scored.push(...results);
-            await new Promise(r => setTimeout(r, 200)); 
+            // 🟢 MEV / 429 FIX: Safely stagger Stage 1
+            await new Promise(r => setTimeout(r, 600)); 
         }
 
         const passedStage1 = stage1Scored.filter(t => t.score >= 25).sort((a,b) => b.score - a.score);
@@ -789,7 +806,8 @@ export async function scoreTokens() {
                 reasons: finalScoreRes.reasons, 
                 breakdown: { mevRisk: t.isRug || !sellability.sellable || t.hasMev ? -100 : 0 } 
             });
-            await new Promise(r => setTimeout(r, 100)); // Safely stagger deep analytics
+            // 🟢 MEV / 429 FIX: Safely stagger deep analytics
+            await new Promise(r => setTimeout(r, 400)); 
         }
 
         const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 25).map(t => ({
