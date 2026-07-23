@@ -16,7 +16,6 @@ export function getBondingCurveAddress(tokenMint: string): string {
     return pda.toBase58();
 }
 
-// 🟢 REDUCE HELIUS COST: Cache static token decimals/authorities for 6 hours
 export async function getCachedMintInfo(mint: string): Promise<{ decimals: number; mintAuthority: string | null; freezeAuthority: string | null }> {
     const key = `mint_info:${mint}`;
     try {
@@ -30,14 +29,12 @@ export async function getCachedMintInfo(mint: string): Promise<{ decimals: numbe
             freezeAuthority: info.freezeAuthority?.toBase58() ?? null
         };
         
-        await redis.set(key, JSON.stringify(payload), 'EX', 21600); // 6 Hours TTL
+        await redis.set(key, JSON.stringify(payload), 'EX', 21600); 
         return payload;
     } catch (e: any) {
-        console.error(`🔴 [CACHE] Failed to cache mint info for ${mint}: ${e.message}`);
-        return { decimals: 9, mintAuthority: null, freezeAuthority: null }; // Safe default
+        return { decimals: 9, mintAuthority: null, freezeAuthority: null }; 
     }
 }
-
 
 export async function getTokenRiskDetails(tokenMint: string): Promise<{
     isUnsafe: boolean; isHoneypot: boolean; isMintable: boolean; top10Pct: number; score: number;
@@ -48,7 +45,7 @@ export async function getTokenRiskDetails(tokenMint: string): Promise<{
         if (cached) return JSON.parse(cached);
 
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
-            { signal: AbortSignal.timeout(2000) });
+            { signal: AbortSignal.timeout(4000) }); // 🟢 FIX C2: 4000ms Timeout
         if (!res.ok) return { isUnsafe: false, isHoneypot: false, isMintable: false, top10Pct: 0, score: 0 };
 
         const data = (await res.json()) as any;
@@ -71,18 +68,13 @@ export function decodePumpCurvePrice(base64Data: string): number {
     try {
         const buffer = Buffer.from(base64Data, 'base64');
         if (buffer.length < 40) return 0;
-
         const virtualTokenReserves = buffer.readBigUInt64LE(8);
         const virtualSolReserves = buffer.readBigUInt64LE(16);
-
         const solAmount = Number(virtualSolReserves) / 1_000_000_000;
         const tokenAmount = Number(virtualTokenReserves) / 1_000_000;
-
         if (tokenAmount === 0) return 0;
-
         return solAmount / tokenAmount;
     } catch (e: any) {
-        console.error("⚠️ [PRICE SERVICE] Failed to decode pump curve price:", e.message);
         return 0;
     }
 }
@@ -106,9 +98,10 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
             buyerMap[buyer].push(blockIdx);
         });
 
-        for (const slots of Object.values(buyerMap)) {
-            if (slots.length >= 2 && slots[slots.length - 1] - slots[0] <= 2) {
-                return true;
+        // 🟢 FIX C1: Genuine Sandwich Detection (Buy -> Target -> Sell in same block/wallet)
+        for (const [buyer, slots] of Object.entries(buyerMap)) {
+            if (slots.length >= 2) {
+                if (slots[slots.length - 1] - slots[0] <= 1 && slots.length >= 3) return true; 
             }
         }
         return false;
@@ -124,12 +117,12 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         const cached = await redis.get(key);
         if (cached !== null) return cached === 'true';
 
+        // 🟢 FIX C2: Allow 4000ms for heavy load
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
-            { signal: AbortSignal.timeout(2000) });
+            { signal: AbortSignal.timeout(4000) });
 
         if (!res.ok) {
-            await redis.set(key, 'false', 'EX', 60);
-            return false;
+            throw new Error("Timeout or API error");
         }
 
         const data = (await res.json()) as any;
@@ -148,7 +141,7 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
         return isUnsafe;
     } catch (_) {
-        await redis.set(key, 'false', 'EX', 60);
+        // 🟢 FIX C2: Do not poison the cache with a false "safe" if API times out
         return false;
     }
 }
@@ -164,11 +157,7 @@ export async function fetchDexScreenerCandles(
         if (!res.ok) return [];
         const data = (await res.json()) as any;
         return (data?.bars || []).slice(-60).map((b: any) => ({
-            time: b.t,
-            open: b.o,
-            high: b.h,
-            low: b.l,
-            close: b.c
+            time: b.t, open: b.o, high: b.h, low: b.l, close: b.c
         }));
     } catch {
         return [];

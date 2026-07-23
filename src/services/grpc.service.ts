@@ -45,7 +45,13 @@ export let cachedSolUsdPrice = 150.0;
 export let isPriceReady = false; 
 
 // 🟢 D1 FIX: Live WebSocket In-Memory Ring Buffer for AI Coin Caller
-export const recentNewMints: { mint: string, symbol: string, firstSeenAt: number }[] = [];
+// 🟢 FIX A3: Track Creator Wallet
+export const recentNewMints: { mint: string, symbol: string, creator: string, firstSeenAt: number }[] = [];
+
+function trackNewMint(mint: string, symbol: string = "UNKNOWN", creator: string = "") {
+    recentNewMints.push({ mint, symbol, creator, firstSeenAt: Date.now() });
+    if (recentNewMints.length > 300) recentNewMints.shift(); 
+}
 
 export function getRecentNewMints() {
     const now = Date.now();
@@ -55,11 +61,7 @@ export function getRecentNewMints() {
     return [...recentNewMints];
 }
 
-// 🟢 FIX: Remove the .has(mint) check since it was just added to the set above it
-function trackNewMint(mint: string, symbol: string = "UNKNOWN") {
-    recentNewMints.push({ mint, symbol, firstSeenAt: Date.now() });
-    if (recentNewMints.length > 300) recentNewMints.shift(); 
-}
+
 
 export async function syncInitialSolPrice() {
     try {
@@ -906,7 +908,14 @@ export async function igniteYellowstoneStream(bot: any) {
                         recentlySnipedTokens.add(tokenMint);
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         
-                        trackNewMint(tokenMint, "UNKNOWN");
+                        // 🟢 FIX A3: Retrieve Creator/Deployer Wallet address on-chain (first accountKey is the signer)
+                        let creatorWallet = "";
+                        try {
+                            const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
+                            if (accountKeys.length > 0) creatorWallet = accountKeys[0];
+                        } catch (_) {}
+
+                        trackNewMint(tokenMint, "UNKNOWN", creatorWallet);
 
                         let poolId: string | undefined = undefined;
                         try {
@@ -932,7 +941,13 @@ export async function igniteYellowstoneStream(bot: any) {
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         console.log(`☄️ [METEORA gRPC] New Meteora Pool Detected: ${tokenMint}`);
                         
-                        trackNewMint(tokenMint, "UNKNOWN");
+                        let creatorWallet = "";
+                        try {
+                            const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
+                            if (accountKeys.length > 0) creatorWallet = accountKeys[0];
+                        } catch (_) {}
+
+                        trackNewMint(tokenMint, "UNKNOWN", creatorWallet);
                         await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM');
                     }
                 }

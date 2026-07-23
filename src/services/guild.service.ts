@@ -11,62 +11,7 @@ dotenv.config();
 const prisma = new PrismaClient();
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
 
-export async function createGuild(
-    telegramId: string, name: string, description: string | null, rewardDescription: string | null
-): Promise<{ success: boolean; message: string; guildCode?: string }> {
-    try {
-        const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
-        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
-        
-        if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
 
-        // 🟢 P0 FIX #1 (Option A): Guild creation is now completely free. No Dev Suite requirement, no SOL charge.
-        const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
-        const randomTwoDigit = Math.floor(10 + Math.random() * 90);
-        const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
-
-        await prisma.guild.create({
-            data: { ownerId: user.id, guildCode, name, description, rewardDescription, feePaidSol: 0 }
-        });
-
-        return { success: true, message: "Guild successfully established.", guildCode };
-    } catch (e: any) { return { success: false, message: e.message }; }
-}
-
-export async function getLeaderboard(guildId: string, limit: number = 50) {
-    try {
-        const rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, limit - 1, 'WITHSCORES');
-        if (rawLb.length === 0) return [];
-        
-        const userIds: string[] = [];
-        const scoreMap: Record<string, number> = {};
-        for (let i = 0; i < rawLb.length; i += 2) {
-            userIds.push(rawLb[i]);
-            scoreMap[rawLb[i]] = parseFloat(rawLb[i + 1]);
-        }
-
-        const memberships = await prisma.guildMembership.findMany({
-            where: { guildId, userId: { in: userIds } },
-            include: { user: true }
-        });
-
-        const memberMap = new Map(memberships.map(m => [m.userId, m]));
-        return userIds.map((userId, index) => {
-            const memberInfo = memberMap.get(userId);
-            if (!memberInfo) return null;
-            return {
-                rank: index + 1,
-                membershipId: memberInfo.id,
-                telegramId: memberInfo.user.telegramId,
-                username: memberInfo.user.username || memberInfo.user.telegramId,
-                walletAddress: memberInfo.user.vaultAddress || "Unknown",
-                glp: scoreMap[userId],
-                volumeSol: memberInfo.totalVolumeSol,
-                airdropsReceived: memberInfo.airdropsReceivedSol || 0 
-            };
-        }).filter(Boolean);
-    } catch (e) { return []; }
-}
 
 export async function joinGuild(telegramId: string, guildCode: string): Promise<{ success: boolean; message: string; guildName?: string; rewardDescription?: string | null }> {
     try {
@@ -83,6 +28,67 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
         return { success: false, message: "Error joining guild." };
     }
 }
+export async function createGuild(
+    telegramId: string, name: string, description: string | null, rewardDescription: string | null
+): Promise<{ success: boolean; message: string; guildCode?: string }> {
+    try {
+        const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
+        if (!user || !user.vaultAddress) return { success: false, message: "No active vault found." };
+        if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
+
+        // 🟢 FIX A2: Guild creation is now genuinely free. No Dev Suite required, no SOL transferred.
+        const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
+        const randomTwoDigit = Math.floor(10 + Math.random() * 90);
+        const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
+
+        await prisma.guild.create({
+            data: { ownerId: user.id, guildCode, name, description, rewardDescription, feePaidSol: 0 }
+        });
+
+        return { success: true, message: "Guild successfully established.", guildCode };
+    } catch (e: any) { return { success: false, message: e.message }; }
+}
+
+export async function getLeaderboard(guildId: string, limit: number = 50) {
+    try {
+        let rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, limit - 1, 'WITHSCORES');
+        
+        // 🟢 FIX C6: DB Fallback if Redis is flushed
+        if (rawLb.length === 0) {
+            const members = await prisma.guildMembership.findMany({ where: { guildId, isActive: true } });
+            if (members.length === 0) return [];
+            const multi = redis.multi();
+            for (const m of members) multi.zadd(`guild_lb:${guildId}`, m.loyaltyPoints, m.userId);
+            await multi.exec();
+            rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, limit - 1, 'WITHSCORES');
+        }
+
+        // 🟢 FIX G3: Eliminate N+1 Query. Fetch all users in one batch.
+        const userIds = [];
+        const scoreMap: Record<string, number> = {};
+        for (let i = 0; i < rawLb.length; i += 2) {
+            userIds.push(rawLb[i]);
+            scoreMap[rawLb[i]] = parseFloat(rawLb[i + 1]);
+        }
+
+        const memberships = await prisma.guildMembership.findMany({
+            where: { guildId, userId: { in: userIds } },
+            include: { user: true }
+        });
+
+        const memberMap = new Map(memberships.map(m => [m.userId, m]));
+        return userIds.map((userId, index) => {
+            const memberInfo = memberMap.get(userId);
+            if (!memberInfo) return null;
+            return {
+                rank: index + 1, membershipId: memberInfo.id, telegramId: memberInfo.user.telegramId,
+                username: memberInfo.user.username || memberInfo.user.telegramId,
+                walletAddress: memberInfo.user.vaultAddress || "Unknown", glp: scoreMap[userId],
+                volumeSol: memberInfo.totalVolumeSol, airdropsReceived: memberInfo.airdropsReceivedSol || 0 
+            };
+        }).filter(Boolean);
+    } catch (e) { return []; }
+}
 
 export async function awardGuildPoints(telegramId: string, volumeSol: number): Promise<void> {
     if (volumeSol <= 0) return;
@@ -90,20 +96,21 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user) return;
         
-        // 🟢 P0 FIX #4: User only earns points for their ONE active guild to prevent multi-guild farming.
         const memberships = await prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true } });
         if (memberships.length === 0) return;
         
         const points = volumeSol / 0.1;
-        for (const membership of memberships) {
+        // 🟢 FIX G2: Parallelize DB and Redis updates instead of sequential await
+        await Promise.all(memberships.map(async (membership) => {
             await prisma.guildMembership.update({
                 where: { id: membership.id },
                 data: { loyaltyPoints: { increment: points }, totalVolumeSol: { increment: volumeSol }, lastActiveAt: new Date() }
             });
             await redis.zincrby(`guild_lb:${membership.guildId}`, points, user.id);
-        }
+        }));
     } catch (e) {}
 }
+
 
 export async function exportLeaderboard(telegramId: string, guildId: string): Promise<string | null> {
     try {

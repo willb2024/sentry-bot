@@ -662,9 +662,11 @@ export async function executeExit(
             const tokensToSellRaw = (rawTokenBalance * BigInt(Math.floor(sellPercentage))) / 100n;
             const uiTokensToSell = Number((Number(tokensToSellRaw) / (10 ** decimals)).toFixed(decimals));
 
-            const pkEncrypted = index === 0 ? user.turnkeySubOrgId : user[`pk${index+1}` as keyof typeof user];
+            // 🟢 TS ERROR FIX: Safely assert string | undefined to prevent strict-null compiler failure
+            const rawPkEncrypted = index === 0 ? user.turnkeySubOrgId : user[`pk${index+1}` as keyof typeof user];
+            const pkEncrypted = typeof rawPkEncrypted === 'string' ? rawPkEncrypted : undefined;
 
-            const apiRes = await fetchApiTransaction('sell', targetCA, w.publicKey.toBase58(), 0, uiTokensToSell, tokensToSellRaw.toString(), sellPercentage, slippage, priorityLevel, customPriorityFee, pkEncrypted as string);
+            const apiRes = await fetchApiTransaction('sell', targetCA, w.publicKey.toBase58(), 0, uiTokensToSell, tokensToSellRaw.toString(), sellPercentage, slippage, priorityLevel, customPriorityFee, pkEncrypted);
             if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
 
             const dynamicFeeBase = apiRes.estimatedOutput && apiRes.estimatedOutput > 0 ? apiRes.estimatedOutput : 0.01;
@@ -676,7 +678,6 @@ export async function executeExit(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
             
-            // 🟢 SPEED FIX: Parallel execution via updated sendToJitoBundle. Maintains slippage safety.
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
             if (!bundleOk) {
                 walletErrors[index] = "Transaction dropped. High slippage fallback aborted or network congested."; 
@@ -701,6 +702,7 @@ export async function executeExit(
 
                     const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = actualSolReceived * feeRate;
+                    
                     let affiliateCut = 0;
                     if (user.referredById) {
                         const dynamicRate = await getDynamicAffiliateRate(user.referredById);
@@ -708,24 +710,61 @@ export async function executeExit(
                         await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } }).catch(()=>{});
                     }
 
+                    // 🟢 FIX F1: Calculate Guild Owner split with precise overlap & feeCharged caps
+                    let guildOwnerCut = 0;
+                    let guildOwnerId: string | null = null;
+                    try {
+                        const activeGuildMembership = await prisma.guildMembership.findFirst({ where: { userId: user.id, isActive: true }, include: { guild: true } });
+                        if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
+                            guildOwnerId = activeGuildMembership.guild.ownerId;
+                            
+                            const maxDistributable = feeCharged * 0.70;
+                            const availableForGuild = maxDistributable - affiliateCut;
+                            
+                            if (availableForGuild > 0) {
+                                const standardGuildCut = feeCharged * 0.50; 
+                                guildOwnerCut = Math.min(standardGuildCut, availableForGuild);
+                                
+                                if (guildOwnerId === user.referredById) {
+                                    const combined = affiliateCut + guildOwnerCut;
+                                    if (combined > feeCharged) guildOwnerCut = feeCharged - affiliateCut;
+                                }
+                                
+                                await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } }).catch(()=>{});
+                            }
+                        }
+                    } catch (_) {}
+
                     let volumeToRecord = actualSolReceived; 
                     try {
-                        const lastBuy = await prisma.trade.findFirst({ where: { userId: user.id, tokenAddress: targetCA, isBuy: true }, orderBy: { createdAt: 'desc' } });
-                        if (lastBuy) volumeToRecord = lastBuy.amountInSol * (sellPercentage / 100);
+                        // 🟢 FIX B5: Accurate weighted cost-basis summing across all unclosed buys
+                        const allBuys = await prisma.trade.findMany({ 
+                            where: { userId: user.id, tokenAddress: targetCA, isBuy: true, status: 'CONFIRMED' } 
+                        });
+                        if (allBuys.length > 0) {
+                            const totalInvested = allBuys.reduce((sum, t) => sum + t.amountInSol, 0);
+                            volumeToRecord = totalInvested * (sellPercentage / 100);
+                        }
                     } catch (_) {}
 
                     const realizedPnlSol = actualSolReceived - volumeToRecord;
                     const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
                     await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(()=>{});
+                    
+                    const { awardGuildPoints } = await import('./guild.service.js');
                     awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
                     
+                    // 🟢 FIX 4: Record Stats Event natively to the rolling stats window
+                    const { recordStatsEvent } = await import('./simulation.service.js');
+                    await recordStatsEvent(user.telegramId, 'live', realizedPnlSol).catch(()=>{});
+
                     await prisma.trade.create({
                         data: {
                             userId: user.id, tokenAddress: targetCA, isBuy: false, amountInSol: volumeToRecord,
                             feeChargedSol: feeCharged, affiliateCutSol: affiliateCut, loyaltyRebateSol: 0,
                             txSignature: txSig, status: 'CONFIRMED', profitPercent: parseFloat(profitPercent.toFixed(2)),
-                            realizedPnlSol: volumeToRecord * (profitPercent / 100)
+                            realizedPnlSol: realizedPnlSol
                         }
                     }).catch(() => {});
 
@@ -745,13 +784,14 @@ export async function executeExit(
                             form.append('caption', captionHtml);
                             form.append('parse_mode', 'HTML');
                             
+                            const axiosClient = (await import('axios')).default;
                             await axiosClient.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, {
                                 headers: form.getHeaders(),
                                 timeout: 5000
                             });
                         } catch (e) {
-                            console.error("Failed to generate/send live PnL card:", e);
                             try {
+                                const axiosClient = (await import('axios')).default;
                                 await axiosClient.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
                                     chat_id: telegramId, text: captionHtml, parse_mode: 'HTML', link_preview_options: { is_disabled: true }
                                 });

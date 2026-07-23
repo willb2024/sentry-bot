@@ -5,7 +5,6 @@ import FormData from 'form-data';
 import { PrismaClient } from '@prisma/client';
 import { connection } from '../lib/connection.js';
 import { decryptKey, ensureWalletsExist } from './vault.service.js';
-import { redis } from '../lib/redis.js';
 import dotenv from 'dotenv';
 import axios from 'axios';
 
@@ -53,7 +52,6 @@ export async function uploadMetadataToIpfs(name: string, symbol: string, descrip
     }
 }
 
-// 🟢 FIX: Added boolean return so index.ts knows if mining failed
 export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keypair, matched: boolean }> {
     if (!prefix || prefix.toUpperCase() === 'NO') return { keypair: Keypair.generate(), matched: true };
     
@@ -65,15 +63,15 @@ export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keyp
 
     return new Promise((resolve) => {
         function mineChunk() {
-            for (let i = 0; i < 10000; i++) {
+            for (let i = 0; i < 5000; i++) {
                 if (keypair.publicKey.toBase58().toLowerCase().startsWith(search)) {
                     return resolve({ keypair, matched: true });
                 }
                 keypair = Keypair.generate();
             }
-            iterations += 10000;
-            // Failsafes after 1M tries to not freeze the node
-            if (iterations >= 1000000) {
+            iterations += 5000;
+            // 🟢 FIX E1: Prevent vanity mining from freezing event loop. Cap at 50k.
+            if (iterations >= 50000) {
                 return resolve({ keypair, matched: false }); 
             }
             setImmediate(mineChunk);
@@ -96,30 +94,17 @@ export async function launchTokenOnPumpFun(
         if (walletCount > 1) await ensureWalletsExist(telegramId, walletCount);
         
         const refreshedUser = await prisma.user.findUnique({ where: { telegramId } });
-        
-        if (!refreshedUser || !refreshedUser.turnkeySubOrgId) {
-            return { success: false, message: "Database query error during wallet retrieval." };
-        }
+        if (!refreshedUser || !refreshedUser.turnkeySubOrgId) return { success: false, message: "Database query error during wallet retrieval." };
 
         const wallets: Keypair[] = [];
         const rawW1 = decryptKey(refreshedUser.turnkeySubOrgId);
         if (!rawW1) return { success: false, message: "Failed to decrypt W1 key." };
         wallets.push(Keypair.fromSecretKey(bs58.decode(rawW1)));
 
-        if (walletCount >= 2 && refreshedUser.pk2) {
-            const pk = decryptKey(refreshedUser.pk2);
-            if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
-        }
-        if (walletCount >= 3 && refreshedUser.pk3) {
-            const pk = decryptKey(refreshedUser.pk3);
-            if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
-        }
-        if (walletCount >= 4 && refreshedUser.pk4) {
-            const pk = decryptKey(refreshedUser.pk4);
-            if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk)));
-        }
+        if (walletCount >= 2 && refreshedUser.pk2) { const pk = decryptKey(refreshedUser.pk2); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (walletCount >= 3 && refreshedUser.pk3) { const pk = decryptKey(refreshedUser.pk3); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (walletCount >= 4 && refreshedUser.pk4) { const pk = decryptKey(refreshedUser.pk4); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
 
-        // 🟢 FIX: Handle the new tuple return from mineVanityKeypair
         const vanityResult = await mineVanityKeypair(vanityPrefix);
         const mintKeypair = vanityResult.keypair;
         const tokenAddress = mintKeypair.publicKey.toBase58();
@@ -127,19 +112,13 @@ export async function launchTokenOnPumpFun(
         const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
         const bundledTxs: string[] = [];
 
-        // 🟢 FIX: DenominatedInSol is passed as proper boolean, not string 'true'
         const response = await fetch('https://pumpportal.fun/api/create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                action: 'create',
-                tokenMetadata: { name, symbol, uri: metadataUri },
-                mint: bs58.encode(mintKeypair.secretKey),
-                denominatedInSol: true, 
-                amount: splitBuySol,
-                slippage: 25,
-                priorityFee: 0.001,
-                pool: 'pump'
+                action: 'create', tokenMetadata: { name, symbol, uri: metadataUri },
+                mint: bs58.encode(mintKeypair.secretKey), denominatedInSol: true, 
+                amount: splitBuySol, slippage: 25, priorityFee: 0.001, pool: 'pump'
             })
         });
 
@@ -153,14 +132,8 @@ export async function launchTokenOnPumpFun(
         if (splitBuySol > 0 && wallets.length > 1) {
             const extraBuys = await Promise.all(wallets.slice(1).map(async (wallet) => {
                 const buyRes = await axios.post('https://pumpportal.fun/api/trade-local', {
-                    publicKey: wallet.publicKey.toBase58(),
-                    action: 'buy',
-                    mint: tokenAddress,
-                    denominatedInSol: true, // 🟢 FIX
-                    amount: splitBuySol,
-                    slippage: 25,
-                    priorityFee: 0.0005,
-                    pool: 'pump'
+                    publicKey: wallet.publicKey.toBase58(), action: 'buy', mint: tokenAddress,
+                    denominatedInSol: true, amount: splitBuySol, slippage: 25, priorityFee: 0.0005, pool: 'pump'
                 }, { responseType: 'arraybuffer' });
                 const buyTx = VersionedTransaction.deserialize(new Uint8Array(buyRes.data));
                 buyTx.sign([wallet]);
@@ -180,9 +153,7 @@ export async function launchTokenOnPumpFun(
         const jitoTipLamports = 3_000_000; 
 
         const instructions = [];
-        if (!isAdmin) {
-            instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: new PublicKey(treasuryWalletStr), lamports: feeLamports }));
-        }
+        if (!isAdmin) instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: new PublicKey(treasuryWalletStr), lamports: feeLamports }));
         instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: new PublicKey(jitoTipAccount), lamports: jitoTipLamports }));
 
         const feeTx = new VersionedTransaction(new TransactionMessage({

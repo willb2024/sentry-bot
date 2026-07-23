@@ -38,10 +38,85 @@ export async function getUserCallerFilters(telegramId: string): Promise<CallerFi
     return defaultFilters;
 }
 
+export async function setUserCallerFilters(telegramId: string, updates: Partial<CallerFilters>) {
+    const current = await getUserCallerFilters(telegramId);
+    const updated = { ...current, ...updates };
+    await redis.set(`caller_filters:${telegramId}`, JSON.stringify(updated));
+    return updated;
+}
+
 function chunkArray<T>(arr: T[], size: number): T[][] {
     const out: T[][] = [];
     for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
     return out;
+}
+
+export function humanizeMs(ms: number): string {
+    const mins = ms / 60000;
+    if (mins < 60) return `~${Math.round(mins)} Minutes`;
+    if (mins < 1440) return `~${(mins / 60).toFixed(1)} Hours`;
+    return `~${(mins / 1440).toFixed(1)} Days`;
+}
+
+export async function getCalibratedProjection(token: any) {
+    const historyMap = await redis.hgetall('caller_history');
+    const calls = Object.values(historyMap).map((v: any) => JSON.parse(v)).filter((c: any) => c.finalized && c.peakPct !== undefined);
+
+    const scoreBand = 15;   
+    const similar = calls.filter((c: any) =>
+        Math.abs((c.score ?? 50) - (token.score ?? token.totalScore ?? 50)) <= scoreBand
+    );
+
+    if (similar.length >= 8) {
+        const sortedPct = similar.map((c: any) => c.peakPct).sort((a: number, b: number) => a - b);
+        const sortedTime = similar.map((c: any) => c.peakAtMs).sort((a: number, b: number) => a - b);
+        const p25 = sortedPct[Math.floor(sortedPct.length * 0.25)];
+        const p75 = sortedPct[Math.floor(sortedPct.length * 0.75)];
+        const medianTimeMs = sortedTime[Math.floor(sortedTime.length * 0.5)];
+
+        return {
+            target: `+${Math.max(0, p25).toFixed(0)}% to +${Math.max(p25 + 1, p75).toFixed(0)}%`,
+            timeframe: humanizeMs(medianTimeMs),
+            volatility: `Calibrated (${similar.length} past alerts)`,
+            sampleSize: similar.length,
+            rawLow: Math.max(0, p25),
+            rawHigh: Math.max(p25 + 1, p75),
+            rawTimeMins: medianTimeMs / 60000
+        };
+    }
+
+    // fallback: not enough data yet — say so honestly instead of inventing numbers
+    const score = token.score ?? token.totalScore ?? 50;
+    const liq = token.liquidity || 5000;
+    const mom = token.priceChangeM5 || 10;
+    const age = token.ageMins || 10;
+
+    let baseMultiplier = (score / 100) * 4.5; 
+    let liqMultiplier = Math.max(0.5, 20000 / Math.max(liq, 1000)); 
+    let momMultiplier = 1 + (Math.min(mom, 300) / 100); 
+
+    let minPeak = baseMultiplier * liqMultiplier * momMultiplier * 100;
+    let maxPeak = minPeak * 1.5; 
+
+    if (minPeak > 5000) minPeak = 3500;
+    if (maxPeak > 10000) maxPeak = 7000;
+    if (minPeak < 20) { minPeak = 20; maxPeak = 50; }
+
+    let timeframe = "1 - 4 Hours";
+    let rawTimeMins = 120;
+    if (age < 15 && mom > 50) { timeframe = "10 - 30 Minutes"; rawTimeMins = 20; }
+    else if (age < 60) { timeframe = "30 - 90 Minutes"; rawTimeMins = 60; }
+    else if (liq > 50000) { timeframe = "12 - 24 Hours"; rawTimeMins = 720; }
+
+    return {
+        target: `+${Math.floor(minPeak).toLocaleString()}% to +${Math.floor(maxPeak).toLocaleString()}%`,
+        timeframe,
+        volatility: 'Preliminary Estimate (Building History)',
+        sampleSize: similar.length,
+        rawLow: minPeak,
+        rawHigh: maxPeak,
+        rawTimeMins
+    };
 }
 
 export async function startCoinCaller(bot: any) {
@@ -61,7 +136,6 @@ export async function startCoinCaller(bot: any) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
-                // Standard filter
                 let matchingTokens = tokens.filter(t => 
                     t.totalScore >= filters.minScore &&
                     t.ageMins <= filters.maxAgeMins &&
@@ -88,7 +162,7 @@ export async function startCoinCaller(bot: any) {
                         (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= relaxedFilters.minPctChange && t.priceChangeM5 <= relaxedFilters.maxPctChange)) &&
                         ((t.sourceQuality !== 'onchain-only' && t.volume >= relaxedFilters.minVolume24h) || 
                          (t.sourceQuality === 'onchain-only' && t.liquidity >= relaxedFilters.minLiquidity)) &&
-                        t.liquidity >= relaxedFilters.minLiquidity &&
+                        t.liquidity >= filters.minLiquidity &&
                         (!relaxedFilters.blockMev || t.breakdown.mevRisk >= 0)
                     );
                     if (matchingTokens.length > 0) isRelaxed = true;
@@ -100,15 +174,17 @@ export async function startCoinCaller(bot: any) {
                     const alreadyAlerted = await redis.get(alertKey);
                     if (!alreadyAlerted) {
                         matchedToken = t;
-                        await redis.set(alertKey, '1', 'EX', 3600 * 24); 
+                        await redis.set(alertKey, '1', 'EX', 180); // 🟢 3 min lock instead of 24h
                         break; 
                     }
                 }
 
                 if (matchedToken) {
+                    const projection = await getCalibratedProjection(matchedToken);
                     const historyData = {
                         mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
-                        priceAtAlert: matchedToken.price, alertedAt: Date.now()
+                        priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
+                        predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
                     };
                     await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
 
@@ -124,11 +200,16 @@ export async function startCoinCaller(bot: any) {
                     } catch(e) {}
 
                     const relaxNote = isRelaxed ? `⚠️ <i>Filters temporarily relaxed to find this match.</i>\n\n` : '';
+                    const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
 
                     const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                                 `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
                                 relaxNote +
+                                `${projLabel}\n` +
+                                `• Confidence: <b>${projection.volatility}</b>\n` +
+                                `• Target Peak: <b>${projection.target}</b>\n` +
+                                `• Est. Timeframe: <b>${projection.timeframe}</b>\n\n` +
                                 `<b>Audit Trail:</b>\n` +
                                 `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
                                 historicalContext +
@@ -148,21 +229,13 @@ export async function startCoinCaller(bot: any) {
                     } catch (e: any) {}
                 }
             }
-        } catch (e) {
-        } finally {
+        } catch (e) {} finally {
             isScoring = false;
         }
     }, 15000);
 }
 
-export async function setUserCallerFilters(telegramId: string, updates: Partial<CallerFilters>) {
-    const current = await getUserCallerFilters(telegramId);
-    const updated = { ...current, ...updates };
-    await redis.set(`caller_filters:${telegramId}`, JSON.stringify(updated));
-    return updated;
-}
-
-// 🟢 FIX 5: Custom RugStatus fetch with 4000ms timeout & uncertain flag
+// 🟢 FIX 5: Extended RugCheck Status with 4000ms timeout
 async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
     try {
@@ -182,14 +255,14 @@ async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10
         await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
         return result;
     } catch (_) {
-        // Force retry next scan, don't poison cache with false safety
         return { isRug: false, top10Pct: 0, uncertain: true };
     }
 }
 
+
 // 🟢 PIPELINE 1: WebSocket Buffer (With Chunking)
 async function fetchRecentNewMints() {
-    const rawMints = getRecentNewMints().slice(0, 60);
+    const rawMints = getRecentNewMints().slice(0, 60) as any[]; // 🟢 FIX: safely cast as any[]
     if (rawMints.length === 0) return [];
 
     const enrichedTokens: any[] = [];
@@ -207,7 +280,8 @@ async function fetchRecentNewMints() {
                     mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"),
                     volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
                     priceChangeH1: pair.priceChange?.h1 || 0, pairCreatedAt: pair.pairCreatedAt || Date.now(),
-                    socials: pair.info?.socials || [], sourceQuality: 'dexscreener'
+                    socials: pair.info?.socials || [], sourceQuality: 'dexscreener',
+                    creatorWallet: rawMints.find((m: any) => m.mint === pair.baseToken.address)?.creator || ''
                 });
             });
         }
@@ -240,7 +314,8 @@ async function fetchRecentNewMints() {
                         volume: realSolReserves * cachedSolUsdPrice * 2, 
                         liquidity: virtualSolReserves * cachedSolUsdPrice,
                         priceChangeM5: 0, pairCreatedAt: rawMints.find((m: any) => m.mint === mint)?.firstSeenAt || Date.now(),
-                        socials: [], sourceQuality: 'onchain-only'
+                        socials: [], sourceQuality: 'onchain-only',
+                        creatorWallet: rawMints.find((m: any) => m.mint === mint)?.creator || ''
                     });
                 });
             }));
@@ -249,7 +324,7 @@ async function fetchRecentNewMints() {
     return enrichedTokens;
 }
 
-// 🟢 PIPELINE 2: Direct Pump.fun API (Fix 1: V3 URL)
+// 🟢 PIPELINE 2: Direct Pump.fun API (Fix 1: V3 URL & Parallelized Chunks)
 async function fetchFreshPumpTokens() {
     try {
         const res = await axios.get('https://frontend-api-v3.pump.fun/coins?offset=0&limit=60&sort=created_timestamp&order=DESC&includeNsfw=false', { timeout: 3500, headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -286,7 +361,10 @@ async function fetchFreshPumpTokens() {
             }
         }
         return enrichedTokens;
-    } catch (_) { return []; }
+    } catch (e: any) {
+        console.warn('[CALLER] pump-fallback pipeline failed:', e.message);
+        return [];
+    }
 }
 
 async function fetchFreshViaRest() {
@@ -305,7 +383,10 @@ async function fetchFreshViaRest() {
             volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
             pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [], sourceQuality: 'rest-fallback'
         })).filter((t: any) => (now - t.pairCreatedAt) < 30 * 60 * 1000); 
-    } catch (_) { return []; }
+    } catch (e: any) {
+        console.warn('[CALLER] rest-fallback pipeline failed:', e.message);
+        return [];
+    }
 }
 
 async function fetchTrendingPairs() {
@@ -322,7 +403,10 @@ async function fetchTrendingPairs() {
             volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
             pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
         }));
-    } catch (_) { return []; }
+    } catch (e: any) {
+        console.warn('[CALLER] trending pipeline failed:', e.message);
+        return [];
+    }
 }
 
 async function fetchBoostedPairs() {
@@ -339,7 +423,10 @@ async function fetchBoostedPairs() {
             volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
             pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
         }));
-    } catch (_) { return []; }
+    } catch (e: any) {
+        console.warn('[CALLER] boosted pipeline failed:', e.message);
+        return [];
+    }
 }
 
 export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean }> {
@@ -436,20 +523,18 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
     if (cached) return JSON.parse(cached);
 
     try {
-        // Find how many tokens 0.1 SOL buys first
-        const buyQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&slippageBps=50`).catch(() => null);
+        const buyQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`).catch(() => null);
         
         if (!buyQuote?.data?.outAmount) {
-            const result = { sellable: true, estimatedTaxPct: 0 }; // Unknown ≠ honeypot
+            const result = { sellable: true, estimatedTaxPct: 0 }; 
             await redis.set(cacheKey, JSON.stringify(result), 'EX', 120);
             return result;
         }
 
-        // Quote selling that exact amount of tokens back
-        const sellQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&slippageBps=50`).catch(() => null);
+        const sellQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
 
         if (!sellQuote?.data?.outAmount) {
-            const result = { sellable: true, estimatedTaxPct: 0 }; // Unknown ≠ honeypot
+            const result = { sellable: true, estimatedTaxPct: 0 }; 
             await redis.set(cacheKey, JSON.stringify(result), 'EX', 120);
             return result;
         }
@@ -459,7 +544,7 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
         await redis.set(cacheKey, JSON.stringify(result), 'EX', 300);
         return result;
     } catch (_) {
-        return { sellable: true, estimatedTaxPct: 0 }; // Fail safe
+        return { sellable: true, estimatedTaxPct: 0 }; 
     }
 }
 
@@ -487,7 +572,6 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     if (stats.ageMins < 60) score += 30; 
     else if (stats.ageMins < 180) score += 15;
 
-    // 🟢 FIX 6: Use Real Observed Vol if available
     const activeVol = stats.observedVol && stats.observedVol > stats.volume24h ? stats.observedVol : stats.volume24h;
     reasons.push(`💰 Vol: $${(activeVol/1000).toFixed(1)}k`);
     if (activeVol > 100000) score += 25; 
@@ -516,10 +600,10 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     if (stats.hasSocials) { score += 10; reasons.push(`🌐 Socials present`); }
 
     if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
-    if (stats.uncertain) { score -= 15; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); }
+    if (stats.uncertain) { score -= 5; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); } // 🟢 FIX 2: softened to -5
 
     if (stats.sourceQuality === 'onchain-only') {
-        score -= 8;
+        score -= 4; // 🟢 FIX 2: softened to -4
         reasons.push(`⛓️ Unindexed (early, unverified)`);
     }
 
@@ -588,7 +672,7 @@ export async function scoreTokens() {
 
         const needsFix = uniquePairs.filter(p => (p.liquidity === 0 || p.volume === 0) && p.mint.toLowerCase().endsWith('pump'));
 
-        // 🟢 FIX 3: Parallelize NeedsFix Array via chunking
+        // 🟢 FIX 3: Parallelized NeedsFix Array Chunking
         if (needsFix.length > 0) {
             const chunks = chunkArray(needsFix, 100);
             await Promise.all(chunks.map(async (chunk) => {
@@ -619,6 +703,9 @@ export async function scoreTokens() {
             const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
             const observedVolStr = await redis.get(`observed_vol:${pair.mint}`);
             
+            const { checkRecentMevActivity } = await import('./price.service.js');
+            const hasMev = await checkRecentMevActivity(pair.mint);
+
             const stats: TokenStats = {
                 ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
                 volume24h: pair.volume,
@@ -632,11 +719,11 @@ export async function scoreTokens() {
             };
 
             const { score, reasons } = computeTokenScore(stats);
-            return { pair, stats, score, reasons, isRug, top10Pct };
+            return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
         }));
 
-        // Funnel cutoff: Only spend expensive RPC/Jupiter queries on tokens that already score >= 40
-        const passedStage1 = stage1Scored.filter(t => t.score >= 40).sort((a,b) => b.score - a.score);
+        // 🟢 FIX 2: Lower Stage-1 Cutoff to 25 to allow unindexed tokens to enrich
+        const passedStage1 = stage1Scored.filter(t => t.score >= 25).sort((a,b) => b.score - a.score);
 
         // STAGE 2: Deep Verification (Expensive signals)
         const fullyScored = await Promise.all(passedStage1.slice(0, 20).map(async (t) => {
@@ -648,7 +735,7 @@ export async function scoreTokens() {
             }
 
             const [devRep, lpLock, velocity] = await Promise.all([
-                getDevReputation(t.pair.creatorWallet || ''), // Passed in from modified upstream trackNewMint
+                getDevReputation(t.pair.creatorWallet || ''), 
                 checkLpLockStatus(t.pair.mint),
                 trackHolderVelocity(t.pair.mint)
             ]);
@@ -671,12 +758,12 @@ export async function scoreTokens() {
                 totalScore: Math.max(0, concentrationAdjustedScore), 
                 ageMins: t.stats.ageMins, 
                 reasons: finalScoreRes.reasons, 
-                breakdown: { mevRisk: t.isRug || !sellability.sellable ? -100 : 0 } 
+                breakdown: { mevRisk: t.isRug || !sellability.sellable || t.hasMev ? -100 : 0 } 
             };
         }));
 
-        // Re-merge fully scored with the ones that failed stage 1
-        const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 40).map(t => ({
+        // 🟢 FIX 2: Re-merge fully scored with the ones below 25
+        const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 25).map(t => ({
             ...t.pair, totalScore: t.score, ageMins: t.stats.ageMins, reasons: t.reasons, breakdown: { mevRisk: t.isRug ? -100 : 0 }
         }))].sort((a, b) => b.totalScore - a.totalScore);
 
@@ -690,9 +777,7 @@ export async function scoreTokens() {
 
 let isScoring = false;
 
-// 🟢 Authentic Hit Rate & Peak Evaluator Job
 export function startCallerEvaluator() {
-    // Sample every 5 minutes instead of only at 1h/6h/24h checkpoints
     setInterval(async () => {
         try {
             const historyMap = await redis.hgetall('caller_history');
@@ -707,7 +792,6 @@ export function startCallerEvaluator() {
                 if (ageMs > 24 * 3600000) { 
                     data.finalized = true; 
                     
-                    // Check if it landed inside our predicted window
                     if (data.peakPct !== undefined && data.predictedRangeLow !== undefined && data.predictedRangeHigh !== undefined) {
                         const withinRange = data.peakPct >= data.predictedRangeLow && data.peakPct <= data.predictedRangeHigh;
                         await redis.incr(withinRange ? 'projection:hits' : 'projection:misses');
@@ -722,84 +806,13 @@ export function startCallerEvaluator() {
 
                 if (currentPrice > 0) {
                     const pctChange = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
-                    
-                    // Actually record when the peak happens!
                     if (data.peakPct === undefined || pctChange > data.peakPct) {
                         data.peakPct = pctChange;
-                        data.peakAtMs = ageMs; // real time-to-peak
+                        data.peakAtMs = ageMs; 
                     }
-                    
                     await redis.hset('caller_history', mint, JSON.stringify(data));
                 }
             }
         } catch (_) {}
     }, 5 * 60 * 1000);
-}
-
-export function humanizeMs(ms: number): string {
-    const mins = ms / 60000;
-    if (mins < 60) return `~${Math.round(mins)} Minutes`;
-    if (mins < 1440) return `~${(mins / 60).toFixed(1)} Hours`;
-    return `~${(mins / 1440).toFixed(1)} Days`;
-}
-
-export async function getCalibratedProjection(token: any) {
-    const historyMap = await redis.hgetall('caller_history');
-    const calls = Object.values(historyMap).map((v: any) => JSON.parse(v)).filter((c: any) => c.finalized && c.peakPct !== undefined);
-
-    const scoreBand = 15;   
-    const similar = calls.filter((c: any) =>
-        Math.abs((c.score ?? 50) - (token.score ?? token.totalScore ?? 50)) <= scoreBand
-    );
-
-    if (similar.length >= 8) {
-        const sortedPct = similar.map((c: any) => c.peakPct).sort((a: number, b: number) => a - b);
-        const sortedTime = similar.map((c: any) => c.peakAtMs).sort((a: number, b: number) => a - b);
-        const p25 = sortedPct[Math.floor(sortedPct.length * 0.25)];
-        const p75 = sortedPct[Math.floor(sortedPct.length * 0.75)];
-        const medianTimeMs = sortedTime[Math.floor(sortedTime.length * 0.5)];
-
-        return {
-            target: `+${Math.max(0, p25).toFixed(0)}% to +${Math.max(p25 + 1, p75).toFixed(0)}%`,
-            timeframe: humanizeMs(medianTimeMs),
-            volatility: `Calibrated (${similar.length} past alerts)`,
-            sampleSize: similar.length,
-            rawLow: Math.max(0, p25),
-            rawHigh: Math.max(p25 + 1, p75),
-            rawTimeMins: medianTimeMs / 60000
-        };
-    }
-
-    // fallback: not enough data yet — say so honestly instead of inventing numbers
-    const score = token.score ?? token.totalScore ?? 50;
-    const liq = token.liquidity || 5000;
-    const mom = token.priceChangeM5 || 10;
-    const age = token.ageMins || 10;
-
-    let baseMultiplier = (score / 100) * 4.5; 
-    let liqMultiplier = Math.max(0.5, 20000 / Math.max(liq, 1000)); 
-    let momMultiplier = 1 + (Math.min(mom, 300) / 100); 
-
-    let minPeak = baseMultiplier * liqMultiplier * momMultiplier * 100;
-    let maxPeak = minPeak * 1.5; 
-
-    if (minPeak > 5000) minPeak = 3500;
-    if (maxPeak > 10000) maxPeak = 7000;
-    if (minPeak < 20) { minPeak = 20; maxPeak = 50; }
-
-    let timeframe = "1 - 4 Hours";
-    let rawTimeMins = 120;
-    if (age < 15 && mom > 50) { timeframe = "10 - 30 Minutes"; rawTimeMins = 20; }
-    else if (age < 60) { timeframe = "30 - 90 Minutes"; rawTimeMins = 60; }
-    else if (liq > 50000) { timeframe = "12 - 24 Hours"; rawTimeMins = 720; }
-
-    return {
-        target: `+${Math.floor(minPeak).toLocaleString()}% to +${Math.floor(maxPeak).toLocaleString()}%`,
-        timeframe,
-        volatility: 'Preliminary Estimate (Building History)',
-        sampleSize: similar.length,
-        rawLow: minPeak,
-        rawHigh: maxPeak,
-        rawTimeMins
-    };
 }

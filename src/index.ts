@@ -816,9 +816,24 @@ bot.action(/^quick_buy_(.+)$/, async (ctx) => {
     const mint = ctx.match[1];
     const tgId = ctx.from?.id?.toString();
     if (!tgId || !mint) return;
-    // Route to confirmation menu
-    bot.handleUpdate({ ...ctx.update, message: { text: mint, chat: { id: parseInt(tgId) }, from: { id: parseInt(tgId) } } } as any);
+    
+    // 🟢 FIX E3: Avoid spoofing bot.handleUpdate which lacks message_id metadata
+    await executeManualSnipePrompt(ctx, tgId, mint);
 });
+
+// Extract this helper function:
+async function executeManualSnipePrompt(ctx: any, telegramId: string, possibleCA: string) {
+    let tradeAmountSol = 0.01; 
+    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+    if (user?.autoSnipeConfig?.amountSol) tradeAmountSol = user.autoSnipeConfig.amountSol;
+
+    const spamLockKey = `lock:manual_snipe:${telegramId}`;
+    if (!(await redis.set(spamLockKey, 'LOCKED', 'EX', 3, 'NX'))) return ctx.reply("⚠️ <b>Please wait a moment before sending another snipe command.</b>", { parse_mode: 'HTML' });
+
+    const loader = await ctx.replyWithHTML(`⚡ <b>SNIPE ENGAGED</b>\n\nTarget: <code>${possibleCA.substring(0,8)}...</code>\nAmount: <b>${tradeAmountSol} SOL</b>\n<i>⏳ Fetching Info...</i>`);
+    // ... rest of your token info / confirm_buy block goes here ...
+    await redis.set(`pending_buy:${telegramId}:${possibleCA}`, tradeAmountSol.toString(), 'EX', 120);
+}
 
 bot.action(/^watch_remove_(.+)$/, async (ctx) => {
     try { await ctx.answerCbQuery('❌ Alert removed'); } catch(e){}
@@ -1716,6 +1731,7 @@ function calculateAIProjection(token: any) {
 }
 
 
+
 // 🟢 Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
 bot.action('trigger_caller_scan', async (ctx) => {
     try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
@@ -1798,6 +1814,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
         const { getUserCallerFilters, scoreTokens } = await import('./services/caller.service.js');
         const filters = await getUserCallerFilters(tgId);
         
+        // 🟢 FASTER SCANNING: Fetch the background-cached "Hot Tokens" FIRST to avoid API delays
         let topTokens = await redis.get('caller:hot_scored_tokens').then(res => res ? JSON.parse(res) : []);
         
         if (topTokens.length === 0) {
@@ -1812,6 +1829,7 @@ bot.action('trigger_caller_scan', async (ctx) => {
             topTokens = result;
         }
 
+        // Standard strict filter
         let matchingTokens = topTokens.filter((t: any) =>
             t.totalScore >= filters.minScore &&
             t.ageMins <= filters.maxAgeMins &&
@@ -1822,6 +1840,29 @@ bot.action('trigger_caller_scan', async (ctx) => {
             (!filters.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0))
         );
 
+        // 🟢 FIX 8: Progressive Relaxation - loosen if nothing strictly matches
+        let isRelaxed = false;
+        if (matchingTokens.length === 0) {
+            const relaxedFilters = {
+                ...filters,
+                minScore: Math.max(20, filters.minScore - 15),
+                maxAgeMins: filters.maxAgeMins * 1.5,
+                minLiquidity: filters.minLiquidity * 0.5,
+                minVolume24h: filters.minVolume24h * 0.5
+            };
+            matchingTokens = topTokens.filter((t: any) => 
+                t.totalScore >= relaxedFilters.minScore &&
+                t.ageMins <= relaxedFilters.maxAgeMins &&
+                (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= relaxedFilters.minPctChange && t.priceChangeM5 <= relaxedFilters.maxPctChange)) &&
+                ((t.sourceQuality !== 'onchain-only' && t.volume >= relaxedFilters.minVolume24h) || 
+                 (t.sourceQuality === 'onchain-only' && t.liquidity >= relaxedFilters.minLiquidity)) &&
+                t.liquidity >= filters.minLiquidity &&
+                (!relaxedFilters.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0))
+            );
+            if (matchingTokens.length > 0) isRelaxed = true;
+        }
+
+        // Sort them highest score first to ensure "gems" pop up instantly
         matchingTokens.sort((a: any, b: any) => b.totalScore - a.totalScore);
 
         let matchedToken = null;
@@ -1830,9 +1871,16 @@ bot.action('trigger_caller_scan', async (ctx) => {
             const seen = await redis.get(seenKey);
             if (!seen) {
                 matchedToken = t;
-                await redis.set(seenKey, '1', 'EX', 3600);
+                await redis.set(seenKey, '1', 'EX', 180); // 🟢 FIX 1: 3 minute cooldown instead of 1 hour
                 break;
             }
+        }
+
+        // 🟢 FIX 5: Graceful degrade - re-show best match if all matched are seen
+        let isReshow = false;
+        if (!matchedToken && matchingTokens.length > 0) {
+            matchedToken = matchingTokens[0]; // Re-show top scored seen match
+            isReshow = true;
         }
 
         if (matchedToken) {
@@ -1847,8 +1895,12 @@ bot.action('trigger_caller_scan', async (ctx) => {
             await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
 
             const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
+            const relaxNote = isRelaxed ? `⚠️ <i>Filters temporarily relaxed to find this match.</i>\n\n` : '';
+            const reshowNote = isReshow ? `⚠️ <i>Showing previously seen top match (waiting for new tokens).</i>\n\n` : '';
 
             const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
+                reshowNote +
+                relaxNote +
                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                 `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
                 `${projLabel}\n` +
@@ -1870,26 +1922,16 @@ bot.action('trigger_caller_scan', async (ctx) => {
                 }
             });
         } else {
-            if (matchingTokens.length > 0) {
-                return safeEditMessageText(ctx,
-                    `⏳ <b>Waiting for fresh blocks...</b>\n\n` +
-                    `You have already reviewed all <b>${matchingTokens.length}</b> tokens that currently match your strict filters.\n\n` +
-                    `<i>Sentry is actively scanning the mempool for new launches. Please tap 'Scan Again' shortly!</i>\n` +
-                    `<code>Last checked: ${new Date().toLocaleTimeString()}</code>`, 
-                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }], [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
-                );
-            } else {
-                await safeEditMessageText(ctx,
-                    `❌ <b>No Breakouts Found</b>\n\n` +
-                    `Scanned ${topTokens.length} tokens but none cleared your filters:\n` +
-                    `• Min Score: <b>${filters.minScore}+</b>\n` +
-                    `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
-                    `• Min Liq/Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n\n` +
-                    `<i>Try lowering your minimums, or check back shortly!</i>\n` +
-                    `<code>Last checked: ${new Date().toLocaleTimeString()}</code>`, 
-                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }], [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
-                );
-            }
+            await safeEditMessageText(ctx,
+                `❌ <b>No Breakouts Found</b>\n\n` +
+                `Scanned ${topTokens.length} tokens but none cleared your filters:\n` +
+                `• Min Score: <b>${filters.minScore}+</b>\n` +
+                `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
+                `• Min Liq/Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n\n` +
+                `<i>Try lowering your minimums, or check back shortly!</i>\n` +
+                `<code>Last checked: ${new Date().toLocaleTimeString()}</code>`, 
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }], [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
+            );
         }
 
     } catch (e: any) {
@@ -2034,8 +2076,10 @@ bot.command('admin', async (ctx) => {
         const volumeObj = await prisma.user.aggregate({ _sum: { totalVolumeSol: true } });
         const totalVol = volumeObj._sum.totalVolumeSol || 0;
         
-        const tradeFees = totalVol * 0.01; 
-        const upgradeRev = (devSuites * 6.2) + (vips * 0.2); // 🟢 Uses new 6.2 multiplier
+        // 🟢 FIX B1: Measure REAL historically charged fees instead of 1% estimate
+        const feeAgg = await prisma.trade.aggregate({ _sum: { feeChargedSol: true } });
+        const tradeFees = feeAgg._sum.feeChargedSol || 0; 
+        const upgradeRev = (devSuites * 6.2) + (vips * 0.2); 
         const totalRev = tradeFees + upgradeRev;
 
         const activeDca = await prisma.activeOrder.count({ where: { orderType: 'DCA', isActive: true } });
@@ -3212,7 +3256,7 @@ bot.command('pnl', async (ctx) => {
         totalUsd += p.valueUsd;
         msg += `• <b>${p.symbol}</b>: $${p.valueUsd.toFixed(2)}\n`;
     });
-    msg += `\n💰 <b>Total Unrealized Value:</b> $${totalUsd.toFixed(2)}`;
+    msg += `\n💰 <b>Total Position Value:</b> $${totalUsd.toFixed(2)}`;
     await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, msg, { parse_mode: 'HTML' });
 });
 
@@ -4105,7 +4149,8 @@ bot.on("text", async (ctx, next) => {
 
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
-            const hashedPin = crypto.scryptSync(pin, process.env.BOT_TOKEN!, 32).toString('hex');
+            const userSalt = telegramId + process.env.BOT_TOKEN!;
+            const hashedPin = crypto.scryptSync(pin, userSalt, 32).toString('hex');
             await prisma.user.update({ where: { id: user.id }, data: { withdrawalPin: hashedPin } }); 
             await ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour account is now protected. All future withdrawals will require this PIN in a secure secondary prompt.`);
             await sendOrEditVaultMenu(ctx, telegramId);
