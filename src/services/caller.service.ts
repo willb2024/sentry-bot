@@ -17,14 +17,6 @@ export interface CallerFilters {
     blockMev: boolean;
 }
 
-export function getScoreBand(score: number): { label: string; sizeSol: string; risk: string } {
-    if (score < 40) return { label: '🔵 Too Early', sizeSol: '0.01-0.02 SOL (watchlist only)', risk: 'Unproven — no real signal yet' };
-    if (score < 60) return { label: '🟡 Speculative', sizeSol: '0.02-0.05 SOL', risk: 'Weak confirmation — lottery-ticket sizing' };
-    if (score < 75) return { label: '🟠 Developing', sizeSol: '0.05-0.1 SOL', risk: 'Multiple signals confirmed' };
-    return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
-}
-
-// 🟢 FIX 7: Relaxed Default Filters to expand pool size
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
     const defaultFilters: CallerFilters = {
         isActive: false,
@@ -65,6 +57,13 @@ export function humanizeMs(ms: number): string {
     return `~${(mins / 1440).toFixed(1)} Days`;
 }
 
+export function getScoreBand(score: number): { label: string; sizeSol: string; risk: string } {
+    if (score < 40) return { label: '🔵 Too Early', sizeSol: '0.01-0.02 SOL (watchlist only)', risk: 'Unproven — no real signal yet' };
+    if (score < 60) return { label: '🟡 Speculative', sizeSol: '0.02-0.05 SOL', risk: 'Weak confirmation — lottery-ticket sizing' };
+    if (score < 75) return { label: '🟠 Developing', sizeSol: '0.05-0.1 SOL', risk: 'Multiple signals confirmed' };
+    return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
+}
+
 export async function getCalibratedProjection(token: any) {
     const historyMap = await redis.hgetall('caller_history');
     const calls = Object.values(historyMap).map((v: any) => JSON.parse(v)).filter((c: any) => c.finalized && c.peakPct !== undefined);
@@ -92,7 +91,6 @@ export async function getCalibratedProjection(token: any) {
         };
     }
 
-    // fallback: not enough data yet — say so honestly instead of inventing numbers
     const score = token.score ?? token.totalScore ?? 50;
     const liq = token.liquidity || 5000;
     const mom = token.priceChangeM5 || 10;
@@ -126,6 +124,8 @@ export async function getCalibratedProjection(token: any) {
     };
 }
 
+
+
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Scanning distinct pipelines every 15 seconds.");
 
@@ -153,24 +153,22 @@ export async function startCoinCaller(bot: any) {
                     (!filters.blockMev || t.breakdown.mevRisk >= 0)
                 );
 
-                // 🟢 FIX 8: Progressive Relaxation
-               // 🟢 FIX: Progressive Relaxation with Hard Safety Floors
-               let isRelaxed = false;
-               if (matchingTokens.length === 0) {
-                   const relaxedFilters = {
-                       ...filters,
-                       minScore: Math.max(35, filters.minScore - 15), // 🟢 FIX 4: floor raised from 20 → 35
-                       maxAgeMins: filters.maxAgeMins * 1.5,
-                       minLiquidity: Math.max(1500, filters.minLiquidity * 0.5), // 🟢 FIX 4: never drop below $1.5k liquidity
-                       minVolume24h: filters.minVolume24h * 0.5
-                   };
+                let isRelaxed = false;
+                if (matchingTokens.length === 0) {
+                    const relaxedFilters = {
+                        ...filters,
+                        minScore: Math.max(35, filters.minScore - 15), 
+                        maxAgeMins: filters.maxAgeMins * 1.5,
+                        minLiquidity: Math.max(1500, filters.minLiquidity * 0.5), 
+                        minVolume24h: filters.minVolume24h * 0.5
+                    };
                     matchingTokens = tokens.filter(t => 
                         t.totalScore >= relaxedFilters.minScore &&
                         t.ageMins <= relaxedFilters.maxAgeMins &&
                         (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= relaxedFilters.minPctChange && t.priceChangeM5 <= relaxedFilters.maxPctChange)) &&
                         ((t.sourceQuality !== 'onchain-only' && t.volume >= relaxedFilters.minVolume24h) || 
                          (t.sourceQuality === 'onchain-only' && t.liquidity >= relaxedFilters.minLiquidity)) &&
-                        t.liquidity >= filters.minLiquidity &&
+                        t.liquidity >= relaxedFilters.minLiquidity &&
                         (!relaxedFilters.blockMev || t.breakdown.mevRisk >= 0)
                     );
                     if (matchingTokens.length > 0) isRelaxed = true;
@@ -182,7 +180,7 @@ export async function startCoinCaller(bot: any) {
                     const alreadyAlerted = await redis.get(alertKey);
                     if (!alreadyAlerted) {
                         matchedToken = t;
-                        await redis.set(alertKey, '1', 'EX', 180); // 🟢 3 min lock instead of 24h
+                        await redis.set(alertKey, '1', 'EX', 180); 
                         break; 
                     }
                 }
@@ -209,8 +207,8 @@ export async function startCoinCaller(bot: any) {
 
                     const relaxNote = isRelaxed ? `⚠️ <i>Filters temporarily relaxed to find this match.</i>\n\n` : '';
                     const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
+                    const band = getScoreBand(matchedToken.totalScore); 
 
-                    const band = getScoreBand(matchedToken.totalScore); // 🟢 FIX 2: Dynamic Banding
                     const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                                 `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
@@ -239,13 +237,13 @@ export async function startCoinCaller(bot: any) {
                     } catch (e: any) {}
                 }
             }
-        } catch (e) {} finally {
+        } catch (e) {
+        } finally {
             isScoring = false;
         }
     }, 15000);
 }
 
-// 🟢 FIX 5: Extended RugCheck Status with 4000ms timeout
 async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
     try {
@@ -269,32 +267,42 @@ async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10
     }
 }
 
+// 🟢 FIX: DEDICATED SAFE FETCHER (PREVENTS 429 API BANS)
+async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
+    if (mints.length === 0) return [];
+    const chunks = chunkArray(mints, 30);
+    const allPairs: any[] = [];
+    
+    for (const chunk of chunks) {
+        try {
+            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 });
+            if (res.data?.pairs) allPairs.push(...res.data.pairs);
+        } catch (e: any) {
+            // Silent fail to keep scanner moving
+        }
+        await new Promise(r => setTimeout(r, 250)); // Stagger to prevent 429s
+    }
+    return allPairs;
+}
 
-// 🟢 PIPELINE 1: WebSocket Buffer (With Chunking)
+// 🟢 PIPELINE 1: WebSocket Buffer
 async function fetchRecentNewMints() {
-    const rawMints = getRecentNewMints().slice(0, 60) as any[]; // 🟢 FIX: safely cast as any[]
+    const rawMints = getRecentNewMints().slice(0, 60) as any[];
     if (rawMints.length === 0) return [];
 
     const enrichedTokens: any[] = [];
     const mintsOnly = rawMints.map((m: any) => m.mint);
     
-    const chunks = chunkArray(mintsOnly, 30);
-    const results = await Promise.all(chunks.map(chunk =>
-        axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3000 }).catch(() => null)
-    ));
+    const dsPairs = await safeDexScreenerFetch(mintsOnly);
 
-    results.forEach(res => {
-        if (res?.data?.pairs) {
-            res.data.pairs.forEach((pair: any) => {
-                enrichedTokens.push({
-                    mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"),
-                    volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
-                    priceChangeH1: pair.priceChange?.h1 || 0, pairCreatedAt: pair.pairCreatedAt || Date.now(),
-                    socials: pair.info?.socials || [], sourceQuality: 'dexscreener',
-                    creatorWallet: rawMints.find((m: any) => m.mint === pair.baseToken.address)?.creator || ''
-                });
-            });
-        }
+    dsPairs.forEach((pair: any) => {
+        enrichedTokens.push({
+            mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"),
+            volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
+            priceChangeH1: pair.priceChange?.h1 || 0, pairCreatedAt: pair.pairCreatedAt || Date.now(),
+            socials: pair.info?.socials || [], sourceQuality: 'dexscreener',
+            creatorWallet: rawMints.find((m: any) => m.mint === pair.baseToken.address)?.creator || ''
+        });
     });
 
     const missing = mintsOnly.filter(m => !enrichedTokens.some(e => e.mint === m));
@@ -306,35 +314,36 @@ async function fetchRecentNewMints() {
             const { cachedSolUsdPrice } = await import('./grpc.service.js');
 
             const missingChunks = chunkArray(missing, 100);
-            await Promise.all(missingChunks.map(async (mintChunk) => {
+            for (const mintChunk of missingChunks) {
                 const pdaChunk = mintChunk.map(m => new PublicKey(getBondingCurveAddress(m)));
                 const accInfos = await connection.getMultipleAccountsInfo(pdaChunk).catch(() => null);
-                if (!accInfos) return;
-
-                accInfos.forEach((accInfo, idx) => {
-                    if (!accInfo?.data) return;
-                    const mint = mintChunk[idx];
-                    const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-                    const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
-                    const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
-                    
-                    enrichedTokens.push({
-                        mint, symbol: rawMints.find((m: any) => m.mint === mint)?.symbol || 'UNKNOWN',
-                        price: decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice,
-                        volume: realSolReserves * cachedSolUsdPrice * 2, 
-                        liquidity: virtualSolReserves * cachedSolUsdPrice,
-                        priceChangeM5: 0, pairCreatedAt: rawMints.find((m: any) => m.mint === mint)?.firstSeenAt || Date.now(),
-                        socials: [], sourceQuality: 'onchain-only',
-                        creatorWallet: rawMints.find((m: any) => m.mint === mint)?.creator || ''
+                if (accInfos) {
+                    accInfos.forEach((accInfo, idx) => {
+                        if (!accInfo?.data) return;
+                        const mint = mintChunk[idx];
+                        const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+                        const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
+                        const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
+                        
+                        enrichedTokens.push({
+                            mint, symbol: rawMints.find((m: any) => m.mint === mint)?.symbol || 'UNKNOWN',
+                            price: decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice,
+                            volume: realSolReserves * cachedSolUsdPrice * 2, 
+                            liquidity: virtualSolReserves * cachedSolUsdPrice,
+                            priceChangeM5: 0, pairCreatedAt: rawMints.find((m: any) => m.mint === mint)?.firstSeenAt || Date.now(),
+                            socials: [], sourceQuality: 'onchain-only',
+                            creatorWallet: rawMints.find((m: any) => m.mint === mint)?.creator || ''
+                        });
                     });
-                });
-            }));
+                }
+                await new Promise(r => setTimeout(r, 200)); 
+            }
         } catch (e: any) {}
     }
     return enrichedTokens;
 }
 
-// 🟢 PIPELINE 2: Direct Pump.fun API (Fix 1: V3 URL & Parallelized Chunks)
+// 🟢 PIPELINE 2: Direct Pump.fun API 
 async function fetchFreshPumpTokens() {
     try {
         const res = await axios.get('https://frontend-api-v3.pump.fun/coins?offset=0&limit=60&sort=created_timestamp&order=DESC&includeNsfw=false', { timeout: 3500, headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -344,10 +353,8 @@ async function fetchFreshPumpTokens() {
         const recentPump = res.data.filter((c: any) => c.created_timestamp && (now - c.created_timestamp) < 20 * 60 * 1000);
         if (recentPump.length === 0) return [];
 
-        const chunks = chunkArray(recentPump.map((c: any) => c.mint), 30);
-        const dsPairs: any[] = [];
-        const results = await Promise.all(chunks.map(chunk => axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3000 }).catch(() => null)));
-        results.forEach(r => { if (r?.data?.pairs) dsPairs.push(...r.data.pairs); });
+        const mintsOnly = recentPump.map((c: any) => c.mint);
+        const dsPairs = await safeDexScreenerFetch(mintsOnly);
         
         const enrichedTokens: any[] = [];
         for (const coin of recentPump) {
@@ -372,7 +379,6 @@ async function fetchFreshPumpTokens() {
         }
         return enrichedTokens;
     } catch (e: any) {
-        console.warn('[CALLER] pump-fallback pipeline failed:', e.message);
         return [];
     }
 }
@@ -382,10 +388,7 @@ async function fetchFreshViaRest() {
         const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
         if (!res.data) return [];
         const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 60);
-        const chunks = chunkArray(mints, 30);
-        const dsPairs: any[] = [];
-        const results = await Promise.all(chunks.map(chunk => axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3000 }).catch(() => null)));
-        results.forEach(r => { if (r?.data?.pairs) dsPairs.push(...r.data.pairs); });
+        const dsPairs = await safeDexScreenerFetch(mints);
 
         const now = Date.now();
         return dsPairs.map((pair: any) => ({
@@ -394,27 +397,6 @@ async function fetchFreshViaRest() {
             pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [], sourceQuality: 'rest-fallback'
         })).filter((t: any) => (now - t.pairCreatedAt) < 30 * 60 * 1000); 
     } catch (e: any) {
-        console.warn('[CALLER] rest-fallback pipeline failed:', e.message);
-        return [];
-    }
-}
-
-async function fetchTrendingPairs() {
-    try {
-        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
-        if (!res.data) return [];
-        const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 60);
-        const chunks = chunkArray(mints, 30);
-        const dsPairs: any[] = [];
-        const results = await Promise.all(chunks.map(chunk => axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3000 }).catch(() => null)));
-        results.forEach(r => { if (r?.data?.pairs) dsPairs.push(...r.data.pairs); });
-        return dsPairs.map((pair: any) => ({
-            mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"),
-            volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
-            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
-        }));
-    } catch (e: any) {
-        console.warn('[CALLER] trending pipeline failed:', e.message);
         return [];
     }
 }
@@ -424,17 +406,13 @@ async function fetchBoostedPairs() {
         const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 3000 });
         if (!res.data) return [];
         const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 60);
-        const chunks = chunkArray(mints, 30);
-        const dsPairs: any[] = [];
-        const results = await Promise.all(chunks.map(chunk => axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3000 }).catch(() => null)));
-        results.forEach(r => { if (r?.data?.pairs) dsPairs.push(...r.data.pairs); });
+        const dsPairs = await safeDexScreenerFetch(mints);
         return dsPairs.map((pair: any) => ({
             mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"),
             volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
             pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
         }));
     } catch (e: any) {
-        console.warn('[CALLER] boosted pipeline failed:', e.message);
         return [];
     }
 }
@@ -448,8 +426,6 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
     try {
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
-        
-        // 🟢 FIX 3: cap to 8 sigs (was 20) and PARALLELIZE the parsed-tx fetches
         const sigs = await connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 8 }).catch(() => []);
 
         const txs = await Promise.all(
@@ -531,14 +507,13 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
     }
 }
 
-// 🟢 FIX 4: Probing Realistic Size (0.1 SOL equivalent)
 export async function simulateSellability(mintAddress: string, probeSolSize: number = 0.1): Promise<{ sellable: boolean; estimatedTaxPct: number }> {
     const cacheKey = `sellable:${mintAddress}`;
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
     try {
-        const buyQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`).catch(() => null);
+        const buyQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`).catch(() => null);
         
         if (!buyQuote?.data?.outAmount) {
             const result = { sellable: true, estimatedTaxPct: 0 }; 
@@ -546,7 +521,7 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
             return result;
         }
 
-        const sellQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
+        const sellQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
 
         if (!sellQuote?.data?.outAmount) {
             const result = { sellable: true, estimatedTaxPct: 0 }; 
@@ -615,10 +590,10 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     if (stats.hasSocials) { score += 10; reasons.push(`🌐 Socials present`); }
 
     if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
-    if (stats.uncertain) { score -= 5; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); } // 🟢 FIX 2: softened to -5
+    if (stats.uncertain) { score -= 5; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); } 
 
     if (stats.sourceQuality === 'onchain-only') {
-        score -= 4; // 🟢 FIX 2: softened to -4
+        score -= 4; 
         reasons.push(`⛓️ Unindexed (early, unverified)`);
     }
 
@@ -658,14 +633,14 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     return { score: Math.max(0, score), reasons };
 }
 
+// 🟢 MERGE AND SCORE (WITH SEQUENTIAL/STAGGERED API PROTECTION)
 export async function scoreTokens() {
     try {
-        const [newMints, pumpFallback, restFallback, boosted] = await Promise.all([
-            fetchRecentNewMints(),
-            fetchFreshPumpTokens(),
-            fetchFreshViaRest().catch(()=>[]),
-            fetchBoostedPairs().catch(()=>[])
-        ]);
+        // Run staggered rather than Promise.all to completely avoid 429 DDoS bans
+        const newMints = await fetchRecentNewMints();
+        const pumpFallback = await fetchFreshPumpTokens();
+        const restFallback = await fetchFreshViaRest();
+        const boosted = await fetchBoostedPairs();
 
         const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...boosted];
         
@@ -687,61 +662,71 @@ export async function scoreTokens() {
 
         const needsFix = uniquePairs.filter(p => (p.liquidity === 0 || p.volume === 0) && p.mint.toLowerCase().endsWith('pump'));
 
-        // 🟢 FIX 3: Parallelized NeedsFix Array Chunking
         if (needsFix.length > 0) {
             const chunks = chunkArray(needsFix, 100);
-            await Promise.all(chunks.map(async (chunk) => {
+            for (const chunk of chunks) {
                 const pdas = chunk.map(p => new PublicKey(getBondingCurveAddress(p.mint)));
                 const accInfos = await connection.getMultipleAccountsInfo(pdas).catch(() => null);
-                if (!accInfos) return;
-                
-                accInfos.forEach((acc, idx) => {
-                    if (acc?.data) {
-                        const buf = Buffer.isBuffer(acc.data) ? acc.data : Buffer.from(acc.data);
-                        if (buf.length >= 40) {
-                            const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
-                            const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
-                            const liqUsd = virtualSolReserves * cachedSolUsdPrice;
-                            const volUsd = realSolReserves * cachedSolUsdPrice * 2; 
+                if (accInfos) {
+                    accInfos.forEach((acc, idx) => {
+                        if (acc?.data) {
+                            const buf = Buffer.isBuffer(acc.data) ? acc.data : Buffer.from(acc.data);
+                            if (buf.length >= 40) {
+                                const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
+                                const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
+                                
+                                const liqUsd = virtualSolReserves * cachedSolUsdPrice;
+                                const volUsd = realSolReserves * cachedSolUsdPrice * 2; 
 
-                            if (chunk[idx].liquidity === 0) chunk[idx].liquidity = liqUsd;
-                            if (chunk[idx].volume === 0) chunk[idx].volume = volUsd;
-                            if (chunk[idx].price === 0) chunk[idx].price = decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice;
+                                if (chunk[idx].liquidity === 0) chunk[idx].liquidity = liqUsd;
+                                if (chunk[idx].volume === 0) chunk[idx].volume = volUsd;
+                                if (chunk[idx].price === 0) {
+                                    chunk[idx].price = decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice;
+                                }
+                            }
                         }
-                    }
-                });
-            }));
+                    });
+                }
+                await new Promise(r => setTimeout(r, 250)); // Safely stagger RPC queries
+            }
         }
 
-        // STAGE 1: Basic Scoring (Cheap signals)
-        const stage1Scored = await Promise.all(uniquePairs.map(async (pair) => {
-            const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
-            const observedVolStr = await redis.get(`observed_vol:${pair.mint}`);
-            
-            const { checkRecentMevActivity } = await import('./price.service.js');
-            const hasMev = await checkRecentMevActivity(pair.mint);
+        // STAGE 1: Basic Scoring (Staggered to protect RugCheck limits)
+        const stage1Scored: any[] = [];
+        const stage1Chunks = chunkArray(uniquePairs, 15);
+        
+        for (const chunk of stage1Chunks) {
+            const results = await Promise.all(chunk.map(async (pair) => {
+                const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
+                const observedVolStr = await redis.get(`observed_vol:${pair.mint}`);
+                
+                const { checkRecentMevActivity } = await import('./price.service.js');
+                const hasMev = await checkRecentMevActivity(pair.mint);
 
-            const stats: TokenStats = {
-                ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
-                volume24h: pair.volume,
-                liquidity: pair.liquidity,
-                priceChangeM5: pair.priceChangeM5,
-                hasSocials: pair.socials.length > 0,
-                isRug,
-                uncertain,
-                sourceQuality: pair.sourceQuality,
-                observedVol: observedVolStr ? parseFloat(observedVolStr) : undefined
-            };
+                const stats: TokenStats = {
+                    ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
+                    volume24h: pair.volume,
+                    liquidity: pair.liquidity,
+                    priceChangeM5: pair.priceChangeM5,
+                    hasSocials: pair.socials.length > 0,
+                    isRug,
+                    uncertain,
+                    sourceQuality: pair.sourceQuality,
+                    observedVol: observedVolStr ? parseFloat(observedVolStr) : undefined
+                };
 
-            const { score, reasons } = computeTokenScore(stats);
-            return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
-        }));
+                const { score, reasons } = computeTokenScore(stats);
+                return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
+            }));
+            stage1Scored.push(...results);
+            await new Promise(r => setTimeout(r, 200)); 
+        }
 
-        // 🟢 FIX 2: Lower Stage-1 Cutoff to 25 to allow unindexed tokens to enrich
         const passedStage1 = stage1Scored.filter(t => t.score >= 25).sort((a,b) => b.score - a.score);
 
-        // STAGE 2: Deep Verification (Expensive signals)
-        const fullyScored = await Promise.all(passedStage1.slice(0, 20).map(async (t) => {
+        // STAGE 2: Deep Verification (Staggered to protect RPC/Jup)
+        const fullyScored: any[] = [];
+        for (const t of passedStage1.slice(0, 20)) {
             const stillOnCurve = t.pair.mint.toLowerCase().endsWith('pump') && t.pair.sourceQuality !== 'dexscreener' && t.pair.sourceQuality !== 'pump-fallback';
             
             let sellability = { sellable: true, estimatedTaxPct: 0 };
@@ -768,16 +753,16 @@ export async function scoreTokens() {
                 finalScoreRes.reasons.push(`⚠️ Top 10 holders own ${t.top10Pct.toFixed(1)}%`);
             }
 
-            return { 
+            fullyScored.push({ 
                 ...t.pair, 
                 totalScore: Math.max(0, concentrationAdjustedScore), 
                 ageMins: t.stats.ageMins, 
                 reasons: finalScoreRes.reasons, 
                 breakdown: { mevRisk: t.isRug || !sellability.sellable || t.hasMev ? -100 : 0 } 
-            };
-        }));
+            });
+            await new Promise(r => setTimeout(r, 100)); // Safely stagger deep analytics
+        }
 
-        // 🟢 FIX 2: Re-merge fully scored with the ones below 25
         const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 25).map(t => ({
             ...t.pair, totalScore: t.score, ageMins: t.stats.ageMins, reasons: t.reasons, breakdown: { mevRisk: t.isRug ? -100 : 0 }
         }))].sort((a, b) => b.totalScore - a.totalScore);
