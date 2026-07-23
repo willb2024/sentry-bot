@@ -45,7 +45,7 @@ export async function getTokenRiskDetails(tokenMint: string): Promise<{
         if (cached) return JSON.parse(cached);
 
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
-            { signal: AbortSignal.timeout(4000) }); // 🟢 FIX C2: 4000ms Timeout
+            { signal: AbortSignal.timeout(4000) }); // 🟢 Extended timeout to 4000ms
         if (!res.ok) return { isUnsafe: false, isHoneypot: false, isMintable: false, top10Pct: 0, score: 0 };
 
         const data = (await res.json()) as any;
@@ -81,11 +81,21 @@ export function decodePumpCurvePrice(base64Data: string): number {
 
 export async function checkRecentMevActivity(tokenMint: string): Promise<boolean> {
     try {
+        const { rpcLimiter } = await import('./caller.service.js');
         const pubkey = new PublicKey(tokenMint);
-        const sigs = await connection.getSignaturesForAddress(pubkey, { limit: 10 });
-        const txs = await connection.getParsedTransactions(
-            sigs.map((s: any) => s.signature),
-            { maxSupportedTransactionVersion: 0 }
+        
+        // 🟢 Rate limit MEV signatures query to prevent Helius 429 Bans
+        const sigs = await rpcLimiter.run(() =>
+            connection.getSignaturesForAddress(pubkey, { limit: 10 }).catch(() => [])
+        );
+        if (sigs.length === 0) return false;
+
+        // 🟢 Rate limit MEV parsed transactions query
+        const txs = await rpcLimiter.run(() =>
+            connection.getParsedTransactions(
+                sigs.map((s: any) => s.signature),
+                { maxSupportedTransactionVersion: 0 }
+            ).catch(() => [])
         );
 
         const buyerMap: Record<string, number[]> = {};
@@ -98,9 +108,10 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
             buyerMap[buyer].push(blockIdx);
         });
 
-        // 🟢 FIX C1: Genuine Sandwich Detection (Buy -> Target -> Sell in same block/wallet)
+        // 🟢 Genuine Sandwich Detection (Buy -> Target -> Sell in same block/wallet)
         for (const [buyer, slots] of Object.entries(buyerMap)) {
             if (slots.length >= 2) {
+                // If a wallet traded 3 times in 2 blocks, or Buy+Sell in same block, flag as sandwich
                 if (slots[slots.length - 1] - slots[0] <= 1 && slots.length >= 3) return true; 
             }
         }
@@ -117,7 +128,7 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         const cached = await redis.get(key);
         if (cached !== null) return cached === 'true';
 
-        // 🟢 FIX C2: Allow 4000ms for heavy load
+        // 🟢 Extended 4000ms timeout for heavy API load
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
             { signal: AbortSignal.timeout(4000) });
 
@@ -141,7 +152,8 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
         return isUnsafe;
     } catch (_) {
-        // 🟢 FIX C2: Do not poison the cache with a false "safe" if API times out
+        // 🟢 Do NOT poison the cache with a false "safe" if API times out.
+        // Return false to allow the trade, but do not cache it so it retries later.
         return false;
     }
 }

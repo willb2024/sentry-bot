@@ -12,7 +12,7 @@ class RpcRateLimiter {
     private inFlight = 0;
     private readonly maxPerSecond: number;
 
-    constructor(maxPerSecond = 8) {
+    constructor(maxPerSecond = 4) { // 🟢 FIX: Lowered to 4 req/s to protect free tier
         this.maxPerSecond = maxPerSecond;
         setInterval(() => this.drain(), Math.ceil(1000 / this.maxPerSecond));
     }
@@ -29,7 +29,7 @@ class RpcRateLimiter {
     }
 }
 
-export const rpcLimiter = new RpcRateLimiter(8); // Capped at 8 req/sec
+export const rpcLimiter = new RpcRateLimiter(4); // 🟢 Capped at 4 req/sec
 
 export interface CallerFilters {
     isActive: boolean;
@@ -592,7 +592,7 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
             return result;
         }
 
-        const sellQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
+        const sellQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
 
         if (!sellQuote?.data?.outAmount) {
             const result = { sellable: true, estimatedTaxPct: 0 }; 
@@ -766,7 +766,7 @@ export async function scoreTokens() {
 
         // STAGE 1: Basic Scoring (Staggered to protect RugCheck limits)
         const stage1Scored: any[] = [];
-        // 🟢 FIX 2: Lowered chunk size to 8
+        // 🟢 FIX: Lowered chunk size to 8
         const stage1Chunks = chunkArray(uniquePairs, 8);
         
         for (const chunk of stage1Chunks) {
@@ -774,7 +774,7 @@ export async function scoreTokens() {
                 const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
                 const observedVolStr = await redis.get(`observed_vol:${pair.mint}`);
                 
-                // 🟢 FIX 1: Cache MEV check results for 5 minutes
+                // 🟢 FIX: Cache MEV check results for 5 minutes
                 const mevCacheKey = `mev_check:${pair.mint}`;
                 const cachedMev = await redis.get(mevCacheKey);
                 let hasMev = false;
@@ -802,7 +802,7 @@ export async function scoreTokens() {
                 return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
             }));
             stage1Scored.push(...results);
-            // 🟢 FIX 2: Increased delay to 600ms
+            // 🟢 FIX: Increased delay to 600ms
             await new Promise(r => setTimeout(r, 600)); 
         }
 
@@ -844,7 +844,7 @@ export async function scoreTokens() {
                 reasons: finalScoreRes.reasons, 
                 breakdown: { mevRisk: t.isRug || !sellability.sellable || t.hasMev ? -100 : 0 } 
             });
-            // 🟢 FIX 3: Increased stagger delay to 400ms
+            // 🟢 FIX: Increased stagger delay to 400ms
             await new Promise(r => setTimeout(r, 400)); 
         }
 
