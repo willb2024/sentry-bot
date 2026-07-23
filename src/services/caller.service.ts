@@ -17,6 +17,13 @@ export interface CallerFilters {
     blockMev: boolean;
 }
 
+export function getScoreBand(score: number): { label: string; sizeSol: string; risk: string } {
+    if (score < 40) return { label: '🔵 Too Early', sizeSol: '0.01-0.02 SOL (watchlist only)', risk: 'Unproven — no real signal yet' };
+    if (score < 60) return { label: '🟡 Speculative', sizeSol: '0.02-0.05 SOL', risk: 'Weak confirmation — lottery-ticket sizing' };
+    if (score < 75) return { label: '🟠 Developing', sizeSol: '0.05-0.1 SOL', risk: 'Multiple signals confirmed' };
+    return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
+}
+
 // 🟢 FIX 7: Relaxed Default Filters to expand pool size
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
     const defaultFilters: CallerFilters = {
@@ -147,15 +154,16 @@ export async function startCoinCaller(bot: any) {
                 );
 
                 // 🟢 FIX 8: Progressive Relaxation
-                let isRelaxed = false;
-                if (matchingTokens.length === 0) {
-                    const relaxedFilters = {
-                        ...filters,
-                        minScore: Math.max(20, filters.minScore - 15),
-                        maxAgeMins: filters.maxAgeMins * 1.5,
-                        minLiquidity: filters.minLiquidity * 0.5,
-                        minVolume24h: filters.minVolume24h * 0.5
-                    };
+               // 🟢 FIX: Progressive Relaxation with Hard Safety Floors
+               let isRelaxed = false;
+               if (matchingTokens.length === 0) {
+                   const relaxedFilters = {
+                       ...filters,
+                       minScore: Math.max(35, filters.minScore - 15), // 🟢 FIX 4: floor raised from 20 → 35
+                       maxAgeMins: filters.maxAgeMins * 1.5,
+                       minLiquidity: Math.max(1500, filters.minLiquidity * 0.5), // 🟢 FIX 4: never drop below $1.5k liquidity
+                       minVolume24h: filters.minVolume24h * 0.5
+                   };
                     matchingTokens = tokens.filter(t => 
                         t.totalScore >= relaxedFilters.minScore &&
                         t.ageMins <= relaxedFilters.maxAgeMins &&
@@ -202,9 +210,11 @@ export async function startCoinCaller(bot: any) {
                     const relaxNote = isRelaxed ? `⚠️ <i>Filters temporarily relaxed to find this match.</i>\n\n` : '';
                     const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
 
+                    const band = getScoreBand(matchedToken.totalScore); // 🟢 FIX 2: Dynamic Banding
                     const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
                                 `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
                                 `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
+                                `${band.label} — Suggested size: <b>${band.sizeSol}</b>\n<i>${band.risk}</i>\n\n` +
                                 relaxNote +
                                 `${projLabel}\n` +
                                 `• Confidence: <b>${projection.volatility}</b>\n` +
@@ -438,11 +448,16 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
     try {
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
-        const sigs = await connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 20 }).catch(() => []);
+        
+        // 🟢 FIX 3: cap to 8 sigs (was 20) and PARALLELIZE the parsed-tx fetches
+        const sigs = await connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 8 }).catch(() => []);
+
+        const txs = await Promise.all(
+            sigs.map(s => connection.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null))
+        );
 
         let rugCount = 0;
-        for (const sig of sigs) {
-            const tx = await connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null);
+        for (const tx of txs) {
             if (!tx?.meta) continue;
             const pre = tx.meta.preBalances?.[0] || 0;
             const post = tx.meta.postBalances?.[0] || 0;
