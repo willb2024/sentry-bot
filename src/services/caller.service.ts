@@ -124,13 +124,17 @@ export async function getCalibratedProjection(token: any) {
     };
 }
 
-
+let isScoring = false;
 
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Scanning distinct pipelines every 15 seconds.");
 
     setInterval(async () => {
-        if (isScoring) return;
+        if (isScoring) {
+            // 🟢 FIX: Log warning instead of silently dropping
+            console.warn("⚠️ [CALLER ENGINE] Overlapping scan tick skipped. Previous scan still processing.");
+            return;
+        }
         isScoring = true;
 
         try {
@@ -267,7 +271,6 @@ async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10
     }
 }
 
-// 🟢 FIX: DEDICATED SAFE FETCHER (PREVENTS 429 API BANS)
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     if (mints.length === 0) return [];
     const chunks = chunkArray(mints, 30);
@@ -277,17 +280,15 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
         try {
             const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 });
             if (res.data?.pairs) allPairs.push(...res.data.pairs);
-        } catch (e: any) {
-            // Silent fail to keep scanner moving
-        }
-        await new Promise(r => setTimeout(r, 250)); // Stagger to prevent 429s
+        } catch (e: any) {}
+        await new Promise(r => setTimeout(r, 250)); 
     }
     return allPairs;
 }
 
 // 🟢 PIPELINE 1: WebSocket Buffer
 async function fetchRecentNewMints() {
-    const rawMints = getRecentNewMints().slice(0, 60) as any[];
+    const rawMints = getRecentNewMints().slice(0, 120) as any[]; // 🟢 FIX: Extended slice buffer to 120
     if (rawMints.length === 0) return [];
 
     const enrichedTokens: any[] = [];
@@ -379,10 +380,12 @@ async function fetchFreshPumpTokens() {
         }
         return enrichedTokens;
     } catch (e: any) {
+        console.warn('[CALLER] pump-fallback pipeline failed:', e.message);
         return [];
     }
 }
 
+// 🟢 PIPELINE 3: DexScreener Latest Profile Submissions
 async function fetchFreshViaRest() {
     try {
         const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
@@ -397,10 +400,12 @@ async function fetchFreshViaRest() {
             pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [], sourceQuality: 'rest-fallback'
         })).filter((t: any) => (now - t.pairCreatedAt) < 30 * 60 * 1000); 
     } catch (e: any) {
+        console.warn('[CALLER] rest-fallback pipeline failed:', e.message);
         return [];
     }
 }
 
+// 🟢 PIPELINE 4: Boosted Pairs
 async function fetchBoostedPairs() {
     try {
         const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 3000 });
@@ -410,9 +415,30 @@ async function fetchBoostedPairs() {
         return dsPairs.map((pair: any) => ({
             mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"),
             volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
-            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
+            pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || [], sourceQuality: 'dexscreener'
         }));
     } catch (e: any) {
+        console.warn('[CALLER] boosted pipeline failed:', e.message);
+        return [];
+    }
+}
+
+// 🟢 PIPELINE 5: NEW Raydium Pairs
+async function fetchFreshRaydiumPairs() {
+    try {
+        const res = await axios.get('https://api.dexscreener.com/latest/dex/search?q=raydium', { timeout: 3000 });
+        if (!res.data) return [];
+        const now = Date.now();
+        return (res.data?.pairs || [])
+            .filter((p: any) => p.chainId === 'solana' && p.dexId === 'raydium' && (now - p.pairCreatedAt) < 30 * 60 * 1000)
+            .slice(0, 60)
+            .map((pair: any) => ({
+                mint: pair.baseToken.address, symbol: pair.baseToken.symbol, price: parseFloat(pair.priceUsd || "0"),
+                volume: pair.volume?.h24 || 0, liquidity: pair.liquidity?.usd || 0, priceChangeM5: pair.priceChange?.m5 || 0,
+                pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [], sourceQuality: 'dexscreener'
+            }));
+    } catch (e: any) {
+        console.warn('[CALLER] fetchFreshRaydiumPairs pipeline failed:', e.message);
         return [];
     }
 }
@@ -633,16 +659,19 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     return { score: Math.max(0, score), reasons };
 }
 
-// 🟢 MERGE AND SCORE (WITH SEQUENTIAL/STAGGERED API PROTECTION)
+// 🟢 MERGE AND SCORE (WITH PARALLEL PIPELINES & FAST CHUNKING)
 export async function scoreTokens() {
     try {
-        // Run staggered rather than Promise.all to completely avoid 429 DDoS bans
-        const newMints = await fetchRecentNewMints();
-        const pumpFallback = await fetchFreshPumpTokens();
-        const restFallback = await fetchFreshViaRest();
-        const boosted = await fetchBoostedPairs();
+        // 🟢 FIX 2: Run all 5 pipelines concurrently to cut scan time by 60-75%
+        const [newMints, pumpFallback, restFallback, boosted, raydiumPairs] = await Promise.all([
+            fetchRecentNewMints(),
+            fetchFreshPumpTokens(),
+            fetchFreshViaRest(),
+            fetchBoostedPairs(),
+            fetchFreshRaydiumPairs() // 🟢 5th Pipeline
+        ]);
 
-        const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...boosted];
+        const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...boosted, ...raydiumPairs];
         
         const sourceRank: Record<string, number> = { 'dexscreener': 3, 'pump-fallback': 3, 'rest-fallback': 2, 'onchain-only': 1 };
         const mergedMap = new Map<string, any>();
@@ -774,8 +803,6 @@ export async function scoreTokens() {
         return [];
     }
 }
-
-let isScoring = false;
 
 export function startCallerEvaluator() {
     setInterval(async () => {

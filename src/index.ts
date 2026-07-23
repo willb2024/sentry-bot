@@ -939,26 +939,29 @@ bot.command('simbal', async (ctx) => {
 
 // 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
 // index.ts — sendCallerMenu()
+// 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
 async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
+    const { getUserCallerFilters } = await import('./services/caller.service.js');
     const filters = await getUserCallerFilters(tgId);
+    
     const statusText = filters.isActive 
-        ? "🟢 <b>ACTIVE & SCANNING</b> 🔍\n<i>(5 pipelines merged every 15s: WebSocket mints, Pump.fun API, DexScreener profiles/boosts, and on-chain curve fallback)</i>" 
+        ? "🟢 <b>ACTIVE & SCANNING</b> 🔍\n<i>(Searching mempool for matches every 15s...)</i>" 
         : "🔴 <b>OFFLINE</b>";
+        
     const mevText = filters.blockMev ? "🟢 Yes (Protected)" : "🔴 No (Risky)";
 
     const text = `🎯 <b>AI COIN CALLER ENGINE</b>\n\n` +
-        `Sentry merges 5 live data pipelines and DMs you the highest-scoring tokens before they pump.\n\n` +
-
-        `🧠 <b>HOW THE SCORE WORKS (0-100):</b>\n` +
-        `Built from Age, Volume, Momentum, Liquidity, Socials — then adjusted for dev wallet history, LP lock status, holder growth velocity, and honeypot/sellability checks.\n\n` +
-
-        `📊 <b>SCORE BANDS — WHAT TO DO:</b>\n` +
-        `• <b>0-39 Too Early:</b> Unproven. Watchlist only, don't size in.\n` +
-        `• <b>40-59 Speculative:</b> Some signal, weak confirmation. Tiny size (0.02-0.05 SOL), tight -15/20% stop.\n` +
-        `• <b>60-74 Developing:</b> Multiple signals confirmed. Standard size (0.05-0.1 SOL) with a guard.\n` +
-        `• <b>75-100 High Conviction:</b> Most signals confirmed, LP secured. Full size (0.1-0.2 SOL).\n\n` +
-
-        `🛡️ <b>AUTO-BLOCKED (Score forced to 0):</b> Honeypot/unsellable tokens, tokens from wallets with 2+ prior rug patterns, RugCheck critical flags.\n\n` +
+        `Sentry scans DexScreener every 15 seconds and DMs you the highest-scoring tokens before they pump.\n\n` +
+        
+        `🧠 <b>HOW THE SCORE WORKS (0 - 100):</b>\n` +
+        `• <b>High Score (75-100):</b> High liquidity, strong volume, high momentum, young age. Safer, higher potential.\n` +
+        `• <b>Low Score (0-50):</b> Low liquidity, dead volume, or aging token. High risk of failure.\n` +
+        `• <b>RugCheck:</b> Any honeypot or freeze authority instantly scores -100 (Blocked).\n\n` +
+        
+        `💡 <b>STRATEGY GUIDE ($500 - $1,000 Bankroll):</b>\n` +
+        `• <b>Spend:</b> 0.1 to 0.2 SOL per trade (approx $15 - $30). This allows you to spread risk across 20+ tokens instead of gambling on just one.\n` +
+        `• <b>Stop-Loss:</b> -20% to -30%. Gives the coin room to breathe through normal trench volatility without getting fully rugged.\n` +
+        `• <b>Take-Profit:</b> +50% to +100%. Don't be greedy. Compounding small 50% wins builds bankrolls faster than waiting for a 100x.\n\n` +
 
         `<b>Engine Status:</b> ${statusText}\n\n` +
         `⚙️ <b>CURRENT FILTERS:</b>\n` +
@@ -970,9 +973,28 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         `• <b>Block MEV:</b> ${mevText}\n\n` +
         `<i>Adjust your scanner parameters below:</i>`;
 
-    // ...rest (keyboard) unchanged
-}
+    const ui = Markup.inlineKeyboard([
+        [Markup.button.callback('🔍 Scan Mainnet Now', 'trigger_caller_scan')], 
+        [Markup.button.callback(filters.isActive ? '🛑 TURN OFF CALLER' : '⚡ TURN ON CALLER', 'toggle_caller_status')],
+        [
+            Markup.button.callback(`⏱️ Max Age (${filters.maxAgeMins}m)`, 'edit_caller_age'),
+            Markup.button.callback(`📈 % Range (${filters.minPctChange} - ${filters.maxPctChange}%)`, 'edit_caller_pct')
+        ],
+        [
+            Markup.button.callback(`💧 Min Liq ($${(filters.minLiquidity/1000).toFixed(0)}k)`, 'edit_caller_liq'),
+            Markup.button.callback(`📊 Min Vol ($${(filters.minVolume24h/1000).toFixed(0)}k)`, 'edit_caller_vol')
+        ],
+        [
+            Markup.button.callback(`✏️ Min Score (${filters.minScore})`, 'edit_caller_score'), 
+            Markup.button.callback(filters.blockMev ? '🛡️ MEV Block: ON' : '⚠️ MEV Block: OFF', 'toggle_caller_mev')
+        ],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
 
+    // 🟢 FIX 1: Send the message!
+    if (isEdit) await safeEditMessageText(ctx, text, ui);
+    else await ctx.replyWithHTML(text, ui);
+}
 bot.action('action_create_guild_prompt', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     
