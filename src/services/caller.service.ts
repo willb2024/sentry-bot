@@ -6,6 +6,31 @@ import { getRecentNewMints } from './grpc.service.js';
 
 const prisma = new PrismaClient();
 
+// 🟢 FIX: Global RPC Rate Limiter to prevent Helius 429 bans
+class RpcRateLimiter {
+    private queue: (() => void)[] = [];
+    private inFlight = 0;
+    private readonly maxPerSecond: number;
+
+    constructor(maxPerSecond = 8) {
+        this.maxPerSecond = maxPerSecond;
+        setInterval(() => this.drain(), Math.ceil(1000 / this.maxPerSecond));
+    }
+
+    private drain() {
+        if (this.queue.length === 0) return;
+        const next = this.queue.shift();
+        if (next) next();
+    }
+
+    async run<T>(fn: () => Promise<T>): Promise<T> {
+        await new Promise<void>(resolve => this.queue.push(resolve));
+        return fn();
+    }
+}
+
+export const rpcLimiter = new RpcRateLimiter(8); // Capped at 8 req/sec
+
 export interface CallerFilters {
     isActive: boolean;
     minScore: number;
@@ -17,7 +42,6 @@ export interface CallerFilters {
     blockMev: boolean;
 }
 
-// 🟢 Relaxed Default Filters to expand pool size
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
     const defaultFilters: CallerFilters = {
         isActive: false,
@@ -157,7 +181,6 @@ export async function startCoinCaller(bot: any) {
                     (!filters.blockMev || t.breakdown.mevRisk >= 0)
                 );
 
-                // 🟢 Progressive Relaxation with Hard Safety Floors
                 let isRelaxed = false;
                 if (matchingTokens.length === 0) {
                     const relaxedFilters = {
@@ -249,7 +272,6 @@ export async function startCoinCaller(bot: any) {
     }, 15000);
 }
 
-// 🟢 Extended RugCheck Status with 4000ms timeout
 async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
     try {
@@ -273,7 +295,6 @@ async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10
     }
 }
 
-// 🟢 DEDICATED SAFE FETCHER (PREVENTS 429 API BANS)
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     if (mints.length === 0) return [];
     const chunks = chunkArray(mints, 30);
@@ -428,7 +449,7 @@ async function fetchBoostedPairs() {
     }
 }
 
-// 🟢 PIPELINE 5: NEW Raydium Pairs
+// 🟢 PIPELINE 5: Raydium Pairs
 async function fetchFreshRaydiumPairs() {
     try {
         const res = await axios.get('https://api.dexscreener.com/latest/dex/search?q=raydium', { timeout: 3000 });
@@ -458,15 +479,17 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
         
-        // Parallelized fetches for speed
-        const sigs = await connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 8 }).catch(() => []);
-
-        const txs = await Promise.all(
-            sigs.map(s => connection.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null))
+        // 🟢 FIX: Wrap in rate limiter
+        const sigs = await rpcLimiter.run(() =>
+            connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 8 }).catch(() => [])
         );
 
+        // 🟢 FIX: Sequential loop with limiter instead of explosive Promise.all
         let rugCount = 0;
-        for (const tx of txs) {
+        for (const s of sigs) {
+            const tx = await rpcLimiter.run(() =>
+                connection.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null)
+            );
             if (!tx?.meta) continue;
             const pre = tx.meta.preBalances?.[0] || 0;
             const post = tx.meta.postBalances?.[0] || 0;
@@ -496,12 +519,22 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
     try {
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
-        const largest = await connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null);
+        
+        // 🟢 FIX: Wrap in rate limiter
+        const largest = await rpcLimiter.run(() => 
+            connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
+        );
+        
         if (!largest || !largest.value[0]) return { locked: false, burned: false, lockPct: 0 };
 
         const top = largest.value[0];
-        const ownerInfo = await connection.getParsedAccountInfo(top.address);
-        const owner = (ownerInfo.value?.data as any)?.parsed?.info?.owner || '';
+        
+        // 🟢 FIX: Wrap in rate limiter
+        const ownerInfo = await rpcLimiter.run(() => 
+            connection.getParsedAccountInfo(top.address).catch(()=>null)
+        );
+        
+        const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner || '';
         const pct = (top.uiAmount || 0) / (largest.value.reduce((s, v) => s + (v.uiAmount || 0), 0) || 1) * 100;
 
         const result = {
@@ -520,7 +553,12 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
     try {
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
-        const largest = await connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null);
+        
+        // 🟢 FIX: Wrap in rate limiter
+        const largest = await rpcLimiter.run(() => 
+            connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
+        );
+        
         if(!largest) return { growthRate: 0, uniqueBuyers5m: 0 };
         const currentCount = largest.value.filter(v => (v.uiAmount || 0) > 0).length;
 
@@ -554,7 +592,7 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
             return result;
         }
 
-        const sellQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
+        const sellQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
 
         if (!sellQuote?.data?.outAmount) {
             const result = { sellable: true, estimatedTaxPct: 0 }; 
@@ -728,7 +766,7 @@ export async function scoreTokens() {
 
         // STAGE 1: Basic Scoring (Staggered to protect RugCheck limits)
         const stage1Scored: any[] = [];
-        // 🟢 MEV / 429 FIX: Smaller chunk size to prevent API throttling
+        // 🟢 FIX 2: Lowered chunk size to 8
         const stage1Chunks = chunkArray(uniquePairs, 8);
         
         for (const chunk of stage1Chunks) {
@@ -736,7 +774,7 @@ export async function scoreTokens() {
                 const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
                 const observedVolStr = await redis.get(`observed_vol:${pair.mint}`);
                 
-                // 🟢 MEV / 429 FIX: 5 Minute Cache
+                // 🟢 FIX 1: Cache MEV check results for 5 minutes
                 const mevCacheKey = `mev_check:${pair.mint}`;
                 const cachedMev = await redis.get(mevCacheKey);
                 let hasMev = false;
@@ -764,7 +802,7 @@ export async function scoreTokens() {
                 return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
             }));
             stage1Scored.push(...results);
-            // 🟢 MEV / 429 FIX: Safely stagger Stage 1
+            // 🟢 FIX 2: Increased delay to 600ms
             await new Promise(r => setTimeout(r, 600)); 
         }
 
@@ -806,7 +844,7 @@ export async function scoreTokens() {
                 reasons: finalScoreRes.reasons, 
                 breakdown: { mevRisk: t.isRug || !sellability.sellable || t.hasMev ? -100 : 0 } 
             });
-            // 🟢 MEV / 429 FIX: Safely stagger deep analytics
+            // 🟢 FIX 3: Increased stagger delay to 400ms
             await new Promise(r => setTimeout(r, 400)); 
         }
 
