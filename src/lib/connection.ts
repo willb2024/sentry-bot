@@ -4,7 +4,14 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const HELIUS_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+const keys = [
+    process.env.HELIUS_API_KEY,
+    process.env.HELIUS_API_KEY_2,
+].filter(Boolean);
+
+let keyIndex = 0;
+const getHeliumUrl = () => `https://mainnet.helius-rpc.com/?api-key=${keys[keyIndex++ % keys.length]}`;
+const HELIUS_URL = getHeliumUrl();
 const BACKUP_URL = process.env.BACKUP_RPC_URL || "https://api.mainnet-beta.solana.com";
 
 const primaryConnection = new Connection(HELIUS_URL, 'confirmed');
