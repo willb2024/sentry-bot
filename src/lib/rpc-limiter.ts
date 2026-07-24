@@ -4,7 +4,8 @@ export class RpcRateLimiter {
     private queue: (() => void)[] = [];
     private readonly maxPerSecond: number;
 
-    constructor(maxPerSecond = 4) {
+    // 🟢 BOOTED TO 20 REQ/SEC FOR QUICKNODE
+    constructor(maxPerSecond = 20) {
         this.maxPerSecond = maxPerSecond;
         setInterval(() => this.drain(), Math.ceil(1000 / this.maxPerSecond));
     }
@@ -21,5 +22,5 @@ export class RpcRateLimiter {
     }
 }
 
-// 🟢 SINGLE SHARED INSTANCE
-export const rpcLimiter = new RpcRateLimiter(6);
+// 🟢 BOOTED TO 20 REQ/SEC FOR QUICKNODE
+export const rpcLimiter = new RpcRateLimiter(20);

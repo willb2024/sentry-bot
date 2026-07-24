@@ -4,17 +4,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const keys = [
-    process.env.HELIUS_API_KEY,
-    process.env.HELIUS_API_KEY_2,
-].filter(Boolean);
-
-let keyIndex = 0;
-const getHeliumUrl = () => `https://mainnet.helius-rpc.com/?api-key=${keys[keyIndex++ % keys.length]}`;
-const HELIUS_URL = getHeliumUrl();
+// 🟢 Uses the new QuickNode URL from your .env
+const PRIMARY_URL = process.env.PRIMARY_RPC_URL || process.env.PUBLIC_RPC_URL || "https://api.mainnet-beta.solana.com";
 const BACKUP_URL = process.env.BACKUP_RPC_URL || "https://api.mainnet-beta.solana.com";
 
-const primaryConnection = new Connection(HELIUS_URL, 'confirmed');
+const primaryConnection = new Connection(PRIMARY_URL, 'confirmed');
 const backupConnection = new Connection(BACKUP_URL, 'confirmed');
 
 const SYNC_SUBSCRIPTION_METHODS = new Set(['onAccountChange', 'onLogs', 'onProgramAccountChange', 'onSlotChange', 'onSignature', 'onRootChange']);
@@ -46,19 +40,15 @@ function recordPrimaryFailure() {
     }
 }
 
-// 🟢 SPEED FIX: Raised MAX concurrent RPCs drastically from 8 to 40
-const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 8);
+// 🟢 40 concurrent slots for instant sniper execution
+const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 40);
 let activeCount = 0;
 
-// 🟢 SPEED FIX: These NEVER wait in the queue — trade submission and blockhash must be instant
+// 🟢 These NEVER wait in any queue — trade submission must be instant
 const BYPASS_QUEUE_METHODS = new Set([
     'sendRawTransaction', 'sendTransaction', 'getLatestBlockhash',
     'getSignatureStatus', 'getBalance'
 ]);
-
-// 🚨 DRASTIC FIX: Global rate limiter applied to ALL Helius calls
-// Previous bypass queue allowed unlimited concurrent requests
-import { rpcLimiter } from './rpc-limiter.js';
 
 const waitQueueHigh: Array<() => void> = [];
 const waitQueueLow: Array<() => void> = [];
@@ -109,31 +99,28 @@ export const connection = new Proxy(primaryConnection, {
         return function (...args: any[]) {
             const isHighPriority = methodName.includes('sendRawTransaction') || methodName.includes('getLatestBlockhash');
 
-            // 🟢 FAST PATH: Skip the semaphore completely for hot-path methods
+            // 🟢 FAST PATH: Trades bypass all queues and hit the network instantly
             if (BYPASS_QUEUE_METHODS.has(methodName)) {
                 return (async () => {
-                    // 🟢 DRASTIC FIX: Rate limit even bypass methods
-                    return await rpcLimiter.run(async () => {
-                        if (isCircuitOpen()) {
-                            const backupValue = Reflect.get(backupConnection, prop);
-                            if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
-                        }
-                        try {
-                            const result = await value.apply(target, args);
-                            recordPrimarySuccess();
-                            return result;
-                        } catch (error: any) {
-                            recordPrimaryFailure();
-                            const backupValue = Reflect.get(backupConnection, prop);
-                            if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
-                            throw error;
-                        }
-                    });
+                    if (isCircuitOpen()) {
+                        const backupValue = Reflect.get(backupConnection, prop);
+                        if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
+                    }
+                    try {
+                        const result = await value.apply(target, args);
+                        recordPrimarySuccess();
+                        return result;
+                    } catch (error: any) {
+                        recordPrimaryFailure();
+                        const backupValue = Reflect.get(backupConnection, prop);
+                        if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
+                        throw error;
+                    }
                 })();
             }
 
-            // STANDARD PATH: Queue background tasks
-            return rpcLimiter.run(async () => withSlot(isHighPriority, async () => {
+            // STANDARD PATH: General concurrency limiter for non-trades
+            return withSlot(isHighPriority, async () => {
                 if (isCircuitOpen()) {
                     const backupValue = Reflect.get(backupConnection, prop);
                     if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
@@ -148,10 +135,9 @@ export const connection = new Proxy(primaryConnection, {
                     if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
                     throw error;
                 }
-            }));
+            });
         };
     }
 }) as unknown as Connection;
 
-// 🟢 COLD CONNECTION: Non-latency critical read paths
 export const coldConnection = backupConnection;
