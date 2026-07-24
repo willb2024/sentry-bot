@@ -884,8 +884,20 @@ export function startCallerEvaluator() {
                     continue; 
                 }
 
-                const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 3000 }).catch(() => null);
-                const currentPrice = parseFloat(res?.data?.pairs?.[0]?.priceUsd || "0");
+              // 🟢 FIX: Cache price checks for 60 seconds — was hitting DexScreener for every mint every tick
+const priceCacheKey = `caller_price:${mint}`;
+const cachedPrice = await redis.get(priceCacheKey);
+let currentPrice = 0;
+if (cachedPrice !== null) {
+    currentPrice = parseFloat(cachedPrice);
+} else {
+    const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 3000 }).catch(() => null);
+    currentPrice = parseFloat(res?.data?.pairs?.[0]?.priceUsd || "0");
+    if (currentPrice > 0) {
+        await redis.set(priceCacheKey, currentPrice.toString(), 'EX', 60);
+    }
+}
+                
 
                 if (currentPrice > 0) {
                     const pctChange = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
@@ -897,5 +909,5 @@ export function startCallerEvaluator() {
                 }
             }
         } catch (_) {}
-    }, 5 * 60 * 1000);
+    }, 10 * 60 * 1000);
 }
