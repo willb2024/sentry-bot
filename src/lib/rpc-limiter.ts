@@ -22,4 +22,4 @@ export class RpcRateLimiter {
     }
 }
 
-export const rpcLimiter = new RpcRateLimiter(4);
+export const rpcLimiter = new RpcRateLimiter(8);

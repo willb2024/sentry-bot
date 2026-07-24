@@ -40,7 +40,7 @@ function recordPrimaryFailure() {
 }
 
 // 🟢 SPEED FIX: Raised MAX concurrent RPCs drastically from 8 to 40
-const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 40);
+const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 10);
 let activeCount = 0;
 
 // 🟢 SPEED FIX: These NEVER wait in the queue — trade submission and blockhash must be instant
