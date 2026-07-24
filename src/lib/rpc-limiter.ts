@@ -2,7 +2,6 @@
 
 export class RpcRateLimiter {
     private queue: (() => void)[] = [];
-    private inFlight = 0;
     private readonly maxPerSecond: number;
 
     constructor(maxPerSecond = 4) {
@@ -22,4 +21,5 @@ export class RpcRateLimiter {
     }
 }
 
+// 🟢 SINGLE SHARED INSTANCE
 export const rpcLimiter = new RpcRateLimiter(6);

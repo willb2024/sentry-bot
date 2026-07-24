@@ -3,33 +3,10 @@ import { PrismaClient } from '@prisma/client';
 import { redis } from '../lib/redis.js';
 import axios from 'axios';
 import { getRecentNewMints } from './grpc.service.js';
+import { rpcLimiter } from '../lib/rpc-limiter.js';
 
 const prisma = new PrismaClient();
 
-// 🟢 FIX: Global RPC Rate Limiter to prevent Helius 429 bans
-class RpcRateLimiter {
-    private queue: (() => void)[] = [];
-    private inFlight = 0;
-    private readonly maxPerSecond: number;
-
-    constructor(maxPerSecond = 4) { // 🟢 FIX: Lowered to 4 req/s to protect free tier
-        this.maxPerSecond = maxPerSecond;
-        setInterval(() => this.drain(), Math.ceil(1000 / this.maxPerSecond));
-    }
-
-    private drain() {
-        if (this.queue.length === 0) return;
-        const next = this.queue.shift();
-        if (next) next();
-    }
-
-    async run<T>(fn: () => Promise<T>): Promise<T> {
-        await new Promise<void>(resolve => this.queue.push(resolve));
-        return fn();
-    }
-}
-
-export const rpcLimiter = new RpcRateLimiter(4); // 🟢 Capped at 4 req/sec
 
 export interface CallerFilters {
     isActive: boolean;
