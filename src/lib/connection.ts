@@ -5,10 +5,13 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // 🟢 Uses the new QuickNode URL from your .env
-const PRIMARY_URL = process.env.PRIMARY_RPC_URL || process.env.PUBLIC_RPC_URL || "https://api.mainnet-beta.solana.com";
-const BACKUP_URL = process.env.BACKUP_RPC_URL || "https://api.mainnet-beta.solana.com";
+// Replace the entire keys/getHeliumUrl block with this
+const PRIMARY_URL = process.env.PRIMARY_RPC_URL 
+    || `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+const BACKUP_URL = process.env.BACKUP_RPC_URL 
+    || 'https://api.mainnet-beta.solana.com';
 
-const primaryConnection = new Connection(PRIMARY_URL, 'confirmed');
+ const primaryConnection = new Connection(PRIMARY_URL, 'confirmed');
 const backupConnection = new Connection(BACKUP_URL, 'confirmed');
 
 const SYNC_SUBSCRIPTION_METHODS = new Set(['onAccountChange', 'onLogs', 'onProgramAccountChange', 'onSlotChange', 'onSignature', 'onRootChange']);
