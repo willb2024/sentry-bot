@@ -49,6 +49,10 @@ const BYPASS_QUEUE_METHODS = new Set([
     'getSignatureStatus', 'getBalance'
 ]);
 
+// 🚨 DRASTIC FIX: Global rate limiter applied to ALL Helius calls
+// Previous bypass queue allowed unlimited concurrent requests
+import { rpcLimiter } from './rpc-limiter.js';
+
 const waitQueueHigh: Array<() => void> = [];
 const waitQueueLow: Array<() => void> = [];
 
@@ -101,25 +105,28 @@ export const connection = new Proxy(primaryConnection, {
             // 🟢 FAST PATH: Skip the semaphore completely for hot-path methods
             if (BYPASS_QUEUE_METHODS.has(methodName)) {
                 return (async () => {
-                    if (isCircuitOpen()) {
-                        const backupValue = Reflect.get(backupConnection, prop);
-                        if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
-                    }
-                    try {
-                        const result = await value.apply(target, args);
-                        recordPrimarySuccess();
-                        return result;
-                    } catch (error: any) {
-                        recordPrimaryFailure();
-                        const backupValue = Reflect.get(backupConnection, prop);
-                        if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
-                        throw error;
-                    }
+                    // 🟢 DRASTIC FIX: Rate limit even bypass methods
+                    return await rpcLimiter.run(async () => {
+                        if (isCircuitOpen()) {
+                            const backupValue = Reflect.get(backupConnection, prop);
+                            if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
+                        }
+                        try {
+                            const result = await value.apply(target, args);
+                            recordPrimarySuccess();
+                            return result;
+                        } catch (error: any) {
+                            recordPrimaryFailure();
+                            const backupValue = Reflect.get(backupConnection, prop);
+                            if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
+                            throw error;
+                        }
+                    });
                 })();
             }
 
             // STANDARD PATH: Queue background tasks
-            return withSlot(isHighPriority, async () => {
+            return rpcLimiter.run(async () => withSlot(isHighPriority, async () => {
                 if (isCircuitOpen()) {
                     const backupValue = Reflect.get(backupConnection, prop);
                     if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
@@ -134,7 +141,7 @@ export const connection = new Proxy(primaryConnection, {
                     if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
                     throw error;
                 }
-            });
+            }));
         };
     }
 }) as unknown as Connection;
