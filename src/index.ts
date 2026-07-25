@@ -955,17 +955,26 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     const mevText = filters.blockMev ? "🟢 Yes (Protected)" : "🔴 No (Risky)";
 
     const text = `🎯 <b>AI COIN CALLER ENGINE</b>\n\n` +
-        `Sentry scans DexScreener every 15 seconds and DMs you the highest-scoring tokens before they pump.\n\n` +
-        
-        `🧠 <b>HOW THE SCORE WORKS (0 - 100):</b>\n` +
-        `• <b>High Score (75-100):</b> High liquidity, strong volume, high momentum, young age. Safer, higher potential.\n` +
-        `• <b>Low Score (0-50):</b> Low liquidity, dead volume, or aging token. High risk of failure.\n` +
-        `• <b>RugCheck:</b> Any honeypot or freeze authority instantly scores -100 (Blocked).\n\n` +
-        
-        `💡 <b>STRATEGY GUIDE ($500 - $1,000 Bankroll):</b>\n` +
-        `• <b>Spend:</b> 0.1 to 0.2 SOL per trade (approx $15 - $30). This allows you to spread risk across 20+ tokens instead of gambling on just one.\n` +
-        `• <b>Stop-Loss:</b> -20% to -30%. Gives the coin room to breathe through normal trench volatility without getting fully rugged.\n` +
-        `• <b>Take-Profit:</b> +50% to +100%. Don't be greedy. Compounding small 50% wins builds bankrolls faster than waiting for a 100x.\n\n` +
+
+    `⚙️ <b>HOW IT WORKS</b>\n` +
+    `Every 15 seconds, Sentry checks new tokens as they appear and looks at a few things:\n` +
+    `1️⃣ Is it new, and does it have real trading activity?\n` +
+    `2️⃣ Is it safe? (checks for scam red flags like frozen wallets or fake liquidity)\n` +
+    `3️⃣ Who made it, and is the liquidity locked so it can't be pulled out?\n` +
+    `4️⃣ Are real people buying, or does it just look busy?\n` +
+    `If a token looks good on all of this, Sentry scores it and sends it straight to you.\n\n` +
+
+    `🧠 <b>WHAT THE SCORE (0-100) MEANS</b>\n` +
+    `• <b>0-39 — 🔵 Too Early:</b> Not enough happening yet. Just something to keep an eye on, not a buy.\n` +
+    `• <b>40-59 — 🟡 Speculative:</b> A couple of good signs, but still very risky. Think of it as a small gamble.\n` +
+    `• <b>60-74 — 🟠 Developing:</b> Several good signs at once — decent volume, decent liquidity, no scam flags. Still early, but looking healthier.\n` +
+    `• <b>75-100 — 🟢 High Conviction:</b> Everything Sentry checks looks good at the same time. This is the strongest signal the engine gives — but it's still not a sure thing.\n\n` +
+    `One rule beats every other rule: if Sentry finds a scam red flag (like a frozen wallet or a coin you can't sell), the score drops straight to 0, no matter how good everything else looks.\n\n` +
+
+    `🔮 <b>WHAT THE "PRICE PROJECTION" MEANS</b>\n` +
+    `Each alert also shows a rough guess at how far the price might move and how fast. This is not a promise — it's a smart estimate, and Sentry always tells you which kind:\n` +
+    `• <b>Calibrated:</b> based on what actually happened with similar tokens before. More trustworthy, and gets better the longer Sentry runs.\n` +
+    `• <b>Uncalibrated Estimate:</b> a rough guess used when there isn't enough past data yet. Take this one with a bigger grain of salt.\n\n` +
 
         `<b>Engine Status:</b> ${statusText}\n\n` +
         `⚙️ <b>CURRENT FILTERS:</b>\n` +
