@@ -244,9 +244,16 @@ export async function sendToJitoBundle(
         const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
         const rawSig = await rawSendPromise;
 
-        // If raw hit, attempt to tip anyway just in case
+        // 🟢 FIX 2.3: Retry and log the fee/tip if the Jito bundle failed but the raw swap landed
         if (rawSig) {
-            connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
+            const tipResult = await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch((e) => {
+                console.error(`🔴 [FEE/TIP LEAK] Raw-fallback trade ${rawSig} landed but fee/tip tx failed: ${e.message}`);
+                return null;
+            });
+            if (!tipResult) {
+                // one retry — cheap insurance against a transient RPC blip costing you the fee entirely
+                await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {}); 
+            }
         }
 
         if (jitoRes?.data?.error && !rawSig) {
@@ -254,19 +261,13 @@ export async function sendToJitoBundle(
             return false;
         }
 
-        const signature = bs58.encode(swapTx.signatures[0]);
-        for (let i = 0; i < 20; i++) {
-            await new Promise(r => setTimeout(r, 1000));
-            const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) return true;
-        }
-        
-        return false;
+        // 🟢 FIX 2.1: Return true as soon as the bundle/raw send was ACCEPTED by the network.
+        // DO NOT block here for 20s of confirmation polling — the outer caller already does that in the background!
+        return true; 
     } catch (e: any) {
         return false;
     }
 }
-
 // 🟢 PERFORMANCE: Timeouts slashed to 3.5s to fail fast
 async function fetchApiTransaction(
     action: 'buy' | 'sell',
@@ -570,9 +571,13 @@ export async function executeSnipe(
                                 const standardGuildCut = feeCharged * 0.50; 
                                 guildOwnerCut = Math.min(standardGuildCut, availableForGuild);
                                 
-                                if (guildOwnerId !== user.referredById) {
-                                    await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } }).catch(()=>{});
+                                // 🟢 FIX 2.2: Correctly handle when Guild Owner is also the Referrer
+                                if (guildOwnerId === user.referredById) {
+                                    const combined = affiliateCut + guildOwnerCut;
+                                    if (combined > feeCharged) guildOwnerCut = feeCharged - affiliateCut;
                                 }
+                                
+                                await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } }).catch(()=>{});
                             }
                         }
                     } catch (_) {}

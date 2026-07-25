@@ -450,16 +450,25 @@ export function startUniversalGuardPoller(bot: any) {
             }));
 
             // 🟢 Fire all guard checks in parallel
-            await Promise.allSettled(activeGuards.map(guard => {
-                const isSim = simFlags.get(guard.telegramId);
-                if (isSim) {
-                    return checkAndTriggerGuard(guard, 1.0, bot); // livePrice doesn't matter for sim triggers
-                } else {
-                    const livePrice = getLivePriceSol(guard.tokenAddress);
-                    if (livePrice === null) return Promise.resolve();
-                    return checkAndTriggerGuard(guard, livePrice, bot);
+           // 🟢 Fire all guard checks in parallel
+           await Promise.allSettled(activeGuards.map(async guard => {
+            const isSim = simFlags.get(guard.telegramId);
+            if (isSim) {
+                return checkAndTriggerGuard(guard, 1.0, bot); 
+            } else {
+                let livePrice = getLivePriceSol(guard.tokenAddress);
+                
+                // 🟢 FIX 1.1: Fallback to a polled price for Raydium-native & graduated pump.fun tokens
+                if (livePrice === null) {
+                    const { getCachedTokenPrice } = await import('./engine.service.js');
+                    const fallback = await getCachedTokenPrice(guard.tokenAddress).catch(() => 0);
+                    if (fallback > 0) livePrice = fallback;
                 }
-            }));
+                
+                if (livePrice === null) return; // genuinely no price available this tick — try again next tick
+                return checkAndTriggerGuard(guard, livePrice, bot);
+            }
+        }));
         } catch (e: any) {
             console.error(`🔴 [GUARD POLLER] Tick failed: ${e.message}`);
         }

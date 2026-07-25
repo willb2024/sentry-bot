@@ -34,6 +34,8 @@ model User {
   guildMemberships GuildMembership[] @relation("GuildMemberships")
 
   vaultAddress        String?  @unique
+   wasEverPromoGranted Boolean   @default(false) // 🟢 ADD THIS LINE
+  
   turnkeySubOrgId     String?  @unique
 
   referralCode        String   @unique

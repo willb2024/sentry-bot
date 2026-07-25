@@ -94,7 +94,8 @@ export async function getVipStatus(telegramId: string): Promise<VipStatus> {
     if (user.isVip && user.vipExpiresAt && user.vipExpiresAt < now) {
         await prisma.user.update({
             where: { telegramId },
-            data: { isVip: false, vipSource: 'EXPIRED' }
+            // 🟢 FIX 3.1: Do not overwrite vipSource so we don't erase history
+            data: { isVip: false } 
         });
 
         const { badge, badgeLabel, badgeLine } = resolveBadge(false, true, 'EXPIRED', 0);
@@ -145,7 +146,8 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
         const now = new Date();
         if (user.isVip && !user.vipExpiresAt) return { granted: false, slotsRemaining: await getSlotsRemaining(), reason: 'ALREADY_ACTIVE_VIP' };
 
-        const hadPromo = user.vipSource === 'PROMO' || user.vipSource === 'EXPIRED';
+        // 🟢 FIX 3.1: Check the persistent flag instead of the volatile source string
+        const hadPromo = (user as any).wasEverPromoGranted === true; 
         const hasActivePromo = user.isVip && user.vipExpiresAt && user.vipExpiresAt > now;
 
         if (hadPromo && !hasActivePromo) return { granted: false, slotsRemaining: await getSlotsRemaining(), reason: 'PREVIOUSLY_HAD_PROMO' };
@@ -172,7 +174,8 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
             data: {
                 isVip: true,
                 vipExpiresAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000), 
-                vipSource: 'PROMO'
+                vipSource: 'PROMO',
+                wasEverPromoGranted: true // 🟢 FIX 3.1: Permanently mark that they claimed the promo
             }
         });
 
@@ -233,7 +236,8 @@ export async function sweepExpiredVips() {
         if (expiredUsers.length > 0) {
             await prisma.user.updateMany({
                 where: { id: { in: expiredUsers.map(u => u.id) } },
-                data: { isVip: false, vipSource: 'EXPIRED' }
+                // 🟢 FIX 3.1: Do not overwrite vipSource
+                data: { isVip: false } 
             });
             console.log(`🧹 [VIP SWEEP] Demoted ${expiredUsers.length} expired VIPs.`);
         }

@@ -530,7 +530,9 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
         `└ ${whaleModeText}\n\n` +
 
-        `🎯 <b>Caller Credits:</b> <code>${user.creditBalance}</code> Remaining\n` + // 🟢 ADDED HERE
+        `🎯 <b>Caller Credits:</b> <code>${user.creditBalance}</code> Remaining\n` + 
+        `└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
+        
         `└ ${whaleModeText}\n\n` +
         
         `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
@@ -1028,11 +1030,18 @@ app.post('/api/toggle-sim', async (req, res) => {
 
         if (newState === 'true') {
             const existing = await redis.get(`sim:balance:${tgId}`);
-            if (!existing) await redis.set(`sim:balance:${tgId}`, '12.4521');
+            // 🟢 FIX A.6: Start them at exactly 1000 so the Net Worth lines up beautifully
+            if (!existing) {
+                const DEFAULT_SIM_BALANCE = 1000;
+                await redis.set(`sim:balance:${tgId}`, DEFAULT_SIM_BALANCE.toFixed(4));
+                const { setSimStartingBalance } = await import('./services/simulation.service.js');
+                await setSimStartingBalance(tgId, DEFAULT_SIM_BALANCE);
+            }
             const { generateSimWallets } = await import('./services/simulation.service.js');
             const wallets = generateSimWallets();
             await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
         } else {
+            
             const keys = await redis.keys(`sim:*:${tgId}`);
             if (keys.length > 0) await redis.del(...keys);
         }
@@ -1738,6 +1747,8 @@ function calculateAIProjection(token: any) {
 
 
 // 🟢 Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
+// Replace the existing bot.action('trigger_caller_scan', ...) block in index.ts with this:
+
 bot.action('trigger_caller_scan', async (ctx) => {
     try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
@@ -1780,23 +1791,18 @@ bot.action('trigger_caller_scan', async (ctx) => {
 
             if (matchedToken) {
                 const projection = await getCalibratedProjection(matchedToken); 
-                const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
+                
+                // 🟢 FIX 0.1 & A.1: Use shared formatter and pass isReshow!
+                const { formatCallerAlertMessage } = await import('./services/caller.service.js');
+                const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
 
-                const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
-                    `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
-                    `<b>Score:</b> ${matchedToken.score}/100 ⭐\n\n` +
-                    `${projLabel}\n` +
-                    `• Confidence: <b>${projection.volatility}</b>\n` +
-                    `• Target Peak: <b>${projection.target}</b>\n` +
-                    `• Est. Timeframe: <b>${projection.timeframe}</b>\n\n` +
-                    `<b>Audit Trail:</b>\n` +
-                    `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
-                    `<i>Click below to buy instantly via Jito:</i>`;
+                const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: (await prisma.user.findUnique({where:{telegramId:tgId}}))!.id } });
+                const defaultSize = userConfig?.amountSol || 0.1;
 
                 return safeEditMessageText(ctx, msg, {
                     parse_mode: 'HTML',
                     reply_markup: { inline_keyboard: [
-                        [{ text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
+                        [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
                         [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
                         [{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }],
                         [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
@@ -1819,7 +1825,6 @@ bot.action('trigger_caller_scan', async (ctx) => {
         const { getUserCallerFilters, scoreTokens } = await import('./services/caller.service.js');
         const filters = await getUserCallerFilters(tgId);
         
-        // 🟢 FASTER SCANNING: Fetch the background-cached "Hot Tokens" FIRST to avoid API delays
         let topTokens = await redis.get('caller:hot_scored_tokens').then(res => res ? JSON.parse(res) : []);
         
         if (topTokens.length === 0) {
@@ -1834,38 +1839,10 @@ bot.action('trigger_caller_scan', async (ctx) => {
             topTokens = result;
         }
 
-        // Standard strict filter
-        let matchingTokens = topTokens.filter((t: any) =>
-            t.totalScore >= filters.minScore &&
-            t.ageMins <= filters.maxAgeMins &&
-            (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= filters.minPctChange && t.priceChangeM5 <= filters.maxPctChange)) &&
-            ((t.sourceQuality !== 'onchain-only' && t.volume >= filters.minVolume24h) || 
-             (t.sourceQuality === 'onchain-only' && t.liquidity >= filters.minLiquidity)) &&
-            t.liquidity >= filters.minLiquidity &&
-            (!filters.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0))
-        );
-
-        // 🟢 FIX 8: Progressive Relaxation - loosen if nothing strictly matches
-        let isRelaxed = false;
-        if (matchingTokens.length === 0) {
-            const relaxedFilters = {
-                ...filters,
-                minScore: Math.max(20, filters.minScore - 15),
-                maxAgeMins: filters.maxAgeMins * 1.5,
-                minLiquidity: filters.minLiquidity * 0.5,
-                minVolume24h: filters.minVolume24h * 0.5
-            };
-            matchingTokens = topTokens.filter((t: any) => 
-                t.totalScore >= relaxedFilters.minScore &&
-                t.ageMins <= relaxedFilters.maxAgeMins &&
-                (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= relaxedFilters.minPctChange && t.priceChangeM5 <= relaxedFilters.maxPctChange)) &&
-                ((t.sourceQuality !== 'onchain-only' && t.volume >= relaxedFilters.minVolume24h) || 
-                 (t.sourceQuality === 'onchain-only' && t.liquidity >= relaxedFilters.minLiquidity)) &&
-                t.liquidity >= filters.minLiquidity &&
-                (!relaxedFilters.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0))
-            );
-            if (matchingTokens.length > 0) isRelaxed = true;
-        }
+        // 🟢 FIX 0.2: Progressive Ladder
+        const { getMatchesWithLadder, formatCallerAlertMessage } = await import('./services/caller.service.js');
+        const { matches, isRelaxed } = getMatchesWithLadder(topTokens, filters);
+        let matchingTokens = matches;
 
         // Sort them highest score first to ensure "gems" pop up instantly
         matchingTokens.sort((a: any, b: any) => b.totalScore - a.totalScore);
@@ -1876,50 +1853,50 @@ bot.action('trigger_caller_scan', async (ctx) => {
             const seen = await redis.get(seenKey);
             if (!seen) {
                 matchedToken = t;
-                await redis.set(seenKey, '1', 'EX', 180); // 🟢 FIX 1: 3 minute cooldown instead of 1 hour
+                await redis.set(seenKey, '1', 'EX', 180); 
                 break;
             }
         }
 
-        // 🟢 FIX 5: Graceful degrade - re-show best match if all matched are seen
         let isReshow = false;
         if (!matchedToken && matchingTokens.length > 0) {
-            matchedToken = matchingTokens[0]; // Re-show top scored seen match
+            matchedToken = matchingTokens[0]; 
             isReshow = true;
         }
 
         if (matchedToken) {
+            // 🟢 FIX 0.5: Charge credits for manual scans too!
+            const { consumeCredit } = await import('./services/credits.service.js');
+            const creditResult = await consumeCredit(tgId, 'CONSUME_SCAN', matchedToken.mint);
+            if (!creditResult.success) {
+                return safeEditMessageText(ctx, `⚠️ <b>OUT OF CREDITS</b>\n\nBuy more with /credits to keep scanning.`, {
+                    parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]] }
+                });
+            }
+
             const projection = await getCalibratedProjection(matchedToken); 
             
-            // 🟢 Store projection history for accuracy loop tracking
             const historyData = {
                 mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
                 priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
                 predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
             };
-            await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
+            // 🟢 FIX 0.4: Unique Key
+            const historyKey = `${matchedToken.mint}:${Date.now()}`;
+            await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
 
-            const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
-            const relaxNote = isRelaxed ? `⚠️ <i>Filters temporarily relaxed to find this match.</i>\n\n` : '';
-            const reshowNote = isReshow ? `⚠️ <i>Showing previously seen top match (waiting for new tokens).</i>\n\n` : '';
+            // 🟢 FIX 0.1: Universal Formatter
+            const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed, isReshow });
 
-            const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
-                reshowNote +
-                relaxNote +
-                `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
-                `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
-                `${projLabel}\n` +
-                `• Confidence: <b>${projection.volatility}</b>\n` +
-                `• Target Peak: <b>${projection.target}</b>\n` +
-                `• Est. Timeframe: <b>${projection.timeframe}</b>\n\n` +
-                `<b>Audit Trail:</b>\n${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
-                `<i>Click below to buy instantly via Jito:</i>`;
+            // 🟢 FIX C.2: Dynamic Button Size
+            const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: (await prisma.user.findUnique({where:{telegramId:tgId}}))!.id } });
+            const defaultSize = userConfig?.amountSol || 0.1;
 
             await safeEditMessageText(ctx, msg, {
                 parse_mode: 'HTML',
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
+                        [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
                         [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
                         [{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }],
                         [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
@@ -4279,13 +4256,16 @@ if (pendingCreditsTx) {
     }
 
     // 🟢 SECURITY: Withdrawal Execution
+    // 🟢 SECURITY: Withdrawal Execution
     const pendingWithdrawalStr = await redis.get(`state:withdraw_pin:${telegramId}`);
     if (pendingWithdrawalStr) {
         await redis.del(`state:withdraw_pin:${telegramId}`);
         try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} 
 
         const user = await prisma.user.findUnique({ where: { telegramId } });
-        const submittedHash = crypto.scryptSync(text.trim(), process.env.BOT_TOKEN!, 32).toString('hex');
+        // 🟢 FIX 1.2: Match the salt used when the PIN was originally set!
+        const userSalt = telegramId + process.env.BOT_TOKEN!;
+        const submittedHash = crypto.scryptSync(text.trim(), userSalt, 32).toString('hex');
 
         if (user && user.withdrawalPin !== submittedHash) {
             const attemptsKey = `pin_fails:${telegramId}`;

@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { PublicKey, Keypair, SystemProgram, TransactionMessage, VersionedTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { connection } from '../lib/connection.js'; 
 import { redis } from '../lib/redis.js';
+import { decryptKey } from './vault.service.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 
@@ -23,16 +24,19 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
         if (!user || user.pendingRewardsSol <= 0) throw new Error("No rewards to claim.");
         if (!user.vaultAddress) throw new Error("No vault address found to receive payout.");
 
-        const treasuryPrivKey = process.env.TREASURY_PRIVATE_KEY;
-        if (!treasuryPrivKey) throw new Error("Platform Error: Treasury Hot Wallet not configured.");
+        // 🟢 FIX 3.4: Decrypt Treasury Key securely
+        const treasuryPrivKeyEncrypted = process.env.TREASURY_PRIVATE_KEY_ENCRYPTED;
+        if (!treasuryPrivKeyEncrypted) throw new Error("Platform Error: Treasury Hot Wallet not configured.");
+
+        const treasuryPrivKey = decryptKey(treasuryPrivKeyEncrypted);
+        if (!treasuryPrivKey) throw new Error("Platform Error: Treasury key decryption failed.");
 
         amountToPay = user.pendingRewardsSol;
         const lamportsToPay = Math.floor(amountToPay * LAMPORTS_PER_SOL);
 
-       // 🟢 PART 2.8 FIX: Atomic decrement prevents erasing mid-flight affiliate earnings
-       await prisma.user.update({ where: { id: user.id }, data: { pendingRewardsSol: { decrement: amountToPay } } });
-       rewardsDebited = true;
-       
+        await prisma.user.update({ where: { id: user.id }, data: { pendingRewardsSol: 0 } });
+        rewardsDebited = true; 
+
         const treasuryKeypair = Keypair.fromSecretKey(bs58.decode(treasuryPrivKey));
         const userVaultPubkey = new PublicKey(user.vaultAddress);
 

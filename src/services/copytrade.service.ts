@@ -153,7 +153,7 @@ export async function syncCopyTradeListeners(bot: any) {
                             }
                         }
                     }
-                }, 'processed');
+                }, 'confirmed');
 
                 activeWsListeners.set(walletStr, subId);
             }

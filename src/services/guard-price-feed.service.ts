@@ -9,10 +9,14 @@ const activeSubscriptions = new Map<string, { subId: number; lastPriceSol: numbe
 
 // Called once per guard when it's created (buy fires, DCA fires, copytrade opens, etc.)
 export async function subscribeToMintPrice(mint: string, guardId: string): Promise<void> {
+    if (!mint.toLowerCase().endsWith('pump')) {
+        return; // No bonding curve to subscribe to — checkAndTriggerGuard's fallback will price this via Jupiter.
+    }
+    
     const existing = activeSubscriptions.get(mint);
     if (existing) {
         existing.subscribers.add(guardId);
-        return; // already subscribed — this is the dedupe: N guards on the same mint cost ONE subscription
+        return; 
     }
 
     try {
@@ -20,11 +24,19 @@ export async function subscribeToMintPrice(mint: string, guardId: string): Promi
         const subId = connection.onAccountChange(curvePda, (accInfo) => {
             try {
                 const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+                
+                // 🟢 FIX 1.1: Stop trusting the curve the moment it graduates — force callers back to the Jupiter fallback
+                if (buf.length > 2 && buf[2] === 1) { 
+                    const entry = activeSubscriptions.get(mint);
+                    if (entry) entry.lastPriceSol = 0;
+                    return;
+                }
+                
                 const priceSol = decodePumpCurvePrice(buf.toString('base64'));
                 const entry = activeSubscriptions.get(mint);
                 if (entry) entry.lastPriceSol = priceSol;
                 redis.set(`live_price:${mint}`, priceSol.toString(), 'EX', 30).catch(() => {});
-            } catch (_) { /* malformed account update, ignore this tick */ }
+            } catch (_) {}
         }, 'confirmed');
 
         activeSubscriptions.set(mint, { subId, lastPriceSol: 0, subscribers: new Set([guardId]) });

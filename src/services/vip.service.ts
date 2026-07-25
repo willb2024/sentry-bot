@@ -61,35 +61,44 @@ export async function grantVip(telegramId: string, tier: VipTierKey, source: str
     await redis.set(`vip:${telegramId}`, JSON.stringify({ isVip: true, tier, expiresAt: expiresAt.toISOString() }), 'EX', tierDef.durationDays * 86400);
 }
 
-export async function verifyVipPayment(txSignature: string, expectedAmountSol: number, treasuryAddress: string, senderVaultAddress: string): Promise<{ valid: boolean; reason: string }> {
+export async function verifyVipPayment(
+    txSignature: string, expectedAmountSol: number, treasuryAddress: string, senderVaultAddress: string
+): Promise<{ valid: boolean; reason: string }> {
     try {
-        const used = await redis.get(`vip:tx:${txSignature}`);
-        if (used) return { valid: false, reason: 'Transaction already used for a VIP purchase' };
+        // 🟢 FIX 1.3: Claim the signature BEFORE verifying, atomically, to close race conditions
+        const claimed = await redis.set(`vip:tx:${txSignature}`, '1', 'EX', 86400 * 30, 'NX'); 
+        if (!claimed) return { valid: false, reason: 'Transaction already used for a purchase' };
 
         const tx = await connection.getParsedTransaction(txSignature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
-        if (!tx) return { valid: false, reason: 'Transaction not found on-chain' };
+        if (!tx) { await redis.del(`vip:tx:${txSignature}`); return { valid: false, reason: 'Transaction not found on-chain' }; }
 
         const txTime = tx.blockTime ? tx.blockTime * 1000 : 0;
-        if (Date.now() - txTime > 10 * 60 * 1000) return { valid: false, reason: 'Transaction is older than 10 minutes' };
+        if (Date.now() - txTime > 10 * 60 * 1000) { await redis.del(`vip:tx:${txSignature}`); return { valid: false, reason: 'Transaction is older than 10 minutes' }; }
+
+        // 🟢 FIX 1.3: Confirm the fee payer / signer IS the claiming user's own vault!
+        const signerKey = tx.transaction.message.accountKeys[0]?.pubkey.toBase58();
+        if (signerKey !== senderVaultAddress) {
+            await redis.del(`vip:tx:${txSignature}`);
+            return { valid: false, reason: 'Transaction was not sent from your own wallet' };
+        }
 
         const instructions = tx.transaction.message.instructions as any[];
         let totalSentToTreasury = 0;
-
         for (const ix of instructions) {
-            if (ix.parsed?.type === 'transfer') {
-                const dest = ix.parsed.info?.destination;
-                const lamports = ix.parsed.info?.lamports || 0;
-                if (dest === treasuryAddress) totalSentToTreasury += lamports / LAMPORTS_PER_SOL;
+            if (ix.parsed?.type === 'transfer' && ix.parsed.info?.destination === treasuryAddress) {
+                totalSentToTreasury += (ix.parsed.info?.lamports || 0) / LAMPORTS_PER_SOL;
             }
         }
-
+        
         if (totalSentToTreasury < expectedAmountSol - 0.001) {
+            await redis.del(`vip:tx:${txSignature}`);
             return { valid: false, reason: `Insufficient payment. Expected ${expectedAmountSol} SOL, received ${totalSentToTreasury.toFixed(4)} SOL` };
         }
-
-        await redis.set(`vip:tx:${txSignature}`, '1', 'EX', 86400 * 30);
+        
         return { valid: true, reason: 'Payment verified' };
-    } catch (e: any) { return { valid: false, reason: `Verification error: ${e.message}` }; }
+    } catch (e: any) { 
+        return { valid: false, reason: `Verification error: ${e.message}` }; 
+    }
 }
 
 export async function getPlatformFeeRate(telegramId: string): Promise<number> {

@@ -125,6 +125,65 @@ export async function getCalibratedProjection(token: any) {
     };
 }
 
+export async function formatCallerAlertMessage(
+    matchedToken: any,
+    projection: Awaited<ReturnType<typeof getCalibratedProjection>>,
+    opts: { isRelaxed?: boolean; isReshow?: boolean } = {}
+): Promise<string> {
+    const band = getScoreBand(matchedToken.totalScore ?? matchedToken.score);
+    const projLabel = projection.sampleSize >= 8
+        ? '🔮 <b>AI PROJECTION (Calibrated)</b>'
+        : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
+
+    let historicalContext = "";
+    try {
+        const historyMap = await redis.hgetall('caller_history');
+        const calls = Object.values(historyMap).map((v: any) => JSON.parse(v)).filter((c: any) => c.finalized && c.score >= 75);
+        if (calls.length >= 5) {
+            const hits = calls.filter((c: any) => Math.max(c.outcome1h ?? -100, c.outcome6h ?? -100, c.outcome24h ?? -100) >= 20).length;
+            const winRate = ((hits / calls.length) * 100).toFixed(1);
+            historicalContext = `<i>(Based on ${calls.length} verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting +20%).</i>\n\n`;
+        }
+    } catch (_) {}
+
+    const relaxNote = opts.isRelaxed ? `⚠️ <i>Filters temporarily relaxed to find this match.</i>\n\n` : '';
+    const reshowNote = opts.isReshow ? `⚠️ <i>Showing previously seen top match (waiting for new tokens).</i>\n\n` : '';
+
+    return `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
+        reshowNote + relaxNote +
+        `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
+        `<b>Score:</b> ${matchedToken.totalScore ?? matchedToken.score}/100 ⭐\n\n` +
+        `${band.label} — Suggested size: <b>${band.sizeSol}</b>\n<i>${band.risk}</i>\n\n` +
+        `${projLabel}\n` +
+        `• Confidence: <b>${projection.volatility}</b>\n` +
+        `• Target Peak: <b>${projection.target}</b>\n` +
+        `• Est. Timeframe: <b>${projection.timeframe}</b>\n\n` +
+        `<b>Audit Trail:</b>\n${(matchedToken.reasons || []).map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
+        historicalContext +
+        `<i>Click below to buy instantly via Jito:</i>`;
+}
+
+export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { matches: any[]; isRelaxed: boolean } {
+    const steps = [
+        filters,
+        { ...filters, minScore: Math.max(20, filters.minScore - 10), maxAgeMins: filters.maxAgeMins * 1.25, minLiquidity: filters.minLiquidity * 0.75, minVolume24h: filters.minVolume24h * 0.75 },
+        { ...filters, minScore: Math.max(15, filters.minScore - 20), maxAgeMins: filters.maxAgeMins * 1.6,  minLiquidity: filters.minLiquidity * 0.4,  minVolume24h: filters.minVolume24h * 0.4  },
+    ];
+    for (let i = 0; i < steps.length; i++) {
+        const f = steps[i];
+        const matches = tokens.filter((t: any) =>
+            t.totalScore >= f.minScore &&
+            t.ageMins <= f.maxAgeMins &&
+            (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= f.minPctChange && t.priceChangeM5 <= f.maxPctChange)) &&
+            ((t.sourceQuality !== 'onchain-only' && t.volume >= f.minVolume24h) || (t.sourceQuality === 'onchain-only' && t.liquidity >= f.minLiquidity)) &&
+            t.liquidity >= f.minLiquidity &&
+            (!f.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0))
+        );
+        if (matches.length > 0) return { matches, isRelaxed: i > 0 };
+    }
+    return { matches: [], isRelaxed: false };
+}
+
 let isScoring = false;
 
 export async function startCoinCaller(bot: any) {
@@ -141,42 +200,13 @@ export async function startCoinCaller(bot: any) {
             const tokens = await scoreTokens();
             if (tokens.length === 0) return;
 
-            const allUsers = await prisma.user.findMany({ select: { telegramId: true } });
+            const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
             
             for (const user of allUsers) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
-                let matchingTokens = tokens.filter(t => 
-                    t.totalScore >= filters.minScore &&
-                    t.ageMins <= filters.maxAgeMins &&
-                    (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= filters.minPctChange && t.priceChangeM5 <= filters.maxPctChange)) &&
-                    ((t.sourceQuality !== 'onchain-only' && t.volume >= filters.minVolume24h) || 
-                     (t.sourceQuality === 'onchain-only' && t.liquidity >= filters.minLiquidity)) &&
-                    t.liquidity >= filters.minLiquidity &&
-                    (!filters.blockMev || t.breakdown.mevRisk >= 0)
-                );
-
-                let isRelaxed = false;
-                if (matchingTokens.length === 0) {
-                    const relaxedFilters = {
-                        ...filters,
-                        minScore: Math.max(35, filters.minScore - 15), 
-                        maxAgeMins: filters.maxAgeMins * 1.5,
-                        minLiquidity: Math.max(1500, filters.minLiquidity * 0.5), 
-                        minVolume24h: filters.minVolume24h * 0.5
-                    };
-                    matchingTokens = tokens.filter(t => 
-                        t.totalScore >= relaxedFilters.minScore &&
-                        t.ageMins <= relaxedFilters.maxAgeMins &&
-                        (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= relaxedFilters.minPctChange && t.priceChangeM5 <= relaxedFilters.maxPctChange)) &&
-                        ((t.sourceQuality !== 'onchain-only' && t.volume >= relaxedFilters.minVolume24h) || 
-                         (t.sourceQuality === 'onchain-only' && t.liquidity >= relaxedFilters.minLiquidity)) &&
-                        t.liquidity >= relaxedFilters.minLiquidity &&
-                        (!relaxedFilters.blockMev || t.breakdown.mevRisk >= 0)
-                    );
-                    if (matchingTokens.length > 0) isRelaxed = true;
-                }
+                const { matches: matchingTokens, isRelaxed } = getMatchesWithLadder(tokens, filters);
 
                 let matchedToken = null;
                 for (const t of matchingTokens) {
@@ -190,7 +220,6 @@ export async function startCoinCaller(bot: any) {
                 }
 
                 if (matchedToken) {
-                    // 🟢 CREDIT GATE: only fires for background auto-alerts
                     const { consumeCredit } = await import('./credits.service.js');
                     const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
                     if (!creditResult.success) {
@@ -214,43 +243,20 @@ export async function startCoinCaller(bot: any) {
                         priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
                         predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
                     };
-                    await redis.hset(`caller_history`, matchedToken.mint, JSON.stringify(historyData));
+                    const historyKey = `${matchedToken.mint}:${Date.now()}`;
+                    await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
 
-                    let historicalContext = "";
-                    try {
-                        const historyMap = await redis.hgetall('caller_history');
-                        const calls = Object.values(historyMap).map(val => JSON.parse(val)).filter(c => c.finalized && c.score >= 75);
-                        if (calls.length >= 5) { 
-                            const hits = calls.filter(c => Math.max(c.outcome1h || -100, c.outcome6h || -100, c.outcome24h || -100) >= 20).length;
-                            const winRate = ((hits / calls.length) * 100).toFixed(1);
-                            historicalContext = `<i>(Based on ${calls.length} verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting +20%).</i>\n\n`;
-                        }
-                    } catch(e) {}
+                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed });
 
-                    const relaxNote = isRelaxed ? `⚠️ <i>Filters temporarily relaxed to find this match.</i>\n\n` : '';
-                    const projLabel = projection.sampleSize >= 8 ? '🔮 <b>AI PROJECTION (Calibrated)</b>' : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
-                    const band = getScoreBand(matchedToken.totalScore); 
-
-                    const msg = `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
-                                `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
-                                `<b>Score:</b> ${matchedToken.totalScore}/100 ⭐\n\n` +
-                                `${band.label} — Suggested size: <b>${band.sizeSol}</b>\n<i>${band.risk}</i>\n\n` +
-                                relaxNote +
-                                `${projLabel}\n` +
-                                `• Confidence: <b>${projection.volatility}</b>\n` +
-                                `• Target Peak: <b>${projection.target}</b>\n` +
-                                `• Est. Timeframe: <b>${projection.timeframe}</b>\n\n` +
-                                `<b>Audit Trail:</b>\n` +
-                                `${matchedToken.reasons.map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
-                                historicalContext +
-                                `<i>Click below to buy instantly via Jito:</i>`;
+                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
+                    const defaultSize = userConfig?.amountSol || 0.1;
                     
                     try {
                         await bot.telegram.sendMessage(user.telegramId, msg, {
                             parse_mode: 'HTML',
                             reply_markup: {
                                 inline_keyboard: [
-                                    [{ text: '⚡ Snipe 0.1 SOL', callback_data: `forcebuy_${matchedToken.mint}_0.1` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
+                                    [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
                                     [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
                                     [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
                                 ]
@@ -646,8 +652,8 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
     if (stats.uncertain) { score -= 5; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); } 
 
+    // 🟢 FIX 1.4: Remove unfair penalty, keep informational tag
     if (stats.sourceQuality === 'onchain-only') {
-        score -= 4; 
         reasons.push(`⛓️ Unindexed (early, unverified)`);
     }
 
@@ -772,62 +778,68 @@ export async function scoreTokens() {
                 return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
             }));
             stage1Scored.push(...results);
-            await new Promise(r => setTimeout(r, 600)); 
+            // 🟢 FIX 1.3: Removed 600ms sleep. rpcLimiter natively throttles us safely.
         }
 
-        const passedStage1 = stage1Scored.filter(t => t.score >= 25).sort((a,b) => b.score - a.score);
+        // 🟢 FIX 1.2: Let more borderline tokens through to deep-check
+        const passedStage1 = stage1Scored.filter(t => t.score >= 15).sort((a,b) => b.score - a.score);
 
         const fullyScored: any[] = [];
-        for (const t of passedStage1.slice(0, 20)) {
-            const stillOnCurve = t.pair.mint.toLowerCase().endsWith('pump') && t.pair.sourceQuality !== 'dexscreener' && t.pair.sourceQuality !== 'pump-fallback';
-            
-            let sellability = { sellable: true, estimatedTaxPct: 0 };
-            if (!stillOnCurve) {
-                sellability = await simulateSellability(t.pair.mint);
-            }
+        // 🟢 FIX 1.3: Deep check up to 40 candidates in parallel batches of 5
+        const stage2Chunks = chunkArray(passedStage1.slice(0, 40), 5);
+        
+        for (const chunk of stage2Chunks) {
+            const results = await Promise.all(chunk.map(async (t) => {
+                const stillOnCurve = t.pair.mint.toLowerCase().endsWith('pump') && t.pair.sourceQuality !== 'dexscreener' && t.pair.sourceQuality !== 'pump-fallback';
+                
+                let sellability = { sellable: true, estimatedTaxPct: 0 };
+                if (!stillOnCurve) {
+                    sellability = await simulateSellability(t.pair.mint);
+                }
 
-            const mevCacheKey = `mev_check:${t.pair.mint}`;
-            const cachedMev = await redis.get(mevCacheKey);
-            let hasMev = false;
-            if (cachedMev !== null) {
-                hasMev = cachedMev === 'true';
-            } else {
-                const { checkRecentMevActivity } = await import('./price.service.js');
-                hasMev = await checkRecentMevActivity(t.pair.mint);
-                await redis.set(mevCacheKey, hasMev ? 'true' : 'false', 'EX', 300);
-            }
+                const mevCacheKey = `mev_check:${t.pair.mint}`;
+                const cachedMev = await redis.get(mevCacheKey);
+                let hasMev = false;
+                if (cachedMev !== null) {
+                    hasMev = cachedMev === 'true';
+                } else {
+                    const { checkRecentMevActivity } = await import('./price.service.js');
+                    hasMev = await checkRecentMevActivity(t.pair.mint);
+                    await redis.set(mevCacheKey, hasMev ? 'true' : 'false', 'EX', 300);
+                }
 
-            const [devRep, lpLock, velocity] = await Promise.all([
-                getDevReputation(t.pair.creatorWallet || ''), 
-                checkLpLockStatus(t.pair.mint),
-                trackHolderVelocity(t.pair.mint)
-            ]);
+                const [devRep, lpLock, velocity] = await Promise.all([
+                    getDevReputation(t.pair.creatorWallet || ''), 
+                    checkLpLockStatus(t.pair.mint),
+                    trackHolderVelocity(t.pair.mint)
+                ]);
 
-            t.stats.devRep = devRep;
-            t.stats.lpLock = lpLock;
-            t.stats.velocity = velocity;
-            t.stats.sellability = sellability;
+                t.stats.devRep = devRep;
+                t.stats.lpLock = lpLock;
+                t.stats.velocity = velocity;
+                t.stats.sellability = sellability;
 
-            const finalScoreRes = computeTokenScore(t.stats);
-            
-            let concentrationAdjustedScore = finalScoreRes.score;
-            if (!t.isRug && t.top10Pct > 25) {
-                concentrationAdjustedScore -= Math.floor((t.top10Pct - 25) * 1.5);
-                finalScoreRes.reasons.push(`⚠️ Top 10 holders own ${t.top10Pct.toFixed(1)}%`);
-            }
+                const finalScoreRes = computeTokenScore(t.stats);
+                
+                let concentrationAdjustedScore = finalScoreRes.score;
+                if (!t.isRug && t.top10Pct > 25) {
+                    concentrationAdjustedScore -= Math.floor((t.top10Pct - 25) * 1.5);
+                    finalScoreRes.reasons.push(`⚠️ Top 10 holders own ${t.top10Pct.toFixed(1)}%`);
+                }
 
-            fullyScored.push({ 
-                ...t.pair, 
-                totalScore: Math.max(0, concentrationAdjustedScore), 
-                ageMins: t.stats.ageMins, 
-                reasons: finalScoreRes.reasons, 
-                breakdown: { mevRisk: t.isRug || !sellability.sellable || hasMev ? -100 : 0 } 
-            });
-            
-            await new Promise(r => setTimeout(r, 500)); 
+                return { 
+                    ...t.pair, 
+                    totalScore: Math.max(0, concentrationAdjustedScore), 
+                    ageMins: t.stats.ageMins, 
+                    reasons: finalScoreRes.reasons, 
+                    breakdown: { mevRisk: t.isRug || !sellability.sellable || hasMev ? -100 : 0 } 
+                };
+            }));
+            fullyScored.push(...results);
+            // 🟢 FIX 1.3: Removed 500ms sleep.
         }
 
-        const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 25).map(t => ({
+        const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 15).map(t => ({
             ...t.pair, totalScore: t.score, ageMins: t.stats.ageMins, reasons: t.reasons, breakdown: { mevRisk: t.isRug ? -100 : 0 }
         }))].sort((a, b) => b.totalScore - a.totalScore);
 
@@ -845,23 +857,12 @@ export function startCallerEvaluator() {
             const historyMap = await redis.hgetall('caller_history');
             const now = Date.now();
 
-            for (const [mint, val] of Object.entries(historyMap)) {
+            for (const [key, val] of Object.entries(historyMap)) {
                 const data = JSON.parse(val);
                 if (data.finalized) continue;
 
                 const ageMs = now - data.alertedAt;
-                
-                if (ageMs > 24 * 3600000) { 
-                    data.finalized = true; 
-                    
-                    if (data.peakPct !== undefined && data.predictedRangeLow !== undefined && data.predictedRangeHigh !== undefined) {
-                        const withinRange = data.peakPct >= data.predictedRangeLow && data.peakPct <= data.predictedRangeHigh;
-                        await redis.incr(withinRange ? 'projection:hits' : 'projection:misses');
-                    }
-                    
-                    await redis.hset('caller_history', mint, JSON.stringify(data)); 
-                    continue; 
-                }
+                const mint = data.mint;
 
                 const priceCacheKey = `caller_price:${mint}`;
                 const cachedPrice = await redis.get(priceCacheKey);
@@ -876,14 +877,30 @@ export function startCallerEvaluator() {
                     }
                 }
 
-                if (currentPrice > 0) {
+                if (currentPrice > 0 && data.priceAtAlert > 0) {
                     const pctChange = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
                     if (data.peakPct === undefined || pctChange > data.peakPct) {
                         data.peakPct = pctChange;
                         data.peakAtMs = ageMs; 
                     }
-                    await redis.hset('caller_history', mint, JSON.stringify(data));
+                    // 🟢 FIX 0.4: Stamp checkpoint outcomes exactly once each
+                    if (ageMs >= 3600000 && data.outcome1h === undefined) data.outcome1h = pctChange;
+                    if (ageMs >= 6 * 3600000 && data.outcome6h === undefined) data.outcome6h = pctChange;
+                    if (ageMs >= 24 * 3600000 && data.outcome24h === undefined) data.outcome24h = pctChange;
                 }
+
+                if (ageMs > 24 * 3600000) { 
+                    data.finalized = true; 
+                    if (data.outcome24h === undefined && currentPrice > 0 && data.priceAtAlert > 0) {
+                        data.outcome24h = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
+                    }
+                    if (data.peakPct !== undefined && data.predictedRangeLow !== undefined && data.predictedRangeHigh !== undefined) {
+                        const withinRange = data.peakPct >= data.predictedRangeLow && data.peakPct <= data.predictedRangeHigh;
+                        await redis.incr(withinRange ? 'projection:hits' : 'projection:misses');
+                    }
+                }
+                
+                await redis.hset('caller_history', key, JSON.stringify(data));
             }
         } catch (_) {}
     }, 5 * 60 * 1000);
