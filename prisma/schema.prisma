@@ -69,6 +69,27 @@ model User {
 
   @@index([telegramId])
   @@index([referralCode])
+
+ // Inside model User { ... } add these two lines:
+  creditBalance     Int      @default(5)  // Gives 5 free credits to new users
+  lifetimeCredits   Int      @default(5)
+  creditTxs         CreditTransaction[]
+}
+
+
+model CreditTransaction {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  type         String   // 'PURCHASE' | 'CONSUME_SCAN' | 'CONSUME_CALLER' | 'ADMIN_GRANT'
+  amount       Int      // positive for purchase, negative for consume
+  balanceAfter Int
+  tokenMint    String?  
+  packName     String?  
+  txSignature  String?
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
 }
 
 model LaunchedToken {

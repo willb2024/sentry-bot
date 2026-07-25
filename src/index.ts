@@ -529,6 +529,9 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         
         `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
         `└ ${whaleModeText}\n\n` +
+
+        `🎯 <b>Caller Credits:</b> <code>${user.creditBalance}</code> Remaining\n` + // 🟢 ADDED HERE
+        `└ ${whaleModeText}\n\n` +
         
         `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
         `${guildDisplay}` + 
@@ -540,17 +543,16 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
-    const UI = Markup.inlineKeyboard([
+  const UI = Markup.inlineKeyboard([
         [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
         [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
         [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-        [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+        [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')], // 🟢 ADDED HERE
         [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-        [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('📖 How to Trade', 'btn_trade_guide')],
-        [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All Automations', 'action_global_cancel')],
+        [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+        [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
         [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
     ]);
-
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
     else await ctx.replyWithHTML(layoutTxt, UI);
 }
@@ -3243,6 +3245,85 @@ bot.action('action_consolidate_wallets', async (ctx) => {
     await ctx.replyWithHTML(`✅ <b>CONSOLIDATION COMPLETE</b>\nSwept ~<b>${sweptSol.toFixed(4)} SOL</b> from sub-wallets into W1.`);
 });
 
+
+// =========================================================
+// 🪙 PAY-PER-RESULT CREDIT SHOP
+// =========================================================
+
+bot.command('credits', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await sendCreditsMenu(ctx, tgId, false);
+});
+
+bot.action('menu_credits', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await sendCreditsMenu(ctx, ctx.from!.id.toString(), true);
+});
+
+async function sendCreditsMenu(ctx: any, tgId: string, isEdit: boolean) {
+    const { getUsageStats, CREDIT_PACKS } = await import('./services/credits.service.js');
+    const stats = await getUsageStats(tgId);
+    if (!stats) return;
+
+    const text = `💳 <b>SENTRY CREDITS</b>\n\n` +
+        `<i>Credits only spend when Sentry finds and delivers a real token — never for empty scans.</i>\n\n` +
+        `📊 <b>Your Usage (Last 30 days):</b>\n` +
+        `• Current Balance: <b>${stats.currentBalance} credits</b>\n` +
+        `• Lifetime Purchased: <b>${stats.lifetimeCredits.toLocaleString()}</b>\n` +
+        `• Manual Scans Used: <b>${stats.scanConsumed}</b>\n` +
+        `• Auto-Caller Alerts Used: <b>${stats.callerConsumed}</b>\n` +
+        `• Total Consumed: <b>${stats.totalConsumed}</b>\n\n` +
+        `💰 <b>CREDIT PACKS:</b>\n` +
+        `• ${CREDIT_PACKS.starter.name}: $${CREDIT_PACKS.starter.priceUsd} → ${CREDIT_PACKS.starter.credits} credits\n` +
+        `• ${CREDIT_PACKS.growth.name}: $${CREDIT_PACKS.growth.priceUsd} → ${CREDIT_PACKS.growth.credits} credits\n` +
+        `• ${CREDIT_PACKS.pro.name}: $${CREDIT_PACKS.pro.priceUsd} → ${CREDIT_PACKS.pro.credits} credits\n` +
+        `• ${CREDIT_PACKS.whale.name}: $${CREDIT_PACKS.whale.priceUsd} → ${CREDIT_PACKS.whale.credits} credits\n\n` +
+        `<i>Pick a pack below to top up:</i>`;
+
+    const UI = Markup.inlineKeyboard([
+        [Markup.button.callback(`Starter — $30 (150 credits)`, 'buy_credits_starter')],
+        [Markup.button.callback(`Growth — $50 (280 credits)`, 'buy_credits_growth')],
+        [Markup.button.callback(`Pro — $75 (450 credits)`, 'buy_credits_pro')],
+        [Markup.button.callback(`Whale — $100 (2,000 credits)`, 'buy_credits_whale')],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
+
+    if (isEdit) await safeEditMessageText(ctx, text, UI);
+    else await ctx.replyWithHTML(text, UI);
+}
+
+bot.action(/^buy_credits_(starter|growth|pro|whale)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const packKey = ctx.match[1] as any;
+    const tgId = ctx.from?.id.toString()!;
+    const { CREDIT_PACKS } = await import('./services/credits.service.js');
+    const pack = CREDIT_PACKS[packKey as keyof typeof CREDIT_PACKS];
+
+    const priceSol = parseFloat((pack.priceUsd / cachedSolUsdPrice).toFixed(4));
+    const treasury = process.env.TREASURY_WALLET_ADDRESS!;
+
+    await redis.set(`credits:pending:${tgId}`, packKey, 'EX', 900);
+
+    await safeEditMessageText(ctx,
+        `💳 <b>${pack.name} Pack — $${pack.priceUsd} (${pack.credits} credits)</b>\n\n` +
+        `Send exactly <b>${priceSol} SOL</b> (current rate) to:\n<code>${treasury}</code>\n\n` +
+        `⏱️ You have 15 minutes. After sending, tap below and paste your transaction signature.\n\n` +
+        `<i>Your W1 wallet address must be the sender.</i>`,
+        Markup.inlineKeyboard([
+            [Markup.button.callback('✅ I\'ve Paid — Submit TX', `credits_submit_tx`)],
+            [Markup.button.callback('❌ Cancel', 'menu_credits')]
+        ])
+    );
+});
+
+bot.action('credits_submit_tx', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id?.toString()!;
+    await redis.set(`state:credits_tx:${tgId}`, 'AWAITING', 'EX', 600);
+    await ctx.replyWithHTML(`✅ <b>Paste your transaction signature below.</b>\n<i>Example: 5KtP9x...abc123</i>`);
+});
+
 bot.command('pnl', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
@@ -4113,6 +4194,42 @@ bot.on("text", async (ctx, next) => {
         await sendOrEditDashboard(ctx, telegramId, false);
         return;
     }
+// 🟢 CREDIT PAYMENT HANDLER
+const pendingCreditsTx = await redis.get(`state:credits_tx:${telegramId}`);
+if (pendingCreditsTx) {
+    await redis.del(`state:credits_tx:${telegramId}`);
+    const txSig = text.trim();
+    const loader = await ctx.replyWithHTML(`<i>⏳ Verifying payment...</i>`);
+    try {
+        const rawPending = await redis.get(`credits:pending:${telegramId}`);
+        if (!rawPending) throw new Error("Session expired. Please restart the purchase.");
+        const packKey = rawPending;
+
+        const { verifyVipPayment } = await import('./services/vip.service.js');
+        const { CREDIT_PACKS, addCredits } = await import('./services/credits.service.js');
+        
+        // Safely assert the key to avoid the 'any' indexing error
+        const pack = CREDIT_PACKS[packKey as keyof typeof CREDIT_PACKS];
+        const priceSol = pack.priceUsd / cachedSolUsdPrice;
+        const treasury = process.env.TREASURY_WALLET_ADDRESS!;
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+
+        const verifyRes = await verifyVipPayment(txSig, priceSol * 0.9, treasury, user!.vaultAddress!); // 10% slippage tolerance on SOL price swings
+        if (verifyRes.valid) {
+            const result = await addCredits(telegramId, packKey as any, txSig);
+            await redis.del(`credits:pending:${telegramId}`);
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+                `✅ <b>CREDITS ADDED!</b>\n\n+${pack.credits} credits.\nNew Balance: <b>${result.newBalance} credits</b>`,
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller', callback_data: 'menu_caller' }]]} });
+        } else {
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+                `🔴 <b>Verification Failed:</b> ${verifyRes.reason}`, { parse_mode: 'HTML' });
+        }
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Error: ${e.message}`, { parse_mode: 'HTML' });
+    }
+    return;
+}
     
     // 🟢 VIP PAYMENT HANDLER
     const pendingVipTier = await redis.get(`vip:awaiting_tx:${telegramId}`);

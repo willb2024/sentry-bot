@@ -7,7 +7,6 @@ import { rpcLimiter } from '../lib/rpc-limiter.js';
 
 const prisma = new PrismaClient();
 
-
 export interface CallerFilters {
     isActive: boolean;
     minScore: number;
@@ -191,6 +190,24 @@ export async function startCoinCaller(bot: any) {
                 }
 
                 if (matchedToken) {
+                    // 🟢 CREDIT GATE: only fires for background auto-alerts
+                    const { consumeCredit } = await import('./credits.service.js');
+                    const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
+                    if (!creditResult.success) {
+                        const outOfCreditsWarnedKey = `credits_warned:${user.telegramId}`;
+                        const alreadyWarned = await redis.get(outOfCreditsWarnedKey);
+                        if (!alreadyWarned) {
+                            await redis.set(outOfCreditsWarnedKey, '1', 'EX', 3600); 
+                            try {
+                                await bot.telegram.sendMessage(user.telegramId,
+                                    `⚠️ <b>OUT OF CREDITS</b>\n\nAI Coin Caller found a match but you're out of credits. Buy more with /credits to keep receiving alerts.`,
+                                    { parse_mode: 'HTML' }
+                                );
+                            } catch (_) {}
+                        }
+                        continue; 
+                    }
+
                     const projection = await getCalibratedProjection(matchedToken);
                     const historyData = {
                         mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
@@ -281,10 +298,8 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
         try {
             const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 });
             if (res.data?.pairs) allPairs.push(...res.data.pairs);
-        } catch (e: any) {
-            // Silent fail to keep scanner moving
-        }
-        await new Promise(r => setTimeout(r, 250)); // Stagger to prevent 429s
+        } catch (e: any) {}
+        await new Promise(r => setTimeout(r, 250)); 
     }
     return allPairs;
 }
@@ -383,7 +398,6 @@ async function fetchFreshPumpTokens() {
         }
         return enrichedTokens;
     } catch (e: any) {
-        console.warn('[CALLER] pump-fallback pipeline failed:', e.message);
         return [];
     }
 }
@@ -403,7 +417,6 @@ async function fetchFreshViaRest() {
             pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [], sourceQuality: 'rest-fallback'
         })).filter((t: any) => (now - t.pairCreatedAt) < 30 * 60 * 1000); 
     } catch (e: any) {
-        console.warn('[CALLER] rest-fallback pipeline failed:', e.message);
         return [];
     }
 }
@@ -421,7 +434,6 @@ async function fetchBoostedPairs() {
             pairCreatedAt: pair.pairCreatedAt || Date.now(), socials: pair.info?.socials || []
         }));
     } catch (e: any) {
-        console.warn('[CALLER] boosted pipeline failed:', e.message);
         return [];
     }
 }
@@ -441,7 +453,6 @@ async function fetchFreshRaydiumPairs() {
                 pairCreatedAt: pair.pairCreatedAt || now, socials: pair.info?.socials || [], sourceQuality: 'dexscreener'
             }));
     } catch (e: any) {
-        console.warn('[CALLER] fetchFreshRaydiumPairs pipeline failed:', e.message);
         return [];
     }
 }
@@ -456,12 +467,10 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
         
-        // 🟢 FIX: Wrap in rate limiter
         const sigs = await rpcLimiter.run(() =>
             connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 8 }).catch(() => [])
         );
 
-        // 🟢 FIX: Sequential loop with limiter instead of explosive Promise.all
         let rugCount = 0;
         for (const s of sigs) {
             const tx = await rpcLimiter.run(() =>
@@ -497,7 +506,6 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
         
-        // 🟢 FIX: Wrap in rate limiter
         const largest = await rpcLimiter.run(() => 
             connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
         );
@@ -506,13 +514,12 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
 
         const top = largest.value[0];
         
-        // 🟢 FIX: Wrap in rate limiter
         const ownerInfo = await rpcLimiter.run(() => 
             connection.getParsedAccountInfo(top.address).catch(()=>null)
         );
         
         const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner || '';
-        const pct = (top.uiAmount || 0) / (largest.value.reduce((s, v) => s + (v.uiAmount || 0), 0) || 1) * 100;
+        const pct = (top.uiAmount || 0) / (largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1) * 100;
 
         const result = {
             burned: owner === BURN_ADDRESS,
@@ -531,7 +538,6 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
         
-        // 🟢 FIX: Wrap in rate limiter
         const largest = await rpcLimiter.run(() => 
             connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
         );
@@ -681,7 +687,6 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     return { score: Math.max(0, score), reasons };
 }
 
-// 🟢 MERGE AND SCORE (WITH PARALLEL PIPELINES & FAST CHUNKING)
 export async function scoreTokens() {
     try {
         const [newMints, pumpFallback, restFallback, boosted, raydiumPairs] = await Promise.all([
@@ -737,13 +742,11 @@ export async function scoreTokens() {
                         }
                     });
                 }
-                await new Promise(r => setTimeout(r, 250)); // Safely stagger RPC queries
+                await new Promise(r => setTimeout(r, 250)); 
             }
         }
 
-        // STAGE 1: Basic Scoring (Staggered to protect RugCheck limits)
         const stage1Scored: any[] = [];
-        // 🟢 FIX: Lowered chunk size to 8
         const stage1Chunks = chunkArray(uniquePairs, 8);
         
         for (const chunk of stage1Chunks) {
@@ -751,17 +754,7 @@ export async function scoreTokens() {
                 const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
                 const observedVolStr = await redis.get(`observed_vol:${pair.mint}`);
                 
-                // 🟢 FIX: Cache MEV check results for 5 minutes
-                const mevCacheKey = `mev_check:${pair.mint}`;
-                const cachedMev = await redis.get(mevCacheKey);
                 let hasMev = false;
-                if (cachedMev !== null) {
-                    hasMev = cachedMev === 'true';
-                } else {
-                    const { checkRecentMevActivity } = await import('./price.service.js');
-                    hasMev = await checkRecentMevActivity(pair.mint);
-                    await redis.set(mevCacheKey, hasMev ? 'true' : 'false', 'EX', 300);
-                }
 
                 const stats: TokenStats = {
                     ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
@@ -779,13 +772,11 @@ export async function scoreTokens() {
                 return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
             }));
             stage1Scored.push(...results);
-            // 🟢 FIX: Increased delay to 600ms
             await new Promise(r => setTimeout(r, 600)); 
         }
 
         const passedStage1 = stage1Scored.filter(t => t.score >= 25).sort((a,b) => b.score - a.score);
 
-        // STAGE 2: Deep Verification (Staggered to protect RPC/Jup)
         const fullyScored: any[] = [];
         for (const t of passedStage1.slice(0, 20)) {
             const stillOnCurve = t.pair.mint.toLowerCase().endsWith('pump') && t.pair.sourceQuality !== 'dexscreener' && t.pair.sourceQuality !== 'pump-fallback';
@@ -793,6 +784,17 @@ export async function scoreTokens() {
             let sellability = { sellable: true, estimatedTaxPct: 0 };
             if (!stillOnCurve) {
                 sellability = await simulateSellability(t.pair.mint);
+            }
+
+            const mevCacheKey = `mev_check:${t.pair.mint}`;
+            const cachedMev = await redis.get(mevCacheKey);
+            let hasMev = false;
+            if (cachedMev !== null) {
+                hasMev = cachedMev === 'true';
+            } else {
+                const { checkRecentMevActivity } = await import('./price.service.js');
+                hasMev = await checkRecentMevActivity(t.pair.mint);
+                await redis.set(mevCacheKey, hasMev ? 'true' : 'false', 'EX', 300);
             }
 
             const [devRep, lpLock, velocity] = await Promise.all([
@@ -819,10 +821,10 @@ export async function scoreTokens() {
                 totalScore: Math.max(0, concentrationAdjustedScore), 
                 ageMins: t.stats.ageMins, 
                 reasons: finalScoreRes.reasons, 
-                breakdown: { mevRisk: t.isRug || !sellability.sellable || t.hasMev ? -100 : 0 } 
+                breakdown: { mevRisk: t.isRug || !sellability.sellable || hasMev ? -100 : 0 } 
             });
-            // 🟢 FIX: Increased stagger delay to 400ms
-            await new Promise(r => setTimeout(r, 400)); 
+            
+            await new Promise(r => setTimeout(r, 500)); 
         }
 
         const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 25).map(t => ({
@@ -861,20 +863,18 @@ export function startCallerEvaluator() {
                     continue; 
                 }
 
-              // 🟢 FIX: Cache price checks for 60 seconds — was hitting DexScreener for every mint every tick
-const priceCacheKey = `caller_price:${mint}`;
-const cachedPrice = await redis.get(priceCacheKey);
-let currentPrice = 0;
-if (cachedPrice !== null) {
-    currentPrice = parseFloat(cachedPrice);
-} else {
-    const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 3000 }).catch(() => null);
-    currentPrice = parseFloat(res?.data?.pairs?.[0]?.priceUsd || "0");
-    if (currentPrice > 0) {
-        await redis.set(priceCacheKey, currentPrice.toString(), 'EX', 60);
-    }
-}
-                
+                const priceCacheKey = `caller_price:${mint}`;
+                const cachedPrice = await redis.get(priceCacheKey);
+                let currentPrice = 0;
+                if (cachedPrice !== null) {
+                    currentPrice = parseFloat(cachedPrice);
+                } else {
+                    const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 3000 }).catch(() => null);
+                    currentPrice = parseFloat(res?.data?.pairs?.[0]?.priceUsd || "0");
+                    if (currentPrice > 0) {
+                        await redis.set(priceCacheKey, currentPrice.toString(), 'EX', 60);
+                    }
+                }
 
                 if (currentPrice > 0) {
                     const pctChange = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
@@ -886,5 +886,5 @@ if (cachedPrice !== null) {
                 }
             }
         } catch (_) {}
-    }, 10 * 60 * 1000);
+    }, 5 * 60 * 1000);
 }
