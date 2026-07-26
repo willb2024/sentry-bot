@@ -4,12 +4,13 @@ import { redis } from '../lib/redis.js';
 
 const prisma = new PrismaClient();
 
-// 🟢 Pricing tiers
+
+// 🟢 Pricing tiers — flattened curve, cheaper entry point
 export const CREDIT_PACKS = {
-    starter: { name: 'Starter', priceSol: null, priceUsd: 30,  credits: 150 },
-    growth:  { name: 'Growth',  priceSol: null, priceUsd: 50,  credits: 280 },
-    pro:     { name: 'Pro',     priceSol: null, priceUsd: 75,  credits: 450 },
-    whale:   { name: 'Whale',   priceSol: null, priceUsd: 100, credits: 2000 } // 🟢 2000 credits for $100
+    starter: { name: 'Starter', priceSol: null, priceUsd: 20,  credits: 140  }, // $0.143/credit
+    growth:  { name: 'Growth',  priceSol: null, priceUsd: 40,  credits: 300  }, // $0.133/credit
+    pro:     { name: 'Pro',     priceSol: null, priceUsd: 60,  credits: 480  }, // $0.125/credit
+    whale:   { name: 'Whale',   priceSol: null, priceUsd: 100, credits: 2000 }  // $0.05/credit — unchanged
 } as const;
 
 export type CreditPackKey = keyof typeof CREDIT_PACKS;

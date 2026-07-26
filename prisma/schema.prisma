@@ -73,8 +73,8 @@ model User {
   @@index([referralCode])
 
  // Inside model User { ... } add these two lines:
-  creditBalance     Int      @default(5)  // Gives 5 free credits to new users
-  lifetimeCredits   Int      @default(5)
+  creditBalance     Int      @default(15)  // Gives 5 free credits to new users
+  lifetimeCredits   Int      @default(15)
   creditTxs         CreditTransaction[]
 }
 

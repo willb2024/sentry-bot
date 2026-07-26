@@ -54,12 +54,22 @@ export async function grantVip(telegramId: string, tier: VipTierKey, source: str
         where: { telegramId },
         data: {
             isVip: true, vipTier: tier, vipExpiresAt: expiresAt, vipSource: source,
-            vipTxSignature: txSignature || null, vipPurchasedAt: new Date()
+            vipTxSignature: txSignature || null, vipPurchasedAt: new Date(),
+            // 🟢 NEW: VIP purchase includes a one-time caller credit bonus, scaled to tier
+            creditBalance: { increment: VIP_CREDIT_BONUS[tier] },
+            lifetimeCredits: { increment: VIP_CREDIT_BONUS[tier] }
         }
     });
 
     await redis.set(`vip:${telegramId}`, JSON.stringify({ isVip: true, tier, expiresAt: expiresAt.toISOString() }), 'EX', tierDef.durationDays * 86400);
 }
+
+export const VIP_CREDIT_BONUS: Record<VipTierKey, number> = {
+    trial: 20,
+    standard: 60,
+    pro: 150,
+    lifetime: 300
+};
 
 export async function verifyVipPayment(
     txSignature: string, expectedAmountSol: number, treasuryAddress: string, senderVaultAddress: string

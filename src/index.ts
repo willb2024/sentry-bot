@@ -27,7 +27,7 @@ import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './s
 import { connection } from './lib/connection.js';
 import cron from 'node-cron';
 import { sendWeeklyReportsToAll, computeWeeklyStats, formatWeeklyReport } from './services/weekly_report.service.js';
-import { VIP_TIERS, VipTierKey, checkVipStatus, grantVip, verifyVipPayment, getPlatformFeeRate, formatVipStatus } from './services/vip.service.js';
+import { VIP_TIERS, VipTierKey, checkVipStatus, grantVip, verifyVipPayment, getPlatformFeeRate, formatVipStatus, VIP_CREDIT_BONUS } from './services/vip.service.js';
 import { 
     checkAndGrantDailyVip, 
     startPromo, 
@@ -748,6 +748,7 @@ async function showVipPaymentInstructions(ctx: any, tier: VipTierKey) {
 
     const tierDef = VIP_TIERS[tier];
     const treasury = process.env.TREASURY_WALLET_ADDRESS!;
+    const bonusCredits = VIP_CREDIT_BONUS[tier];
 
     await redis.set(
         `vip:pending:${tgId}`,
@@ -756,7 +757,8 @@ async function showVipPaymentInstructions(ctx: any, tier: VipTierKey) {
     );
 
     const msg =
-        `${tierDef.label}\n\n` +
+        `${tierDef.label}\n` +
+        `🎁 <b>Includes:</b> ${bonusCredits} Free AI Caller Credits\n\n` +
         `📋 <b>PAYMENT INSTRUCTIONS</b>\n\n` +
         `Send exactly <b>${tierDef.priceSol} SOL</b> to:\n` +
         `<code>${treasury}</code>\n\n` +
@@ -3254,22 +3256,23 @@ async function sendCreditsMenu(ctx: any, tgId: string, isEdit: boolean) {
     const text = `💳 <b>SENTRY CREDITS</b>\n\n` +
         `<i>Credits only spend when Sentry finds and delivers a real token — never for empty scans.</i>\n\n` +
         `📊 <b>Your Usage (Last 30 days):</b>\n` +
+
         `• Current Balance: <b>${stats.currentBalance} credits</b>\n` +
         `• Lifetime Purchased: <b>${stats.lifetimeCredits.toLocaleString()}</b>\n` +
         `• Manual Scans Used: <b>${stats.scanConsumed}</b>\n` +
         `• Auto-Caller Alerts Used: <b>${stats.callerConsumed}</b>\n` +
         `• Total Consumed: <b>${stats.totalConsumed}</b>\n\n` +
         `💰 <b>CREDIT PACKS:</b>\n` +
-        `• ${CREDIT_PACKS.starter.name}: $${CREDIT_PACKS.starter.priceUsd} → ${CREDIT_PACKS.starter.credits} credits\n` +
-        `• ${CREDIT_PACKS.growth.name}: $${CREDIT_PACKS.growth.priceUsd} → ${CREDIT_PACKS.growth.credits} credits\n` +
-        `• ${CREDIT_PACKS.pro.name}: $${CREDIT_PACKS.pro.priceUsd} → ${CREDIT_PACKS.pro.credits} credits\n` +
-        `• ${CREDIT_PACKS.whale.name}: $${CREDIT_PACKS.whale.priceUsd} → ${CREDIT_PACKS.whale.credits} credits\n\n` +
+        `• ${CREDIT_PACKS.starter.name}: $${CREDIT_PACKS.starter.priceUsd} → ${CREDIT_PACKS.starter.credits} credits <i>(~$0.14/alert)</i>\n` +
+        `• ${CREDIT_PACKS.growth.name}: $${CREDIT_PACKS.growth.priceUsd} → ${CREDIT_PACKS.growth.credits} credits <i>(~$0.13/alert)</i>\n` +
+        `• ${CREDIT_PACKS.pro.name}: $${CREDIT_PACKS.pro.priceUsd} → ${CREDIT_PACKS.pro.credits} credits <i>(~$0.13/alert)</i>\n` +
+        `• ${CREDIT_PACKS.whale.name}: $${CREDIT_PACKS.whale.priceUsd} → ${CREDIT_PACKS.whale.credits} credits <i>(~$0.05/alert)</i>\n\n` +
         `<i>Pick a pack below to top up:</i>`;
 
     const UI = Markup.inlineKeyboard([
-        [Markup.button.callback(`Starter — $30 (150 credits)`, 'buy_credits_starter')],
-        [Markup.button.callback(`Growth — $50 (280 credits)`, 'buy_credits_growth')],
-        [Markup.button.callback(`Pro — $75 (450 credits)`, 'buy_credits_pro')],
+        [Markup.button.callback(`Starter — $20 (140 credits)`, 'buy_credits_starter')],
+        [Markup.button.callback(`Growth — $40 (300 credits)`, 'buy_credits_growth')],
+        [Markup.button.callback(`Pro — $60 (480 credits)`, 'buy_credits_pro')],
         [Markup.button.callback(`Whale — $100 (2,000 credits)`, 'buy_credits_whale')],
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
