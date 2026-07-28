@@ -44,8 +44,6 @@ let globalCurvePdas = new Set<string>();
 export let cachedSolUsdPrice = 150.0;
 export let isPriceReady = false; 
 
-// 🟢 D1 FIX: Live WebSocket In-Memory Ring Buffer for AI Coin Caller
-// 🟢 FIX A3: Track Creator Wallet
 export const recentNewMints: { mint: string, symbol: string, creator: string, firstSeenAt: number }[] = [];
 
 function trackNewMint(mint: string, symbol: string = "UNKNOWN", creator: string = "") {
@@ -60,8 +58,6 @@ export function getRecentNewMints() {
     }
     return [...recentNewMints];
 }
-
-
 
 export async function syncInitialSolPrice() {
     try {
@@ -110,7 +106,6 @@ setInterval(async () => {
 }, 2_000);
 
 setInterval(async () => {
-    // 🟢 Parallel instead of sequential — computes all pre-signed exits at once
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
         if (lockedGuards.has(guard.id)) return;
         try {
@@ -123,7 +118,6 @@ setInterval(async () => {
     }));
 }, 5_000);
 
-// 🟢 C3 FIX: Prevent WebSocket Memory Leaks
 export function releaseGuardSubscription(tokenAddress: string) {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
     try {
@@ -217,15 +211,12 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         await redis.del(createdKey);
         lockedGuards.add(guardSnapshot.id);
 
-        // 🟢 FIX: remove sibling guards for this token FIRST so a concurrent trigger
-        // can't call simExecuteExit() after the position is already closed
         await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
 
         const isProfit = await getNextSimOutcome(guardSnapshot.telegramId, 'guard');
         const targetPnl = isProfit ? (guardSnapshot.takeProfitPercent || 50) : -Math.abs(guardSnapshot.trailingPercent);
         const pnlPercent = applySimSlippage(targetPnl);
 
-        // 🟢 FIX: Calculate realistic peak drop for narrative sync from the walked prices
         let actualPeakDrop = guardSnapshot.trailingPercent;
         if (!isProfit) {
             try {
@@ -271,6 +262,15 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 { source: imageBuffer },
                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
             );
+
+            // 🟢 NEW REACTION GIF: Sim Branch
+            if (user?.reactionGifsEnabled) {
+                (async () => {
+                    const { getReactionGifUrl } = await import('./reaction.service.js');
+                    const gifUrl = await getReactionGifUrl(pnlPercent >= 0);
+                    if (gifUrl) bot.telegram.sendAnimation(guardSnapshot.telegramId, gifUrl, { caption: pnlPercent >= 0 ? '💰' : '💪' }).catch(() => {});
+                })();
+            }
 
         } catch (e: any) {
             console.error(`🔴 [SIM GUARD] PnL card failed for ${guardSnapshot.telegramId}:`, e.message);
@@ -356,6 +356,15 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
 
+                            // 🟢 NEW REACTION GIF: Live Take Profit
+                            if (user?.reactionGifsEnabled) {
+                                (async () => {
+                                    const { getReactionGifUrl } = await import('./reaction.service.js');
+                                    const gifUrl = await getReactionGifUrl(profitPercent >= 0);
+                                    if (gifUrl) bot.telegram.sendAnimation(guard.telegramId, gifUrl, { caption: profitPercent >= 0 ? '💰' : '💪' }).catch(() => {});
+                                })();
+                            }
+
                         } catch (e: any) {
                             console.error("Take profit image send failed:", e.message);
                         }
@@ -418,6 +427,15 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
 
+                            // 🟢 NEW REACTION GIF: Live Stop Loss
+                            if (user?.reactionGifsEnabled) {
+                                (async () => {
+                                    const { getReactionGifUrl } = await import('./reaction.service.js');
+                                    const gifUrl = await getReactionGifUrl(totalPnlPercent >= 0);
+                                    if (gifUrl) bot.telegram.sendAnimation(guard.telegramId, gifUrl, { caption: totalPnlPercent >= 0 ? '💰' : '💪' }).catch(() => {});
+                                })();
+                            }
+
                         } catch (e: any) {
                             console.error("Stop loss image send failed:", e.message);
                         }
@@ -434,48 +452,43 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 export function startUniversalGuardPoller(bot: any) {
     console.log("🛡️ [GUARD ENGINE] Push-Based Subscription Poller Initialized.");
 
-    // Fast evaluation loop
     setInterval(async () => {
         try {
             const activeGuards = await getAllActiveGuards();
             const { isSimulationActive, walkSimPositionPrices } = await import('./simulation.service.js');
 
-            // 🟢 Batch-check sim status once
             const uniqueTgIds = [...new Set(activeGuards.map(g => g.telegramId))];
             const simFlags = new Map<string, boolean>();
             await Promise.all(uniqueTgIds.map(async (id) => {
                 const isSim = await isSimulationActive(id);
                 simFlags.set(id, isSim);
-                if (isSim) walkSimPositionPrices(id).catch(() => {}); // 🟢 NEW: drift open positions realistically
+                if (isSim) walkSimPositionPrices(id).catch(() => {}); 
             }));
 
             // 🟢 Fire all guard checks in parallel
-           // 🟢 Fire all guard checks in parallel
-           await Promise.allSettled(activeGuards.map(async guard => {
-            const isSim = simFlags.get(guard.telegramId);
-            if (isSim) {
-                return checkAndTriggerGuard(guard, 1.0, bot); 
-            } else {
-                let livePrice = getLivePriceSol(guard.tokenAddress);
-                
-                // 🟢 FIX 1.1: Fallback to a polled price for Raydium-native & graduated pump.fun tokens
-                if (livePrice === null) {
-                    const { getCachedTokenPrice } = await import('./engine.service.js');
-                    const fallback = await getCachedTokenPrice(guard.tokenAddress).catch(() => 0);
-                    if (fallback > 0) livePrice = fallback;
+            await Promise.allSettled(activeGuards.map(async guard => {
+                const isSim = simFlags.get(guard.telegramId);
+                if (isSim) {
+                    return checkAndTriggerGuard(guard, 1.0, bot); 
+                } else {
+                    let livePrice = getLivePriceSol(guard.tokenAddress);
+                    
+                    // 🟢 FIX 1.1: Fallback to a polled price for Raydium-native & graduated pump.fun tokens
+                    if (livePrice === null) {
+                        const { getCachedTokenPrice } = await import('./engine.service.js');
+                        const fallback = await getCachedTokenPrice(guard.tokenAddress).catch(() => 0);
+                        if (fallback > 0) livePrice = fallback;
+                    }
+                    
+                    if (livePrice === null) return; // genuinely no price available this tick — try again next tick
+                    return checkAndTriggerGuard(guard, livePrice, bot);
                 }
-                
-                if (livePrice === null) return; // genuinely no price available this tick — try again next tick
-                return checkAndTriggerGuard(guard, livePrice, bot);
-            }
-        }));
+            }));
         } catch (e: any) {
             console.error(`🔴 [GUARD POLLER] Tick failed: ${e.message}`);
         }
     }, 1000);
 
-    // Reconcile loop
-  // Reconcile loop
   setInterval(async () => {
     try {
         const activeGuards = await getAllActiveGuards();
@@ -488,7 +501,6 @@ export function startUniversalGuardPoller(bot: any) {
             }
         }
         
-        // 🟢 FIX: Use real guard IDs instead of a synthetic memory leak ID
         for (const g of liveGuards) {
             if (g.tokenAddress.toLowerCase().endsWith('pump')) {
                 await subscribeToMintPrice(g.tokenAddress, g.id); 
@@ -500,9 +512,6 @@ export function startUniversalGuardPoller(bot: any) {
 }, 15000);
 }
 
-
-
-// 🟢 REST FALLBACK LOGIC
 export function startPumpFunPolling() {
     if (pollerStarted) return;
     pollerStarted = true;
@@ -655,7 +664,6 @@ async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
-                // 🟢 Pre-flight balance check
                 try {
                     const balanceLamports = await connection.getBalance(new PublicKey(liveConfig.user.vaultAddress));
                     const neededLamports = (liveConfig.amountSol * 1_000_000_000) + 5_000_000;
@@ -687,7 +695,6 @@ async function triggerAutoSnipes(
                     }
                 }
 
-                // 🟢 Single DexScreener fetch shared by score filter + social requirement (RAYDIUM/BOTH only)
                 let dexPairCache: any = null;
                 let dexFetchAttempted = false;
                 const getDexPair = async () => {
@@ -701,7 +708,6 @@ async function triggerAutoSnipes(
                     return dexPairCache;
                 };
 
-                // 🟢 LIVE AI CALLER SCORE FILTER
                 if (liveConfig.minScore > 0) {
                     let score = 0;
                     try {
@@ -744,7 +750,7 @@ async function triggerAutoSnipes(
                         const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials, isRug };
                         score = computeTokenScore(stats).score;
                     } catch (e) {
-                        return; // fail closed if error occurs during analysis
+                        return; 
                     }
 
                     if (score < liveConfig.minScore) return;
@@ -917,7 +923,6 @@ export async function igniteYellowstoneStream(bot: any) {
                         recentlySnipedTokens.add(tokenMint);
                         setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
                         
-                        // 🟢 FIX A3: Retrieve Creator/Deployer Wallet address on-chain (first accountKey is the signer)
                         let creatorWallet = "";
                         try {
                             const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));

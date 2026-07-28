@@ -76,6 +76,8 @@ model User {
   creditBalance     Int      @default(15)  // Gives 5 free credits to new users
   lifetimeCredits   Int      @default(15)
   creditTxs         CreditTransaction[]
+
+  reactionGifsEnabled Boolean @default(true)
 }
 
 

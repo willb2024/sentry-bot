@@ -2501,7 +2501,11 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
                 Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed'),
                 Markup.button.callback(hideWallets ? '👁️ Show Wallets' : '🙈 Hide Wallets', 'toggle_hide_wallets')
             ],
-            [Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')],
+            [
+                Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage'),
+                // 🟢 ADD THIS LINE:
+                Markup.button.callback(user.reactionGifsEnabled ? '🎬 Trade GIFs: ON' : '🎬 Trade GIFs: OFF', 'toggle_reaction_gifs')
+            ],
             [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
             [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
         ]);
@@ -2509,6 +2513,18 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
     if (isEdit) await safeEditMessageText(ctx, levelText, UI);
     else await ctx.replyWithHTML(levelText, UI);
 }
+
+
+bot.action('toggle_reaction_gifs', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+    if (user) {
+        await prisma.user.update({ where: { id: user.id }, data: { reactionGifsEnabled: !user.reactionGifsEnabled } });
+        await sendOrEditSettings(ctx, tgId, true);
+    }
+});
 
 bot.action('menu_settings', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3073,41 +3089,65 @@ bot.action(/^sell_(10|25|50|75|100)_(.+)$/, async (ctx) => {
     const loader = await ctx.replyWithHTML(`<i>⏳ Initiating ${percentage}% Manual Exit for <code>${targetCA.substring(0,6)}...</code> via Jito...</i>`);
 
     try {
+        // executeExit automatically checks if simulation mode is active and routes to simExecuteExit
         const result = await executeExit(tgId, targetCA, percentage);
+        
         if (result.success) {
             await redis.del(`balance_cache:${tgId}`);
             
-            const { isSimulationActive } = await import('./services/simulation.service.js');
-            if (await isSimulationActive(tgId)) {
+            // 🟢 FIX: Safely fetch the user here so 'user' is defined for both Live and Sim
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+            const isSim = await isSimulationActive(tgId);
+            let isWin = true;
+
+            if (isSim) {
+                // Parse PnL from simulation result message
                 const pnlMatch = result.message.match(/PnL: (-?\+?[\d.]+)%/);
-const pnlPercent = pnlMatch ? parseFloat(pnlMatch[1]) : parseFloat((Math.random() * 200 + 20).toFixed(2));
-                const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-                
+                const pnlPercent = pnlMatch ? parseFloat(pnlMatch[1]) : parseFloat((Math.random() * 200 + 20).toFixed(2));
+                isWin = pnlPercent >= 0;
+
                 const captionText =
                     `🟢 <b>MANUAL SELL SUCCESSFUL!</b>\n\n` +
                     `<b>Token:</b> <code>${targetCA}</code>\n` +
                     `<b>Amount Sold:</b> ${percentage}%\n` +
-                    `💰 <b>PnL: +${pnlPercent.toFixed(2)}%</b>\n` +
+                    `💰 <b>PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n` +
                     `Status: 🟢 Executed via Jito Bundle.\n` +
                     `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
                 
                 try {
                     const { generatePnlCard } = await import('./services/image.service.js');
-                    const imageBuffer = await generatePnlCard(targetCA, pnlPercent, user?.referralCode);
-                    const tweetText = encodeURIComponent(`Just secured +${pnlPercent.toFixed(1)}% using Sentry Terminal ⚡️\nhttps://t.me/${process.env.BOT_USERNAME}?start=${user?.referralCode}`);
+                    const imageBuffer = await generatePnlCard(targetCA, pnlPercent, user?.referralCode ?? undefined);
+                    const tweetText = encodeURIComponent(`Just secured ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}% using Sentry Terminal ⚡️\nhttps://t.me/${process.env.BOT_USERNAME}?start=${user?.referralCode}`);
                     const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share & Earn on X', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+                    
                     await ctx.replyWithPhoto({ source: imageBuffer }, { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn });
                     await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
                 } catch (_) {
                     await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                 }
             } else {
+                // Live Execution Result
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
                     `🟢 <b>MANUAL SELL SUCCESSFUL!</b>\n\n<b>Token:</b> <code>${targetCA}</code>\n<b>Amount Sold:</b> ${percentage}%\n<b>Status:</b> ${result.message}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`, 
                     { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                 );
+
+                if (user) {
+                    const lastTrade = await prisma.trade.findFirst({ where: { userId: user.id, isBuy: false }, orderBy: { createdAt: 'desc' } });
+                    if (lastTrade && lastTrade.profitPercent !== null) isWin = lastTrade.profitPercent >= 0;
+                }
             }
 
+            // 🟢 REACTION GIF (Sim & Live, Fire-and-Forget)
+            if (user?.reactionGifsEnabled) {
+                (async () => {
+                    const { getReactionGifUrl } = await import('./services/reaction.service.js');
+                    const gifUrl = await getReactionGifUrl(isWin);
+                    if (gifUrl) bot.telegram.sendAnimation(tgId, gifUrl, { caption: isWin ? '💰' : '💪' }).catch(() => {});
+                })();
+            }
+
+            // Clean up or adjust trailing guards
             if (percentage === 100) {
                 await cancelAllGuardsForToken(tgId, targetCA); 
             } else {
