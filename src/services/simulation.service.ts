@@ -363,28 +363,21 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
 }
 
 // 🟢 FIX: Dynamic Win/Loss randomizer with realistic variance
+// exists elsewhere in this file — having both is what causes inconsistent behavior
+// across different call sites.
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
     const scoreVal = score ?? 65;
-    
-    // Higher AI score gives slightly better win probability, but losses can still happen!
-    // Score 30 -> 35% win rate
-    // Score 75 -> 52% win rate
-    // Score 90 -> 62% win rate
-    let baseWinProb = 0.25 + (scoreVal / 100) * 0.40;
-    
-    // Streak balancing: prevent more than 3 wins or 3 losses in a row for maximum realism
+    let baseWinProb = 0.15 + (scoreVal / 100) * 0.30; // ~24-42% win rate range, score-weighted
+
     const lastKey = `sim:last_outcome:${type}:${telegramId}`;
     const last = await redis.get(lastKey);
-    
-    if (last === 'true' && Math.random() < 0.4) {
-        baseWinProb -= 0.15; // Nudge towards a loss after a win
-    } else if (last === 'false' && Math.random() < 0.5) {
-        baseWinProb += 0.20; // Nudge towards a win after a loss
-    }
 
-    const finalProb = Math.min(0.75, Math.max(0.20, baseWinProb));
+    if (last === 'true' && Math.random() < 0.5) baseWinProb -= 0.10;
+    else if (last === 'false' && Math.random() < 0.3) baseWinProb += 0.08;
+
+    const finalProb = Math.min(0.55, Math.max(0.12, baseWinProb));
     const isWin = Math.random() < finalProb;
-    
+
     await redis.set(lastKey, isWin ? 'true' : 'false', 'EX', 3600);
     return isWin;
 }
