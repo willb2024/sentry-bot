@@ -28,7 +28,8 @@ model User {
   priorityLevel       String   @default("FAST") 
   customPriorityFee   Float    @default(0.001) 
 
- simState            SimState?
+  // ✅ Simulation relations (only once)
+  simState            SimState?
   simTrades           SimTrade[]
 
   ownedGuild       Guild?            @relation("GuildOwner")
@@ -73,11 +74,6 @@ model User {
   lifetimeCredits     Int      @default(5)
   creditTxs           CreditTransaction[]
   reactionGifsEnabled Boolean  @default(true)
-
-   
-
-  // NEW: Simulation persistence
-  simState            SimState?
 
   @@index([telegramId])
   @@index([referralCode])
