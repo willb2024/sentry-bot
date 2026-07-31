@@ -1,5 +1,5 @@
 // src/services/engine.service.ts
-import { PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, Keypair, LAMPORTS_PER_SOL, Connection } from '@solana/web3.js';
 import { PrismaClient } from '@prisma/client';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
@@ -12,6 +12,7 @@ import { checkRecentMevActivity } from './price.service.js';
 import { redis } from '../lib/redis.js'; 
 import dns from 'dns';
 import { getLiveWalletBalance } from './deposit.service.js';
+import { fireWebhook } from './webhook.service.js';
 import https from 'https';
 
 dotenv.config();
@@ -249,7 +250,6 @@ export async function sendToJitoBundle(
                 return null;
             });
             if (!tipResult) {
-                // one retry — cheap insurance against a transient RPC blip
                 await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {}); 
             }
         }
@@ -265,6 +265,7 @@ export async function sendToJitoBundle(
     }
 }
 
+// 🟢 SMART ORDER ROUTING ENGINE
 async function fetchApiTransaction(
     action: 'buy' | 'sell',
     mint: string,
@@ -280,14 +281,16 @@ async function fetchApiTransaction(
     raydiumPoolId?: string
 ): Promise<{ buffer: Buffer | null, errorLog: string, estimatedOutput?: number }> {
     let globalErrorLog = "";
-    try {
-        const isPumpToken = mint.toLowerCase().endsWith("pump");
-        let apiBuffer: Buffer | null = null;
+    const isPumpToken = mint.toLowerCase().endsWith("pump");
+    const pumpAmount: string | number = action === 'buy' ? amountSolForBuy : (sellPercentage === 100 ? "100%" : rawTokenAmountForSell);
+    const slippageBps = Math.floor(slippage * 100);
+    const jupAmount = action === 'buy' ? Math.floor(amountSolForBuy * 1_000_000_000).toString() : rawTokenAmountForSell;
+    const inputMint = action === 'buy' ? "So11111111111111111111111111111111111111112" : mint;
+    const outputMint = action === 'buy' ? mint : "So11111111111111111111111111111111111111112";
 
+    try {
+        // 🟢 If it's a Pump token, PumpPortal is preferred initially
         if (isPumpToken) {
-            const pumpAmount: string | number = action === 'buy'
-                ? amountSolForBuy
-                : (sellPercentage === 100 ? "100%" : rawTokenAmountForSell);
             try {
                 const pumpRes = await axiosClient.post(
                     `https://pumpportal.fun/api/trade-local`,
@@ -295,71 +298,66 @@ async function fetchApiTransaction(
                         publicKey: vault, action, mint, denominatedInSol: action === 'buy',
                         amount: pumpAmount, slippage, priorityFee: 0.0001, pool: "auto"
                     },
-                    { headers: API_HEADERS, responseType: 'arraybuffer', timeout: 3500 }
+                    { headers: API_HEADERS, responseType: 'arraybuffer', timeout: 3000 }
                 );
-                apiBuffer = Buffer.from(pumpRes.data);
-                return { buffer: apiBuffer, errorLog: "" };
+                if (pumpRes && pumpRes.data) {
+                    return { buffer: Buffer.from(pumpRes.data), errorLog: "" };
+                }
             } catch (e: any) {
                 globalErrorLog += `[PumpPortal: API Reject] `;
             }
         }
 
-        if (!apiBuffer && !isPumpToken && raydiumPoolId && pkEncrypted) {
-            try {
-                const { buildDirectRaydiumSwap } = await import('./raydium.service.js');
-                const keypair = getCachedKeypair(vault, pkEncrypted); 
-                if (keypair) {
-                    const inputMint = action === 'buy' ? 'So11111111111111111111111111111111111111112' : mint;
-                    const rawAmount = action === 'buy' ? Math.floor(amountSolForBuy * 1_000_000_000) : parseInt(rawTokenAmountForSell);
-
-                    const raydiumBuffer = await buildDirectRaydiumSwap(
-                        keypair, raydiumPoolId, inputMint, rawAmount, Math.floor(slippage * 100)
-                    );
-                    if (raydiumBuffer) return { buffer: raydiumBuffer, errorLog: '' };
-                }
-            } catch (e: any) {
-                globalErrorLog += `[Raydium Direct: ${e.message}] `;
+        // 🟢 PARALLEL ROUTING: Fetch Jupiter and Raydium simultaneously
+        const jupiterPromise = axiosClient.get(
+            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
+            { headers: API_HEADERS, timeout: 2500 }
+        ).catch(() => null);
+        
+        let raydiumPromise = Promise.resolve(null);
+        if (raydiumPoolId && pkEncrypted) {
+            const { buildDirectRaydiumSwap } = await import('./raydium.service.js');
+            const keypair = getCachedKeypair(vault, pkEncrypted);
+            if (keypair) {
+                raydiumPromise = buildDirectRaydiumSwap(
+                    keypair, raydiumPoolId, inputMint, parseInt(jupAmount), slippageBps
+                ).catch(() => null) as any;
             }
         }
 
-        if (!apiBuffer) {
-            const inputMint = action === 'buy' ? "So11111111111111111111111111111111111111112" : mint;
-            const outputMint = action === 'buy' ? mint : "So11111111111111111111111111111111111111112";
-            const rawAmount = action === 'buy' ? Math.floor(amountSolForBuy * 1_000_000_000).toString() : rawTokenAmountForSell;
-            const slippageBps = Math.floor(slippage * 100);
-            const jupiterPriorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
+        const [jupQuote, raydiumBuffer] = await Promise.all([jupiterPromise, raydiumPromise]);
 
+        // Prioritize Jupiter if a solid route exists
+        if (jupQuote?.data) {
             try {
-                const quoteRes = await axiosClient.get(
-                    `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
-                    { headers: API_HEADERS, timeout: 3500 }
-                );
-                
-                let estimatedOutput = 0;
-                if (action === 'sell' && quoteRes.data?.outAmount) estimatedOutput = Number(quoteRes.data.outAmount) / 1_000_000_000;
-
+                const priorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
                 const swapRes = await axiosClient.post(
                     'https://lite-api.jup.ag/swap/v1/swap',
                     {
-                        quoteResponse: quoteRes.data, userPublicKey: vault, wrapAndUnwrapSol: true,
-                        dynamicComputeUnitLimit: true, prioritizationFeeLamports: jupiterPriorityLamports
+                        quoteResponse: jupQuote.data, userPublicKey: vault, wrapAndUnwrapSol: true,
+                        dynamicComputeUnitLimit: true, prioritizationFeeLamports: priorityLamports
                     },
-                    { headers: API_HEADERS, timeout: 3500 }
+                    { headers: API_HEADERS, timeout: 3000 }
                 );
 
-                if (swapRes.data?.swapTransaction) {
-                    apiBuffer = Buffer.from(swapRes.data.swapTransaction, 'base64');
-                    return { buffer: apiBuffer, errorLog: "", estimatedOutput };
+                if (swapRes?.data?.swapTransaction) {
+                    const estOut = action === 'sell' && jupQuote.data.outAmount ? Number(jupQuote.data.outAmount) / 1_000_000_000 : 0;
+                    return { buffer: Buffer.from(swapRes.data.swapTransaction, 'base64'), errorLog: "", estimatedOutput: estOut };
                 }
                 globalErrorLog += `[Jupiter: Swap Reject] `;
             } catch (e: any) {
-                globalErrorLog += `[Jupiter: Route Timeout] `;
+                globalErrorLog += `[Jupiter: Swap Route Timeout] `;
             }
         }
 
-        return { buffer: null, errorLog: globalErrorLog };
+        // Fallback to Direct Raydium
+        if (raydiumBuffer) {
+            return { buffer: raydiumBuffer as Buffer, errorLog: "" };
+        }
+
+        return { buffer: null, errorLog: globalErrorLog || "No DEX liquidity routes available." };
     } catch (e: any) {
-        return { buffer: null, errorLog: `Fatal: ${e.message}` };
+        return { buffer: null, errorLog: `Routing Fault: ${e.message}` };
     }
 }
 
@@ -406,9 +404,10 @@ export async function executeSnipe(
     telegramId: string, targetCA: string, amountSol: number,
     side: 'buy' | 'sell' = 'buy', tokenAmount?: number,
     isBumper: boolean = false, raydiumPoolId?: string,
-    overrideSlippage?: number, // 🟢 UPGRADE: CopyTrade Dynamic Slippage
+    overrideSlippage?: number, // 🟢 UPGRADE: Dynamic CopyTrade Slippage
     antiMevDelayMs: number = 0, // 🟢 UPGRADE: Anti-MEV Delay Execution
-    customRpcUrl?: string // 🟢 UPGRADE: Private Custom RPC Routing
+    customRpcUrl?: string, // 🟢 UPGRADE: Private Custom RPC Routing
+    strategy: string = 'MANUAL' // 🟢 UPGRADE: Performance Attribution Strategy Tag
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
@@ -416,7 +415,7 @@ export async function executeSnipe(
         return await simExecuteSnipe(telegramId, targetCA, amountSol);
     }
     
-    // 🟢 Delay for Anti-MEV strategy (If specified by Sniper/Settings)
+    // 🟢 Anti-MEV Strategy Delay
     if (antiMevDelayMs > 0) {
         await new Promise(r => setTimeout(r, antiMevDelayMs));
     }
@@ -448,7 +447,7 @@ export async function executeSnipe(
                 }
             } catch (e) { percentage = 100; }
         }
-        return executeExit(telegramId, targetCA, percentage, isBumper);
+        return executeExit(telegramId, targetCA, percentage, isBumper, strategy);
     }
 
     try {
@@ -465,7 +464,7 @@ export async function executeSnipe(
             return { success: false, message: "Insufficient Funds." };
         }
 
-        // 🟢 UPGRADE: Extended 500ms MEV Safety Net
+        // 🟢 Extended 500ms MEV Safety Net
         const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve("TIMEOUT"), 500));
         const mevResult = await Promise.race([mevPromise, timeoutPromise]);
         
@@ -486,7 +485,7 @@ export async function executeSnipe(
             }).catch(()=>{});
         }
 
-        // 🟢 UPGRADE: Dynamic Override for CopyTrading
+        // 🟢 Dynamic Slippage Override
         const slippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
@@ -532,10 +531,9 @@ export async function executeSnipe(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
-            // 🟢 UPGRADE: Execute via Custom RPC if user has designated one
+            // 🟢 Private Custom RPC Submission Path
             if (customRpcUrl) {
                 try {
-                    const { Connection } = await import('@solana/web3.js');
                     const customConnection = new Connection(customRpcUrl, 'confirmed');
                     customConnection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(()=>{});
                 } catch(e) {}
@@ -592,13 +590,19 @@ export async function executeSnipe(
                     await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: amountSol } } }).catch(()=>{});
                     awardGuildPoints(user.telegramId, amountSol).catch(() => {});
                     
+                    // 🟢 SAVES STRATEGY TAG TO PRISMA FOR PERFORMANCE ATTRIBUTION
                     await prisma.trade.create({
                         data: {
                             userId: user.id, tokenAddress: targetCA, isBuy: true, amountInSol: amountSol,
                             feeChargedSol: feeCharged, affiliateCutSol: affiliateCut, loyaltyRebateSol: 0,
-                            txSignature: txSig, status: 'CONFIRMED'
+                            txSignature: txSig, status: 'CONFIRMED', strategy: strategy
                         }
                     }).catch(() => {});
+
+                    // 🟢 FIRE WEBHOOK EVENT
+                    fireWebhook(user.telegramId, 'trade_buy', {
+                        tokenAddress: targetCA, amountSol, signature: txSig, strategy
+                    }).catch(()=>{});
                 }
             });
         });
@@ -625,7 +629,8 @@ export async function executeSnipe(
 }
 
 export async function executeExit(
-    telegramId: string, targetCA: string, sellPercentage: number = 100, isBumper: boolean = false
+    telegramId: string, targetCA: string, sellPercentage: number = 100, isBumper: boolean = false,
+    strategy: string = 'MANUAL' // 🟢 STRATEGY ATTRIBUTION TAG
 ): Promise<{ success: boolean; signature?: string; message: string }> {
 
     const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
@@ -767,14 +772,20 @@ export async function executeExit(
                     const { recordStatsEvent } = await import('./simulation.service.js');
                     await recordStatsEvent(user.telegramId, 'live', realizedPnlSol).catch(()=>{});
 
+                    // 🟢 SAVES STRATEGY TAG TO PRISMA FOR PERFORMANCE ATTRIBUTION
                     await prisma.trade.create({
                         data: {
                             userId: user.id, tokenAddress: targetCA, isBuy: false, amountInSol: volumeToRecord,
                             feeChargedSol: feeCharged, affiliateCutSol: affiliateCut, loyaltyRebateSol: 0,
                             txSignature: txSig, status: 'CONFIRMED', profitPercent: parseFloat(profitPercent.toFixed(2)),
-                            realizedPnlSol: realizedPnlSol
+                            realizedPnlSol: realizedPnlSol, strategy: strategy
                         }
                     }).catch(() => {});
+
+                    // 🟢 FIRE WEBHOOK EVENT
+                    fireWebhook(user.telegramId, 'trade_sell', {
+                        tokenAddress: targetCA, percentage: sellPercentage, realizedPnlSol, profitPercent, signature: txSig, strategy
+                    }).catch(()=>{});
 
                     if (!isBumper) {
                         const captionHtml = `${profitPercent >= 0 ? '🟢' : '🔴'} <b>SELL CONFIRMED</b>\n\n` +

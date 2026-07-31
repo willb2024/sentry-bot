@@ -5577,21 +5577,21 @@ app.post('/api/risk-score', async (req, res) => {
         
         let totalValue = 0;
         let rugCount = 0;
-        let lowLiqCount = 0;
 
-        const enriched = await Promise.all(positions.map(async (p) => {
+        // 🟢 FIX: Added explicit `p: any` and `t: any` type annotations
+        const enriched = await Promise.all(positions.map(async (p: any) => {
             const rug = await getTokenRiskDetails(p.mint);
             totalValue += p.valueUsd;
             if (rug.isUnsafe) rugCount++;
             return { ...p, rug };
         }));
 
-        const topConcentration = Math.max(...enriched.map(t => t.valueUsd / (totalValue || 1)));
+        const topConcentration = Math.max(...enriched.map((t: any) => t.valueUsd / (totalValue || 1)));
         
         let score = 0;
-        if (topConcentration > 0.50) score += 30; // Highly concentrated in one coin
+        if (topConcentration > 0.50) score += 30;
         if (topConcentration > 0.80) score += 15;
-        if (rugCount > 0) score += 40;            // Holds risky tokens
+        if (rugCount > 0) score += 40;
         
         const riskLevel = score > 70 ? 'High' : score > 40 ? 'Medium' : 'Low';
         res.json({ score: Math.min(100, score), riskLevel, details: { topConcentration, rugCount } });
