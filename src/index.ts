@@ -16,7 +16,6 @@ import { sweepExpiredVips } from './services/vip_promo.service.js';
 import { addTrailingStopToMemory, cancelAllUserGuards, cancelAllGuardsForToken, updateGuardSize } from './services/order.service.js';
 import { generateSecureVault, exportPrivateKey, importPrivateKey, ensureWalletsExist, decryptKey } from './services/vault.service.js';
 import { cachedSolUsdPrice } from './services/grpc.service.js';
-import { executeSnipe, executeExit, warmDnsCache } from './services/engine.service.js';
 import { getUserPositions } from './services/position.service.js';
 import { processAffiliatePayout } from './services/payout.service.js';
 import { getEmptyTokenAccounts, executeRentSweep } from './services/burn.service.js';
@@ -25,6 +24,8 @@ import { startDepositWatcher } from './services/deposit.service.js';
 import { syncGuardsFromDb } from './services/order.service.js';
 import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './services/caller.service.js';
 import { connection } from './lib/connection.js';
+// 🟢 Update line 22 in src/index.ts:
+import { executeSnipe, executeExit, warmDnsCache, getCachedTokenPrice } from './services/engine.service.js';
 import cron from 'node-cron';
 import { sendWeeklyReportsToAll, computeWeeklyStats, formatWeeklyReport } from './services/weekly_report.service.js';
 import { VIP_TIERS, VipTierKey, checkVipStatus, grantVip, verifyVipPayment, getPlatformFeeRate, formatVipStatus, VIP_CREDIT_BONUS } from './services/vip.service.js';
