@@ -81,54 +81,60 @@ export function decodePumpCurvePrice(base64Data: string): number {
 }
 
 export async function checkRecentMevActivity(tokenMint: string): Promise<boolean> {
-    // 🟢 FIX: Cache for 10 minutes — this was running uncached on every scan
     const cacheKey = `mev_check:${tokenMint}`;
     try {
-        const cached = await redis.get(cacheKey);
-        if (cached !== null) return cached === 'true';
-
-        const pubkey = new PublicKey(tokenMint);
-
-        const sigs = await rpcLimiter.run(() =>
-            connection.getSignaturesForAddress(pubkey, { limit: 10 }).catch(() => [])
-        );
-        if (sigs.length === 0) {
-            await redis.set(cacheKey, 'false', 'EX', 600);
-            return false;
-        }
-
-        const txs = await rpcLimiter.run(() =>
-            connection.getParsedTransactions(
-                sigs.map((s: any) => s.signature),
-                { maxSupportedTransactionVersion: 0 }
-            ).catch(() => [])
-        );
-
-        const buyerMap: Record<string, number[]> = {};
-        txs.forEach((tx: any, blockIdx: number) => {
-            if (!tx || tx.meta?.err) return;
-            const buyer = tx.transaction.message.accountKeys[0]?.pubkey.toBase58();
-            if (!buyer) return;
-            if (!buyerMap[buyer]) buyerMap[buyer] = [];
-            buyerMap[buyer].push(blockIdx);
-        });
-
-        let isMev = false;
-        for (const slots of Object.values(buyerMap)) {
-            if (slots.length >= 3 && slots[slots.length - 1] - slots[0] <= 1) {
-                isMev = true;
-                break;
-            }
-        }
-
-        // 🟢 Cache result 10 minutes — MEV status does not change second to second
-        await redis.set(cacheKey, isMev ? 'true' : 'false', 'EX', 600);
-        return isMev;
-    } catch (e: any) {
-        console.error("⚠️ [PRICE SERVICE] MEV activity check exception:", e.message);
+      const cached = await redis.get(cacheKey);
+      if (cached !== null) return cached === 'true';
+  
+      // 🟢 FIX: Validate mint format before creating PublicKey
+      let pubkey: PublicKey;
+      try {
+        pubkey = new PublicKey(tokenMint);
+      } catch (e) {
+        console.warn(`⚠️ [MEV] Invalid mint format: ${tokenMint}`);
+        await redis.set(cacheKey, 'false', 'EX', 600);
         return false;
+      }
+  
+      const sigs = await rpcLimiter.run(() =>
+        connection.getSignaturesForAddress(pubkey, { limit: 10 }).catch(() => [])
+      );
+      if (sigs.length === 0) {
+        await redis.set(cacheKey, 'false', 'EX', 600);
+        return false;
+      }
+  
+      const txs = await rpcLimiter.run(() =>
+        connection.getParsedTransactions(
+          sigs.map((s: any) => s.signature),
+          { maxSupportedTransactionVersion: 0 }
+        ).catch(() => [])
+      );
+  
+      const buyerMap: Record<string, number[]> = {};
+      txs.forEach((tx: any, blockIdx: number) => {
+        if (!tx || tx.meta?.err) return;
+        const buyer = tx.transaction.message.accountKeys[0]?.pubkey.toBase58();
+        if (!buyer) return;
+        if (!buyerMap[buyer]) buyerMap[buyer] = [];
+        buyerMap[buyer].push(blockIdx);
+      });
+  
+      let isMev = false;
+      for (const slots of Object.values(buyerMap)) {
+        if (slots.length >= 3 && slots[slots.length - 1] - slots[0] <= 1) {
+          isMev = true;
+          break;
+        }
+      }
+  
+      await redis.set(cacheKey, isMev ? 'true' : 'false', 'EX', 600);
+      return isMev;
+    } catch (e: any) {
+      console.error("⚠️ [PRICE SERVICE] MEV activity check exception:", e.message);
+      return false;
     }
-}
+  }
 
 export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
     const key = `rugcheck:${tokenMint}`;
