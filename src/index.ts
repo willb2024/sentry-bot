@@ -281,7 +281,8 @@ app.get('/share/:imgId', async (req, res) => {
     }
 });
 
-// 🎮 SIMULATION INTERCEPT: Fetch simulated trades for Flow Analytics
+// src/index.ts
+
 app.post('/api/sim-trades', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData))
@@ -291,8 +292,8 @@ app.post('/api/sim-trades', async (req, res) => {
             new URLSearchParams(req.body.initData).get('user')!
         ).id.toString();
 
-        // Strict security: Only the admin can access simulated trades
-        if (telegramId !== process.env.ADMIN_TELEGRAM_ID)
+        // Strict security: Only admins can access simulated trades
+        if (!isAdmin(telegramId))
             return res.status(403).json({ error: 'Admin only' });
 
         const { isSimulationActive } = await import('./services/simulation.service.js');
@@ -305,6 +306,53 @@ app.post('/api/sim-trades', async (req, res) => {
     } catch (e: any) {
         res.status(500).json([]);
     }
+});
+
+app.post('/api/sim-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
+        
+        if (!isAdmin(telegramId)) return res.status(403).json({ error: 'Admin only' });
+
+        const { isSimulationActive, getSimBalance, getSimVolume, getSimStartingBalance } = await import('./services/simulation.service.js');
+        if (!await isSimulationActive(telegramId)) return res.json({ isActive: false });
+
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+
+        const balance = await getSimBalance(telegramId);
+        const startingBalance = await getSimStartingBalance(telegramId); 
+        const volume = await getSimVolume(telegramId);
+        const posRaw = await redis.get(`sim:positions:${telegramId}`);
+        const positions = posRaw ? JSON.parse(posRaw) : [];
+        const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
+        const simTrades = tradesRaw ? JSON.parse(tradesRaw) : [];
+
+        // 🟢 Fetch Live Trades and Merge them with Sim Trades
+        let dbTrades: any[] = [];
+        if (user) {
+            dbTrades = await prisma.trade.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'desc' }, take: 100 });
+        }
+        const mappedDbTrades = dbTrades.map((t: any) => ({
+            createdAt: t.createdAt.toISOString(), isBuy: t.isBuy, amountInSol: t.amountInSol,
+            profitPercent: t.profitPercent || 0, realizedPnlSol: t.realizedPnlSol || 0
+        }));
+
+        const allTrades = [...simTrades, ...mappedDbTrades]
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+            .slice(0, 100);
+
+        let wins = 0, losses = 0;
+        allTrades.filter((t: any) => !t.isBuy).forEach((t: any) => {
+            if (t.profitPercent > 0) wins++; else losses++;
+        });
+
+        res.json({
+            isActive: true, balance: parseFloat(balance), startingBalance, 
+            volume, positions, trades: allTrades, wins, losses,
+            winRate: (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0"
+        });
+    } catch (e: any) { res.status(500).json({ isActive: false }); }
 });
 
 // 🎮 SIMULATION INTERCEPT: Fetch simulated balance, volume, positions, and win/loss rates
@@ -3414,6 +3462,8 @@ bot.action('menu_credits', async (ctx) => {
     await sendCreditsMenu(ctx, ctx.from!.id.toString(), true);
 });
 
+// src/index.ts
+
 async function sendCreditsMenu(ctx: any, tgId: string, isEdit: boolean) {
     const { getUsageStats, CREDIT_PACKS } = await import('./services/credits.service.js');
     const stats = await getUsageStats(tgId);
@@ -3422,7 +3472,6 @@ async function sendCreditsMenu(ctx: any, tgId: string, isEdit: boolean) {
     const text = `💳 <b>SENTRY CREDITS</b>\n\n` +
         `<i>Credits only spend when Sentry finds and delivers a real token — never for empty scans.</i>\n\n` +
         `📊 <b>Your Usage (Last 30 days):</b>\n` +
-
         `• Current Balance: <b>${stats.currentBalance} credits</b>\n` +
         `• Lifetime Purchased: <b>${stats.lifetimeCredits.toLocaleString()}</b>\n` +
         `• Manual Scans Used: <b>${stats.scanConsumed}</b>\n` +
@@ -3436,10 +3485,10 @@ async function sendCreditsMenu(ctx: any, tgId: string, isEdit: boolean) {
         `<i>Pick a pack below to top up:</i>`;
 
     const UI = Markup.inlineKeyboard([
-        [Markup.button.callback(`Starter — $20 (140 credits)`, 'buy_credits_starter')],
-        [Markup.button.callback(`Growth — $40 (300 credits)`, 'buy_credits_growth')],
-        [Markup.button.callback(`Pro — $60 (480 credits)`, 'buy_credits_pro')],
-        [Markup.button.callback(`Whale — $100 (2,000 credits)`, 'buy_credits_whale')],
+        [Markup.button.callback(`${CREDIT_PACKS.starter.name} — $${CREDIT_PACKS.starter.priceUsd} (${CREDIT_PACKS.starter.credits} credits)`, 'buy_credits_starter')],
+        [Markup.button.callback(`${CREDIT_PACKS.growth.name} — $${CREDIT_PACKS.growth.priceUsd} (${CREDIT_PACKS.growth.credits} credits)`, 'buy_credits_growth')],
+        [Markup.button.callback(`${CREDIT_PACKS.pro.name} — $${CREDIT_PACKS.pro.priceUsd} (${CREDIT_PACKS.pro.credits} credits)`, 'buy_credits_pro')],
+        [Markup.button.callback(`${CREDIT_PACKS.whale.name} — $${CREDIT_PACKS.whale.priceUsd} (${CREDIT_PACKS.whale.credits.toLocaleString()} credits)`, 'buy_credits_whale')],
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 

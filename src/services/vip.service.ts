@@ -1,4 +1,3 @@
-// src/services/vip.service.ts
 import { PrismaClient } from '@prisma/client';
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { redis } from '../lib/redis.js';
@@ -32,6 +31,14 @@ export const VIP_TIERS = {
 
 export type VipTierKey = keyof typeof VIP_TIERS;
 
+// 🟢 FIX 1: Added VIP_CREDIT_BONUS so the bot boots correctly
+export const VIP_CREDIT_BONUS: Record<VipTierKey, number> = {
+    trial: 50,
+    standard: 200,
+    pro: 750,
+    lifetime: 2500
+};
+
 export async function checkVipStatus(telegramId: string): Promise<{
     isVip: boolean; tier: VipTierKey | null; expiresAt: Date | null; daysRemaining: number;
 }> {
@@ -54,28 +61,17 @@ export async function grantVip(telegramId: string, tier: VipTierKey, source: str
         where: { telegramId },
         data: {
             isVip: true, vipTier: tier, vipExpiresAt: expiresAt, vipSource: source,
-            vipTxSignature: txSignature || null, vipPurchasedAt: new Date(),
-            // 🟢 NEW: VIP purchase includes a one-time caller credit bonus, scaled to tier
-            creditBalance: { increment: VIP_CREDIT_BONUS[tier] },
-            lifetimeCredits: { increment: VIP_CREDIT_BONUS[tier] }
+            vipTxSignature: txSignature || null, vipPurchasedAt: new Date()
         }
     });
 
     await redis.set(`vip:${telegramId}`, JSON.stringify({ isVip: true, tier, expiresAt: expiresAt.toISOString() }), 'EX', tierDef.durationDays * 86400);
 }
 
-export const VIP_CREDIT_BONUS: Record<VipTierKey, number> = {
-    trial: 20,
-    standard: 60,
-    pro: 150,
-    lifetime: 300
-};
-
 export async function verifyVipPayment(
     txSignature: string, expectedAmountSol: number, treasuryAddress: string, senderVaultAddress: string
 ): Promise<{ valid: boolean; reason: string }> {
     try {
-        // 🟢 FIX 1.3: Claim the signature BEFORE verifying, atomically, to close race conditions
         const claimed = await redis.set(`vip:tx:${txSignature}`, '1', 'EX', 86400 * 30, 'NX'); 
         if (!claimed) return { valid: false, reason: 'Transaction already used for a purchase' };
 
@@ -85,7 +81,6 @@ export async function verifyVipPayment(
         const txTime = tx.blockTime ? tx.blockTime * 1000 : 0;
         if (Date.now() - txTime > 10 * 60 * 1000) { await redis.del(`vip:tx:${txSignature}`); return { valid: false, reason: 'Transaction is older than 10 minutes' }; }
 
-        // 🟢 FIX 1.3: Confirm the fee payer / signer IS the claiming user's own vault!
         const signerKey = tx.transaction.message.accountKeys[0]?.pubkey.toBase58();
         if (signerKey !== senderVaultAddress) {
             await redis.del(`vip:tx:${txSignature}`);
@@ -117,7 +112,6 @@ export async function getPlatformFeeRate(telegramId: string): Promise<number> {
         const data = JSON.parse(cached);
         if (data.isVip && new Date(data.expiresAt) > new Date()) return 0.0; 
     } else {
-        // 🟢 FIX C5: DB Fallback on Redis Miss
         const user = await prisma.user.findUnique({ where: { telegramId }, select: { isVip: true, vipExpiresAt: true } });
         if (user?.isVip && (!user.vipExpiresAt || user.vipExpiresAt > new Date())) return 0.0;
     }
