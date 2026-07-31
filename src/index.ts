@@ -60,6 +60,15 @@ if (!process.env.TREASURY_WALLET_ADDRESS) { console.error("🔴 FATAL: TREASURY_
 const bot = new Telegraf(BOT_TOKEN);
 
 
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🔴 Unhandled Rejection at:', promise, 'reason:', reason);
+  });
+  
+  process.on('uncaughtException', (error) => {
+    console.error('🔴 Uncaught Exception:', error);
+  });
+
+
 // Add this helper function near the top of index.ts
 function isAdmin(tgId: string | undefined): boolean {
     if (!tgId) return false;
