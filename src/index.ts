@@ -2478,6 +2478,94 @@ bot.action('action_unlock_devsuite', async (ctx) => {
         
     } catch (e) { await ctx.replyWithHTML(`🔴 <b>Error processing multi-wallet transaction.</b>`); }
 });
+
+
+// EXTENDED SIMEDIT (Includes optional Credits)
+bot.command('simedit', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 5 || parts.length > 6) {
+        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [VOLUME_SOL] [DAYS_ACTIVE] [CREDITS?]</code>');
+    }
+
+    const wins = parseInt(parts[1]);
+    const losses = parseInt(parts[2]);
+    const totalVol = parseFloat(parts[3]);
+    const daysActive = parseInt(parts[4]);
+    const credits = parts.length === 6 ? parseInt(parts[5]) : undefined;
+
+    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive)) {
+        return ctx.reply("🔴 Invalid numbers provided.");
+    }
+
+    if (credits !== undefined) {
+        await redis.set(`sim:credits:${tgId}`, credits.toString());
+    }
+
+    const fakeTrades = [];
+    const volPerTrade = totalVol / ((wins + losses) || 1);
+    const now = Date.now();
+    let totalRealizedPnl = 0; 
+
+    for (let i = 0; i < wins; i++) {
+        const pnlPercent = Math.random() * 150 + 15;
+        totalRealizedPnl += volPerTrade * (pnlPercent / 100);
+        fakeTrades.push({
+            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
+            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
+        });
+    }
+    for (let i = 0; i < losses; i++) {
+        const pnlPercent = -(Math.random() * 35 + 5);
+        totalRealizedPnl += volPerTrade * (pnlPercent / 100);
+        fakeTrades.push({
+            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
+            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
+        });
+    }
+
+    fakeTrades.sort(() => Math.random() - 0.5);
+    await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
+    await redis.set(`sim:volume:${tgId}`, totalVol.toString());
+
+    const { getSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
+    const startBal = await getSimStartingBalance(tgId!);
+    const newBalance = Math.max(0, startBal + totalRealizedPnl);
+    await redis.set(`sim:balance:${tgId}`, newBalance.toFixed(4));
+    
+    await saveSimulationState(tgId!); // Persist to DB
+
+    await ctx.replyWithHTML(`✅ <b>Simulated Stats Forged!</b>\nWins: <b>${wins}</b> | Losses: <b>${losses}</b>\nCredits Set: <b>${credits ?? 'Unchanged'}</b>`);
+});
+
+// STATS WINDOW API ENDPOINT (For WebApp)
+app.post('/api/stats-window', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const { getStatsForWindow } = await import('./services/simulation.service.js');
+        const liveStats = await getStatsForWindow(telegramId, 'live', 30);
+        const simStats = await getStatsForWindow(telegramId, 'sim', 30);
+
+        res.json({
+            live: liveStats,
+            sim: simStats,
+            combined: {
+                totalPnl: liveStats.totalPnl + simStats.totalPnl,
+                wins: liveStats.wins + simStats.wins,
+                losses: liveStats.losses + simStats.losses,
+                tradeCount: liveStats.tradeCount + simStats.tradeCount
+            }
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 bot.action('action_enter_ref_code', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -3661,46 +3749,95 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
     await executeWithdrawalProcess(user, targetAddress, requestedAmount, isMax, telegramId, ctx, withdrawLockKey);
 });
 
-// Helper function to handle the actual sending logic
-// Helper function to handle the actual sending logic
-async function executeWithdrawalProcess(user: any, targetAddress: string, requestedAmount: number, isMax: boolean, telegramId: string, ctx: any, withdrawLockKey: string) {
-    
-    // --- 🎮 SIMULATION INTERCEPT ---
-    const { isSimulationActive, getSimBalance } = await import('./services/simulation.service.js');
-    if (await isSimulationActive(telegramId)) {
-        const loader = await ctx.replyWithHTML(`<i>⏳ Submitting transaction to Solana validators. Sweeping in progress...</i>`);
-        await new Promise(r => setTimeout(r, 1500 + Math.random() * 2000)); // Fake network delay
-        
-        const currentBal = parseFloat(await getSimBalance(telegramId));
-        const gasBuffer = 0.00005; // tiny fake gas buffer
-        
-        let withdrawAmount = isMax ? currentBal - gasBuffer : requestedAmount;
-        
-        // Check simulated balance limits
-        if (withdrawAmount <= 0 || withdrawAmount > currentBal) {
-            await redis.del(withdrawLockKey);
-            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Insufficient balance in your vault to cover the network transfer fee.`, { parse_mode: 'HTML' });
-        }
-        
-        // Deduct from simulated balance
-        const newBal = (currentBal - withdrawAmount).toFixed(4);
-        await redis.set(`sim:balance:${telegramId}`, newBal);
-        
-        const { generateSimSignature } = await import('./services/simulation.service.js');
-        
-        // Exact replica of the real success message (No simulation tags)
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
-            `🟢 <b>WITHDRAWAL INITIATED</b>\n\n<b>Total Swept:</b> ~<code>${withdrawAmount.toFixed(4)} SOL</code>\n<b>Destination:</b> <code>${targetAddress}</code>\n\n🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View Latest Receipt on Solscan</a>`, 
-            { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-        );
-        
-        await redis.del(withdrawLockKey);
-        return;
-    }
-    // --- END SIMULATION INTERCEPT ---
+// ------------------ LIMIT ORDER WATCHER ------------------
+let cachedLimitOrders: any[] = [];
+let isLimitChecking = false;
 
+export async function refreshLimitOrders() {
+    try {
+        cachedLimitOrders = await prisma.activeOrder.findMany({
+            where: { orderType: 'LIMIT', isActive: true },
+            include: { user: true }
+        });
+    } catch (e) {
+        console.error("🔴 [LIMIT WATCHER] Cache refresh failed:", e);
+    }
+}
+
+export function startLimitOrderWatcher(bot: any) {
+    console.log("⏳ [LIMIT WATCHER] Monitoring limit orders every 5 seconds.");
+    refreshLimitOrders();
+    setInterval(refreshLimitOrders, 5000);
+
+    setInterval(async () => {
+        if (isLimitChecking || cachedLimitOrders.length === 0) return;
+        isLimitChecking = true;
+
+        try {
+            for (const order of cachedLimitOrders) {
+                const fresh = await prisma.activeOrder.findUnique({ where: { id: order.id } });
+                if (!fresh || !fresh.isActive) {
+                    cachedLimitOrders = cachedLimitOrders.filter(o => o.id !== order.id);
+                    continue;
+                }
+
+                let price = await getCachedTokenPrice(order.tokenAddress);
+                if (price === 0) {
+                    try {
+                        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${order.tokenAddress}`, { timeout: 2000 });
+                        price = parseFloat(res.data?.pairs?.[0]?.priceUsd || "0");
+                    } catch (_) {}
+                }
+                if (price === 0) continue; 
+
+                // 🟢 LIMIT MET: Execute Snipe
+                if (price <= order.targetPriceUsd!) {
+                    const result = await executeSnipe(order.user.telegramId, order.tokenAddress, order.amountSol);
+                    
+                    if (result.success) {
+                        await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
+                        cachedLimitOrders = cachedLimitOrders.filter(o => o.id !== order.id);
+
+                        if (order.trailingPercent) {
+                            await addTrailingStopToMemory(
+                                order.user.telegramId, order.tokenAddress, order.trailingPercent,
+                                order.amountSol, price, order.takeProfitPercent || undefined
+                            );
+                        }
+
+                        try {
+                            await bot.telegram.sendMessage(
+                                order.user.telegramId,
+                                `🟢 <b>LIMIT ORDER FILLED!</b>\n\nToken: <code>${order.tokenAddress.substring(0,8)}...</code>\nTarget: $${order.targetPriceUsd}\nFilled at: $${price}\nAmount: ${order.amountSol} SOL\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
+                                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                            );
+                        } catch (_) {}
+                    } else {
+                        await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
+                        cachedLimitOrders = cachedLimitOrders.filter(o => o.id !== order.id);
+                        try {
+                            await bot.telegram.sendMessage(
+                                order.user.telegramId,
+                                `🔴 <b>LIMIT ORDER FAILED</b>\n\nToken: <code>${order.tokenAddress.substring(0,8)}...</code>\nReason: ${result.message}\n<i>Order has been deactivated.</i>`,
+                                { parse_mode: 'HTML' }
+                            );
+                        } catch (_) {}
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('🔴 [LIMIT WATCHER] Error:', e);
+        } finally {
+            isLimitChecking = false;
+        }
+    }, 5000);
+}
+
+// ------------------ BATCHED WITHDRAWALS ------------------
+// Replace your existing executeWithdrawalProcess with this optimized version
+async function executeWithdrawalProcess(user: any, targetAddress: string, requestedAmount: number, isMax: boolean, telegramId: string, ctx: any, withdrawLockKey: string) {
     const targetPubkey = new PublicKey(targetAddress);
-    const loader = await ctx.replyWithHTML(`<i>⏳ Submitting transaction to Solana validators. Sweeping in progress...</i>`);
+    const loader = await ctx.replyWithHTML(`<i>⏳ Building consolidated multi-wallet transfer...</i>`);
 
     try {
         const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
@@ -3710,10 +3847,12 @@ async function executeWithdrawalProcess(user: any, targetAddress: string, reques
         if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5 });
 
         let totalSentAmount = 0; 
-        let successCount = 0; 
-        let finalSignature = "";
         let remainingLamportsToWithdraw = isMax ? Number.MAX_SAFE_INTEGER : Math.floor(requestedAmount * LAMPORTS_PER_SOL);
+        
+        const instructions = [];
+        const signers: Keypair[] = [];
 
+        // 🟢 Gather all transfers into ONE transaction
         for (const w of wallets) {
             if (remainingLamportsToWithdraw <= 0) break;
             if (!w.pub || !w.pk) continue;
@@ -3730,38 +3869,45 @@ async function executeWithdrawalProcess(user: any, targetAddress: string, reques
             
             try {
                 const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
-                const ix = SystemProgram.transfer({ fromPubkey: vaultPubkey, toPubkey: targetPubkey, lamports: lamportsToWithdraw });
-                const { blockhash } = await connection.getLatestBlockhash('confirmed');
-                const messageV0 = new TransactionMessage({ payerKey: vaultPubkey, recentBlockhash: blockhash, instructions: [ix] }).compileToV0Message();
-                const vTx = new VersionedTransaction(messageV0);
-                vTx.sign([keypair]);
+                instructions.push(SystemProgram.transfer({
+                    fromPubkey: vaultPubkey, toPubkey: targetPubkey, lamports: lamportsToWithdraw
+                }));
+                signers.push(keypair);
                 
-                const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-                
-                let isConfirmed = false;
-                for (let i = 0; i < 15; i++) {
-                    await new Promise(r => setTimeout(r, 2000));
-                    const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-                    if (status?.value && !status.value.err) { isConfirmed = true; break; }
-                }
-
-                if (isConfirmed) {
-                    finalSignature = sig;
-                    if (!isMax) remainingLamportsToWithdraw -= lamportsToWithdraw;
-                    totalSentAmount += (lamportsToWithdraw / LAMPORTS_PER_SOL);
-                    successCount++;
-                }
-            } catch (txError) {}
+                if (!isMax) remainingLamportsToWithdraw -= lamportsToWithdraw;
+                totalSentAmount += (lamportsToWithdraw / LAMPORTS_PER_SOL);
+            } catch (e) {}
         }
 
-        if (successCount > 0) {
+        if (instructions.length === 0) {
+            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Insufficient balance across your active wallets.`);
+        }
+
+        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+        const messageV0 = new TransactionMessage({
+            payerKey: signers[0].publicKey, recentBlockhash: blockhash, instructions
+        }).compileToV0Message();
+        
+        const vTx = new VersionedTransaction(messageV0);
+        vTx.sign(signers); // Sign with all gathered keypairs
+        
+        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+        
+        let isConfirmed = false;
+        for (let i = 0; i < 15; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            if (status?.value && !status.value.err) { isConfirmed = true; break; }
+        }
+
+        if (isConfirmed) {
             await redis.del(`balance_cache:${telegramId}`); 
             await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
-                `🟢 <b>WITHDRAWAL INITIATED</b>\n\n<b>Total Swept:</b> ~<code>${totalSentAmount.toFixed(4)} SOL</code>\n<b>Destination:</b> <code>${targetPubkey.toBase58()}</code>\n\n🔗 <a href="https://solscan.io/tx/${finalSignature}">View Latest Receipt on Solscan</a>`, 
+                `🟢 <b>WITHDRAWAL INITIATED</b>\n\n<b>Total Swept:</b> ~<code>${totalSentAmount.toFixed(4)} SOL</code>\n<b>Destination:</b> <code>${targetPubkey.toBase58()}</code>\n\n🔗 <a href="https://solscan.io/tx/${sig}">View Latest Receipt on Solscan</a>`, 
                 { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
             );
         } else {
-            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Insufficient balance in your vault to cover the network transfer fee or transaction was dropped.`);
+            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Transaction dropped by the network.`);
         }
     } catch (e: any) { 
         await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Error:</b> ${e.message}`); 

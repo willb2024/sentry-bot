@@ -2,7 +2,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
 import { PrismaClient } from '@prisma/client';
-import { executeSnipe, getCachedTokenPrice } from './engine.service.js'; // 🟢 FIX: Import cached price helper
+import { executeSnipe, getCachedTokenPrice } from './engine.service.js'; 
 import { addTrailingStopToMemory } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { redis } from '../lib/redis.js';
@@ -25,7 +25,6 @@ export function shutdownCopyTradeWatchers() {
 }
 
 async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
-    // 🟢 FIX: Use fast redis cached lookup instead of raw Jupiter API calls
     try {
         const cachedPrice = await getCachedTokenPrice(tokenAddress);
         if (cachedPrice > 0) return cachedPrice;
@@ -49,7 +48,6 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     return 0;
 }
 
-// Replace this function in src/services/copytrade.service.ts
 export async function syncCopyTradeListeners(bot: any) {
     try {
         const activeConfigs = await prisma.copyTradeConfig.findMany({
@@ -104,26 +102,31 @@ export async function syncCopyTradeListeners(bot: any) {
                             include: { user: true }
                         });
 
-                        // 🟢 FIX: Handle Buy Mirroring
+                        // 🟢 HANDLE BUY MIRRORING
                         if (tradeType === 'buy') {
                             console.log(`🎯 [COPY-TRADE] Whale ${walletStr.substring(0,6)} BOUGHT: ${targetTokenMint}.`);
                             const entryPrice = await fetchLiveEntryPrice(targetTokenMint);
 
                             for (const follower of freshConfigs) {
-                                executeSnipe(follower.user.telegramId, targetTokenMint, follower.tradeAmountSol)
+                                // 🟢 UPGRADE: Max Trade Size & Direction Filtering
+                                const f: any = follower; 
+                                if (f.copyBuys === false) continue;
+                                const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
+
+                                executeSnipe(follower.user.telegramId, targetTokenMint, sizeToTrade)
                                     .then(async (res) => {
                                         if (res.success) {
                                             try {
                                                 await addTrailingStopToMemory(
                                                     follower.user.telegramId, targetTokenMint!,
-                                                    follower.autoTrailingDropPercent, follower.tradeAmountSol,
+                                                    follower.autoTrailingDropPercent, sizeToTrade,
                                                     entryPrice, follower.autoTakeProfitPercent || undefined
                                                 );
                                             } catch (guardErr) {}
                                             
                                             try {
                                                 await bot.telegram.sendMessage(follower.user.telegramId,
-                                                    `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${targetTokenMint}</code>\nInvested: <b>${follower.tradeAmountSol} SOL</b>\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`,
+                                                    `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${targetTokenMint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`,
                                                     { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                                                 );
                                             } catch (_) {}
@@ -131,7 +134,7 @@ export async function syncCopyTradeListeners(bot: any) {
                                     }).catch(() => {});
                             }
                         } 
-                        // 🟢 NEW: Handle Sell Mirroring
+                        // 🟢 HANDLE SELL MIRRORING
                         else if (tradeType === 'sell' && sellPercentage >= 1) {
                             console.log(`🎯 [COPY-TRADE] Whale ${walletStr.substring(0,6)} SOLD ${sellPercentage.toFixed(1)}% of: ${targetTokenMint}.`);
                             
@@ -139,6 +142,10 @@ export async function syncCopyTradeListeners(bot: any) {
                             const { executeExit } = await import('./engine.service.js');
 
                             for (const follower of freshConfigs) {
+                                // 🟢 UPGRADE: Sell Filtering
+                                const f: any = follower; 
+                                if (f.copySells === false) continue;
+
                                 executeExit(follower.user.telegramId, targetTokenMint, sellPercentage)
                                     .then(async (res) => {
                                         if (res.success) {

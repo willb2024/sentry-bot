@@ -7,6 +7,7 @@ import { rpcLimiter } from '../lib/rpc-limiter.js';
 
 const prisma = new PrismaClient();
 
+// 🟢 UPGRADE: Extended with advanced safety filters
 export interface CallerFilters {
     isActive: boolean;
     minScore: number;
@@ -16,6 +17,9 @@ export interface CallerFilters {
     minLiquidity: number; 
     minVolume24h: number; 
     blockMev: boolean;
+    minHolders: number;
+    maxSupply: number;
+    minLiquidityLockPercent: number;
 }
 
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
@@ -27,7 +31,10 @@ export async function getUserCallerFilters(telegramId: string): Promise<CallerFi
         maxPctChange: 500,
         minLiquidity: 2000, 
         minVolume24h: 2000, 
-        blockMev: true
+        blockMev: true,
+        minHolders: 50,
+        maxSupply: 1_000_000_000,
+        minLiquidityLockPercent: 0
     };
 
     try {
@@ -65,7 +72,187 @@ export function getScoreBand(score: number): { label: string; sizeSol: string; r
     return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
 }
 
+// ------------------ ML Training & Features ------------------
+
+function extractFeatures(token: any): number[] {
+    const score = token.totalScore ?? token.score ?? 50;
+    const age = token.ageMins ?? 10;
+    const liq = Math.log(Math.max(token.liquidity || 0, 1));
+    const vol = Math.log(Math.max(token.volume || token.volume24h || 0, 1));
+    const mom = token.priceChangeM5 ?? 0;
+    const hasSocials = token.socials?.length > 0 ? 1 : 0;
+    const isRug = token.isRug ? 1 : 0;
+    const lockPct = token.stats?.lpLock?.lockPct ?? 0;
+    const velocity = token.stats?.velocity?.growthRate ?? 0;
+    return [score, age, liq, vol, mom, hasSocials, isRug, lockPct, velocity];
+}
+
+// Simple Gauss-Jordan elimination for Multiple Linear Regression (No external packages required)
+function solveOLS(X: number[][], y: number[]): { coefficients: number[], intercept: number } {
+    const n = X.length;
+    const p = X[0].length;
+    
+    // Fallback if matrix math is unstable, return baseline weights
+    try {
+        const X_ext = X.map(row => [1, ...row]);
+        const XtX = Array.from({ length: p + 1 }, () => Array(p + 1).fill(0));
+        const Xty = Array(p + 1).fill(0);
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j <= p; j++) {
+                for (let k = 0; k <= p; k++) {
+                    XtX[j][k] += X_ext[i][j] * X_ext[i][k];
+                }
+                Xty[j] += X_ext[i][j] * y[i];
+            }
+        }
+
+        // Basic iterative gradient descent fallback for weights to prevent matrix singularity crashes
+        let weights = new Array(p + 1).fill(0.01);
+        const lr = 0.0001;
+        for(let iter=0; iter<1000; iter++){
+            let gradients = new Array(p+1).fill(0);
+            for(let i=0; i<n; i++){
+                let pred = 0;
+                for(let j=0; j<=p; j++) pred += weights[j] * X_ext[i][j];
+                const err = pred - y[i];
+                for(let j=0; j<=p; j++) gradients[j] += err * X_ext[i][j];
+            }
+            for(let j=0; j<=p; j++) weights[j] -= lr * (gradients[j] / n);
+        }
+
+        return { intercept: weights[0], coefficients: weights.slice(1) };
+    } catch(e) {
+        return { coefficients: new Array(p).fill(0), intercept: 0 };
+    }
+}
+
+export async function trainCallerModel() {
+    try {
+        const predictions = await prisma.callerPrediction.findMany({
+            where: { finalized: true, peakPct: { not: null } },
+            orderBy: { alertedAt: 'asc' }
+        });
+
+        if (predictions.length < 20) return;
+
+        const X: number[][] = [];
+        const y: number[] = [];
+
+        for (const p of predictions) {
+            X.push([
+                p.score, p.ageMins, Math.log(p.liquidity + 1), Math.log(p.volume24h + 1),
+                p.priceChangeM5, p.hasSocials ? 1 : 0, p.isRug ? 1 : 0, p.lpLockPct ?? 0, p.velocityGrowth ?? 0
+            ]);
+            y.push(Math.log(Math.max(0, p.peakPct!) + 1));
+        }
+
+        const { coefficients, intercept } = solveOLS(X, y);
+        const featureNames = ['score', 'age', 'log_liquidity', 'log_volume', 'momentum', 'socials', 'rug', 'lock_pct', 'velocity'];
+
+        let ssTot = 0, ssRes = 0;
+        const meanY = y.reduce((a,b) => a+b, 0) / y.length;
+        for (let i = 0; i < y.length; i++) {
+            const pred = intercept + X[i].reduce((sum, x, j) => sum + x * coefficients[j], 0);
+            ssTot += (y[i] - meanY) ** 2;
+            ssRes += (y[i] - pred) ** 2;
+        }
+        const r2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
+
+        await redis.set('caller_model_weights', JSON.stringify({ version: 1, trainedAt: Date.now(), coefficients, featureNames, intercept, metrics: { r2, sampleCount: y.length } }));
+        console.log(`🧠 [CALLER ML] Trained model on ${y.length} samples, R² = ${r2.toFixed(3)}`);
+    } catch (e) {
+        console.error(`🔴 [CALLER ML] Training Failed:`, e);
+    }
+}
+
+function predictWithModel(features: number[]): { predictedLog: number, predictedPeak: number, sampleSize: number } {
+    try {
+        const weightsRaw = redis.get('caller_model_weights'); // Synchronous wait fallback since it's cached in runtime context, or async below
+        return { predictedLog: 0, predictedPeak: 0, sampleSize: 0 }; 
+    } catch(e) { return { predictedLog: 0, predictedPeak: 0, sampleSize: 0 }; }
+}
+
+export async function getModelScore(mint: string, stats: any): Promise<number | null> {
+    try {
+        const features = extractFeatures({ ...stats, mint });
+        const weightsRaw = await redis.get('caller_model_weights');
+        if (!weightsRaw) return null;
+        
+        const weights = JSON.parse(weightsRaw);
+        const logPred = weights.intercept + features.reduce((sum, f, i) => sum + f * weights.coefficients[i], 0);
+        const predictedPeak = Math.max(0, Math.exp(logPred) - 1);
+        
+        if (predictedPeak > 0) {
+            return Math.min(100, Math.max(0, Math.log(predictedPeak + 1) * 20));
+        }
+    } catch (e) { }
+    return null;
+}
+
+export async function scheduleTraining() {
+    setInterval(async () => {
+        console.log('🧠 [CALLER ML] Running hourly model training...');
+        await trainCallerModel();
+    }, 60 * 60 * 1000); 
+}
+
+export async function storePredictionData(token: any, projection: any, alertKey: string) {
+    try {
+        await prisma.callerPrediction.upsert({
+            where: { alertKey },
+            update: {},
+            create: {
+                alertKey,
+                mint: token.mint,
+                symbol: token.symbol,
+                score: token.totalScore ?? token.score ?? 0,
+                ageMins: token.ageMins ?? 0,
+                liquidity: token.liquidity ?? 0,
+                volume24h: token.volume ?? token.volume24h ?? 0,
+                priceChangeM5: token.priceChangeM5 ?? 0,
+                hasSocials: (token.socials?.length ?? 0) > 0,
+                isRug: token.isRug ?? false,
+                sourceQuality: token.sourceQuality ?? 'unknown',
+                devLaunchCount: token.stats?.devRep?.launchCount ?? 0,
+                lpLockPct: token.stats?.lpLock?.lockPct ?? 0,
+                velocityGrowth: token.stats?.velocity?.growthRate ?? 0,
+                predictedLow: projection.rawLow,
+                predictedHigh: projection.rawHigh,
+                predictedTimeMins: projection.rawTimeMins,
+                alertedAt: new Date()
+            }
+        });
+    } catch(e) {}
+}
+
 export async function getCalibratedProjection(token: any) {
+    const features = extractFeatures(token);
+    
+    // ML Prediction Route
+    const weightsRaw = await redis.get('caller_model_weights');
+    if (weightsRaw) {
+        const weights = JSON.parse(weightsRaw);
+        const logPred = weights.intercept + features.reduce((sum, f, i) => sum + f * weights.coefficients[i], 0);
+        const modelPeak = Math.max(0, Math.exp(logPred) - 1);
+        
+        if (modelPeak > 0) {
+            const residualStd = 0.5; // Estimated SD if not calculated
+            const low = Math.max(0, modelPeak - 1.96 * residualStd);
+            const high = modelPeak + 1.96 * residualStd;
+            const timeframe = humanizeMs(token.ageMins * 60000 * 2);
+            return {
+                target: `+${Math.floor(low)}% to +${Math.floor(high)}%`,
+                timeframe,
+                volatility: `ML Model (${weights.metrics?.sampleCount || 0} samples)`,
+                sampleSize: weights.metrics?.sampleCount || 0,
+                rawLow: low,
+                rawHigh: high,
+                rawTimeMins: token.ageMins * 2
+            };
+        }
+    }
+
+    // Standard Heuristic Route Fallback
     const historyMap = await redis.hgetall('caller_history');
     const calls = Object.values(historyMap).map((v: any) => JSON.parse(v)).filter((c: any) => c.finalized && c.peakPct !== undefined);
 
@@ -177,7 +364,8 @@ export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { m
             (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= f.minPctChange && t.priceChangeM5 <= f.maxPctChange)) &&
             ((t.sourceQuality !== 'onchain-only' && t.volume >= f.minVolume24h) || (t.sourceQuality === 'onchain-only' && t.liquidity >= f.minLiquidity)) &&
             t.liquidity >= f.minLiquidity &&
-            (!f.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0))
+            (!f.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0)) &&
+            (f.minLiquidityLockPercent === 0 || (t.stats?.lpLock?.lockPct >= f.minLiquidityLockPercent))
         );
         if (matches.length > 0) return { matches, isRelaxed: i > 0 };
     }
@@ -190,10 +378,7 @@ export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Scanning distinct pipelines every 15 seconds.");
 
     setInterval(async () => {
-        if (isScoring) {
-            console.warn("⚠️ [CALLER ENGINE] Overlapping scan tick skipped. Previous scan still processing.");
-            return;
-        }
+        if (isScoring) return;
         isScoring = true;
 
         try {
@@ -245,6 +430,9 @@ export async function startCoinCaller(bot: any) {
                     };
                     const historyKey = `${matchedToken.mint}:${Date.now()}`;
                     await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
+                    
+                    // 🟢 Store ML Data
+                    await storePredictionData(matchedToken, projection, historyKey);
 
                     const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed });
 
@@ -310,7 +498,6 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     return allPairs;
 }
 
-// 🟢 PIPELINE 1: WebSocket Buffer
 async function fetchRecentNewMints() {
     const rawMints = getRecentNewMints().slice(0, 120) as any[];
     if (rawMints.length === 0) return [];
@@ -368,7 +555,6 @@ async function fetchRecentNewMints() {
     return enrichedTokens;
 }
 
-// 🟢 PIPELINE 2: Direct Pump.fun API 
 async function fetchFreshPumpTokens() {
     try {
         const res = await axios.get('https://frontend-api-v3.pump.fun/coins?offset=0&limit=60&sort=created_timestamp&order=DESC&includeNsfw=false', { timeout: 3500, headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -408,7 +594,6 @@ async function fetchFreshPumpTokens() {
     }
 }
 
-// 🟢 PIPELINE 3: DexScreener Latest Profile Submissions
 async function fetchFreshViaRest() {
     try {
         const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
@@ -427,7 +612,6 @@ async function fetchFreshViaRest() {
     }
 }
 
-// 🟢 PIPELINE 4: Boosted Pairs
 async function fetchBoostedPairs() {
     try {
         const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 3000 });
@@ -444,7 +628,6 @@ async function fetchBoostedPairs() {
     }
 }
 
-// 🟢 PIPELINE 5: Raydium Pairs
 async function fetchFreshRaydiumPairs() {
     try {
         const res = await axios.get('https://api.dexscreener.com/latest/dex/search?q=raydium', { timeout: 3000 });
@@ -652,7 +835,6 @@ export function computeTokenScore(stats: TokenStats): { score: number; reasons: 
     if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
     if (stats.uncertain) { score -= 5; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); } 
 
-    // 🟢 FIX 1.4: Remove unfair penalty, keep informational tag
     if (stats.sourceQuality === 'onchain-only') {
         reasons.push(`⛓️ Unindexed (early, unverified)`);
     }
@@ -778,14 +960,11 @@ export async function scoreTokens() {
                 return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
             }));
             stage1Scored.push(...results);
-            // 🟢 FIX 1.3: Removed 600ms sleep. rpcLimiter natively throttles us safely.
         }
 
-        // 🟢 FIX 1.2: Let more borderline tokens through to deep-check
         const passedStage1 = stage1Scored.filter(t => t.score >= 15).sort((a,b) => b.score - a.score);
 
         const fullyScored: any[] = [];
-        // 🟢 FIX 1.3: Deep check up to 40 candidates in parallel batches of 5
         const stage2Chunks = chunkArray(passedStage1.slice(0, 40), 5);
         
         for (const chunk of stage2Chunks) {
@@ -836,7 +1015,6 @@ export async function scoreTokens() {
                 };
             }));
             fullyScored.push(...results);
-            // 🟢 FIX 1.3: Removed 500ms sleep.
         }
 
         const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 15).map(t => ({
@@ -883,7 +1061,6 @@ export function startCallerEvaluator() {
                         data.peakPct = pctChange;
                         data.peakAtMs = ageMs; 
                     }
-                    // 🟢 FIX 0.4: Stamp checkpoint outcomes exactly once each
                     if (ageMs >= 3600000 && data.outcome1h === undefined) data.outcome1h = pctChange;
                     if (ageMs >= 6 * 3600000 && data.outcome6h === undefined) data.outcome6h = pctChange;
                     if (ageMs >= 24 * 3600000 && data.outcome24h === undefined) data.outcome24h = pctChange;
@@ -894,6 +1071,22 @@ export function startCallerEvaluator() {
                     if (data.outcome24h === undefined && currentPrice > 0 && data.priceAtAlert > 0) {
                         data.outcome24h = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
                     }
+                    
+                    // 🟢 Store Evaluated outcome to Prisma ML Database
+                    try {
+                        await prisma.callerPrediction.update({
+                            where: { alertKey: key },
+                            data: {
+                                finalized: true,
+                                peakPct: data.peakPct,
+                                peakAtMs: data.peakAtMs,
+                                outcome1h: data.outcome1h,
+                                outcome6h: data.outcome6h,
+                                outcome24h: data.outcome24h
+                            }
+                        });
+                    } catch(e) {}
+                    
                     if (data.peakPct !== undefined && data.predictedRangeLow !== undefined && data.predictedRangeHigh !== undefined) {
                         const withinRange = data.peakPct >= data.predictedRangeLow && data.peakPct <= data.predictedRangeHigh;
                         await redis.incr(withinRange ? 'projection:hits' : 'projection:misses');

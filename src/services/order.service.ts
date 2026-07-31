@@ -6,7 +6,7 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-// BUG 8 FIX: Export ORDER_TYPES constant and use it across the service
+// 🟢 EXPORTED TYPES
 export const ORDER_TYPES = {
     DCA: 'DCA',
     LIMIT: 'LIMIT',
@@ -22,7 +22,9 @@ export interface TrailingOrder {
     highestSeenPrice: number;
     amountInSol: number;
     entryPrice: number;           
-    takeProfitPercent?: number;   
+    takeProfitPercent?: number; 
+    maxHoldMinutes?: number; // 🟢 TIME-BASED EXIT SUPPORT
+    createdAt?: number;      // 🟢 AGE TRACKING
 }
 
 export async function syncGuardsFromDb() {
@@ -42,7 +44,9 @@ export async function syncGuardsFromDb() {
                 highestSeenPrice: g.targetPriceUsd || 0,
                 amountInSol: g.amountSol,
                 entryPrice: g.targetPriceUsd || 0,
-                takeProfitPercent: g.takeProfitPercent || undefined
+                takeProfitPercent: g.takeProfitPercent || undefined,
+                maxHoldMinutes: (g as any).maxHoldMinutes || undefined,
+                createdAt: g.createdAt.getTime()
             };
             
             await redis.set(`order:trail:${g.id}`, JSON.stringify(order));
@@ -81,8 +85,6 @@ async function updateGuardSafe(orderId: string, mutateFn: (order: TrailingOrder)
     console.error(`🔴 [REDIS] Race condition blocked. Failed to update order ${orderId} after ${maxRetries} retries.`);
 }
 
-
-
 export async function getAllActiveGuards(): Promise<TrailingOrder[]> {
     try {
         const orderIds = await redis.smembers(`active_guards_global`);
@@ -107,15 +109,16 @@ export async function updateEntryPrice(orderId: string, entryPrice: number) {
     await updateGuardSafe(orderId, (order) => { order.entryPrice = entryPrice; });
 }
 
-
 export async function addTrailingStopToMemory(
     telegramId: string, tokenAddress: string, trailingPercent: number, 
-    amountInSol: number, currentPrice: number, takeProfitPercent?: number
+    amountInSol: number, currentPrice: number, takeProfitPercent?: number,
+    maxHoldMinutes?: number // 🟢 NEW TIME-BASED EXIT TRIGGER
 ): Promise<string> {
     const orderId = crypto.randomUUID();
     const order: TrailingOrder = { 
         id: orderId, telegramId, tokenAddress, trailingPercent, 
-        highestSeenPrice: currentPrice, amountInSol, entryPrice: currentPrice, takeProfitPercent 
+        highestSeenPrice: currentPrice, amountInSol, entryPrice: currentPrice, takeProfitPercent,
+        maxHoldMinutes, createdAt: Date.now()
     };
 
     await redis.set(`order:trail:${orderId}`, JSON.stringify(order));
@@ -123,7 +126,6 @@ export async function addTrailingStopToMemory(
     await redis.sadd(`user_guards:${telegramId}`, orderId);
     await redis.sadd(`token_guards:${telegramId}:${tokenAddress}`, orderId); 
 
-    // 🟢 REDUCE HELIUS COST: Instantly subscribe to the push price feed
     await subscribeToMintPrice(tokenAddress, orderId).catch(() => {});
 
     try {
@@ -139,8 +141,9 @@ export async function addTrailingStopToMemory(
                     trailingPercent,
                     takeProfitPercent: takeProfitPercent || null,
                     targetPriceUsd: currentPrice,
-                    isActive: true
-                }
+                    isActive: true,
+                    maxHoldMinutes: maxHoldMinutes || null // 🟢 STORED IN DB IF SUPPORTED
+                } as any
             });
         }
     } catch (e: any) {
@@ -158,7 +161,6 @@ export async function removeOrderFromMemory(orderId: string, telegramId: string,
         await redis.srem(`user_guards:${telegramId}`, orderId);
         await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, orderId);
 
-        // 🟢 REDUCE HELIUS COST: Unsubscribe from the price feed on close
         await unsubscribeFromMintPrice(tokenAddress, orderId).catch(() => {});
 
         await prisma.activeOrder.updateMany({
@@ -185,7 +187,7 @@ export async function cancelAllGuardsForToken(telegramId: string, tokenAddress: 
             if (raw) {
                 await removeOrderFromMemory(id, telegramId, tokenAddress);
             } else {
-                // 🟢 FIX: Clean up zombie token guards to prevent tracking bloat
+                // Zombie Cleanup
                 await redis.srem(`active_guards_global`, id);
                 await redis.srem(`user_guards:${telegramId}`, id);
                 await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, id);
@@ -208,13 +210,12 @@ export async function cancelAllUserGuards(telegramId: string): Promise<number> {
                     const order: TrailingOrder = JSON.parse(raw);
                     await removeOrderFromMemory(orderId, telegramId, order.tokenAddress);
                 } catch (e) {
-                    // Corrupted JSON - Force clean
                     await redis.del(`order:trail:${orderId}`);
                     await redis.srem(`active_guards_global`, orderId);
                     await redis.srem(`user_guards:${telegramId}`, orderId);
                 }
             } else {
-                // 🟢 FIX: Handle Zombie IDs (Key expired but set member remained)
+                // Zombie Cleanup
                 await redis.srem(`active_guards_global`, orderId);
                 await redis.srem(`user_guards:${telegramId}`, orderId);
             }

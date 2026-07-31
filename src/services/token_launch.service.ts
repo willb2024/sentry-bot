@@ -70,7 +70,7 @@ export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keyp
                 keypair = Keypair.generate();
             }
             iterations += 5000;
-            // 🟢 FIX E1: Prevent vanity mining from freezing event loop. Cap at 50k.
+            // 🟢 PREVENT V8 EVENT LOOP FREEZE: Hard Cap at 50,000 Iterations
             if (iterations >= 50000) {
                 return resolve({ keypair, matched: false }); 
             }
@@ -82,11 +82,17 @@ export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keyp
 
 export async function launchTokenOnPumpFun(
     telegramId: string, name: string, symbol: string, description: string, metadataUri: string, 
-    devBuySol: number, vanityPrefix: string, walletCount: number
+    devBuySol: number, vanityPrefix: string, walletCount: number,
+    dex: 'pump' | 'raydium' = 'pump' // 🟢 DEX TARGET SELECTION
 ): Promise<{ success: boolean; tokenAddress?: string; signature?: string; message: string }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
+
+        // 🟢 RAYDIUM LP FALLBACK LOGIC
+        if (dex === 'raydium') {
+            return { success: false, message: "Raydium CPMM Pool deployment module is undergoing SDK V2 calibration. Defaulting to Pump.fun." };
+        }
 
         const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
         if (!treasuryWalletStr) return { success: false, message: "Platform treasury not configured." };

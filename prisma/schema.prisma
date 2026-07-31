@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -34,7 +32,7 @@ model User {
   guildMemberships GuildMembership[] @relation("GuildMemberships")
 
   vaultAddress        String?  @unique
-   wasEverPromoGranted Boolean   @default(false) // 🟢 ADD THIS LINE
+  wasEverPromoGranted Boolean   @default(false)
   
   turnkeySubOrgId     String?  @unique
 
@@ -47,7 +45,6 @@ model User {
   isLoyaltyUnlocked   Boolean  @default(false) 
   hasReferralDiscount Boolean  @default(false) 
 
-  
   isVip               Boolean   @default(false)
   vipTier             String?
   vipExpiresAt        DateTime?
@@ -56,7 +53,7 @@ model User {
   vipPurchasedAt      DateTime?
   isDevSuiteUnlocked  Boolean   @default(false)
   
-  withdrawalPin       String?   // 🟢 ADD THIS LINE RIGHT HERE
+  withdrawalPin       String?
   
   slippagePercent     Float    @default(20.0)
   pendingRewardsSol   Float    @default(0.0)
@@ -69,24 +66,28 @@ model User {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
+  creditBalance       Int      @default(5)
+  lifetimeCredits     Int      @default(5)
+  creditTxs           CreditTransaction[]
+  reactionGifsEnabled Boolean  @default(true)
+
+   // 🟢 PRISMA RELATION FIX: Opposites for SimState and SimTrade
+  simState            SimState?
+  simTrades           SimTrade[]
+
+  // NEW: Simulation persistence
+  simState            SimState?
+
   @@index([telegramId])
   @@index([referralCode])
-
- // Inside model User { ... } add these two lines:
-  creditBalance     Int      @default(5)  // Gives 5 free credits to new users
-  lifetimeCredits   Int      @default(5)
-  creditTxs         CreditTransaction[]
-
-  reactionGifsEnabled Boolean @default(true)
 }
-
 
 model CreditTransaction {
   id           String   @id @default(uuid())
   userId       String
   user         User     @relation(fields: [userId], references: [id])
   type         String   // 'PURCHASE' | 'CONSUME_SCAN' | 'CONSUME_CALLER' | 'ADMIN_GRANT'
-  amount       Int      // positive for purchase, negative for consume
+  amount       Int
   balanceAfter Int
   tokenMint    String?  
   packName     String?  
@@ -108,7 +109,7 @@ model LaunchedToken {
   launchedAt        DateTime @default(now())
   devBuySol         Float
   walletCount       Int
-  totalVolumeBumped Float    @default(0.0) // 🟢 PART 1 FIX
+  totalVolumeBumped Float    @default(0.0)
   
   isActive          Boolean  @default(true)
   
@@ -149,6 +150,11 @@ model ActiveOrder {
   dcaIntervalMins   Int?     
   maxBudgetSol      Float?   
   totalSpentSol     Float    @default(0.0)
+  
+  // 🟢 MISSING FIELDS ADDED:
+  maxHoldMinutes    Int?     // Time-based exit
+  maxBuys           Int?     // DCA Max buys limit
+
   isActive          Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -168,7 +174,7 @@ model AutoSnipeConfig {
   maxDevBuyPercent        Float    @default(10.0)
   autoTrailingDropPercent Float    @default(20.0) 
   autoTakeProfitPercent   Float?
-   minScore                Int      @default(0) 
+  minScore                Int      @default(0) 
   minMarketCap            Float    @default(0.0)
   maxMarketCap            Float    @default(100000.0)
   antiDeadCoin            Boolean  @default(false)
@@ -187,6 +193,13 @@ model CopyTradeConfig {
   tradeAmountSol          Float    @default(0.1) 
   autoTrailingDropPercent Float    @default(20.0) 
   autoTakeProfitPercent   Float?                  
+  
+  // 🟢 MISSING FIELDS ADDED:
+  copyBuys                Boolean  @default(true)
+  copySells               Boolean  @default(true)
+  maxTradeSizeSol         Float?   
+  slippagePercent         Float?   // Override user's default slippage
+
   isActive                Boolean  @default(true)
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
@@ -237,4 +250,72 @@ model DailyVipPromo {
   maxSlots    Int      @default(10)
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
+}
+
+// ========== NEW MODELS FOR AI CALLER ML & SIMULATION ==========
+
+model CallerPrediction {
+  id                String    @id @default(uuid())
+  alertKey          String    @unique
+  mint              String
+  symbol            String
+  score             Int
+  ageMins           Float
+  liquidity         Float
+  volume24h         Float
+  priceChangeM5     Float
+  hasSocials        Boolean
+  isRug             Boolean?
+  sourceQuality     String?
+  devLaunchCount    Int?
+  lpLockPct         Float?
+  velocityGrowth    Float?
+  predictedLow      Float
+  predictedHigh     Float
+  predictedTimeMins Float
+  alertedAt         DateTime
+  finalized         Boolean   @default(false)
+  peakPct           Float?
+  peakAtMs          Int?
+  outcome1h         Float?
+  outcome6h         Float?
+  outcome24h        Float?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([mint])
+  @@index([finalized])
+}
+
+model SimState {
+  id                String    @id @default(uuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id])
+  balance           Float     @default(1000.0)
+  startingBalance   Float     @default(1000.0)
+  volume            Float     @default(0.0)
+  credits           Int       @default(0)
+  active            Boolean   @default(false)
+  autoSnipeActive   Boolean   @default(false)
+  positions         Json?     // store array of positions
+  updatedAt         DateTime  @updatedAt
+  trades            SimTrade[]
+
+  @@index([userId])
+}
+
+model SimTrade {
+  id              String   @id @default(uuid())
+  simStateId      String?
+  simState        SimState? @relation(fields: [simStateId], references: [id])
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  tokenAddress    String
+  isBuy           Boolean
+  amountInSol     Float
+  profitPercent   Float?
+  realizedPnlSol  Float?
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
 }

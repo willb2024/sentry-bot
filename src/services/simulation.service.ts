@@ -42,6 +42,98 @@ export function generateSimSignature(): string {
     return randomBase58(87);
 }
 
+// 🟢 UPGRADE: Full Prisma PostgreSQL Persistence Sync
+export async function saveSimulationState(telegramId: string) {
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (!user) return;
+
+    const balance = parseFloat(await getSimBalance(telegramId));
+    const startingBalance = await getSimStartingBalance(telegramId);
+    const volume = parseFloat((await getSimVolume(telegramId))?.toString() || '0');
+    const credits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0');
+    const active = await isSimulationActive(telegramId);
+    const autoSnipeActive = (await redis.get(`sim:autosnipe:${telegramId}`)) === 'true';
+    
+    const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
+    const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+    
+    const positionsRaw = await redis.get(`sim:positions:${telegramId}`);
+    const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
+
+    await prisma.simState.upsert({
+        where: { userId: user.id },
+        update: {
+            balance, startingBalance, volume, credits, active, autoSnipeActive,
+            positions: positions,
+            trades: {
+                deleteMany: {},
+                create: trades.map((t: any) => ({
+                    tokenAddress: t.mint || t.tokenAddress || 'unknown',
+                    isBuy: t.isBuy,
+                    amountInSol: t.amountInSol,
+                    profitPercent: t.profitPercent || 0,
+                    realizedPnlSol: t.realizedPnlSol || 0,
+                    createdAt: new Date(t.createdAt)
+                }))
+            }
+        },
+        create: {
+            userId: user.id,
+            balance, startingBalance, volume, credits, active, autoSnipeActive,
+            positions: positions,
+            trades: {
+                create: trades.map((t: any) => ({
+                    tokenAddress: t.mint || t.tokenAddress || 'unknown',
+                    isBuy: t.isBuy,
+                    amountInSol: t.amountInSol,
+                    profitPercent: t.profitPercent || 0,
+                    realizedPnlSol: t.realizedPnlSol || 0,
+                    createdAt: new Date(t.createdAt)
+                }))
+            }
+        }
+    });
+}
+
+export async function loadSimulationState(telegramId: string) {
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (!user) return;
+
+    const state = await prisma.simState.findUnique({
+        where: { userId: user.id },
+        include: { trades: { orderBy: { createdAt: 'desc' }, take: 100 } }
+    });
+    if (!state) return;
+
+    await redis.set(`sim:balance:${telegramId}`, state.balance.toFixed(4));
+    await redis.set(`sim:starting_balance:${telegramId}`, state.startingBalance.toFixed(4));
+    await redis.set(`sim:volume:${telegramId}`, state.volume.toFixed(4));
+    await redis.set(`sim:credits:${telegramId}`, state.credits.toString());
+    await redis.set(`sim:active:${telegramId}`, state.active ? 'true' : 'false');
+    await redis.set(`sim:autosnipe:${telegramId}`, state.autoSnipeActive ? 'true' : 'false');
+    
+    if (state.positions) {
+        await redis.set(`sim:positions:${telegramId}`, JSON.stringify(state.positions));
+    }
+    
+    const trades = state.trades.map((t: any) => ({
+        createdAt: t.createdAt.toISOString(),
+        isBuy: t.isBuy,
+        amountInSol: t.amountInSol,
+        profitPercent: t.profitPercent || 0,
+        realizedPnlSol: t.realizedPnlSol || 0,
+        mint: t.tokenAddress
+    }));
+    await redis.set(`sim:trades:${telegramId}`, JSON.stringify(trades));
+}
+
+export async function loadAllSimulationStates() {
+    const states = await prisma.simState.findMany({ include: { user: true } });
+    for (const state of states) {
+        await loadSimulationState(state.user.telegramId);
+    }
+}
+
 export async function isSimulationActive(telegramId: string): Promise<boolean> {
     const val = await redis.get(`sim:active:${telegramId}`);
     return val === 'true';
@@ -54,6 +146,7 @@ export async function getSimStartingBalance(telegramId: string): Promise<number>
 
 export async function setSimStartingBalance(telegramId: string, amount: number): Promise<void> {
     await redis.set(`sim:starting_balance:${telegramId}`, amount.toFixed(4));
+    await saveSimulationState(telegramId); // 🟢 Auto-save hook
 }
 
 export async function getSimBalance(telegramId: string): Promise<string> {
@@ -70,7 +163,7 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     const raw = await redis.get(`sim:wallets:${telegramId}`);
     if (raw) return JSON.parse(raw);
     const wallets = generateSimWallets();
-    await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets)); // 🟢 No expiration
+    await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets)); 
     return wallets;
 }
 
@@ -101,7 +194,7 @@ export async function recordSimTrade(telegramId: string, isBuy: boolean, amountI
         isBuy, amountInSol, profitPercent, realizedPnlSol
     });
     
-    await redis.set(key, JSON.stringify(existing.slice(0, 100))); // 🟢 No expiration
+    await redis.set(key, JSON.stringify(existing.slice(0, 100))); 
     await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
 
@@ -185,8 +278,9 @@ export async function simExecuteSnipe(
         entryScore: Math.floor(Math.random() * 40) + 50 
     });
     
-    await redis.set(posKey, JSON.stringify(existing)); // 🟢 No expiration
+    await redis.set(posKey, JSON.stringify(existing)); 
     await recordSimTrade(telegramId, true, amountSol, 0);
+    await saveSimulationState(telegramId); // 🟢 Auto-save hook
 
     return { success: true, signature: generateSimSignature(), message: '🟢 Simulation: Jito bundle confirmed.', volumeSpent: amountSol };
 }
@@ -228,13 +322,14 @@ export async function simExecuteExit(
 
     if (percent === 100) {
         const updated = positions.filter((p: any) => p.mint !== tokenAddress);
-        await redis.set(posKey, JSON.stringify(updated)); // 🟢 No expiration
+        await redis.set(posKey, JSON.stringify(updated)); 
     }
     
     await recordSimTrade(telegramId, false, soldSol, pnlPercent);
     
     const realizedPnlSol = netReturnSol - soldSol;
     await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
+    await saveSimulationState(telegramId); // 🟢 Auto-save hook
 
     return { success: true, signature: generateSimSignature(), message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };
 }
@@ -388,6 +483,7 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
         activeSimLoops.add(telegramId);
         runSimAutoSnipeLoop(telegramId, bot).finally(() => activeSimLoops.delete(telegramId));
     }
+    await saveSimulationState(telegramId); // 🟢 Auto-save hook
     return newState === 'true';
 }
 
@@ -473,6 +569,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
     }
 
     await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+    await saveSimulationState(telegramId);
 }
 
 async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string, amountInSol: number, pnlPercent: number, slPercent: number, entryPriceSol: number, tokensBought: number) {
@@ -511,7 +608,6 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
             { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
         );
 
-        // 🟢 REACTION GIF
         if (user?.reactionGifsEnabled) {
             (async () => {
                 const { getReactionGifUrl } = await import('./reaction.service.js');
@@ -546,5 +642,5 @@ export async function walkSimPositionPrices(telegramId: string): Promise<void> {
         changed = true;
     }
 
-    if (changed) await redis.set(posKey, JSON.stringify(positions)); // 🟢 No expiration
+    if (changed) await redis.set(posKey, JSON.stringify(positions)); 
 }

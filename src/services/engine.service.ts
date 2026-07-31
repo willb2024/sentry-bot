@@ -92,7 +92,6 @@ const activeAgent = new https.Agent({
     keepAlive: true,
 });
 
-// 🟢 SPEED FIX: Apply the DoH-resolved agent to ALL outbound calls, including Jupiter and PumpPortal
 const axiosClient = axios.create({ httpsAgent: activeAgent });
 
 export async function getDynamicPriorityFee(priorityLevel: string, customPriorityFee: number): Promise<number> {
@@ -166,7 +165,6 @@ async function getLatestBlockhashWithCache(): Promise<{ blockhash: string; lastV
     return await connection.getLatestBlockhash('confirmed');
 }
 
-// Background poller. No longer blocks UI responses.
 async function pollSignatureConfirmation(signature: string, maxRetries = 8): Promise<boolean> {
     for (let i = 0; i < maxRetries; i++) {
         await new Promise(r => setTimeout(r, 1500));
@@ -244,14 +242,14 @@ export async function sendToJitoBundle(
         const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
         const rawSig = await rawSendPromise;
 
-        // 🟢 FIX 2.3: Retry and log the fee/tip if the Jito bundle failed but the raw swap landed
+        // Retry and log the fee/tip if the Jito bundle failed but the raw swap landed
         if (rawSig) {
             const tipResult = await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch((e) => {
                 console.error(`🔴 [FEE/TIP LEAK] Raw-fallback trade ${rawSig} landed but fee/tip tx failed: ${e.message}`);
                 return null;
             });
             if (!tipResult) {
-                // one retry — cheap insurance against a transient RPC blip costing you the fee entirely
+                // one retry — cheap insurance against a transient RPC blip
                 await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {}); 
             }
         }
@@ -261,14 +259,12 @@ export async function sendToJitoBundle(
             return false;
         }
 
-        // 🟢 FIX 2.1: Return true as soon as the bundle/raw send was ACCEPTED by the network.
-        // DO NOT block here for 20s of confirmation polling — the outer caller already does that in the background!
         return true; 
     } catch (e: any) {
         return false;
     }
 }
-// 🟢 PERFORMANCE: Timeouts slashed to 3.5s to fail fast
+
 async function fetchApiTransaction(
     action: 'buy' | 'sell',
     mint: string,
@@ -373,7 +369,6 @@ async function buildTipAndFeeTransaction(
     isBumper: boolean = false, blockhash: string
 ): Promise<VersionedTransaction | null> {
     try {
-        // 🟢 CRITICAL FIX: Dynamically fetch fee rate (0% for VIPs, 1% for standard)
         const feeRate = await getPlatformFeeRate(telegramId); 
         const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
 
@@ -406,10 +401,14 @@ async function buildTipAndFeeTransaction(
         return tx;
     } catch (_) { return null; }
 }
+
 export async function executeSnipe(
     telegramId: string, targetCA: string, amountSol: number,
     side: 'buy' | 'sell' = 'buy', tokenAmount?: number,
-    isBumper: boolean = false, raydiumPoolId?: string
+    isBumper: boolean = false, raydiumPoolId?: string,
+    overrideSlippage?: number, // 🟢 UPGRADE: CopyTrade Dynamic Slippage
+    antiMevDelayMs: number = 0, // 🟢 UPGRADE: Anti-MEV Delay Execution
+    customRpcUrl?: string // 🟢 UPGRADE: Private Custom RPC Routing
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
@@ -417,7 +416,11 @@ export async function executeSnipe(
         return await simExecuteSnipe(telegramId, targetCA, amountSol);
     }
     
-    // 🟢 PERFORMANCE: MEV check parallelization
+    // 🟢 Delay for Anti-MEV strategy (If specified by Sniper/Settings)
+    if (antiMevDelayMs > 0) {
+        await new Promise(r => setTimeout(r, antiMevDelayMs));
+    }
+
     const mevPromise = (side === 'buy' && !isBumper)
         ? checkRecentMevActivityCached(targetCA).catch(() => false)
         : Promise.resolve(false);
@@ -452,7 +455,6 @@ export async function executeSnipe(
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
 
-        // 🟢 C6 FIX: Pre-check cached memory balance before wasting a full RPC call
         let liveBalanceSol = getLiveWalletBalance(user.vaultAddress);
         if (liveBalanceSol === null) {
             const balanceLamports = await connection.getBalance(new PublicKey(user.vaultAddress));
@@ -463,14 +465,13 @@ export async function executeSnipe(
             return { success: false, message: "Insufficient Funds." };
         }
 
-        // 🟢 C7 FIX: Race condition for MEV to unblock the execution path
-        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve("TIMEOUT"), 300));
+        // 🟢 UPGRADE: Extended 500ms MEV Safety Net
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve("TIMEOUT"), 500));
         const mevResult = await Promise.race([mevPromise, timeoutPromise]);
         
         if (mevResult === true) {
             return { success: false, message: "🚨 MEV Sandwich Bot / High Risk Activity Detected. Trade Blocked." };
         } else if (mevResult === "TIMEOUT") {
-            // Unblocks the buy immediately, but evaluates the MEV warning asynchronously in the background
             mevPromise.then(async (isMev) => {
                 if (isMev) {
                     try {
@@ -485,7 +486,8 @@ export async function executeSnipe(
             }).catch(()=>{});
         }
 
-        const slippage = user.slippagePercent || 20.0;
+        // 🟢 UPGRADE: Dynamic Override for CopyTrading
+        const slippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
 
@@ -530,7 +532,15 @@ export async function executeSnipe(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
-            // 🟢 SPEED FIX: Parallel execution via updated sendToJitoBundle. Maintains slippage safety.
+            // 🟢 UPGRADE: Execute via Custom RPC if user has designated one
+            if (customRpcUrl) {
+                try {
+                    const { Connection } = await import('@solana/web3.js');
+                    const customConnection = new Connection(customRpcUrl, 'confirmed');
+                    customConnection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(()=>{});
+                } catch(e) {}
+            }
+
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
             if (!bundleOk) {
                 walletErrors[index] = "Transaction dropped. High slippage fallback aborted or network congested."; 
@@ -538,13 +548,11 @@ export async function executeSnipe(
                 return;
             }
 
-            // 🟢 PERFORMANCE: DO NOT AWAIT CONFIRMATION! Assume submission success to speed up Telegram response.
             if (!firstSignature) firstSignature = txSig;
             successCount++;
             totalVolume += amountSol;
             walletReport[index] = `W${index + 1}: 🚀 Sent`;
 
-            // 🟢 BACKGROUND: Polling and DB writes
             pollSignatureConfirmation(txSig).then(async (confirmed) => {
                 if (confirmed) {
                     const feeRate = await getPlatformFeeRate(user.telegramId);
@@ -571,7 +579,6 @@ export async function executeSnipe(
                                 const standardGuildCut = feeCharged * 0.50; 
                                 guildOwnerCut = Math.min(standardGuildCut, availableForGuild);
                                 
-                                // 🟢 FIX 2.2: Correctly handle when Guild Owner is also the Referrer
                                 if (guildOwnerId === user.referredById) {
                                     const combined = affiliateCut + guildOwnerCut;
                                     if (combined > feeCharged) guildOwnerCut = feeCharged - affiliateCut;
@@ -667,7 +674,6 @@ export async function executeExit(
             const tokensToSellRaw = (rawTokenBalance * BigInt(Math.floor(sellPercentage))) / 100n;
             const uiTokensToSell = Number((Number(tokensToSellRaw) / (10 ** decimals)).toFixed(decimals));
 
-            // 🟢 TS ERROR FIX: Safely assert string | undefined to prevent strict-null compiler failure
             const rawPkEncrypted = index === 0 ? user.turnkeySubOrgId : user[`pk${index+1}` as keyof typeof user];
             const pkEncrypted = typeof rawPkEncrypted === 'string' ? rawPkEncrypted : undefined;
 
@@ -715,7 +721,6 @@ export async function executeExit(
                         await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } }).catch(()=>{});
                     }
 
-                    // 🟢 FIX F1: Calculate Guild Owner split with precise overlap & feeCharged caps
                     let guildOwnerCut = 0;
                     let guildOwnerId: string | null = null;
                     try {
@@ -742,7 +747,6 @@ export async function executeExit(
 
                     let volumeToRecord = actualSolReceived; 
                     try {
-                        // 🟢 FIX B5: Accurate weighted cost-basis summing across all unclosed buys
                         const allBuys = await prisma.trade.findMany({ 
                             where: { userId: user.id, tokenAddress: targetCA, isBuy: true, status: 'CONFIRMED' } 
                         });
@@ -760,7 +764,6 @@ export async function executeExit(
                     const { awardGuildPoints } = await import('./guild.service.js');
                     awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
                     
-                    // 🟢 FIX 4: Record Stats Event natively to the rolling stats window
                     const { recordStatsEvent } = await import('./simulation.service.js');
                     await recordStatsEvent(user.telegramId, 'live', realizedPnlSol).catch(()=>{});
 

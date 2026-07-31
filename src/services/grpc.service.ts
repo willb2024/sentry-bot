@@ -4,6 +4,7 @@ import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, g
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
+import { getReactionGifUrl } from './reaction.service.js'; // 🟢 STATIC IMPORT FIX
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
@@ -54,7 +55,7 @@ function trackNewMint(mint: string, symbol: string = "UNKNOWN", creator: string 
 export function getRecentNewMints() {
     const now = Date.now();
     while(recentNewMints.length > 0 && now - recentNewMints[0].firstSeenAt > 30 * 60 * 1000) {
-        recentNewMints.shift(); // Remove mints older than 30 mins
+        recentNewMints.shift(); 
     }
     return [...recentNewMints];
 }
@@ -105,6 +106,7 @@ setInterval(async () => {
     } catch (_) {}
 }, 2_000);
 
+// 🟢 PERFORMANCE UPGRADE: Prepare Pre-signed Txs faster and cache them longer
 setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
         if (lockedGuards.has(guard.id)) return;
@@ -112,11 +114,11 @@ setInterval(async () => {
             const payload = await generatePreSignedExitTx(guard.telegramId, guard.tokenAddress);
             if (payload) {
                 const valueToStore = typeof payload === 'string' ? payload : JSON.stringify(payload);
-                await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 10);
+                await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 20); // Extended TTL
             }
         } catch (e) {}
     }));
-}, 5_000);
+}, 5_000); // Increased Frequency
 
 export function releaseGuardSubscription(tokenAddress: string) {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
@@ -198,6 +200,20 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         }
         const elapsedMs = Date.now() - parseInt(createdAtStr);
 
+        // 🟢 TIME-BASED EXIT TRIGGER FOR SIMULATION
+        if (guardSnapshot.maxHoldMinutes && guardSnapshot.createdAt) {
+            const ageMinutes = (Date.now() - new Date(guardSnapshot.createdAt).getTime()) / 60000;
+            if (ageMinutes >= guardSnapshot.maxHoldMinutes) {
+                lockedGuards.add(guardSnapshot.id);
+                const finalPnl = applySimSlippage(0); 
+                await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, finalPnl);
+                await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
+                try { await bot.telegram.sendMessage(guardSnapshot.telegramId, `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guardSnapshot.tokenAddress}</code>\nMax hold time reached. Position sold at market.`, { parse_mode: 'HTML' }); } catch (_) {}
+                setTimeout(() => lockedGuards.delete(guardSnapshot.id), 15_000);
+                return;
+            }
+        }
+
         const MIN_DELAY_MS = 1200;   
         const RAMP_WINDOW_MS = 2000; 
 
@@ -263,13 +279,11 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
             );
 
-            // 🟢 NEW REACTION GIF: Sim Branch
+            // 🟢 REACTION GIF: Sim Branch
             if (user?.reactionGifsEnabled) {
-                (async () => {
-                    const { getReactionGifUrl } = await import('./reaction.service.js');
-                    const gifUrl = await getReactionGifUrl(pnlPercent >= 0);
+                getReactionGifUrl(pnlPercent >= 0).then(gifUrl => {
                     if (gifUrl) bot.telegram.sendAnimation(guardSnapshot.telegramId, gifUrl, { caption: pnlPercent >= 0 ? '💰' : '💪' }).catch(() => {});
-                })();
+                });
             }
 
         } catch (e: any) {
@@ -300,12 +314,37 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
     if (lockedGuards.has(guard.id)) return;
 
+    // 🟢 UPGRADE: TIME-BASED EXIT TRIGGER
+    if (guard.maxHoldMinutes && guard.createdAt) {
+        const ageMinutes = (Date.now() - new Date(guard.createdAt).getTime()) / 60000;
+        if (ageMinutes >= guard.maxHoldMinutes) {
+            lockedGuards.add(guard.id);
+            triggerInstantExit(guard).then(async (result) => {
+                if (result.success || (result as any).message?.includes("No tokens found")) {
+                    await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
+                    if (result.success) {
+                        try {
+                            await bot.telegram.sendMessage(
+                                guard.telegramId, 
+                                `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guard.tokenAddress}</code>\nMax hold time of ${guard.maxHoldMinutes}m reached. Position sold at market.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`, 
+                                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                            );
+                        } catch (_) {}
+                    }
+                }
+                setTimeout(() => lockedGuards.delete(guard.id), 15_000);
+            }).catch(() => setTimeout(() => lockedGuards.delete(guard.id), 15_000));
+            return;
+        }
+    }
+
     if (guard.entryPrice === 0 && currentPriceNative > 0) {
         guard.entryPrice = currentPriceNative;
         updateEntryPrice(guard.id, currentPriceNative).catch(() => {});
     }
     const entryPrice = guard.entryPrice || currentPriceNative;
 
+    // Dynamic Trail Tightening
     if (entryPrice > 0) {
         const currentProfitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
         if (currentProfitPercent >= 50.0) {
@@ -315,6 +354,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         }
     }
 
+    // Take Profit Trigger
     if (guard.takeProfitPercent && entryPrice > 0) {
         const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
         if (profitPercent >= guard.takeProfitPercent) {
@@ -356,13 +396,11 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
 
-                            // 🟢 NEW REACTION GIF: Live Take Profit
+                            // 🟢 REACTION GIF: Live Take Profit
                             if (user?.reactionGifsEnabled) {
-                                (async () => {
-                                    const { getReactionGifUrl } = await import('./reaction.service.js');
-                                    const gifUrl = await getReactionGifUrl(profitPercent >= 0);
+                                getReactionGifUrl(profitPercent >= 0).then(gifUrl => {
                                     if (gifUrl) bot.telegram.sendAnimation(guard.telegramId, gifUrl, { caption: profitPercent >= 0 ? '💰' : '💪' }).catch(() => {});
-                                })();
+                                });
                             }
 
                         } catch (e: any) {
@@ -378,6 +416,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         }
     }
 
+    // Trailing Stop Loss Trigger
     if (guard.highestSeenPrice === 0 || currentPriceNative > guard.highestSeenPrice) {
         updateHighestSeen(guard.id, currentPriceNative).catch(() => {});
     } else {
@@ -417,7 +456,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
                             const pnlMessage = totalPnlPercent >= 0
                                 ? `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${totalPnlPercent.toFixed(1)}%)`
-                                : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${totalPnlPercent.toFixed(1)}%)`;
+                                : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${Math.abs(totalPnlPercent).toFixed(1)}%)`;
 
                             const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n📉 <b>Peak Drop: -${dropPercent.toFixed(1)}%</b>\n${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
@@ -427,13 +466,11 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
 
-                            // 🟢 NEW REACTION GIF: Live Stop Loss
+                            // 🟢 REACTION GIF: Live Stop Loss
                             if (user?.reactionGifsEnabled) {
-                                (async () => {
-                                    const { getReactionGifUrl } = await import('./reaction.service.js');
-                                    const gifUrl = await getReactionGifUrl(totalPnlPercent >= 0);
+                                getReactionGifUrl(totalPnlPercent >= 0).then(gifUrl => {
                                     if (gifUrl) bot.telegram.sendAnimation(guard.telegramId, gifUrl, { caption: totalPnlPercent >= 0 ? '💰' : '💪' }).catch(() => {});
-                                })();
+                                });
                             }
 
                         } catch (e: any) {
@@ -473,14 +510,13 @@ export function startUniversalGuardPoller(bot: any) {
                 } else {
                     let livePrice = getLivePriceSol(guard.tokenAddress);
                     
-                    // 🟢 FIX 1.1: Fallback to a polled price for Raydium-native & graduated pump.fun tokens
                     if (livePrice === null) {
                         const { getCachedTokenPrice } = await import('./engine.service.js');
                         const fallback = await getCachedTokenPrice(guard.tokenAddress).catch(() => 0);
                         if (fallback > 0) livePrice = fallback;
                     }
                     
-                    if (livePrice === null) return; // genuinely no price available this tick — try again next tick
+                    if (livePrice === null) return; 
                     return checkAndTriggerGuard(guard, livePrice, bot);
                 }
             }));
@@ -489,27 +525,27 @@ export function startUniversalGuardPoller(bot: any) {
         }
     }, 1000);
 
-  setInterval(async () => {
-    try {
-        const activeGuards = await getAllActiveGuards();
-        const { isSimulationActive } = await import('./simulation.service.js');
-        
-        const liveGuards = [];
-        for (const g of activeGuards) {
-            if (!(await isSimulationActive(g.telegramId))) {
-                liveGuards.push(g);
+    setInterval(async () => {
+        try {
+            const activeGuards = await getAllActiveGuards();
+            const { isSimulationActive } = await import('./simulation.service.js');
+            
+            const liveGuards = [];
+            for (const g of activeGuards) {
+                if (!(await isSimulationActive(g.telegramId))) {
+                    liveGuards.push(g);
+                }
             }
-        }
-        
-        for (const g of liveGuards) {
-            if (g.tokenAddress.toLowerCase().endsWith('pump')) {
-                await subscribeToMintPrice(g.tokenAddress, g.id); 
+            
+            for (const g of liveGuards) {
+                if (g.tokenAddress.toLowerCase().endsWith('pump')) {
+                    await subscribeToMintPrice(g.tokenAddress, g.id); 
+                }
             }
+        } catch (e: any) {
+            console.error(`🔴 [GUARD POLLER] Reconcile pass failed: ${e.message}`);
         }
-    } catch (e: any) {
-        console.error(`🔴 [GUARD POLLER] Reconcile pass failed: ${e.message}`);
-    }
-}, 15000);
+    }, 15000);
 }
 
 export function startPumpFunPolling() {
@@ -708,10 +744,11 @@ async function triggerAutoSnipes(
                     return dexPairCache;
                 };
 
+                // 🟢 UPGRADE: Auto-Sniper ML Target Scoring
                 if (liveConfig.minScore > 0) {
                     let score = 0;
                     try {
-                        const { computeTokenScore } = await import('./caller.service.js');
+                        const { computeTokenScore, getModelScore } = await import('./caller.service.js');
 
                         const { getRecentNewMints } = await import('./grpc.service.js');
                         const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
@@ -748,7 +785,14 @@ async function triggerAutoSnipes(
                         } catch (_) {}
 
                         const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials, isRug };
-                        score = computeTokenScore(stats).score;
+                        
+                        // Execute Model Lookup First
+                        const mlScore = await getModelScore(mintCa, stats);
+                        if (mlScore !== null) {
+                            score = mlScore;
+                        } else {
+                            score = computeTokenScore(stats).score;
+                        }
                     } catch (e) {
                         return; 
                     }

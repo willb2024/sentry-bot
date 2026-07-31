@@ -1,6 +1,6 @@
 // src/services/dca.service.ts
 import { PrismaClient } from '@prisma/client';
-import { executeSnipe, getCachedTokenPrice } from './engine.service.js'; // 🟢 FIX: Import cached price helper
+import { executeSnipe, getCachedTokenPrice } from './engine.service.js';
 import { addTrailingStopToMemory } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { PublicKey } from '@solana/web3.js';
@@ -37,7 +37,7 @@ export function startDcaEngine(bot: any) {
             const now = new Date();
 
             for (let i = 0; i < cachedDcaOrders.length; i++) {
-                const order = cachedDcaOrders[i];
+                const order: any = cachedDcaOrders[i];
 
                 const intervalMs = (order.dcaIntervalMins || 60) * 60 * 1000;
                 const timeSinceLastBuy = now.getTime() - new Date(order.updatedAt).getTime();
@@ -54,6 +54,24 @@ export function startDcaEngine(bot: any) {
                         const idx = cachedDcaOrders.findIndex(o => o.id === order.id);
                         if (idx !== -1) cachedDcaOrders.splice(idx, 1);
                         await redis.del(lockKey); 
+                        continue;
+                    }
+
+                    // 🟢 UPGRADE: Max Buys Tracking (Assuming order.maxBuys exists or falling back to Redis counter logic seamlessly)
+                    const buyCountKey = `dca_buy_count:${order.id}`;
+                    const currentBuys = parseInt(await redis.get(buyCountKey) || '0');
+                    if (order.maxBuys && currentBuys >= order.maxBuys) {
+                        await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
+                        const idx = cachedDcaOrders.findIndex(o => o.id === order.id);
+                        if (idx !== -1) cachedDcaOrders.splice(idx, 1);
+                        try {
+                            await bot.telegram.sendMessage(
+                                order.user.telegramId,
+                                `✅ <b>DCA COMPLETE: Max Buys Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nLimit of ${order.maxBuys} buys has been successfully hit.`,
+                                { parse_mode: 'HTML' }
+                            );
+                        } catch (_) {}
+                        await redis.del(lockKey);
                         continue;
                     }
 
@@ -98,6 +116,8 @@ export function startDcaEngine(bot: any) {
                         if (result.success) {
                             const spent = result.volumeSpent || intendedSpend;
 
+                            await redis.incr(buyCountKey); // 🟢 UPGRADE: Increment buy counter
+
                             const activeIdx = cachedDcaOrders.findIndex(o => o.id === capturedOrderId);
                             if (activeIdx !== -1) cachedDcaOrders[activeIdx].totalSpentSol += spent;
 
@@ -108,9 +128,7 @@ export function startDcaEngine(bot: any) {
 
                             let initialPriceNative = 0;
                             try {
-                                // 🟢 FIX: Used fast cache instead of raw blocking API call
                                 initialPriceNative = await getCachedTokenPrice(capturedTokenAddress);
-
                                 if (initialPriceNative === 0 && capturedTokenAddress.toLowerCase().endsWith("pump")) {
                                     const curvePda = getBondingCurveAddress(capturedTokenAddress);
                                     const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
