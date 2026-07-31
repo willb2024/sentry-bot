@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -28,15 +30,11 @@ model User {
   priorityLevel       String   @default("FAST") 
   customPriorityFee   Float    @default(0.001) 
 
-  // ✅ Simulation relations (only once)
-  simState            SimState?
-  simTrades           SimTrade[]
-
-  ownedGuild       Guild?            @relation("GuildOwner")
-  guildMemberships GuildMembership[] @relation("GuildMemberships")
+  ownedGuild          Guild?            @relation("GuildOwner")
+  guildMemberships    GuildMembership[] @relation("GuildMemberships")
 
   vaultAddress        String?  @unique
-  wasEverPromoGranted Boolean   @default(false)
+  wasEverPromoGranted Boolean  @default(false)
   
   turnkeySubOrgId     String?  @unique
 
@@ -57,26 +55,63 @@ model User {
   vipPurchasedAt      DateTime?
   isDevSuiteUnlocked  Boolean   @default(false)
   
-  withdrawalPin       String?
+  withdrawalPin       String?   
   
   slippagePercent     Float    @default(20.0)
   pendingRewardsSol   Float    @default(0.0)
+
+  creditBalance       Int      @default(5)  
+  lifetimeCredits     Int      @default(5)
+  creditTxs           CreditTransaction[]
+
+  reactionGifsEnabled Boolean  @default(true)
 
   trades              Trade[]
   activeOrders        ActiveOrder[] 
   copyTrades          CopyTradeConfig[] 
   launchedTokens      LaunchedToken[] 
 
+  // 🟢 SIMULATION RELATIONS (NO DUPLICATES)
+  simState            SimState?
+  simTrades           SimTrade[]
+
+  // 🟢 WEBHOOK INTEGRATION RELATION
+  webhookConfigs      WebhookConfig[]
+
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  creditBalance       Int      @default(5)
-  lifetimeCredits     Int      @default(5)
-  creditTxs           CreditTransaction[]
-  reactionGifsEnabled Boolean  @default(true)
-
   @@index([telegramId])
   @@index([referralCode])
+}
+
+model SimState {
+  id              String     @id @default(uuid())
+  userId          String     @unique
+  user            User       @relation(fields: [userId], references: [id])
+  balance         Float      @default(1000.0)
+  startingBalance Float      @default(1000.0)
+  volume          Float      @default(0.0)
+  credits         Int        @default(0)
+  active          Boolean    @default(false)
+  autoSnipeActive Boolean    @default(false)
+  positions       Json?      
+  updatedAt       DateTime   @updatedAt
+  trades          SimTrade[]
+}
+
+model SimTrade {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  tokenAddress    String
+  isBuy           Boolean
+  amountInSol     Float
+  profitPercent   Float?
+  realizedPnlSol  Float?
+  createdAt       DateTime  @default(now())
+  simStateId      String?
+  simState        SimState? @relation(fields: [simStateId], references: [id])
 }
 
 model CreditTransaction {
@@ -84,7 +119,7 @@ model CreditTransaction {
   userId       String
   user         User     @relation(fields: [userId], references: [id])
   type         String   // 'PURCHASE' | 'CONSUME_SCAN' | 'CONSUME_CALLER' | 'ADMIN_GRANT'
-  amount       Int
+  amount       Int      // positive for purchase, negative for consume
   balanceAfter Int
   tokenMint    String?  
   packName     String?  
@@ -114,20 +149,24 @@ model LaunchedToken {
 }
 
 model Trade {
-  id              String   @id @default(uuid())
-  userId          String
-  user            User     @relation(fields:[userId], references: [id])
-  tokenAddress    String
-  isBuy           Boolean
-  amountInSol     Float
-  feeChargedSol   Float    
-  affiliateCutSol Float    
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields:[userId], references: [id])
+  tokenAddress     String
+  isBuy            Boolean
+  amountInSol      Float
+  feeChargedSol    Float    
+  affiliateCutSol  Float    
   loyaltyRebateSol Float   
-  txSignature     String   
-  status          String   @default("CONFIRMED") 
-  profitPercent   Float?   @default(0)
-  realizedPnlSol  Float?   @default(0)
-  createdAt       DateTime @default(now())
+  txSignature      String   
+  status           String   @default("CONFIRMED") 
+  profitPercent    Float?   @default(0)
+  realizedPnlSol   Float?   @default(0)
+  
+  // 🟢 PERFORMANCE ATTRIBUTION
+  strategy         String   @default("MANUAL") 
+
+  createdAt        DateTime @default(now())
 
   @@index([userId])
   @@index([tokenAddress])
@@ -146,12 +185,12 @@ model ActiveOrder {
   takeProfitPercent Float?   
   dcaIntervalMins   Int?     
   maxBudgetSol      Float?   
-  totalSpentSol     Float    @default(0.0)
   
-  // 🟢 MISSING FIELDS ADDED:
-  maxHoldMinutes    Int?     // Time-based exit
-  maxBuys           Int?     // DCA Max buys limit
+  // 🟢 TIME-BASED EXITS & MAX BUYS
+  maxHoldMinutes    Int?     
+  maxBuys           Int?     
 
+  totalSpentSol     Float    @default(0.0)
   isActive          Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -191,11 +230,11 @@ model CopyTradeConfig {
   autoTrailingDropPercent Float    @default(20.0) 
   autoTakeProfitPercent   Float?                  
   
-  // 🟢 MISSING FIELDS ADDED:
+  // 🟢 ADVANCED COPYTRADE FILTERS & DYNAMIC SLIPPAGE
   copyBuys                Boolean  @default(true)
   copySells               Boolean  @default(true)
   maxTradeSizeSol         Float?   
-  slippagePercent         Float?   // Override user's default slippage
+  slippagePercent         Float?   
 
   isActive                Boolean  @default(true)
   createdAt               DateTime @default(now())
@@ -206,35 +245,35 @@ model CopyTradeConfig {
 }
 
 model Guild {
-  id               String            @id @default(uuid())
-  ownerId          String            @unique          
-  owner            User              @relation("GuildOwner", fields: [ownerId], references: [id])
-  guildCode        String            @unique          
-  name             String                             
-  description      String?                            
+  id                String            @id @default(uuid())
+  ownerId           String            @unique          
+  owner             User              @relation("GuildOwner", fields: [ownerId], references: [id])
+  guildCode         String            @unique          
+  name              String                             
+  description       String?                            
   rewardDescription String?                           
-  feePaidSol       Float             @default(2.0)
-  isActive         Boolean           @default(true)
-  members          GuildMembership[]
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  feePaidSol        Float             @default(2.0)
+  isActive          Boolean           @default(true)
+  members           GuildMembership[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
   @@index([guildCode])
 }
 
 model GuildMembership {
-  id               String            @id @default(uuid())
-  guildId          String
-  guild            Guild             @relation(fields: [guildId], references: [id])
-  userId           String
-  user             User              @relation("GuildMemberships", fields: [userId], references: [id])
-  loyaltyPoints    Float             @default(0.0)   
-  totalVolumeSol   Float             @default(0.0)   
-  rank             Int?                            
-  airdropsReceivedSol Float          @default(0.0)
-  isActive         Boolean           @default(true) 
-  joinedAt         DateTime          @default(now())
-  lastActiveAt     DateTime          @default(now())
+  id                  String   @id @default(uuid())
+  guildId             String
+  guild               Guild    @relation(fields: [guildId], references: [id])
+  userId              String
+  user                User     @relation("GuildMemberships", fields: [userId], references: [id])
+  loyaltyPoints       Float    @default(0.0)   
+  totalVolumeSol      Float    @default(0.0)   
+  rank                Int?                            
+  airdropsReceivedSol Float    @default(0.0)
+  isActive            Boolean  @default(true) 
+  joinedAt            DateTime @default(now())
+  lastActiveAt        DateTime @default(now())
 
   @@unique([guildId, userId])               
   @@index([guildId, loyaltyPoints])
@@ -249,11 +288,10 @@ model DailyVipPromo {
   createdAt   DateTime @default(now())
 }
 
-// ========== NEW MODELS FOR AI CALLER ML & SIMULATION ==========
-
+// 🟢 AI CALLER MACHINE LEARNING MODELS
 model CallerPrediction {
-  id                String    @id @default(uuid())
-  alertKey          String    @unique
+  id                String   @id @default(uuid())
+  alertKey          String   @unique   
   mint              String
   symbol            String
   score             Int
@@ -271,44 +309,35 @@ model CallerPrediction {
   predictedHigh     Float
   predictedTimeMins Float
   alertedAt         DateTime
-  finalized         Boolean   @default(false)
-  peakPct           Float?
-  peakAtMs          Int?
+  finalized         Boolean  @default(false)
+  peakPct           Float?   
+  peakAtMs          Int?     
   outcome1h         Float?
   outcome6h         Float?
   outcome24h        Float?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-
-  @@index([mint])
-  @@index([finalized])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
-model SimState {
-  id              String     @id @default(uuid())
-  userId          String     @unique
-  user            User       @relation(fields: [userId], references: [id])
-  balance         Float      @default(1000.0)
-  startingBalance Float      @default(1000.0)
-  volume          Float      @default(0.0)
-  credits         Int        @default(0)
-  active          Boolean    @default(false)
-  autoSnipeActive Boolean    @default(false)
-  positions       Json?
-  updatedAt       DateTime   @updatedAt
-  trades          SimTrade[]
+model CallerModelWeights {
+  id          String   @id @default(uuid())
+  version     Int      @default(1)
+  trainedAt   DateTime @default(now())
+  coefficients Json     
+  featureNames Json     
+  metrics     Json?    
 }
 
-model SimTrade {
-  id              String    @id @default(uuid())
-  userId          String
-  user            User      @relation(fields: [userId], references: [id])
-  tokenAddress    String
-  isBuy           Boolean
-  amountInSol     Float
-  profitPercent   Float?
-  realizedPnlSol  Float?
-  createdAt       DateTime  @default(now())
-  simStateId      String?
-  simState        SimState? @relation(fields: [simStateId], references: [id])
+// 🟢 WEBHOOK CONFIGURATION
+model WebhookConfig {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  url         String
+  events      String[] 
+  secretKey   String?  
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
 }

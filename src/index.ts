@@ -5557,6 +5557,78 @@ app.get('/g/:guildCode', async (req, res) => {
 // 🌐 SECURE BOOT & EXPRESS WEBAPP
 // =========================================================
 
+
+// ---------------------------------------------------------
+// 📊 ENTERPRISE ANALYTICS: RISK SCORE & PERFORMANCE
+// ---------------------------------------------------------
+
+app.post('/api/risk-score', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const positions = await getUserPositions(telegramId);
+        if (!positions || positions.length === 0) {
+            return res.json({ score: 0, riskLevel: 'Safe', details: { topConcentration: 0, rugCount: 0 } });
+        }
+
+        const { getTokenRiskDetails } = await import('./services/price.service.js');
+        
+        let totalValue = 0;
+        let rugCount = 0;
+        let lowLiqCount = 0;
+
+        const enriched = await Promise.all(positions.map(async (p) => {
+            const rug = await getTokenRiskDetails(p.mint);
+            totalValue += p.valueUsd;
+            if (rug.isUnsafe) rugCount++;
+            return { ...p, rug };
+        }));
+
+        const topConcentration = Math.max(...enriched.map(t => t.valueUsd / (totalValue || 1)));
+        
+        let score = 0;
+        if (topConcentration > 0.50) score += 30; // Highly concentrated in one coin
+        if (topConcentration > 0.80) score += 15;
+        if (rugCount > 0) score += 40;            // Holds risky tokens
+        
+        const riskLevel = score > 70 ? 'High' : score > 40 ? 'Medium' : 'Low';
+        res.json({ score: Math.min(100, score), riskLevel, details: { topConcentration, rugCount } });
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.post('/api/performance', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const trades = await prisma.trade.findMany({
+            where: { userId: user.id, isBuy: false, status: 'CONFIRMED' },
+            select: { strategy: true, realizedPnlSol: true, amountInSol: true }
+        });
+
+        const strategyStats: Record<string, { totalPnl: number, totalVolume: number, count: number }> = {};
+        trades.forEach(t => {
+            const s = t.strategy || 'MANUAL';
+            if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
+            strategyStats[s].totalPnl += t.realizedPnlSol || 0;
+            strategyStats[s].totalVolume += t.amountInSol || 0;
+            strategyStats[s].count += 1;
+        });
+
+        res.json(strategyStats);
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 async function bootEcosystem() {
     await warmDnsCache();
     await syncGuardsFromDb(); 
