@@ -10,11 +10,18 @@ const PRIMARY_URL = process.env.PRIMARY_RPC_URL
     || process.env.HELIUS_RPC_URL 
     || (HELIUS_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}` : 'https://api.mainnet-beta.solana.com');
 
-const BACKUP_URL = process.env.BACKUP_RPC_URL 
-    || 'https://api.mainnet-beta.solana.com';
+// 🟢 FIX: Use the primary URL as backup to prevent falling back to the highly restrictive public mainnet
+const BACKUP_URL = process.env.BACKUP_RPC_URL || PRIMARY_URL;
 
-const primaryConnection = new Connection(PRIMARY_URL, 'confirmed');
-const backupConnection = new Connection(BACKUP_URL, 'confirmed');
+// 🟢 CRITICAL FIX: disableRetryOnRateLimit prevents web3.js from freezing the Telegram bot
+const primaryConnection = new Connection(PRIMARY_URL, {
+    commitment: 'confirmed',
+    disableRetryOnRateLimit: true 
+});
+const backupConnection = new Connection(BACKUP_URL, {
+    commitment: 'confirmed',
+    disableRetryOnRateLimit: true
+});
 
 const SYNC_SUBSCRIPTION_METHODS = new Set([
     'onAccountChange', 'onLogs', 'onProgramAccountChange', 
@@ -51,11 +58,10 @@ function recordPrimaryFailure() {
     consecutivePrimaryFailures++;
     if (consecutivePrimaryFailures >= CIRCUIT_BREAKER_THRESHOLD && circuitOpenedAt === null) {
         circuitOpenedAt = Date.now();
-        console.warn(`🔴 [RPC CIRCUIT BREAKER] Primary Helius RPC failed ${CIRCUIT_BREAKER_THRESHOLD} times. Routing to backup RPC for 30s.`);
+        console.warn(`🔴 [RPC CIRCUIT BREAKER] Primary RPC failed ${CIRCUIT_BREAKER_THRESHOLD} times. Resting.`);
     }
 }
 
-// 🟢 Concurrency slots tuned for strict RPC limits
 const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 10);
 let activeCount = 0;
 
@@ -125,8 +131,6 @@ export const connection = new Proxy(primaryConnection, {
                         return result;
                     } catch (error: any) {
                         recordPrimaryFailure();
-                        const backupValue = Reflect.get(backupConnection, prop);
-                        if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
                         throw error;
                     }
                 })();
@@ -143,8 +147,6 @@ export const connection = new Proxy(primaryConnection, {
                     return result;
                 } catch (error: any) {
                     recordPrimaryFailure();
-                    const backupValue = Reflect.get(backupConnection, prop);
-                    if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
                     throw error;
                 }
             });

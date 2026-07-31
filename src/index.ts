@@ -5668,27 +5668,28 @@ async function bootEcosystem() {
     await warmDnsCache();
     await syncGuardsFromDb(); 
     
-    // Start WebApp Express Server
-    app.listen(3001, () => console.log('🟢 WebApp API Server listening on port 3001'));
+    // 🟢 FIX: Handle port collisions so the bot doesn't crash silently
+    try {
+        app.listen(3001, () => console.log('🟢 WebApp API Server listening on port 3001'))
+           .on('error', (e: any) => {
+               if (e.code === 'EADDRINUSE') console.warn('⚠️ Port 3001 already in use (Ghost process). Skipping Express boot.');
+               else console.error('🔴 Express Error:', e);
+           });
+    } catch (e) {
+        console.error('🔴 Express Boot Error:', e);
+    }
 
-    // Background sweep to cleanly demote expired VIPs every 10 minutes
-    setInterval(async () => {
-        await sweepExpiredVips();
-    }, 10 * 60 * 1000);
+    setInterval(async () => { await sweepExpiredVips(); }, 10 * 60 * 1000);
 
-    // Stagger rank cache updates
     setInterval(async () => {
         try {
             const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
             for (let i = 0; i < guilds.length; i++) {
-                setTimeout(async () => {
-                    await updateRankCache(guilds[i].id);
-                }, i * 1500); 
+                setTimeout(async () => { await updateRankCache(guilds[i].id); }, i * 1500); 
             }
         } catch (e) {}
     }, 60000);
 
-    // Headless Scheduled Volume Bumper Loop
     setInterval(async () => {
         try {
             let cursor = '0';
@@ -5745,7 +5746,12 @@ async function bootEcosystem() {
 
         const info = await bot.telegram.getMe();
         console.log(`🟢 [4/5] HFT BOT ONLINE -> @${info.username}`);
-        bot.launch({ dropPendingUpdates: true });
+        
+        // 🟢 FIX: Trap the launch promise to keep the process alive even if Telegram API is dropping connections
+        bot.launch({ dropPendingUpdates: true }).catch((e) => {
+            console.error("🔴 [FATAL] Telegram Bot Launch Failed (Check Token or Connection):", e.message);
+        });
+        
         console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
 
         igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err.message));
@@ -5756,13 +5762,11 @@ async function bootEcosystem() {
         startCoinCaller(bot); 
         startLimitOrderWatcher(bot);
 
-        // Weekly Report Scheduler
         cron.schedule('0 8 * * 1', async () => {
             console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
             await sendWeeklyReportsToAll(bot);
         }, { timezone: 'UTC' });
 
-        // VIP Expiry Scheduler
         cron.schedule('0 9 * * *', async () => {
             const expiringUsers = await prisma.user.findMany({
                 where: {
@@ -5784,7 +5788,6 @@ async function bootEcosystem() {
             }
         }, { timezone: 'UTC' });
 
-        // Crash Proof Deletion Sweeper
         setInterval(async () => {
             try {
                 const now = Date.now();
@@ -5803,15 +5806,18 @@ async function bootEcosystem() {
 
     } catch (err: any) {
         console.error("🔴 TELEGRAM BOOT FAILED:", err.message);
-        process.exit(1);
+        // Let it continue running other background services instead of exiting
     }
 
     const { startCallerEvaluator, scheduleTraining } = await import('./services/caller.service.js');
     startCallerEvaluator(); 
-    
-    // 🟢 CRITICAL FIX: Initialize and schedule background hourly ML training
     scheduleTraining();
 }
+
+process.once('SIGINT', () => { try { if (bot.botInfo) bot.stop('SIGINT'); } catch(e){} prisma.$disconnect(); redis.quit(); });
+process.once('SIGTERM', () => { try { if (bot.botInfo) bot.stop('SIGTERM'); } catch(e){} prisma.$disconnect(); redis.quit(); });
+
+bootEcosystem();
 
 process.once('SIGINT', () => { try { if (bot.botInfo) bot.stop('SIGINT'); } catch(e){} prisma.$disconnect(); redis.quit(); });
 process.once('SIGTERM', () => { try { if (bot.botInfo) bot.stop('SIGTERM'); } catch(e){} prisma.$disconnect(); redis.quit(); });

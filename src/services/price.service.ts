@@ -10,17 +10,23 @@ const PUMP_FUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5u
 const BASE58_MINT_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export function getBondingCurveAddress(tokenMint: string): string {
-    const mintPubKey = new PublicKey(tokenMint);
-    const [pda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("bonding-curve"), mintPubKey.toBuffer()],
-        PUMP_FUN_PROGRAM_ID
-    );
-    return pda.toBase58();
+    try {
+        if (!tokenMint || !BASE58_MINT_REGEX.test(tokenMint)) return "";
+        const mintPubKey = new PublicKey(tokenMint);
+        const [pda] = PublicKey.findProgramAddressSync(
+            [Buffer.from("bonding-curve"), mintPubKey.toBuffer()],
+            PUMP_FUN_PROGRAM_ID
+        );
+        return pda.toBase58();
+    } catch (e) {
+        return ""; // Failsafe trap
+    }
 }
 
 export async function getCachedMintInfo(mint: string): Promise<{ decimals: number; mintAuthority: string | null; freezeAuthority: string | null }> {
     const key = `mint_info:${mint}`;
     try {
+        if (!mint || !BASE58_MINT_REGEX.test(mint)) throw new Error("Invalid Mint");
         const cached = await redis.get(key);
         if (cached) return JSON.parse(cached);
 
@@ -89,7 +95,8 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
         const cached = await redis.get(cacheKey);
         if (cached !== null) return cached === 'true';
 
-        const pubkey = new PublicKey(tokenMint);
+        let pubkey: PublicKey;
+        try { pubkey = new PublicKey(tokenMint); } catch { return false; } // Strict trap
 
         const sigs = await rpcLimiter.run(() =>
             connection.getSignaturesForAddress(pubkey, { limit: 10 }).catch(() => [])
@@ -126,7 +133,6 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
         await redis.set(cacheKey, isMev ? 'true' : 'false', 'EX', 600);
         return isMev;
     } catch (e: any) {
-        console.error("⚠️ [PRICE SERVICE] MEV activity check exception:", e.message);
         return false;
     }
 }
@@ -140,9 +146,7 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
             { signal: AbortSignal.timeout(4000) });
 
-        if (!res.ok) {
-            throw new Error("Timeout or API error");
-        }
+        if (!res.ok) throw new Error("Timeout or API error");
 
         const data = (await res.json()) as any;
         const risks = data.risks || [];
@@ -161,23 +165,5 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         return isUnsafe;
     } catch (_) {
         return false;
-    }
-}
-
-export async function fetchDexScreenerCandles(
-    tokenMint: string
-): Promise<Array<{ time: number; open: number; high: number; low: number; close: number }>> {
-    try {
-        const res = await fetch(
-            `https://io.dexscreener.com/dex/chart/amm/v3/solana/${tokenMint}?res=1&cb=1`,
-            { signal: AbortSignal.timeout(5000) }
-        );
-        if (!res.ok) return [];
-        const data = (await res.json()) as any;
-        return (data?.bars || []).slice(-60).map((b: any) => ({
-            time: b.t, open: b.o, high: b.h, low: b.l, close: b.c
-        }));
-    } catch {
-        return [];
     }
 }
