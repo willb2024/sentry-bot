@@ -1,11 +1,9 @@
 // src/lib/rpc-limiter.ts
-
 export class RpcRateLimiter {
     private queue: (() => void)[] = [];
     private readonly maxPerSecond: number;
 
-    // 🟢 BOOTED TO 20 REQ/SEC FOR QUICKNODE
-    constructor(maxPerSecond = 20) {
+    constructor(maxPerSecond = 8) {
         this.maxPerSecond = maxPerSecond;
         setInterval(() => this.drain(), Math.ceil(1000 / this.maxPerSecond));
     }
@@ -22,5 +20,4 @@ export class RpcRateLimiter {
     }
 }
 
-// 🟢 BOOTED TO 20 REQ/SEC FOR QUICKNODE
-export const rpcLimiter = new RpcRateLimiter(20);
+export const rpcLimiter = new RpcRateLimiter(Number(process.env.RPC_LIMITER_PER_SEC || 8));

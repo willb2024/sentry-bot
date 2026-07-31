@@ -6,6 +6,7 @@ import { getRecentNewMints } from './grpc.service.js';
 import { rpcLimiter } from '../lib/rpc-limiter.js';
 
 const prisma = new PrismaClient();
+const BASE58_MINT_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export interface CallerFilters {
     isActive: boolean;
@@ -374,7 +375,6 @@ export async function startCoinCaller(bot: any) {
     // 1️⃣ FAST 5-SECOND SIMULATION CALLER LOOP
     setInterval(async () => {
         try {
-            // 🟢 FIXED: getCalibratedProjection is directly called, not imported!
             const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
             const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
 
@@ -525,7 +525,6 @@ export interface TokenStats {
     observedVol?: number;
 }
 
-// 🟢 ONLY ONE computeTokenScore DECLARATION NOW
 export function computeTokenScore(stats: TokenStats & { sentiment?: number }): { score: number; reasons: string[] } {
     let score = 0;
     const reasons: string[] = [];
@@ -951,7 +950,9 @@ export async function scoreTokens() {
                 mergedMap.set(item.mint, item);
             }
         }
-        const uniquePairs = Array.from(mergedMap.values());
+        
+        // 🟢 Filter out malformed strings before they hit web3.js
+        const uniquePairs = Array.from(mergedMap.values()).filter((p: any) => BASE58_MINT_REGEX.test(p.mint));
 
         const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
         const { connection } = await import('../lib/connection.js');
@@ -1022,7 +1023,9 @@ export async function scoreTokens() {
         const passedStage1 = stage1Scored.filter(t => t.score >= 15).sort((a,b) => b.score - a.score);
 
         const fullyScored: any[] = [];
-        const stage2Chunks = chunkArray(passedStage1.slice(0, 40), 5);
+        
+        // 🟢 Drop maximum deep-checks from 40 down to 15 to alleviate RPC hammering
+        const stage2Chunks = chunkArray(passedStage1.slice(0, 15), 5);
         
         for (const chunk of stage2Chunks) {
             const results = await Promise.all(chunk.map(async (t) => {

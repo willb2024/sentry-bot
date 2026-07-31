@@ -6,7 +6,6 @@ dotenv.config();
 
 const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
 
-// 🟢 Automatically routes to Helius RPC
 const PRIMARY_URL = process.env.PRIMARY_RPC_URL 
     || process.env.HELIUS_RPC_URL 
     || (HELIUS_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}` : 'https://api.mainnet-beta.solana.com');
@@ -56,8 +55,8 @@ function recordPrimaryFailure() {
     }
 }
 
-// 🟢 Concurrency slots tuned for Helius limits
-const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 25);
+// 🟢 Concurrency slots tuned for strict RPC limits
+const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 10);
 let activeCount = 0;
 
 const BYPASS_QUEUE_METHODS = new Set([
