@@ -4,7 +4,7 @@ import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, g
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
-import { getReactionGifUrl } from './reaction.service.js'; // 🟢 STATIC IMPORT FIX
+import { getReactionGifUrl } from './reaction.service.js';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
@@ -24,7 +24,6 @@ const GRPC_URL = `https://atlas-mainnet.helius-rpc.com`;
 const PUMP_FUN_PROGRAM  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 
-// 🟢 VERIFIED METEORA PROGRAM IDS
 const METEORA_DLMM_PROGRAM = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
 const METEORA_DBC_PROGRAM = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
 const METEORA_DAMM_V2_PROGRAM = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG";
@@ -40,7 +39,6 @@ const lockedGuards      = new Set<string>();
 const lockedLimitOrders = new Set<string>();
 const activeSubscriptions = new Map<string, number>(); 
 let isPolling = false;
-let globalCurvePdas = new Set<string>(); 
 
 export let cachedSolUsdPrice = 150.0;
 export let isPriceReady = false; 
@@ -66,10 +64,10 @@ export async function syncInitialSolPrice() {
         const price = res.data?.data?.[WSOL_MINT]?.price;
         if (price && price > 0) {
             cachedSolUsdPrice = parseFloat(price);
-            console.log(`🟢 [gRPC] Successfully synchronized boot price: $${cachedSolUsdPrice} USD.`);
+            console.log(`🟢 [HFT ENGINE] Synchronized SOL boot price: $${cachedSolUsdPrice} USD.`);
         }
     } catch (e) {
-        console.warn("⚠️ [gRPC] Stale boot price check failed, seeding default $150.0.");
+        console.warn("⚠️ [HFT ENGINE] Boot price check timed out, using default $150.0.");
     } finally {
         isPriceReady = true; 
     }
@@ -106,7 +104,6 @@ setInterval(async () => {
     } catch (_) {}
 }, 2_000);
 
-// 🟢 PERFORMANCE UPGRADE: Prepare Pre-signed Txs faster and cache them longer
 setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
         if (lockedGuards.has(guard.id)) return;
@@ -114,11 +111,11 @@ setInterval(async () => {
             const payload = await generatePreSignedExitTx(guard.telegramId, guard.tokenAddress);
             if (payload) {
                 const valueToStore = typeof payload === 'string' ? payload : JSON.stringify(payload);
-                await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 20); // Extended TTL
+                await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 20);
             }
         } catch (e) {}
     }));
-}, 5_000); // Increased Frequency
+}, 5_000);
 
 export function releaseGuardSubscription(tokenAddress: string) {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
@@ -198,9 +195,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             createdAtStr = Date.now().toString();
             await redis.set(createdKey, createdAtStr, 'EX', 3600);
         }
-        const elapsedMs = Date.now() - parseInt(createdAtStr);
 
-        // 🟢 TIME-BASED EXIT TRIGGER FOR SIMULATION
         if (guardSnapshot.maxHoldMinutes && guardSnapshot.createdAt) {
             const ageMinutes = (Date.now() - new Date(guardSnapshot.createdAt).getTime()) / 60000;
             if (ageMinutes >= guardSnapshot.maxHoldMinutes) {
@@ -214,6 +209,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             }
         }
 
+        const elapsedMs = Date.now() - parseInt(createdAtStr);
         const MIN_DELAY_MS = 1200;   
         const RAMP_WINDOW_MS = 2000; 
 
@@ -279,7 +275,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
             );
 
-            // 🟢 REACTION GIF: Sim Branch
             if (user?.reactionGifsEnabled) {
                 getReactionGifUrl(pnlPercent >= 0).then(gifUrl => {
                     if (gifUrl) bot.telegram.sendAnimation(guardSnapshot.telegramId, gifUrl, { caption: pnlPercent >= 0 ? '💰' : '💪' }).catch(() => {});
@@ -287,7 +282,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             }
 
         } catch (e: any) {
-            console.error(`🔴 [SIM GUARD] PnL card failed for ${guardSnapshot.telegramId}:`, e.message);
             try {
                 await bot.telegram.sendMessage(
                     guardSnapshot.telegramId,
@@ -314,7 +308,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
     if (lockedGuards.has(guard.id)) return;
 
-    // 🟢 UPGRADE: TIME-BASED EXIT TRIGGER
     if (guard.maxHoldMinutes && guard.createdAt) {
         const ageMinutes = (Date.now() - new Date(guard.createdAt).getTime()) / 60000;
         if (ageMinutes >= guard.maxHoldMinutes) {
@@ -344,7 +337,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
     }
     const entryPrice = guard.entryPrice || currentPriceNative;
 
-    // Dynamic Trail Tightening
     if (entryPrice > 0) {
         const currentProfitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
         if (currentProfitPercent >= 50.0) {
@@ -354,7 +346,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         }
     }
 
-    // Take Profit Trigger
     if (guard.takeProfitPercent && entryPrice > 0) {
         const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
         if (profitPercent >= guard.takeProfitPercent) {
@@ -396,7 +387,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
 
-                            // 🟢 REACTION GIF: Live Take Profit
                             if (user?.reactionGifsEnabled) {
                                 getReactionGifUrl(profitPercent >= 0).then(gifUrl => {
                                     if (gifUrl) bot.telegram.sendAnimation(guard.telegramId, gifUrl, { caption: profitPercent >= 0 ? '💰' : '💪' }).catch(() => {});
@@ -416,7 +406,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         }
     }
 
-    // Trailing Stop Loss Trigger
     if (guard.highestSeenPrice === 0 || currentPriceNative > guard.highestSeenPrice) {
         updateHighestSeen(guard.id, currentPriceNative).catch(() => {});
     } else {
@@ -466,7 +455,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
 
-                            // 🟢 REACTION GIF: Live Stop Loss
                             if (user?.reactionGifsEnabled) {
                                 getReactionGifUrl(totalPnlPercent >= 0).then(gifUrl => {
                                     if (gifUrl) bot.telegram.sendAnimation(guard.telegramId, gifUrl, { caption: totalPnlPercent >= 0 ? '💰' : '💪' }).catch(() => {});
@@ -502,7 +490,6 @@ export function startUniversalGuardPoller(bot: any) {
                 if (isSim) walkSimPositionPrices(id).catch(() => {}); 
             }));
 
-            // 🟢 Fire all guard checks in parallel
             await Promise.allSettled(activeGuards.map(async guard => {
                 const isSim = simFlags.get(guard.telegramId);
                 if (isSim) {
@@ -744,7 +731,7 @@ async function triggerAutoSnipes(
                     return dexPairCache;
                 };
 
-                // 🟢 UPGRADE: Auto-Sniper ML Target Scoring
+                // 🟢 AUTO-SNIPER TARGET SCORING WITH ML FALLBACK
                 if (liveConfig.minScore > 0) {
                     let score = 0;
                     try {
@@ -786,7 +773,6 @@ async function triggerAutoSnipes(
 
                         const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials, isRug };
                         
-                        // Execute Model Lookup First
                         const mlScore = await getModelScore(mintCa, stats);
                         if (mlScore !== null) {
                             score = mlScore;
@@ -1013,10 +999,19 @@ export async function igniteYellowstoneStream(bot: any) {
         });
 
         stream.on("error", (err: any) => {
-            if (err.message.includes("401") || err.message.includes("UNAUTHENTICATED") || err.message.includes("Free Tier") || err.message.includes("403")) {
-                console.warn("🟡 [HELIUS PAYWALL] Free tier — gRPC disabled. Arming Raydium WS fallback.");
-                isGrpcDisabled = true;
-                stream.destroy();
+            // 🟢 HELIUS FREE TIER PAYWALL DETECTION
+            if (
+                err.message.includes("401") || 
+                err.message.includes("UNAUTHENTICATED") || 
+                err.message.includes("PermissionDenied") ||
+                err.message.includes("Free Tier") || 
+                err.message.includes("403")
+            ) {
+                if (!isGrpcDisabled) {
+                    console.warn("🟡 [HELIUS FREE TIER] Yellowstone gRPC stream requires a Growth plan. Gracefully engaging WebSocket stream & REST polling fallbacks.");
+                    isGrpcDisabled = true;
+                }
+                try { stream.destroy(); } catch (_) {}
                 connectRaydiumFallbackWatcher(bot);
                 return;
             }
@@ -1046,9 +1041,13 @@ export async function igniteYellowstoneStream(bot: any) {
         };
 
         stream.write(request);
-        console.log("🟢 [gRPC] Yellowstone stream connected — Pump.fun + Raydium + Meteora enabled.");
+        console.log("🟢 [gRPC] Yellowstone stream connected — Helius gRPC Active.");
 
     } catch (e: any) {
-        if (!isGrpcDisabled) setTimeout(() => igniteYellowstoneStream(bot), 5_000);
+        if (!isGrpcDisabled) {
+            console.warn("🟡 [HELIUS gRPC] Initial stream connection unauthenticated. Arming Raydium WS fallback.");
+            isGrpcDisabled = true;
+            connectRaydiumFallbackWatcher(bot);
+        }
     }
 }

@@ -4,18 +4,28 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// 🟢 Uses the new QuickNode URL from your .env
-// Replace the entire keys/getHeliumUrl block with this
+const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
+
+// 🟢 Automatically routes to Helius RPC
 const PRIMARY_URL = process.env.PRIMARY_RPC_URL 
-    || `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+    || process.env.HELIUS_RPC_URL 
+    || (HELIUS_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}` : 'https://api.mainnet-beta.solana.com');
+
 const BACKUP_URL = process.env.BACKUP_RPC_URL 
     || 'https://api.mainnet-beta.solana.com';
 
- const primaryConnection = new Connection(PRIMARY_URL, 'confirmed');
+const primaryConnection = new Connection(PRIMARY_URL, 'confirmed');
 const backupConnection = new Connection(BACKUP_URL, 'confirmed');
 
-const SYNC_SUBSCRIPTION_METHODS = new Set(['onAccountChange', 'onLogs', 'onProgramAccountChange', 'onSlotChange', 'onSignature', 'onRootChange']);
-const SYNC_REMOVAL_METHODS = new Set(['removeAccountChangeListener', 'removeOnLogsListener', 'removeProgramAccountChangeListener', 'removeSlotChangeListener', 'removeSignatureListener', 'removeRootChangeListener']);
+const SYNC_SUBSCRIPTION_METHODS = new Set([
+    'onAccountChange', 'onLogs', 'onProgramAccountChange', 
+    'onSlotChange', 'onSignature', 'onRootChange'
+]);
+const SYNC_REMOVAL_METHODS = new Set([
+    'removeAccountChangeListener', 'removeOnLogsListener', 
+    'removeProgramAccountChangeListener', 'removeSlotChangeListener', 
+    'removeSignatureListener', 'removeRootChangeListener'
+]);
 
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 30_000; 
@@ -33,21 +43,23 @@ function isCircuitOpen(): boolean {
     return true;
 }
 
-function recordPrimarySuccess() { consecutivePrimaryFailures = 0; circuitOpenedAt = null; }
+function recordPrimarySuccess() { 
+    consecutivePrimaryFailures = 0; 
+    circuitOpenedAt = null; 
+}
 
 function recordPrimaryFailure() {
     consecutivePrimaryFailures++;
     if (consecutivePrimaryFailures >= CIRCUIT_BREAKER_THRESHOLD && circuitOpenedAt === null) {
         circuitOpenedAt = Date.now();
-        console.warn(`🔴 [RPC CIRCUIT BREAKER] Primary RPC failed. Routing to backup for 30s.`);
+        console.warn(`🔴 [RPC CIRCUIT BREAKER] Primary Helius RPC failed ${CIRCUIT_BREAKER_THRESHOLD} times. Routing to backup RPC for 30s.`);
     }
 }
 
-// 🟢 40 concurrent slots for instant sniper execution
-const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 40);
+// 🟢 Concurrency slots tuned for Helius limits
+const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 25);
 let activeCount = 0;
 
-// 🟢 These NEVER wait in any queue — trade submission must be instant
 const BYPASS_QUEUE_METHODS = new Set([
     'sendRawTransaction', 'sendTransaction', 'getLatestBlockhash',
     'getSignatureStatus', 'getBalance'
@@ -102,7 +114,6 @@ export const connection = new Proxy(primaryConnection, {
         return function (...args: any[]) {
             const isHighPriority = methodName.includes('sendRawTransaction') || methodName.includes('getLatestBlockhash');
 
-            // 🟢 FAST PATH: Trades bypass all queues and hit the network instantly
             if (BYPASS_QUEUE_METHODS.has(methodName)) {
                 return (async () => {
                     if (isCircuitOpen()) {
@@ -122,7 +133,6 @@ export const connection = new Proxy(primaryConnection, {
                 })();
             }
 
-            // STANDARD PATH: General concurrency limiter for non-trades
             return withSlot(isHighPriority, async () => {
                 if (isCircuitOpen()) {
                     const backupValue = Reflect.get(backupConnection, prop);

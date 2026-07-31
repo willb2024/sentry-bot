@@ -28,6 +28,9 @@ model User {
   priorityLevel       String   @default("FAST") 
   customPriorityFee   Float    @default(0.001) 
 
+ simState            SimState?
+  simTrades           SimTrade[]
+
   ownedGuild       Guild?            @relation("GuildOwner")
   guildMemberships GuildMembership[] @relation("GuildMemberships")
 
@@ -71,9 +74,7 @@ model User {
   creditTxs           CreditTransaction[]
   reactionGifsEnabled Boolean  @default(true)
 
-   // 🟢 PRISMA RELATION FIX: Opposites for SimState and SimTrade
-  simState            SimState?
-  simTrades           SimTrade[]
+   
 
   // NEW: Simulation persistence
   simState            SimState?
@@ -288,34 +289,30 @@ model CallerPrediction {
 }
 
 model SimState {
-  id                String    @id @default(uuid())
-  userId            String    @unique
-  user              User      @relation(fields: [userId], references: [id])
-  balance           Float     @default(1000.0)
-  startingBalance   Float     @default(1000.0)
-  volume            Float     @default(0.0)
-  credits           Int       @default(0)
-  active            Boolean   @default(false)
-  autoSnipeActive   Boolean   @default(false)
-  positions         Json?     // store array of positions
-  updatedAt         DateTime  @updatedAt
-  trades            SimTrade[]
-
-  @@index([userId])
+  id              String     @id @default(uuid())
+  userId          String     @unique
+  user            User       @relation(fields: [userId], references: [id])
+  balance         Float      @default(1000.0)
+  startingBalance Float      @default(1000.0)
+  volume          Float      @default(0.0)
+  credits         Int        @default(0)
+  active          Boolean    @default(false)
+  autoSnipeActive Boolean    @default(false)
+  positions       Json?
+  updatedAt       DateTime   @updatedAt
+  trades          SimTrade[]
 }
 
 model SimTrade {
-  id              String   @id @default(uuid())
-  simStateId      String?
-  simState        SimState? @relation(fields: [simStateId], references: [id])
+  id              String    @id @default(uuid())
   userId          String
-  user            User     @relation(fields: [userId], references: [id])
+  user            User      @relation(fields: [userId], references: [id])
   tokenAddress    String
   isBuy           Boolean
   amountInSol     Float
   profitPercent   Float?
   realizedPnlSol  Float?
-  createdAt       DateTime @default(now())
-
-  @@index([userId])
+  createdAt       DateTime  @default(now())
+  simStateId      String?
+  simState        SimState? @relation(fields: [simStateId], references: [id])
 }
