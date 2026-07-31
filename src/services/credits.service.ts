@@ -4,13 +4,11 @@ import { redis } from '../lib/redis.js';
 
 const prisma = new PrismaClient();
 
-
-// 🟢 Pricing tiers — flattened curve, cheaper entry point
 export const CREDIT_PACKS = {
-    starter: { name: 'Starter', priceSol: null, priceUsd: 20,  credits: 140  }, // $0.143/credit
-    growth:  { name: 'Growth',  priceSol: null, priceUsd: 40,  credits: 300  }, // $0.133/credit
-    pro:     { name: 'Pro',     priceSol: null, priceUsd: 60,  credits: 480  }, // $0.125/credit
-    whale:   { name: 'Whale',   priceSol: null, priceUsd: 100, credits: 2000 }  // $0.05/credit — unchanged
+    starter: { name: 'Starter', priceSol: null, priceUsd: 30,  credits: 150 },
+    growth:  { name: 'Growth',  priceSol: null, priceUsd: 50,  credits: 280 },
+    pro:     { name: 'Pro',     priceSol: null, priceUsd: 75,  credits: 450 },
+    whale:   { name: 'Whale',   priceSol: null, priceUsd: 100, credits: 2000 }
 } as const;
 
 export type CreditPackKey = keyof typeof CREDIT_PACKS;
@@ -20,10 +18,9 @@ export async function getCreditBalance(telegramId: string): Promise<number> {
     return user?.creditBalance || 0;
 }
 
-// 🟢 Called ONLY when a real, deliverable token match is found
 export async function consumeCredit(
     telegramId: string,
-    type: 'CONSUME_SCAN' | 'CONSUME_CALLER',
+    type: 'CONSUME_SCAN' | 'CONSUME_CALLER' | 'CONSUME_SNIPER_SCORE',
     tokenMint: string
 ): Promise<{ success: boolean; remaining: number }> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -44,6 +41,36 @@ export async function consumeCredit(
     });
 
     return { success: true, remaining: updated.creditBalance };
+}
+
+// 🟢 NEW: Auto-Sniper Credit Consumption with Automatic Fallback
+export async function consumeSniperCredit(
+    telegramId: string,
+    tokenMint: string
+): Promise<{ success: boolean; remaining: number; fallback: boolean }> {
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (!user) return { success: false, remaining: 0, fallback: true };
+
+    if (user.creditBalance <= 0) {
+        return { success: false, remaining: 0, fallback: true };
+    }
+
+    const updated = await prisma.user.update({
+        where: { id: user.id },
+        data: { creditBalance: { decrement: 1 } }
+    });
+
+    await prisma.creditTransaction.create({
+        data: {
+            userId: user.id,
+            type: 'CONSUME_SNIPER_SCORE',
+            amount: -1,
+            balanceAfter: updated.creditBalance,
+            tokenMint
+        }
+    });
+
+    return { success: true, remaining: updated.creditBalance, fallback: false };
 }
 
 export async function addCredits(
@@ -83,13 +110,14 @@ export async function getUsageStats(telegramId: string, days: number = 30) {
 
     const scanConsumed = txs.filter(t => t.type === 'CONSUME_SCAN').length;
     const callerConsumed = txs.filter(t => t.type === 'CONSUME_CALLER').length;
+    const sniperConsumed = txs.filter(t => t.type === 'CONSUME_SNIPER_SCORE').length;
     const purchased = txs.filter(t => t.type === 'PURCHASE').reduce((s, t) => s + t.amount, 0);
 
     return {
         currentBalance: user.creditBalance,
         lifetimeCredits: user.lifetimeCredits,
-        scanConsumed, callerConsumed,
-        totalConsumed: scanConsumed + callerConsumed,
+        scanConsumed, callerConsumed, sniperConsumed,
+        totalConsumed: scanConsumed + callerConsumed + sniperConsumed,
         purchasedInWindow: purchased,
         recentTxs: txs.slice(0, 20)
     };

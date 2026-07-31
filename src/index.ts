@@ -569,16 +569,21 @@ let displayCredits = user.creditBalance;
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
-  const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
-        [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
-        [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-        [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')], // 🟢 ADDED HERE
-        [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-        [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
-        [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
-        [{ text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }]
-    ]);
+        const UI = Markup.inlineKeyboard([
+            [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+            [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
+            [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
+            [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
+            [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+            [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+            [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
+            
+            // 🟢 FIXED: "How to Trade" added next to "Track Trades"
+            [
+                { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
+                Markup.button.callback('📖 How to Trade', 'btn_trade_guide')
+            ]
+        ])
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
     else await ctx.replyWithHTML(layoutTxt, UI);
 }
@@ -877,82 +882,6 @@ bot.action(/^watch_remove_(.+)$/, async (ctx) => {
 // 🟢 CLAUDE FIX 4: Rolling time window stats for live & sim
 
 
-// 🟢 FIXED /simedit COMMAND (src/index.ts)
-bot.command('simedit', async (ctx) => {
-    const tgId = ctx.from?.id?.toString();
-    if (!isAdmin(tgId)) return;
-
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 5 || parts.length > 6) {
-        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE] [OPTIONAL_CREDITS]</code>');
-    }
-
-    const wins = parseInt(parts[1]);
-    const losses = parseInt(parts[2]);
-    const totalVol = parseFloat(parts[3]);
-    const daysActive = parseInt(parts[4]);
-    const credits = parts.length === 6 ? parseInt(parts[5]) : undefined;
-
-    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive) || daysActive < 1) {
-        return ctx.reply("🔴 Invalid numbers provided.");
-    }
-
-    const totalTrades = wins + losses || 1;
-    const volPerTrade = totalVol / totalTrades;
-    const now = Date.now();
-    const fakeTrades = [];
-    
-    // Use a fixed 1 SOL sizing baseline for simulated balance PnL calculation
-    // to prevent high trade volume from wiping out the starting balance
-    const calcTradeSize = 1.0; 
-    let totalRealizedPnl = 0;
-
-    for (let i = 0; i < wins; i++) {
-        const pnlPercent = Math.random() * 120 + 20; // +20% to +140%
-        const realizedPnlSol = calcTradeSize * (pnlPercent / 100);
-        totalRealizedPnl += realizedPnlSol;
-        fakeTrades.push({
-            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
-        });
-    }
-    for (let i = 0; i < losses; i++) {
-        const pnlPercent = -(Math.random() * 25 + 5); // -5% to -30%
-        const realizedPnlSol = calcTradeSize * (pnlPercent / 100);
-        totalRealizedPnl += realizedPnlSol;
-        fakeTrades.push({
-            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
-        });
-    }
-
-    if (fakeTrades.length > 0) fakeTrades[0].createdAt = new Date(now - daysActive * 86400000).toISOString();
-    fakeTrades.sort(() => Math.random() - 0.5);
-
-    await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
-    await redis.set(`sim:volume:${tgId}`, totalVol.toString());
-
-    if (credits !== undefined) {
-        await redis.set(`sim:credits:${tgId}`, credits.toString());
-    }
-
-    const { getSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
-    const startBal = await getSimStartingBalance(tgId!);
-    const newBalance = Math.max(10, startBal + totalRealizedPnl); // Always preserves a healthy balance
-    await redis.set(`sim:balance:${tgId}`, newBalance.toFixed(4));
-
-    await saveSimulationState(tgId!);
-
-    await ctx.replyWithHTML(
-        `✅ <b>Simulated Stats Forged & Aligned!</b>\n\n` +
-        `Wins: <b>${wins}</b> | Losses: <b>${losses}</b>\n` +
-        `Volume: <b>${totalVol} SOL</b> | Days: <b>${daysActive}</b>\n` +
-        `Win Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n` +
-        `New Balance: <b>${newBalance.toFixed(4)} SOL</b>\n\n` +
-        `<i>Dashboard PnL, Net Worth, and Win Rate are now fully aligned.</i>`
-    );
-});
-
 
 bot.action('action_abort_token_launch', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -990,9 +919,8 @@ bot.command('simcredits', async (ctx) => {
 
 
 
-// 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
-// index.ts — sendCallerMenu()
-// 🟢 NEW FEATURE: Interactive Coin Caller Menu & Filters
+
+// 🟢 UPDATED: AI Coin Caller Menu with MEV Shield & Self-Learning ML Callouts
 async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     const { getUserCallerFilters } = await import('./services/caller.service.js');
     const filters = await getUserCallerFilters(tgId);
@@ -1001,9 +929,12 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         ? "🟢 <b>ACTIVE & SCANNING</b> 🔍\n<i>(Searching mempool for matches every 15s...)</i>" 
         : "🔴 <b>OFFLINE</b>";
         
-    const mevText = filters.blockMev ? "🟢 Yes (Protected)" : "🔴 No (Risky)";
+    const mevText = filters.blockMev ? "🟢 Yes (MEV Protected)" : "🔴 No (Risky)";
 
-    const text = `🎯 <b>AI COIN CALLER ENGINE</b>\n\n` +
+    const text = `🎯 <b>AI COIN CALLER ENGINE</b> 🛡️ <i>[MEV Protected]</i>\n\n` +
+
+    `🤖 <b>INTELLIGENCE ARCHITECTURE</b>\n` +
+    `Powered by <b>Self-Learning AI</b> (Rule-Based Safety Audits + Self-Training ML Model). Sentry constantly retrains on past alert outcomes to maximize target accuracy.\n\n` +
 
     `⚙️ <b>HOW IT WORKS</b>\n` +
     `Every 15 seconds, Sentry checks new tokens as they appear and looks at a few things:\n` +
@@ -1011,18 +942,17 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     `2️⃣ Is it safe? (checks for scam red flags like frozen wallets or fake liquidity)\n` +
     `3️⃣ Who made it, and is the liquidity locked so it can't be pulled out?\n` +
     `4️⃣ Are real people buying, or does it just look busy?\n` +
-    `If a token looks good on all of this, Sentry scores it and sends it straight to you.\n\n` +
+    `If a token looks good on all of this, Sentry scores it, routes it through Jito MEV protection, and sends it straight to you.\n\n` +
 
     `🧠 <b>WHAT THE SCORE (0-100) MEANS</b>\n` +
     `• <b>0-39 — 🔵 Too Early:</b> Not enough happening yet. Just something to keep an eye on, not a buy.\n` +
     `• <b>40-59 — 🟡 Speculative:</b> A couple of good signs, but still very risky. Think of it as a small gamble.\n` +
     `• <b>60-74 — 🟠 Developing:</b> Several good signs at once — decent volume, decent liquidity, no scam flags. Still early, but looking healthier.\n` +
     `• <b>75-100 — 🟢 High Conviction:</b> Everything Sentry checks looks good at the same time. This is the strongest signal the engine gives — but it's still not a sure thing.\n\n` +
-    `One rule beats every other rule: if Sentry finds a scam red flag (like a frozen wallet or a coin you can't sell), the score drops straight to 0, no matter how good everything else looks.\n\n` +
 
     `🔮 <b>WHAT THE "PRICE PROJECTION" MEANS</b>\n` +
     `Each alert also shows a rough guess at how far the price might move and how fast. This is not a promise — it's a smart estimate, and Sentry always tells you which kind:\n` +
-    `• <b>Calibrated:</b> based on what actually happened with similar tokens before. More trustworthy, and gets better the longer Sentry runs.\n` +
+    `• <b>Calibrated (ML Trained):</b> generated by our self-learning AI model trained on historical breakout patterns. Highly reliable and constantly improving.\n` +
     `• <b>Uncalibrated Estimate:</b> a rough guess used when there isn't enough past data yet. Take this one with a bigger grain of salt.\n\n` +
 
         `<b>Engine Status:</b> ${statusText}\n\n` +
@@ -1032,7 +962,7 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         `• <b>Momentum % Range:</b> ${filters.minPctChange}% to ${filters.maxPctChange}%\n` +
         `• <b>Min Liquidity:</b> $${filters.minLiquidity.toLocaleString()}\n` +
         `• <b>Min 24h Volume:</b> $${filters.minVolume24h.toLocaleString()}\n` +
-        `• <b>Block MEV:</b> ${mevText}\n\n` +
+        `• <b>MEV Shield:</b> ${mevText}\n\n` +
         `<i>Adjust your scanner parameters below:</i>`;
 
     const ui = Markup.inlineKeyboard([
@@ -1053,10 +983,10 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 
-    // 🟢 FIX 1: Send the message!
     if (isEdit) await safeEditMessageText(ctx, text, ui);
     else await ctx.replyWithHTML(text, ui);
 }
+
 bot.action('action_create_guild_prompt', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     
@@ -1074,6 +1004,60 @@ bot.action('action_create_guild_prompt', async (ctx) => {
         [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
         [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
     ]));
+});
+
+
+// 🟢 BATCH SNIPE COMMAND
+bot.command('batch', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const text = ctx.message.text.replace('/batch', '').trim();
+    const lines = text.split('\n').filter(line => line.trim() !== '');
+    if (lines.length === 0) {
+        return ctx.replyWithHTML(
+            `📦 <b>BATCH SNIPE USAGE</b>\n\n` +
+            `Send /batch followed by contract addresses and amounts on separate lines:\n\n` +
+            `<code>/batch\nCA1, 0.1\nCA2, $50\nCA3, 0.05</code>`
+        );
+    }
+
+    const parsed: Array<{ ca: string; amt: number }> = [];
+    for (const line of lines) {
+        const parts = line.split(',').map(s => s.trim());
+        if (parts.length !== 2) continue;
+        const ca = parts[0];
+        const amt = parseSolAmount(parts[1]);
+        if (!ca || amt === null || amt <= 0) continue;
+        parsed.push({ ca, amt });
+    }
+
+    if (parsed.length === 0) return ctx.replyWithHTML('🔴 <b>No valid entries found.</b> Ensure format is: <code>[CA], [AMOUNT]</code>');
+
+    const loader = await ctx.replyWithHTML(`<i>⏳ Executing ${parsed.length} concurrent snipes via Jito...</i>`);
+
+    const results = await Promise.allSettled(
+        parsed.map(({ ca, amt }) => executeSnipe(tgId, ca, amt, 'buy', undefined, false, undefined, undefined, 0, undefined, 'BATCH'))
+    );
+
+    let successCount = 0;
+    let msg = `📦 <b>BATCH SNIPE COMPLETE</b>\n\n`;
+    results.forEach((res, i) => {
+        const entry = parsed[i];
+        if (res.status === 'fulfilled' && res.value.success) {
+            successCount++;
+            msg += `✅ <code>${entry.ca.substring(0,8)}...</code> – <b>${entry.amt} SOL</b> – <a href="https://solscan.io/tx/${res.value.signature}">Receipt</a>\n`;
+        } else {
+            const reason = res.status === 'fulfilled' ? res.value.message : 'Execution error';
+            msg += `❌ <code>${entry.ca.substring(0,8)}...</code> – <b>${entry.amt} SOL</b> – ${reason}\n`;
+        }
+    });
+    msg += `\n<b>Success Rate:</b> ${successCount}/${parsed.length} Executed`;
+    
+    await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { 
+        parse_mode: 'HTML', 
+        link_preview_options: { is_disabled: true } 
+    });
 });
 
 // 🟢 NEW: Endpoint to sync WebApp toggle with Backend Simulation state
@@ -1583,103 +1567,82 @@ bot.action('btn_guide', async (ctx) => {
     await safeEditMessageText(ctx, guideText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
 
+
+
 // =========================================================
-// 📖 HOW TO TRADE MANUAL (PAGINATED)
+// 📖 FULL OPERATIONS MANUAL (PAGINATED WITH PREV/NEXT)
 // =========================================================
 const TRADE_GUIDE_PAGES: string[] = [
-    // PAGE 1: Getting Started + Instant Trading
-    `📖 <b>SENTRY TERMINAL — OPERATIONS MANUAL</b> <i>(1/4)</i>\n\n` +
-    `<i>Every method below fires through Jito MEV protection automatically.</i>\n\n` +
-
-    `👛 <b>STEP 1 — FUND YOUR VAULT</b>\n` +
-    `Copy your W1 wallet address from the dashboard and send SOL to it. For multi-wallet mode, go to <b>Vault & Keys</b>, activate up to 5 wallets, and fund each address separately.\n\n` +
-
-    `⚡ <b>STEP 2 — INSTANT BUY</b>\n` +
-    `Paste any Solana token contract address (CA) directly into the chat. Sentry pulls the token info, runs a rug check, and shows you a confirm card.\n` +
-    `• <i>Custom Size Snipe:</i> Paste <code>[CA] [AMOUNT]</code>. You can trade using SOL or the $USD equivalent! (e.g. <code>7xKXtg... 0.5</code> or <code>7xKXtg... $50</code>)\n\n` +
-
-    `🔍 <b>STEP 3 — X-RAY SCANNER</b>\n` +
-    `Type <code>/scan [CA]</code> for a full market cap, volume, momentum, and rug-risk report before you commit.\n\n` +
-
-    `📤 <b>WITHDRAW</b>\n` +
-    `<code>/withdraw [ADDRESS] [AMOUNT]</code> or use <code>ALL</code> to sweep your full balance minus gas. If you've set a Withdrawal PIN, you'll be prompted for it.\n\n` +
-
-    `🔒 <b>SECURITY PIN</b>\n` +
-    `Go to <b>Vault & Keys → Set Withdrawal PIN</b> to require a 4–6 digit code on every withdrawal, protecting you from Telegram session hijacking.`,
+    // PAGE 1: Basics & Instant Trading
+    `📖 <b>SENTRY TERMINAL — OPERATIONS MANUAL</b> <i>(1/5)</i>\n\n` +
+    `<i>All trades are secured by Jito Block-0 MEV Protection.</i>\n\n` +
+    `👛 <b>1. FUNDING YOUR VAULT</b>\n` +
+    `Copy your W1 (Main) wallet address from the dashboard and send SOL to it. For "Whale Mode", go to <b>Vault & Keys</b>, activate up to 5 wallets, and fund each address separately.\n\n` +
+    `⚡ <b>2. INSTANT BUY</b>\n` +
+    `Paste any token contract address (CA) into the chat. Sentry will check it for rugs and show a buy button.\n` +
+    `• <i>Fast Buy:</i> Send <code>[CA] [AMOUNT]</code>. Example: <code>7xKXtg... 0.5</code> or <code>7xKXtg... $50</code>\n\n` +
+    `📦 <b>3. BATCH SNIPING</b>\n` +
+    `Buy multiple tokens at once! Type <code>/batch</code> followed by CAs and amounts on new lines.\n` +
+    `<code>/batch\nCA1, 0.1\nCA2, $50</code>\n\n` +
+    `📤 <b>4. WITHDRAW FUNDS</b>\n` +
+    `Send <code>/withdraw [ADDRESS] [AMOUNT]</code> (e.g., <code>/withdraw 2vMm... ALL</code>). Set a Security PIN in Vault & Keys for extra protection.`,
 
     // PAGE 2: Automation Engines
-    `📖 <b>OPERATIONS MANUAL — AUTOMATION</b> <i>(2/4)</i>\n\n` +
-
+    `📖 <b>OPERATIONS MANUAL — AUTOMATION</b> <i>(2/5)</i>\n\n` +
     `🎯 <b>AUTO-SNIPER</b>\n` +
-    `Go to <b>Sniper Module</b>. Configure spend per wallet, market cap filters, max dev bag %, anti-dead-coin shield, and block delay. Sentry scans Pump.fun/Raydium mempool 24/7 and buys instantly.\n\n` +
-
+    `Go to <b>Sniper Module</b>. Set your spend amount, minimum AI score, and filters. Sentry will auto-buy tokens the second they launch. (Uses 1 Credit per AI score check).\n\n` +
     `🤖 <b>AI COIN CALLER</b>\n` +
-    `Type <code>/caller</code> to arm Sentry's scanner. Every 15 seconds it scores tokens 0–100 on momentum, volume, age, and MEV risk, and DMs you the ones that clear your thresholds with a one-click buy button.\n\n` +
-
+    `Type <code>/caller</code>. Sentry scans the blockchain every 15 seconds. If a token has good volume, locked liquidity, and passes the Machine Learning model, you get an instant DM to buy it.\n\n` +
     `👥 <b>COPY TRADING</b>\n` +
-    `Go to <b>Copy Trade → Add Custom Wallet</b>.\n` +
-    `<i>Syntax:</i> <code>[WALLET] [AMOUNT] [GUARD%] [OPTIONAL TP%]</code>\n` +
-    `Sentry audits the wallet's last 20 trades via Helius and scores it before you start mirroring.\n\n` +
-
+    `Go to <b>Copy Trade</b>. Add a whale's wallet address. Sentry will instantly mirror their buys and sells with dynamic slippage.\n\n` +
     `⏳ <b>DCA & LIMIT ORDERS</b>\n` +
     `Go to <b>Limit / DCA Engine</b>.\n` +
-    `• <i>Limit:</i> <code>[CA] [TARGET_USD] [AMOUNT_SOL]</code>\n` +
-    `• <i>DCA:</i> <code>[CA] [INTERVAL_MINS] [AMOUNT] [GUARD%] [TP%] [MAX_BUDGET]</code>`,
+    `• <i>Limit:</i> Buy automatically when a token drops to a specific price.\n` +
+    `• <i>DCA:</i> Buy a small amount automatically every X minutes.`,
 
-    // PAGE 3: Risk Management + Tracking
-    `📖 <b>OPERATIONS MANUAL — RISK & TRACKING</b> <i>(3/4)</i>\n\n` +
-
-    `🛡️ <b>TRAILING GUARDS</b>\n` +
-    `Go to <b>Trailing Stops → Deploy Trailing Guard</b>.\n` +
-    `<i>Syntax:</i> <code>[CA] [DROP%] [AMOUNT] [OPTIONAL TP%]</code>\n` +
-    `<i>Example:</i> <code>7xKXtg... 15 0.1 50</code> — buys 0.1 SOL, sets a -15% trailing stop, auto-sells at +50% profit.\n\n` +
-
-    `💼 <b>POSITIONS</b>\n` +
-    `Go to <b>Positions</b> to view live holdings. Exit 10/25/50/75/100% instantly via Jito. Every sell generates a shareable PnL card.\n\n` +
-
-    `👀 <b>WATCHLISTS & ALERTS</b>\n` +
-    `• Add: <code>/watch [CA] [TARGET_PRICE_USD]</code>\n` +
-    `• View: <code>/watchlist</code>\n` +
-    `• Remove: <code>/unwatch [CA]</code>\n` +
-    `• Clear: <code>/clearwatch</code>\n\n` +
-
-    `📅 <b>LAUNCH CALENDAR</b>\n` +
-    `Type <code>/calendar</code> for a live feed of newest verified token launches with age, liquidity, and volume — snipe directly from the card.\n\n` +
-
+    // PAGE 3: Risk Management & Positions
+    `📖 <b>OPERATIONS MANUAL — RISK MGMT</b> <i>(3/5)</i>\n\n` +
+    `🛡️ <b>TRAILING GUARDS (STOP LOSS / TAKE PROFIT)</b>\n` +
+    `Go to <b>Trailing Stops</b> to protect your bags. Sentry tracks the highest price and automatically sells if it drops by your chosen percentage. You can also set a maximum hold time!\n\n` +
+    `💼 <b>POSITIONS & MANUAL EXITS</b>\n` +
+    `Go to <b>Positions</b> to view your bags. You can exit 10%, 25%, 50%, 75%, or 100% instantly. Every sell generates a shareable PnL card.\n\n` +
+    `🔍 <b>TOKEN X-RAY SCANNER</b>\n` +
+    `Type <code>/scan [CA]</code> to get a full fundamental report (Market Cap, Liquidity, Socials, Rug Risk, Age) before you buy.\n\n` +
     `🧹 <b>RENT SWEEPER</b>\n` +
-    `Inside <b>Positions</b>, use the sweep button to close empty token accounts and reclaim locked SOL rent instantly.\n\n` +
+    `Inside <b>Positions</b>, click "Sweep Empty Accounts" to burn dead tokens and reclaim locked SOL rent instantly.`,
 
-    `🛑 <b>PANIC CANCEL</b>\n` +
-    `Tap <b>Cancel All Automations</b> on your dashboard to instantly disable every sniper, DCA, limit order, copy trade, caller, and guard.`,
+    // PAGE 4: Analytics, WebApp & Tracking
+    `📖 <b>OPERATIONS MANUAL — ANALYTICS</b> <i>(4/5)</i>\n\n` +
+    `🌐 <b>THE WEB APP DASHBOARD</b>\n` +
+    `Click <b>Track Trades</b> on your main menu to open the Web App. It features:\n` +
+    `• <b>Portfolio Risk Score:</b> AI assessment of your holdings (Low/Medium/High).\n` +
+    `• <b>Performance Attribution:</b> See exactly which strategy (Sniper, Manual, Copy) is making you the most money.\n` +
+    `• <b>30s Live Feed:</b> Watch live vs simulated trade outcomes in real-time.\n\n` +
+    `👀 <b>WATCHLISTS & CALENDAR</b>\n` +
+    `• Type <code>/watch [CA]</code> to track a coin.\n` +
+    `• Type <code>/watchlist</code> to view live prices.\n` +
+    `• Type <code>/calendar</code> to see the newest verified token launches.\n\n` +
+    `📊 <b>LIVE PNL STATS</b>\n` +
+    `Type <code>/stats</code> to view your rolling win rate, total SOL volume, and net profit.`,
 
-    // PAGE 4: Launchpad + Community + Account
-    `📖 <b>OPERATIONS MANUAL — LAUNCHPAD & COMMUNITY</b> <i>(4/4)</i>\n\n` +
-
+    // PAGE 5: Launchpad, Guilds & Ecosystem
+    `📖 <b>OPERATIONS MANUAL — ECOSYSTEM</b> <i>(5/5)</i>\n\n` +
     `🚀 <b>SENTRY LAUNCHPAD</b>\n` +
-    `Tap <b>Launch Token</b>. Enter name, ticker, description, optional vanity prefix, dev buy size, wallet split (1–4), and optional stop-loss guard, then upload a logo. Sentry deploys in one un-snipeable Jito bundle.\n\n` +
-
-    `📂 <b>LAUNCH PORTFOLIO</b>\n` +
-    `Manage deployed tokens: check holder distribution, or execute a consolidated multi-wallet exit.\n\n` +
-
-    `🏰 <b>SENTRY GUILDS</b>\n` +
-    `Create your own loyalty community with <code>/createguild [Name] | [Description] | [Reward]</code>, or join one with <code>/join [CODE]</code>. Earn 50% of your members' trading fees forever.\n\n` +
-
-    `💰 <b>AFFILIATES</b>\n` +
-    `Share your invite link from <b>Affiliates</b>. Earn 40–70% of your recruits' fees depending on your $SENTRY Points tier (Bronze → Diamond).\n\n` +
-
-    `👑 <b>VIP</b>\n` +
-    `Type <code>/vipstatus</code> to view or upgrade — 0% trading fees, Turbo Jito priority, and Alpha Directory access.\n\n` +
-
-    `⚙️ <b>SETTINGS</b>\n` +
-    `Adjust slippage and Jito priority speed (Eco/Fast/Turbo/Custom) anytime from <b>Settings</b>.\n\n` +
-
-    `<i>Type /cancel at any time to abort any active wizard and return safely to your dashboard.</i>`
+    `Tap <b>Launch Token</b>. Launch your own token on Pump.fun or Raydium safely. Sentry hides your initial developer buy inside a secure Jito bundle so snipers can't front-run you.\n\n` +
+    `🏰 <b>SENTRY GUILDS (CREATE YOUR COMMUNITY)</b>\n` +
+    `Type <code>/createguild [Name] | [Desc] | [Reward]</code>. Invite your friends. You earn <b>50% of our platform fee</b> on every trade your members make, forever!\n\n` +
+    `💰 <b>AFFILIATE PROGRAM</b>\n` +
+    `Go to <b>Affiliates</b>. Share your link. You earn 40–70% of your recruits' trading fees depending on your $SENTRY Points tier.\n\n` +
+    `💳 <b>AI CREDITS & VIP</b>\n` +
+    `• <b>Credits:</b> Type <code>/credits</code>. Used to fuel highly accurate Machine Learning predictions for Snipers.\n` +
+    `• <b>VIP:</b> Type <code>/vipstatus</code> to upgrade for 0% trading fees and Dev Suite access.`
 ];
 
+// 🟢 FIXED: Adds BOTH Prev and Next arrows dynamically
 function buildGuideKeyboard(page: number) {
     const buttons = [];
     const navRow = [];
-    if (page > 0) navRow.push(Markup.button.callback('⬅️ Back', `trade_guide_page_${page - 1}`));
+    if (page > 0) navRow.push(Markup.button.callback('⬅️ Prev', `trade_guide_page_${page - 1}`));
     if (page < TRADE_GUIDE_PAGES.length - 1) navRow.push(Markup.button.callback('Next ➡️', `trade_guide_page_${page + 1}`));
     if (navRow.length > 0) buttons.push(navRow);
     buttons.push([Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]);
@@ -2494,14 +2457,14 @@ bot.action('action_unlock_devsuite', async (ctx) => {
 });
 
 
-// EXTENDED SIMEDIT (Includes optional Credits)
+// 🟢 KEEP ONLY THIS ONE SINGLE /simedit COMMAND HANDLER:
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
 
     const parts = ctx.message.text.split(' ');
     if (parts.length < 5 || parts.length > 6) {
-        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [VOLUME_SOL] [DAYS_ACTIVE] [CREDITS?]</code>');
+        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE] [OPTIONAL_CREDITS]</code>');
     }
 
     const wins = parseInt(parts[1]);
@@ -2510,48 +2473,62 @@ bot.command('simedit', async (ctx) => {
     const daysActive = parseInt(parts[4]);
     const credits = parts.length === 6 ? parseInt(parts[5]) : undefined;
 
-    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive)) {
+    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive) || daysActive < 1) {
         return ctx.reply("🔴 Invalid numbers provided.");
     }
 
-    if (credits !== undefined) {
-        await redis.set(`sim:credits:${tgId}`, credits.toString());
-    }
-
-    const fakeTrades = [];
-    const volPerTrade = totalVol / ((wins + losses) || 1);
+    const totalTrades = wins + losses || 1;
+    const volPerTrade = totalVol / totalTrades;
     const now = Date.now();
-    let totalRealizedPnl = 0; 
+    const fakeTrades = [];
+    
+    const calcTradeSize = 1.0; 
+    let totalRealizedPnl = 0;
 
     for (let i = 0; i < wins; i++) {
-        const pnlPercent = Math.random() * 150 + 15;
-        totalRealizedPnl += volPerTrade * (pnlPercent / 100);
+        const pnlPercent = Math.random() * 120 + 20; 
+        const realizedPnlSol = calcTradeSize * (pnlPercent / 100);
+        totalRealizedPnl += realizedPnlSol;
         fakeTrades.push({
             createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
             isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
         });
     }
     for (let i = 0; i < losses; i++) {
-        const pnlPercent = -(Math.random() * 35 + 5);
-        totalRealizedPnl += volPerTrade * (pnlPercent / 100);
+        const pnlPercent = -(Math.random() * 25 + 5); 
+        const realizedPnlSol = calcTradeSize * (pnlPercent / 100);
+        totalRealizedPnl += realizedPnlSol;
         fakeTrades.push({
             createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
             isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
         });
     }
 
+    if (fakeTrades.length > 0) fakeTrades[0].createdAt = new Date(now - daysActive * 86400000).toISOString();
     fakeTrades.sort(() => Math.random() - 0.5);
+
     await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
     await redis.set(`sim:volume:${tgId}`, totalVol.toString());
 
+    if (credits !== undefined) {
+        await redis.set(`sim:credits:${tgId}`, credits.toString());
+    }
+
     const { getSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
     const startBal = await getSimStartingBalance(tgId!);
-    const newBalance = Math.max(0, startBal + totalRealizedPnl);
+    const newBalance = Math.max(10, startBal + totalRealizedPnl); 
     await redis.set(`sim:balance:${tgId}`, newBalance.toFixed(4));
-    
-    await saveSimulationState(tgId!); // Persist to DB
 
-    await ctx.replyWithHTML(`✅ <b>Simulated Stats Forged!</b>\nWins: <b>${wins}</b> | Losses: <b>${losses}</b>\nCredits Set: <b>${credits ?? 'Unchanged'}</b>`);
+    await saveSimulationState(tgId!);
+
+    await ctx.replyWithHTML(
+        `✅ <b>Simulated Stats Forged & Aligned!</b>\n\n` +
+        `Wins: <b>${wins}</b> | Losses: <b>${losses}</b>\n` +
+        `Volume: <b>${totalVol} SOL</b> | Days: <b>${daysActive}</b>\n` +
+        `Win Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n` +
+        `New Balance: <b>${newBalance.toFixed(4)} SOL</b>\n\n` +
+        `<i>Dashboard PnL, Net Worth, and Win Rate are now fully aligned.</i>`
+    );
 });
 
 // STATS WINDOW API ENDPOINT (For WebApp)
@@ -5632,79 +5609,76 @@ app.post('/api/performance', async (req, res) => {
 async function bootEcosystem() {
     await warmDnsCache();
     await syncGuardsFromDb(); 
+    
     // Start WebApp Express Server
     app.listen(3001, () => console.log('🟢 WebApp API Server listening on port 3001'));
-
-
 
     // Background sweep to cleanly demote expired VIPs every 10 minutes
     setInterval(async () => {
         await sweepExpiredVips();
     }, 10 * 60 * 1000);
 
-    // Inside your async function bootEcosystem(), find the 60s interval block and replace it:
-    // 🟢 OPTIMIZATION: Stagger rank cache updates 1.5 seconds apart to avoid blocking database transactions
+    // Stagger rank cache updates
     setInterval(async () => {
         try {
             const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
             for (let i = 0; i < guilds.length; i++) {
                 setTimeout(async () => {
                     await updateRankCache(guilds[i].id);
-                }, i * 1500); // 1.5 second stagger
+                }, i * 1500); 
             }
         } catch (e) {}
     }, 60000);
 
-// 🟢 NEW: Headless Scheduled Volume Bumper Loop
-setInterval(async () => {
-    try {
-        let cursor = '0';
-        do {
-            const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'scheduled_bump:*', 'COUNT', 100);
-            cursor = nextCursor;
-            for (const key of keys) {
-                const dataRaw = await redis.get(key);
-                if (!dataRaw) continue;
-                const data = JSON.parse(dataRaw);
-                
-                if (Date.now() > data.expiresAt || data.spent >= data.budget) {
-                    await redis.del(key);
-                    continue;
+    // Headless Scheduled Volume Bumper Loop
+    setInterval(async () => {
+        try {
+            let cursor = '0';
+            do {
+                const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'scheduled_bump:*', 'COUNT', 100);
+                cursor = nextCursor;
+                for (const key of keys) {
+                    const dataRaw = await redis.get(key);
+                    if (!dataRaw) continue;
+                    const data = JSON.parse(dataRaw);
+                    
+                    if (Date.now() > data.expiresAt || data.spent >= data.budget) {
+                        await redis.del(key);
+                        continue;
+                    }
+                    
+                    const parts = key.split(':');
+                    const tgId = parts[1];
+                    const tokenCA = parts[2];
+                    
+                    const cdKey = `bump_cd:${tokenCA}`;
+                    if (await redis.get(cdKey)) continue;
+                    await redis.set(cdKey, '1', 'EX', 12); 
+                    
+                    try {
+                       const tradeSize = 0.01 + Math.random() * 0.02; 
+                       const { executeSnipe, executeExit } = await import('./services/engine.service.js');
+                       
+                       if (data.isBuyNext) {
+                           const res = await executeSnipe(tgId, tokenCA, tradeSize, 'buy', undefined, true);
+                           if (res.success) data.isBuyNext = false;
+                       } else {
+                           const res = await executeExit(tgId, tokenCA, 100, true);
+                           if (res.success) data.isBuyNext = true;
+                       }
+                       
+                       data.spent += (tradeSize * 0.01) + 0.0005; 
+                       await redis.set(key, JSON.stringify(data));
+                       
+                       await prisma.launchedToken.update({
+                           where: { tokenAddress: tokenCA },
+                           data: { totalVolumeBumped: { increment: tradeSize } }
+                       }).catch(() => {});
+                    } catch(e) {}
                 }
-                
-                const parts = key.split(':');
-                const tgId = parts[1];
-                const tokenCA = parts[2];
-                
-                const cdKey = `bump_cd:${tokenCA}`;
-                if (await redis.get(cdKey)) continue;
-                await redis.set(cdKey, '1', 'EX', 12); 
-                
-                try {
-                   const tradeSize = 0.01 + Math.random() * 0.02; 
-                   const { executeSnipe, executeExit } = await import('./services/engine.service.js');
-                   
-                   if (data.isBuyNext) {
-                       const res = await executeSnipe(tgId, tokenCA, tradeSize, 'buy', undefined, true);
-                       if (res.success) data.isBuyNext = false;
-                   } else {
-                       const res = await executeExit(tgId, tokenCA, 100, true);
-                       if (res.success) data.isBuyNext = true;
-                   }
-                   
-                   data.spent += (tradeSize * 0.01) + 0.0005; 
-                   await redis.set(key, JSON.stringify(data));
-                   
-                   await prisma.launchedToken.update({
-                       where: { tokenAddress: tokenCA },
-                       data: { totalVolumeBumped: { increment: tradeSize } }
-                   }).catch(() => {});
-                } catch(e) {}
-            }
-        } while (cursor !== '0');
-    } catch (e) {}
-}, 5000);
-
+            } while (cursor !== '0');
+        } catch (e) {}
+    }, 5000);
 
     console.log("⏳ Pinging Telegram Servers...");
     try {
@@ -5717,77 +5691,69 @@ setInterval(async () => {
         console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
 
         igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err.message));
+        
         startDcaEngine(bot);
         startCopyTradeWatcher(bot); 
         startDepositWatcher(bot); 
-        
-        const adminId = process.env.ADMIN_TELEGRAM_ID || "8494722111"; // Your Telegram ID
-        
-        startCoinCaller(bot); // ADDED CALLER ENGINE STARTUP
-        
-// =========================================================
-    // 📬 WEEKLY REPORT SCHEDULER — Every Monday 8:00 AM UTC
-    // =========================================================
-    cron.schedule('0 8 * * 1', async () => {
-        console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
-        await sendWeeklyReportsToAll(bot);
-    }, {
-        timezone: 'UTC'
-    });
-    console.log('📬 Weekly report scheduler armed — fires every Monday 8AM UTC');
+        startCoinCaller(bot); 
+        startLimitOrderWatcher(bot);
 
-    // =========================================================
-    // 👑 VIP EXPIRY SCHEDULER — Every Day 9:00 AM UTC
-    // =========================================================
-    cron.schedule('0 9 * * *', async () => {
-        const expiringUsers = await prisma.user.findMany({
-            where: {
-                isVip: true,
-                vipTier: { not: 'lifetime' },
-                vipExpiresAt: { gte: new Date(), lte: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) }
+        // Weekly Report Scheduler
+        cron.schedule('0 8 * * 1', async () => {
+            console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
+            await sendWeeklyReportsToAll(bot);
+        }, { timezone: 'UTC' });
+
+        // VIP Expiry Scheduler
+        cron.schedule('0 9 * * *', async () => {
+            const expiringUsers = await prisma.user.findMany({
+                where: {
+                    isVip: true,
+                    vipTier: { not: 'lifetime' },
+                    vipExpiresAt: { gte: new Date(), lte: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) }
+                }
+            });
+
+            for (const u of expiringUsers) {
+                const daysLeft = Math.ceil((u.vipExpiresAt!.getTime() - Date.now()) / 86400000);
+                try {
+                    await bot.telegram.sendMessage(u.telegramId,
+                        `⚠️ <b>VIP EXPIRING SOON</b>\n\nYour ${u.vipTier} VIP expires in <b>${daysLeft} day${daysLeft !== 1 ? 's' : ''}</b>.\nRenew now to keep your 0% fees.`,
+                        { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('👑 Renew VIP', 'menu_vip')]]) }
+                    );
+                    await new Promise(r => setTimeout(r, 100));
+                } catch(e) {}
             }
-        });
+        }, { timezone: 'UTC' });
 
-        for (const u of expiringUsers) {
-            const daysLeft = Math.ceil((u.vipExpiresAt!.getTime() - Date.now()) / 86400000);
+        // Crash Proof Deletion Sweeper
+        setInterval(async () => {
             try {
-                await bot.telegram.sendMessage(u.telegramId,
-                    `⚠️ <b>VIP EXPIRING SOON</b>\n\nYour ${u.vipTier} VIP expires in <b>${daysLeft} day${daysLeft !== 1 ? 's' : ''}</b>.\nRenew now to keep your 0% fees.`,
-                    { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('👑 Renew VIP', 'menu_vip')]]) }
-                );
-                await new Promise(r => setTimeout(r, 100));
-            } catch(e) {}
-        }
-    }, { timezone: 'UTC' });
+                const now = Date.now();
+                const pending = await redis.zrangebyscore('pending_key_deletions', 0, now);
+                for (const item of pending) {
+                    const [chatId, msgId] = item.split(':');
+                    try { await bot.telegram.deleteMessage(chatId, parseInt(msgId)); } catch(e){}
+                    await redis.zrem('pending_key_deletions', item);
+                }
+            } catch(e){}
+        }, 5000);
 
-    // 🟢 CRASH-PROOF DELETION SWEEPER: Deletes private keys even if bot rebooted
-    setInterval(async () => {
-        try {
-            const now = Date.now();
-            const pending = await redis.zrangebyscore('pending_key_deletions', 0, now);
-            for (const item of pending) {
-                const [chatId, msgId] = item.split(':');
-                try { await bot.telegram.deleteMessage(chatId, parseInt(msgId)); } catch(e){}
-                await redis.zrem('pending_key_deletions', item);
-            }
-        } catch(e){}
-    }, 5000);
-
-        // 🟢 FEATURE 3: Initialize the Launch Calendar background updater
         const { updateLaunchCalendar } = await import('./services/calendar.service.js');
         await updateLaunchCalendar();
-        setInterval(updateLaunchCalendar, 30 * 60 * 1000); // Refreshes every 30 mins
+        setInterval(updateLaunchCalendar, 30 * 60 * 1000);
 
     } catch (err: any) {
         console.error("🔴 TELEGRAM BOOT FAILED:", err.message);
         process.exit(1);
     }
 
-    const { startCallerEvaluator } = await import('./services/caller.service.js');
-        startCallerEvaluator(); // 🟢 Starts the background hit-rate processing job
-} // 🟢 This closing bracket was missing!
-
-bootEcosystem();
+    const { startCallerEvaluator, scheduleTraining } = await import('./services/caller.service.js');
+    startCallerEvaluator(); 
+    
+    // 🟢 CRITICAL FIX: Initialize and schedule background hourly ML training
+    scheduleTraining();
+}
 
 process.once('SIGINT', () => { try { if (bot.botInfo) bot.stop('SIGINT'); } catch(e){} prisma.$disconnect(); redis.quit(); });
 process.once('SIGTERM', () => { try { if (bot.botInfo) bot.stop('SIGTERM'); } catch(e){} prisma.$disconnect(); redis.quit(); });

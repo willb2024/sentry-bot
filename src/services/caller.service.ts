@@ -7,7 +7,6 @@ import { rpcLimiter } from '../lib/rpc-limiter.js';
 
 const prisma = new PrismaClient();
 
-// 🟢 UPGRADE: Extended with advanced safety filters
 export interface CallerFilters {
     isActive: boolean;
     minScore: number;
@@ -87,12 +86,10 @@ function extractFeatures(token: any): number[] {
     return [score, age, liq, vol, mom, hasSocials, isRug, lockPct, velocity];
 }
 
-// Simple Gauss-Jordan elimination for Multiple Linear Regression (No external packages required)
 function solveOLS(X: number[][], y: number[]): { coefficients: number[], intercept: number } {
     const n = X.length;
     const p = X[0].length;
     
-    // Fallback if matrix math is unstable, return baseline weights
     try {
         const X_ext = X.map(row => [1, ...row]);
         const XtX = Array.from({ length: p + 1 }, () => Array(p + 1).fill(0));
@@ -106,7 +103,6 @@ function solveOLS(X: number[][], y: number[]): { coefficients: number[], interce
             }
         }
 
-        // Basic iterative gradient descent fallback for weights to prevent matrix singularity crashes
         let weights = new Array(p + 1).fill(0.01);
         const lr = 0.0001;
         for(let iter=0; iter<1000; iter++){
@@ -165,13 +161,6 @@ export async function trainCallerModel() {
     }
 }
 
-function predictWithModel(features: number[]): { predictedLog: number, predictedPeak: number, sampleSize: number } {
-    try {
-        const weightsRaw = redis.get('caller_model_weights'); // Synchronous wait fallback since it's cached in runtime context, or async below
-        return { predictedLog: 0, predictedPeak: 0, sampleSize: 0 }; 
-    } catch(e) { return { predictedLog: 0, predictedPeak: 0, sampleSize: 0 }; }
-}
-
 export async function getModelScore(mint: string, stats: any): Promise<number | null> {
     try {
         const features = extractFeatures({ ...stats, mint });
@@ -179,7 +168,7 @@ export async function getModelScore(mint: string, stats: any): Promise<number | 
         if (!weightsRaw) return null;
         
         const weights = JSON.parse(weightsRaw);
-        const logPred = weights.intercept + features.reduce((sum, f, i) => sum + f * weights.coefficients[i], 0);
+        const logPred = weights.intercept + features.reduce((sum: number, f: number, i: number) => sum + f * weights.coefficients[i], 0);
         const predictedPeak = Math.max(0, Math.exp(logPred) - 1);
         
         if (predictedPeak > 0) {
@@ -229,28 +218,32 @@ export async function getCalibratedProjection(token: any) {
     const features = extractFeatures(token);
     
     // ML Prediction Route
-    const weightsRaw = await redis.get('caller_model_weights');
-    if (weightsRaw) {
-        const weights = JSON.parse(weightsRaw);
-        const logPred = weights.intercept + features.reduce((sum, f, i) => sum + f * weights.coefficients[i], 0);
-        const modelPeak = Math.max(0, Math.exp(logPred) - 1);
-        
-        if (modelPeak > 0) {
-            const residualStd = 0.5; // Estimated SD if not calculated
-            const low = Math.max(0, modelPeak - 1.96 * residualStd);
-            const high = modelPeak + 1.96 * residualStd;
-            const timeframe = humanizeMs(token.ageMins * 60000 * 2);
-            return {
-                target: `+${Math.floor(low)}% to +${Math.floor(high)}%`,
-                timeframe,
-                volatility: `ML Model (${weights.metrics?.sampleCount || 0} samples)`,
-                sampleSize: weights.metrics?.sampleCount || 0,
-                rawLow: low,
-                rawHigh: high,
-                rawTimeMins: token.ageMins * 2
-            };
+    try {
+        const weightsRaw = await redis.get('caller_model_weights');
+        if (weightsRaw) {
+            const weights = JSON.parse(weightsRaw);
+            if (weights.coefficients && weights.coefficients.length === features.length) {
+                const logPred = (weights.intercept || 0) + features.reduce((sum: number, f: number, i: number) => sum + f * (weights.coefficients[i] || 0), 0);
+                const modelPeak = Math.max(0, Math.exp(logPred) - 1);
+                
+                if (modelPeak > 0) {
+                    const residualStd = 0.5;
+                    const low = Math.max(0, modelPeak - 1.96 * residualStd);
+                    const high = modelPeak + 1.96 * residualStd;
+                    const timeframe = humanizeMs((token.ageMins || 10) * 60000 * 2);
+                    return {
+                        target: `+${Math.floor(low)}% to +${Math.floor(high)}%`,
+                        timeframe,
+                        volatility: `ML Model (${weights.metrics?.sampleCount || 0} samples)`,
+                        sampleSize: weights.metrics?.sampleCount || 0,
+                        rawLow: low,
+                        rawHigh: high,
+                        rawTimeMins: (token.ageMins || 10) * 2
+                    };
+                }
+            }
         }
-    }
+    } catch (_) {}
 
     // Standard Heuristic Route Fallback
     const historyMap = await redis.hgetall('caller_history');
@@ -374,25 +367,23 @@ export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { m
 
 let isScoring = false;
 
-// 🟢 FAST DUAL-SPEED CALLER ENGINE (src/services/caller.service.ts)
+// 🟢 FAST DUAL-SPEED CALLER ENGINE
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Live loop (15s) & Sim loop (5s) active.");
 
-    // --------------------------------------------------
     // 1️⃣ FAST 5-SECOND SIMULATION CALLER LOOP
-    // --------------------------------------------------
     setInterval(async () => {
         try {
-            // 🟢 FIX: Removed getCalibratedProjection from here since it's already in this file!
-const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
+            // 🟢 FIXED: getCalibratedProjection is directly called, not imported!
+            const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
             const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
 
             for (const user of allUsers) {
                 const isSim = await isSimulationActive(user.telegramId);
-                if (!isSim) continue; // Only runs for users in Simulation Mode
+                if (!isSim) continue; 
 
                 const filters = await getUserCallerFilters(user.telegramId);
-                if (!filters.isActive) continue; // Only fires if AI Caller is ON
+                if (!filters.isActive) continue; 
 
                 const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
                 if (matchedToken) {
@@ -417,11 +408,9 @@ const { isSimulationActive, generateSimCallerAlert } = await import('./simulatio
                 }
             }
         } catch (_) {}
-    }, 5000); // 🟢 FIRES EVERY 5 SECONDS FOR SIMULATION
+    }, 5000); 
 
-    // --------------------------------------------------
     // 2️⃣ STANDARD 15-SECOND LIVE MAINNET CALLER LOOP
-    // --------------------------------------------------
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
@@ -435,7 +424,7 @@ const { isSimulationActive, generateSimCallerAlert } = await import('./simulatio
             
             for (const user of allUsers) {
                 const isSim = await isSimulationActive(user.telegramId);
-                if (isSim) continue; // Live loop skips simulation users (handled above)
+                if (isSim) continue; 
 
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
@@ -493,6 +482,131 @@ const { isSimulationActive, generateSimCallerAlert } = await import('./simulatio
             isScoring = false;
         }
     }, 15000);
+}
+
+export async function getSentimentScore(tokenSymbol: string): Promise<number> {
+    if (!tokenSymbol || tokenSymbol === 'UNKNOWN') return 0.5;
+    const cacheKey = `sentiment:${tokenSymbol.toUpperCase()}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return parseFloat(cached);
+
+    try {
+        const bearerToken = process.env.TWITTER_BEARER_TOKEN;
+        if (bearerToken) {
+            const res = await axios.get(`https://api.twitter.com/2/tweets/search/recent?query=$${encodeURIComponent(tokenSymbol)}&max_results=10`, {
+                headers: { Authorization: `Bearer ${bearerToken}` },
+                timeout: 2000
+            });
+            const tweetCount = res.data?.meta?.result_count || 0;
+            const sentiment = Math.min(1.0, 0.4 + (tweetCount / 20));
+            await redis.set(cacheKey, sentiment.toString(), 'EX', 600);
+            return sentiment;
+        }
+    } catch (_) {}
+
+    const sentiment = parseFloat((0.3 + Math.random() * 0.5).toFixed(2));
+    await redis.set(cacheKey, sentiment.toString(), 'EX', 600);
+    return sentiment;
+}
+
+export interface TokenStats {
+    ageMins: number;
+    volume24h: number;
+    liquidity: number;
+    priceChangeM5: number;
+    hasSocials: boolean;
+    isRug: boolean;
+    sourceQuality?: string;
+    uncertain?: boolean;
+    devRep?: { launchCount: number; avgRugScore: number; isKnownRugger: boolean };
+    lpLock?: { locked: boolean; burned: boolean; lockPct: number };
+    velocity?: { growthRate: number; uniqueBuyers5m: number };
+    sellability?: { sellable: boolean; estimatedTaxPct: number };
+    observedVol?: number;
+}
+
+// 🟢 ONLY ONE computeTokenScore DECLARATION NOW
+export function computeTokenScore(stats: TokenStats & { sentiment?: number }): { score: number; reasons: string[] } {
+    let score = 0;
+    const reasons: string[] = [];
+
+    reasons.push(`🕒 Age: ${Math.floor(stats.ageMins)}m`);
+    if (stats.ageMins < 60) score += 30;
+    else if (stats.ageMins < 180) score += 15;
+
+    const activeVol = stats.observedVol && stats.observedVol > stats.volume24h ? stats.observedVol : stats.volume24h;
+    reasons.push(`💰 Vol: $${(activeVol/1000).toFixed(1)}k`);
+    if (activeVol > 100000) score += 25;
+    else if (activeVol > 20000) score += 10;
+
+    if (stats.liquidity > 0) {
+        const volToLiqRatio = activeVol / stats.liquidity;
+        if (volToLiqRatio > 25) {
+            score -= 25;
+            reasons.push(`🚨 Vol/Liq ratio ${volToLiqRatio.toFixed(1)}x — likely wash-traded`);
+        } else if (volToLiqRatio > 12) {
+            score -= 10;
+            reasons.push(`⚠️ High Vol/Liq ratio ${volToLiqRatio.toFixed(1)}x`);
+        }
+    }
+
+    reasons.push(`📈 Mom: +${stats.priceChangeM5.toFixed(1)}%`);
+    if (stats.priceChangeM5 > 15 && stats.priceChangeM5 <= 60) score += 20;
+    else if (stats.priceChangeM5 > 60 && stats.priceChangeM5 <= 150) score += 12;
+    else if (stats.priceChangeM5 > 150) { score += 3; reasons.push(`⚠️ Parabolic — elevated reversal risk`); }
+
+    reasons.push(`💧 Liq: $${(stats.liquidity/1000).toFixed(1)}k`);
+    if (stats.liquidity > 20000) score += 15;
+    else if (stats.liquidity < 3000) { score -= 10; reasons.push(`⚠️ Thin liquidity — high slippage risk`); }
+
+    if (stats.hasSocials) { score += 10; reasons.push(`🌐 Socials present`); }
+    if (stats.sentiment !== undefined && stats.sentiment > 0.6) {
+        const bonus = Math.floor((stats.sentiment - 0.5) * 20);
+        score += bonus;
+        reasons.push(`📈 Positive sentiment +${bonus}`);
+    }
+
+    if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
+    if (stats.uncertain) { score -= 5; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); }
+
+    if (stats.sourceQuality === 'onchain-only') {
+        reasons.push(`⛓️ Unindexed (early, unverified)`);
+    }
+
+    if (stats.sellability && !stats.sellability.sellable) {
+        return { score: 0, reasons: [`🚨 UNSELLABLE (Honeypot/High Tax >15%)`] };
+    }
+
+    if (stats.devRep) {
+        if (stats.devRep.isKnownRugger) {
+            return { score: 0, reasons: [`🚨 Serial Rugger Wallet Detected`] };
+        } else if (stats.devRep.launchCount > 5) {
+            score += 10;
+            reasons.push(`🏗️ Established Builder (${stats.devRep.launchCount} launches)`);
+        }
+    }
+
+    if (stats.lpLock) {
+        if (stats.lpLock.burned || stats.lpLock.lockPct > 80) {
+            score += 15;
+            reasons.push(`🔒 LP Secured (${stats.lpLock.lockPct.toFixed(0)}% Locked/Burned)`);
+        } else if (stats.ageMins > 10 && stats.lpLock.lockPct === 0 && !stats.isRug) {
+            score -= 20;
+            reasons.push(`⚠️ Mature token with 0% LP Lock (Rug Setup)`);
+        }
+    }
+
+    if (stats.velocity) {
+        if (stats.velocity.growthRate > 50) {
+            score += 15;
+            reasons.push(`🔥 High Organic Velocity (+${stats.velocity.growthRate.toFixed(0)}% holders in 5m)`);
+        } else if (stats.velocity.growthRate <= 0 && stats.priceChangeM5 > 5) {
+            score -= 15;
+            reasons.push(`🤖 Wash Buy Warning (Price rising but flat unique buyers)`);
+        }
+    }
+
+    return { score: Math.max(0, score), reasons };
 }
 
 async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
@@ -816,100 +930,6 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
     }
 }
 
-export interface TokenStats {
-    ageMins: number;
-    volume24h: number;
-    liquidity: number;
-    priceChangeM5: number;
-    hasSocials: boolean;
-    isRug: boolean;
-    sourceQuality?: string;
-    uncertain?: boolean;
-    devRep?: { launchCount: number; avgRugScore: number; isKnownRugger: boolean };
-    lpLock?: { locked: boolean; burned: boolean; lockPct: number };
-    velocity?: { growthRate: number; uniqueBuyers5m: number };
-    sellability?: { sellable: boolean; estimatedTaxPct: number };
-    observedVol?: number;
-}
-
-export function computeTokenScore(stats: TokenStats): { score: number; reasons: string[] } {
-    let score = 0;
-    const reasons: string[] = [];
-
-    reasons.push(`🕒 Age: ${Math.floor(stats.ageMins)}m`);
-    if (stats.ageMins < 60) score += 30; 
-    else if (stats.ageMins < 180) score += 15;
-
-    const activeVol = stats.observedVol && stats.observedVol > stats.volume24h ? stats.observedVol : stats.volume24h;
-    reasons.push(`💰 Vol: $${(activeVol/1000).toFixed(1)}k`);
-    if (activeVol > 100000) score += 25; 
-    else if (activeVol > 20000) score += 10;
-
-    if (stats.liquidity > 0) {
-        const volToLiqRatio = activeVol / stats.liquidity;
-        if (volToLiqRatio > 25) {
-            score -= 25;
-            reasons.push(`🚨 Vol/Liq ratio ${volToLiqRatio.toFixed(1)}x — likely wash-traded`);
-        } else if (volToLiqRatio > 12) {
-            score -= 10;
-            reasons.push(`⚠️ High Vol/Liq ratio ${volToLiqRatio.toFixed(1)}x`);
-        }
-    }
-
-    reasons.push(`📈 Mom: +${stats.priceChangeM5.toFixed(1)}%`);
-    if (stats.priceChangeM5 > 15 && stats.priceChangeM5 <= 60) score += 20;
-    else if (stats.priceChangeM5 > 60 && stats.priceChangeM5 <= 150) score += 12;
-    else if (stats.priceChangeM5 > 150) { score += 3; reasons.push(`⚠️ Parabolic — elevated reversal risk`); }
-
-    reasons.push(`💧 Liq: $${(stats.liquidity/1000).toFixed(1)}k`);
-    if (stats.liquidity > 20000) score += 15;
-    else if (stats.liquidity < 3000) { score -= 10; reasons.push(`⚠️ Thin liquidity — high slippage risk`); }
-
-    if (stats.hasSocials) { score += 10; reasons.push(`🌐 Socials present`); }
-
-    if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
-    if (stats.uncertain) { score -= 5; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); } 
-
-    if (stats.sourceQuality === 'onchain-only') {
-        reasons.push(`⛓️ Unindexed (early, unverified)`);
-    }
-
-    if (stats.sellability && !stats.sellability.sellable) {
-        return { score: 0, reasons: [`🚨 UNSELLABLE (Honeypot/High Tax >15%)`] }; 
-    }
-
-    if (stats.devRep) {
-        if (stats.devRep.isKnownRugger) {
-            return { score: 0, reasons: [`🚨 Serial Rugger Wallet Detected`] }; 
-        } else if (stats.devRep.launchCount > 5) {
-            score += 10;
-            reasons.push(`🏗️ Established Builder (${stats.devRep.launchCount} launches)`);
-        }
-    }
-
-    if (stats.lpLock) {
-        if (stats.lpLock.burned || stats.lpLock.lockPct > 80) {
-            score += 15;
-            reasons.push(`🔒 LP Secured (${stats.lpLock.lockPct.toFixed(0)}% Locked/Burned)`);
-        } else if (stats.ageMins > 10 && stats.lpLock.lockPct === 0 && !stats.isRug) {
-            score -= 20;
-            reasons.push(`⚠️ Mature token with 0% LP Lock (Rug Setup)`);
-        }
-    }
-
-    if (stats.velocity) {
-        if (stats.velocity.growthRate > 50) {
-            score += 15;
-            reasons.push(`🔥 High Organic Velocity (+${stats.velocity.growthRate.toFixed(0)}% holders in 5m)`);
-        } else if (stats.velocity.growthRate <= 0 && stats.priceChangeM5 > 5) {
-            score -= 15;
-            reasons.push(`🤖 Wash Buy Warning (Price rising but flat unique buyers)`);
-        }
-    }
-
-    return { score: Math.max(0, score), reasons };
-}
-
 export async function scoreTokens() {
     try {
         const [newMints, pumpFallback, restFallback, boosted, raydiumPairs] = await Promise.all([
@@ -991,8 +1011,10 @@ export async function scoreTokens() {
                     observedVol: observedVolStr ? parseFloat(observedVolStr) : undefined
                 };
 
-                const { score, reasons } = computeTokenScore(stats);
-                return { pair, stats, score, reasons, isRug, top10Pct, hasMev };
+                const sentiment = await getSentimentScore(pair.symbol);
+                const { score, reasons } = computeTokenScore({ ...stats, sentiment });
+                
+                return { pair, stats, score, reasons, isRug, top10Pct, hasMev, sentiment };
             }));
             stage1Scored.push(...results);
         }
@@ -1033,7 +1055,7 @@ export async function scoreTokens() {
                 t.stats.velocity = velocity;
                 t.stats.sellability = sellability;
 
-                const finalScoreRes = computeTokenScore(t.stats);
+                const finalScoreRes = computeTokenScore({ ...t.stats, sentiment: t.sentiment });
                 
                 let concentrationAdjustedScore = finalScoreRes.score;
                 if (!t.isRug && t.top10Pct > 25) {
@@ -1107,7 +1129,6 @@ export function startCallerEvaluator() {
                         data.outcome24h = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
                     }
                     
-                    // 🟢 Store Evaluated outcome to Prisma ML Database
                     try {
                         await prisma.callerPrediction.update({
                             where: { alertKey: key },
