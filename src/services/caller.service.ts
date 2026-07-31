@@ -374,20 +374,69 @@ export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { m
 
 let isScoring = false;
 
+// 🟢 FAST DUAL-SPEED CALLER ENGINE (src/services/caller.service.ts)
 export async function startCoinCaller(bot: any) {
-    console.log("🎯 [CALLER ENGINE] Initialized. Scanning distinct pipelines every 15 seconds.");
+    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (15s) & Sim loop (5s) active.");
 
+    // --------------------------------------------------
+    // 1️⃣ FAST 5-SECOND SIMULATION CALLER LOOP
+    // --------------------------------------------------
+    setInterval(async () => {
+        try {
+            // 🟢 FIX: Removed getCalibratedProjection from here since it's already in this file!
+const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
+            const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
+
+            for (const user of allUsers) {
+                const isSim = await isSimulationActive(user.telegramId);
+                if (!isSim) continue; // Only runs for users in Simulation Mode
+
+                const filters = await getUserCallerFilters(user.telegramId);
+                if (!filters.isActive) continue; // Only fires if AI Caller is ON
+
+                const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
+                if (matchedToken) {
+                    const projection = await getCalibratedProjection(matchedToken);
+                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
+
+                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
+                    const defaultSize = userConfig?.amountSol || 0.1;
+
+                    try {
+                        await bot.telegram.sendMessage(user.telegramId, msg, {
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
+                                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
+                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
+                                ]
+                            }
+                        });
+                    } catch (_) {}
+                }
+            }
+        } catch (_) {}
+    }, 5000); // 🟢 FIRES EVERY 5 SECONDS FOR SIMULATION
+
+    // --------------------------------------------------
+    // 2️⃣ STANDARD 15-SECOND LIVE MAINNET CALLER LOOP
+    // --------------------------------------------------
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
 
         try {
+            const { isSimulationActive } = await import('./simulation.service.js');
             const tokens = await scoreTokens();
             if (tokens.length === 0) return;
 
             const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
             
             for (const user of allUsers) {
+                const isSim = await isSimulationActive(user.telegramId);
+                if (isSim) continue; // Live loop skips simulation users (handled above)
+
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
@@ -407,20 +456,7 @@ export async function startCoinCaller(bot: any) {
                 if (matchedToken) {
                     const { consumeCredit } = await import('./credits.service.js');
                     const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
-                    if (!creditResult.success) {
-                        const outOfCreditsWarnedKey = `credits_warned:${user.telegramId}`;
-                        const alreadyWarned = await redis.get(outOfCreditsWarnedKey);
-                        if (!alreadyWarned) {
-                            await redis.set(outOfCreditsWarnedKey, '1', 'EX', 3600); 
-                            try {
-                                await bot.telegram.sendMessage(user.telegramId,
-                                    `⚠️ <b>OUT OF CREDITS</b>\n\nAI Coin Caller found a match but you're out of credits. Buy more with /credits to keep receiving alerts.`,
-                                    { parse_mode: 'HTML' }
-                                );
-                            } catch (_) {}
-                        }
-                        continue; 
-                    }
+                    if (!creditResult.success) continue; 
 
                     const projection = await getCalibratedProjection(matchedToken);
                     const historyData = {
@@ -431,7 +467,6 @@ export async function startCoinCaller(bot: any) {
                     const historyKey = `${matchedToken.mint}:${Date.now()}`;
                     await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
                     
-                    // 🟢 Store ML Data
                     await storePredictionData(matchedToken, projection, historyKey);
 
                     const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed });

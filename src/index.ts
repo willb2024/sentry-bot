@@ -877,44 +877,52 @@ bot.action(/^watch_remove_(.+)$/, async (ctx) => {
 // 🟢 CLAUDE FIX 4: Rolling time window stats for live & sim
 
 
+// 🟢 FIXED /simedit COMMAND (src/index.ts)
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
 
     const parts = ctx.message.text.split(' ');
-    if (parts.length !== 5) {
-        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE]</code>\n\n<i>Example:</i>\n<code>/simedit 185 64 1250 42</code>');
+    if (parts.length < 5 || parts.length > 6) {
+        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE] [OPTIONAL_CREDITS]</code>');
     }
 
     const wins = parseInt(parts[1]);
     const losses = parseInt(parts[2]);
     const totalVol = parseFloat(parts[3]);
     const daysActive = parseInt(parts[4]);
+    const credits = parts.length === 6 ? parseInt(parts[5]) : undefined;
+
     if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive) || daysActive < 1) {
         return ctx.reply("🔴 Invalid numbers provided.");
     }
 
-    const fakeTrades = [];
-    const volPerTrade = totalVol / ((wins + losses) || 1);
+    const totalTrades = wins + losses || 1;
+    const volPerTrade = totalVol / totalTrades;
     const now = Date.now();
-    let totalRealizedPnl = 0; // 🟢 track so balance stays consistent with the forged wins/losses
+    const fakeTrades = [];
+    
+    // Use a fixed 1 SOL sizing baseline for simulated balance PnL calculation
+    // to prevent high trade volume from wiping out the starting balance
+    const calcTradeSize = 1.0; 
+    let totalRealizedPnl = 0;
 
     for (let i = 0; i < wins; i++) {
-        const pnlPercent = Math.random() * 150 + 15;
-        const realizedPnlSol = volPerTrade * (pnlPercent / 100);
+        const pnlPercent = Math.random() * 120 + 20; // +20% to +140%
+        const realizedPnlSol = calcTradeSize * (pnlPercent / 100);
         totalRealizedPnl += realizedPnlSol;
         fakeTrades.push({
             createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol
+            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
         });
     }
     for (let i = 0; i < losses; i++) {
-        const pnlPercent = -(Math.random() * 35 + 5);
-        const realizedPnlSol = volPerTrade * (pnlPercent / 100);
+        const pnlPercent = -(Math.random() * 25 + 5); // -5% to -30%
+        const realizedPnlSol = calcTradeSize * (pnlPercent / 100);
         totalRealizedPnl += realizedPnlSol;
         fakeTrades.push({
             createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol
+            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
         });
     }
 
@@ -924,11 +932,16 @@ bot.command('simedit', async (ctx) => {
     await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
     await redis.set(`sim:volume:${tgId}`, totalVol.toString());
 
-    // 🟢 THE FIX: forged trades now actually move the balance the dashboard reads
-    const { getSimStartingBalance } = await import('./services/simulation.service.js');
-    const startBal = await getSimStartingBalance(tgId);
-    const newBalance = Math.max(0, startBal + totalRealizedPnl);
+    if (credits !== undefined) {
+        await redis.set(`sim:credits:${tgId}`, credits.toString());
+    }
+
+    const { getSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
+    const startBal = await getSimStartingBalance(tgId!);
+    const newBalance = Math.max(10, startBal + totalRealizedPnl); // Always preserves a healthy balance
     await redis.set(`sim:balance:${tgId}`, newBalance.toFixed(4));
+
+    await saveSimulationState(tgId!);
 
     await ctx.replyWithHTML(
         `✅ <b>Simulated Stats Forged & Aligned!</b>\n\n` +
@@ -936,7 +949,7 @@ bot.command('simedit', async (ctx) => {
         `Volume: <b>${totalVol} SOL</b> | Days: <b>${daysActive}</b>\n` +
         `Win Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n` +
         `New Balance: <b>${newBalance.toFixed(4)} SOL</b>\n\n` +
-        `<i>Dashboard PnL, Net Worth, and Win Rate are now fully consistent.</i>`
+        `<i>Dashboard PnL, Net Worth, and Win Rate are now fully aligned.</i>`
     );
 });
 

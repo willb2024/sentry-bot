@@ -43,6 +43,7 @@ export function generateSimSignature(): string {
 }
 
 // 🟢 UPGRADE: Full Prisma PostgreSQL Persistence Sync
+// 🟢 FIX: Added required `userId` to the trades creation maps
 export async function saveSimulationState(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -68,6 +69,7 @@ export async function saveSimulationState(telegramId: string) {
             trades: {
                 deleteMany: {},
                 create: trades.map((t: any) => ({
+                    userId: user.id, // 🟢 THIS WAS MISSING
                     tokenAddress: t.mint || t.tokenAddress || 'unknown',
                     isBuy: t.isBuy,
                     amountInSol: t.amountInSol,
@@ -83,6 +85,7 @@ export async function saveSimulationState(telegramId: string) {
             positions: positions,
             trades: {
                 create: trades.map((t: any) => ({
+                    userId: user.id, // 🟢 THIS WAS MISSING
                     tokenAddress: t.mint || t.tokenAddress || 'unknown',
                     isBuy: t.isBuy,
                     amountInSol: t.amountInSol,
