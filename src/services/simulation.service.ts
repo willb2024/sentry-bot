@@ -70,7 +70,7 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     const raw = await redis.get(`sim:wallets:${telegramId}`);
     if (raw) return JSON.parse(raw);
     const wallets = generateSimWallets();
-    await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
+    await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets)); // 🟢 No expiration
     return wallets;
 }
 
@@ -101,7 +101,7 @@ export async function recordSimTrade(telegramId: string, isBuy: boolean, amountI
         isBuy, amountInSol, profitPercent, realizedPnlSol
     });
     
-    await redis.set(key, JSON.stringify(existing.slice(0, 100)), 'EX', 86400); 
+    await redis.set(key, JSON.stringify(existing.slice(0, 100))); // 🟢 No expiration
     await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
 
@@ -182,10 +182,10 @@ export async function simExecuteSnipe(
         mint: tokenAddress, symbol, amount: tokenAmount, entryPrice: entryPriceSol,
         entryPriceUsd, priceUsd: entryPriceUsd, valueUsd: amountSol * solUsdPrice,
         amountInSol: amountSol, highestSeenPrice: entryPriceSol,
-        entryScore: Math.floor(Math.random() * 40) + 50 // Varied score from 50 to 90
+        entryScore: Math.floor(Math.random() * 40) + 50 
     });
     
-    await redis.set(posKey, JSON.stringify(existing), 'EX', 3600);
+    await redis.set(posKey, JSON.stringify(existing)); // 🟢 No expiration
     await recordSimTrade(telegramId, true, amountSol, 0);
 
     return { success: true, signature: generateSimSignature(), message: '🟢 Simulation: Jito bundle confirmed.', volumeSpent: amountSol };
@@ -228,7 +228,7 @@ export async function simExecuteExit(
 
     if (percent === 100) {
         const updated = positions.filter((p: any) => p.mint !== tokenAddress);
-        await redis.set(posKey, JSON.stringify(updated), 'EX', 3600);
+        await redis.set(posKey, JSON.stringify(updated)); // 🟢 No expiration
     }
     
     await recordSimTrade(telegramId, false, soldSol, pnlPercent);
@@ -362,12 +362,9 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
     return null;
 }
 
-// 🟢 FIX: Dynamic Win/Loss randomizer with realistic variance
-// exists elsewhere in this file — having both is what causes inconsistent behavior
-// across different call sites.
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
     const scoreVal = score ?? 65;
-    let baseWinProb = 0.15 + (scoreVal / 100) * 0.30; // ~24-42% win rate range, score-weighted
+    let baseWinProb = 0.15 + (scoreVal / 100) * 0.30; 
 
     const lastKey = `sim:last_outcome:${type}:${telegramId}`;
     const last = await redis.get(lastKey);
@@ -549,5 +546,5 @@ export async function walkSimPositionPrices(telegramId: string): Promise<void> {
         changed = true;
     }
 
-    if (changed) await redis.set(posKey, JSON.stringify(positions), 'EX', 3600);
+    if (changed) await redis.set(posKey, JSON.stringify(positions)); // 🟢 No expiration
 }

@@ -414,6 +414,7 @@
         document.getElementById('ticker-strip').innerHTML = stripHTML;
     }, 2500);
 
+    // 🟢 ACCURATELY PLOTS REALIZED PROFIT VS REALIZED LOSS (SOL)
     function aggregatePnlData(timeframe) {
         const now = new Date();
         let cutoff, bucketSizeMs, bucketCount, formatLabel;
@@ -447,9 +448,11 @@
                 const diffMs = tradeDate.getTime() - cutoff.getTime();
                 const bucketIdx = Math.floor(diffMs / bucketSizeMs);
                 if (bucketIdx >= 0 && bucketIdx < bucketCount) {
-                    const volume = parseFloat(trade.amountInSol || 0);
-                    if (trade.isBuy) lossData[bucketIdx] += volume; 
-                    else profitData[bucketIdx] += volume; 
+                    if (!trade.isBuy) {
+                        const pnl = parseFloat(trade.realizedPnlSol || 0);
+                        if (pnl >= 0) profitData[bucketIdx] += pnl; 
+                        else lossData[bucketIdx] += Math.abs(pnl); 
+                    }
                 }
             }
         });
@@ -476,8 +479,8 @@
             data: {
                 labels: labels,
                 datasets: [
-                    { label: 'Revenue (SOL)', data: profitData, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5 },
-                    { label: 'Spend (SOL)', data: lossData, borderColor: '#ef4444', backgroundColor: gradRed, fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5 }
+                    { label: 'Profit (SOL)', data: profitData, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5 },
+                    { label: 'Loss (SOL)', data: lossData, borderColor: '#ef4444', backgroundColor: gradRed, fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5 }
                 ]
             },
             options: {
@@ -803,7 +806,6 @@
         document.getElementById('stat-winrate-sub').innerText = stats.winLossText;
         document.getElementById('stat-volume').innerText = stats.volume;
 
-        // 🟢 Calculate and Inject Total Trading Days
         let tradingDays = 1;
         if (userTrades && userTrades.length > 0) {
             const oldestTrade = new Date(Math.min(...userTrades.map(t => new Date(t.createdAt).getTime())));
@@ -831,7 +833,7 @@
                 const simStats = await simRes.json();
 
                 if (simStats.isActive) {
-                    const startingBalance = simStats.startingBalance || 1000; // 🟢 FIX: real baseline from server
+                    const startingBalance = simStats.startingBalance || 1000; 
                     const solPriceRes = await fetch('/api/sol-price', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ initData: tg.initData || "" })
@@ -851,7 +853,8 @@
                         createdAt: t.createdAt,
                         isBuy: t.isBuy,
                         amountInSol: t.amountInSol,
-                        profitPercent: t.profitPercent || 0
+                        profitPercent: t.profitPercent || 0,
+                        realizedPnlSol: t.realizedPnlSol || 0 // 🟢 Fetches real profit/loss values
                     }));
 
                     let wins = simStats.wins || 0;
@@ -860,7 +863,7 @@
 
                     const totalValueUsd = simPositions.reduce((sum, p) => sum + (p.valueUsd || 0), 0);
                     const simBalanceSol = parseFloat(simStats.balance) || 0;
-                    const networthUsd = Math.max(totalValueUsd, simBalanceSol * liveSolPrice); // 🟢 live price, not 150
+                    const networthUsd = Math.max(totalValueUsd, simBalanceSol * liveSolPrice); 
                     const networthSol = simBalanceSol.toFixed(4) + " SOL";
 
                     const pnlSol = simBalanceSol - startingBalance;
@@ -1008,46 +1011,51 @@
             }
         }).catch(() => {});
 
-        document.getElementById('demo-toggle').addEventListener('change', function(e) {
-        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-        
-        // 🟢 FIX: Actually notify the backend that Simulation mode was toggled!
-        fetch('/api/toggle-sim', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "", active: e.target.checked })
-        }).catch(()=>{});
+        // 🟢 FIX B.1: Protected Demo Toggle Listener
+        const demoToggleEl = document.getElementById('demo-toggle');
+        if (demoToggleEl) {
+            demoToggleEl.addEventListener('change', function(e) {
+                if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+                
+                fetch('/api/toggle-sim', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ initData: tg.initData || "", active: e.target.checked })
+                }).catch(()=>{});
 
-        if (e.target.checked) {
-            userTrades = synthesizeTradesFromPositions(demoPositions); 
-            let tVol = 0, tWins = 0, tLoss = 0;
-            userTrades.forEach(t => { 
-                tVol += t.amountInSol;
-                if(!t.isBuy) { if(t.profitPercent>0) tWins++; else tLoss++; }
+                if (e.target.checked) {
+                    userTrades = typeof synthesizeTradesFromPositions !== 'undefined' ? synthesizeTradesFromPositions(demoPositions) : []; 
+                    let tVol = 0, tWins = 0, tLoss = 0;
+                    userTrades.forEach(t => { 
+                        tVol += t.amountInSol;
+                        if(!t.isBuy) { if(t.profitPercent>0) tWins++; else tLoss++; }
+                    });
+                    
+                    const demoPosMap = typeof demoPositions !== 'undefined' ? demoPositions : [];
+                    
+                    populateDashboard({
+                        networth: 53256.88, networthSol: "336.18 SOL",
+                        pnlPercent: 242.60, pnlUsd: 37083.50,
+                        winrate: ((tWins/(tWins+tLoss))*100).toFixed(1) || 75.5,
+                        winLossText: `${tWins} Wins / ${tLoss} Losses`,
+                        volume: `${tVol.toFixed(2)} SOL`
+                    }, demoPosMap.map(p=>p.symbol), demoPosMap.map(p=>p.valueUsd), demoPosMap);
+                    
+                    setFilter('30D');
+                    renderLeaderboard();
+                    renderAffiliates();
+                } else {
+                    userTrades = []; 
+                    document.getElementById('leaderboard-container').innerHTML = `
+                        <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
+                    `;
+                    document.getElementById('recruits-container').innerHTML = `
+                        <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
+                    `;
+                    fetchLiveData();
+                }
             });
-            
-            populateDashboard({
-                networth: 53256.88, networthSol: "336.18 SOL",
-                pnlPercent: 242.60, pnlUsd: 37083.50,
-                winrate: ((tWins/(tWins+tLoss))*100).toFixed(1) || 75.5,
-                winLossText: `${tWins} Wins / ${tLoss} Losses`,
-                volume: `${tVol.toFixed(2)} SOL`
-            }, demoPositions.map(p=>p.symbol), demoPositions.map(p=>p.valueUsd), demoPositions);
-            
-            setFilter('30D');
-            renderLeaderboard();
-            renderAffiliates();
-        } else {
-            userTrades = []; 
-            document.getElementById('leaderboard-container').innerHTML = `
-                <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
-            `;
-            document.getElementById('recruits-container').innerHTML = `
-                <div class="card-flat h-16 skeleton"></div><div class="card-flat h-16 skeleton"></div>
-            `;
-            fetchLiveData();
         }
-    });
 
         fetch('/api/affiliate-stats', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },

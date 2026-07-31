@@ -308,26 +308,44 @@ app.post('/api/sim-stats', async (req, res) => {
         const { isSimulationActive, getSimBalance, getSimVolume, getSimStartingBalance } = await import('./services/simulation.service.js');
         if (!await isSimulationActive(telegramId)) return res.json({ isActive: false });
 
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+
         const balance = await getSimBalance(telegramId);
-        const startingBalance = await getSimStartingBalance(telegramId); // 🟢 NEW
+        const startingBalance = await getSimStartingBalance(telegramId); 
         const volume = await getSimVolume(telegramId);
         const posRaw = await redis.get(`sim:positions:${telegramId}`);
         const positions = posRaw ? JSON.parse(posRaw) : [];
         const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
-        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+        const simTrades = tradesRaw ? JSON.parse(tradesRaw) : [];
+
+        // 🟢 Fetch Live Trades and Merge them with Sim Trades
+        let dbTrades: any[] = [];
+        if (user) {
+            dbTrades = await prisma.trade.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'desc' }, take: 100 });
+        }
+        const mappedDbTrades = dbTrades.map(t => ({
+            createdAt: t.createdAt.toISOString(), isBuy: t.isBuy, amountInSol: t.amountInSol,
+            profitPercent: t.profitPercent || 0, realizedPnlSol: t.realizedPnlSol || 0
+        }));
+
+        const allTrades = [...simTrades, ...mappedDbTrades]
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+            .slice(0, 100);
 
         let wins = 0, losses = 0;
-        trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
+        allTrades.filter((t: any) => !t.isBuy).forEach((t: any) => {
             if (t.profitPercent > 0) wins++; else losses++;
         });
 
         res.json({
-            isActive: true, balance: parseFloat(balance), startingBalance, // 🟢 NEW
-            volume, positions, trades, wins, losses,
+            isActive: true, balance: parseFloat(balance), startingBalance, 
+            volume, positions, trades: allTrades, wins, losses,
             winRate: (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0"
         });
     } catch (e: any) { res.status(500).json({ isActive: false }); }
 });
+
+
 app.post('/api/positions', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) {
@@ -491,10 +509,16 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         getLiveBalance(user), prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } }), checkVipStatus(user.telegramId)
     ]);
 
-    // 🟢 CLAUDE FIX 3: Check hide wallets setting
-    const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
+// 🟢 CLAUDE FIX 3: Check hide wallets setting
+const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
-    const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
+const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
+
+let displayCredits = user.creditBalance;
+    if (isSimMode) {
+        const simCreds = await redis.get(`sim:credits:${telegramId}`);
+        if (simCreds) displayCredits = parseInt(simCreds);
+    }
 
     const { getSimVolume } = await import('./services/simulation.service.js');
     let displayVolume = user.totalVolumeSol;
@@ -530,7 +554,7 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
         `└ ${whaleModeText}\n\n` +
 
-        `🎯 <b>Caller Credits:</b> <code>${user.creditBalance}</code> Remaining\n` + 
+        `🎯 <b>Caller Credits:</b> <code>${displayCredits}</code> Remaining\n` + 
         `└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
         
         `└ ${whaleModeText}\n\n` +
@@ -541,7 +565,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         
         `📊 <b>Your Economics:</b>\n` +
         `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
-        `• Affiliate Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
@@ -939,7 +962,17 @@ bot.command('simbal', async (ctx) => {
     await ctx.replyWithHTML(`🎮 Sim balance set to <b>${amount.toFixed(4)} SOL</b> and PnL baseline reset to match.`);
 });
 
-
+bot.command('simcredits', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 2) return ctx.replyWithHTML('Usage: <code>/simcredits 500</code>');
+    const credits = parseInt(parts[1]);
+    if (isNaN(credits)) return ctx.reply('🔴 Invalid number.');
+    
+    await redis.set(`sim:credits:${tgId}`, credits.toString());
+    await ctx.replyWithHTML(`🎮 Sim credits set to <b>${credits}</b>.`);
+});
 
 
 
@@ -2235,8 +2268,13 @@ bot.action('menu_affiliate', async (ctx) => {
 
     const referredByText = user.referredBy ? `✅ Linked to Partner: <b>${user.referredBy.referralCode}</b>` : `❌ No Partner Linked`;
 
-    // 🟢 Calculate User's Total Points Dynamically
-    const basePoints = Math.floor((user.totalVolumeSol || 0) * 10000);
+    // 🟢 Precise dynamic point metrics for the WebApp UI
+    const { isSimulationActive, getSimVolume } = await import('./services/simulation.service.js');
+    const isSimMode = await isSimulationActive(user.telegramId);
+    let displayVolume = user.totalVolumeSol || 0;
+    if (isSimMode) displayVolume += await getSimVolume(user.telegramId);
+
+    const basePoints = Math.floor(displayVolume * 10000);
     const welcomeBonus = user.referredById ? 10000 : 0;
     const recruitBonus = user._count.recruits * 2000;
     const totalPoints = basePoints + welcomeBonus + recruitBonus;
