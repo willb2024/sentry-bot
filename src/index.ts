@@ -355,53 +355,6 @@ app.post('/api/sim-stats', async (req, res) => {
     } catch (e: any) { res.status(500).json({ isActive: false }); }
 });
 
-// 🎮 SIMULATION INTERCEPT: Fetch simulated balance, volume, positions, and win/loss rates
-// 🎮 SIMULATION INTERCEPT: Fetch simulated balance, volume, positions, and win/loss rates
-app.post('/api/sim-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
-        if (telegramId !== process.env.ADMIN_TELEGRAM_ID) return res.status(403).json({ error: 'Admin only' });
-
-        const { isSimulationActive, getSimBalance, getSimVolume, getSimStartingBalance } = await import('./services/simulation.service.js');
-        if (!await isSimulationActive(telegramId)) return res.json({ isActive: false });
-
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-
-        const balance = await getSimBalance(telegramId);
-        const startingBalance = await getSimStartingBalance(telegramId); 
-        const volume = await getSimVolume(telegramId);
-        const posRaw = await redis.get(`sim:positions:${telegramId}`);
-        const positions = posRaw ? JSON.parse(posRaw) : [];
-        const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
-        const simTrades = tradesRaw ? JSON.parse(tradesRaw) : [];
-
-        // 🟢 Fetch Live Trades and Merge them with Sim Trades
-        let dbTrades: any[] = [];
-        if (user) {
-            dbTrades = await prisma.trade.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'desc' }, take: 100 });
-        }
-        const mappedDbTrades = dbTrades.map(t => ({
-            createdAt: t.createdAt.toISOString(), isBuy: t.isBuy, amountInSol: t.amountInSol,
-            profitPercent: t.profitPercent || 0, realizedPnlSol: t.realizedPnlSol || 0
-        }));
-
-        const allTrades = [...simTrades, ...mappedDbTrades]
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-            .slice(0, 100);
-
-        let wins = 0, losses = 0;
-        allTrades.filter((t: any) => !t.isBuy).forEach((t: any) => {
-            if (t.profitPercent > 0) wins++; else losses++;
-        });
-
-        res.json({
-            isActive: true, balance: parseFloat(balance), startingBalance, 
-            volume, positions, trades: allTrades, wins, losses,
-            winRate: (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0"
-        });
-    } catch (e: any) { res.status(500).json({ isActive: false }); }
-});
 
 
 app.post('/api/positions', async (req, res) => {
@@ -2300,41 +2253,37 @@ bot.command('leaderboard', async (ctx) => {
 
 // 🟢 GLOBAL PANIC CANCEL
 bot.action('action_global_cancel', async (ctx) => {
-    try { await ctx.answerCbQuery("⏳ Shutting down all engines..."); } catch(e){}
+    try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
+
+    // 🟢 UX FIX: Loader
+    await safeEditMessageText(ctx, `<i>🛑 Shutting down all trading engines and clearing active memory...</i>`);
 
     const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
     if (!user) return;
 
-    // 1. Kill Database Engines
     await prisma.activeOrder.updateMany({ where: { userId: user.id, orderType: { in: ['DCA', 'LIMIT'] }, isActive: true }, data: { isActive: false } });
     await prisma.autoSnipeConfig.updateMany({ where: { userId: user.id, isActive: true }, data: { isActive: false } });
     await prisma.copyTradeConfig.updateMany({ where: { userId: user.id, isActive: true }, data: { isActive: false } });
 
-// ADD THIS LINE:
-syncCopyTradeListeners(bot);
-
-    // 2. Kill RAM Guards
+    syncCopyTradeListeners(bot);
     const cancelledGuards = await cancelAllUserGuards(tgId);
-
-    // 🟢 3. FIX: Kill the AI Coin Caller Automation
+    
     const { setUserCallerFilters } = await import('./services/caller.service.js');
     await setUserCallerFilters(tgId, { isActive: false });
 
-    
-
-    await ctx.editMessageText(
+    await safeEditMessageText(ctx,
         `🛑 <b>ALL AUTOMATIONS HALTED</b>\n\n` +
         `The following engines have been safely powered down to protect your capital:\n` +
         `• DCA Schedules: <b>Disabled</b>\n` +
         `• Limit Orders: <b>Disabled</b>\n` +
         `• Auto-Sniper: <b>Disabled</b>\n` +
         `• Copy Trades: <b>Disabled</b>\n` +
-        `• AI Coin Caller: <b>Disabled</b>\n` + // 🟢 Now displayed in the shutdown report
+        `• AI Coin Caller: <b>Disabled</b>\n` + 
         `• Trailing Guards: <b>${cancelledGuards} Removed</b>\n\n` +
         `<i>No further automated buys or sells will occur until you manually reactivate them.</i>`,
-        { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Return to Dashboard', 'btn_dashboard')]]) }
+        Markup.inlineKeyboard([[Markup.button.callback('⬅️ Return to Dashboard', 'btn_dashboard')]])
     );
 });
 
@@ -2484,11 +2433,15 @@ bot.action('action_unlock_devsuite', async (ctx) => {
         return ctx.replyWithHTML("⚠️ <b>Upgrade Active:</b> You already have lifetime access to the Developer Suite!");
     }
 
-    const PRICE_SOL = 6.2; // 🟢 UPDATED TO 6.2 SOL
+    const PRICE_SOL = 6.2; 
     const priceLamports = PRICE_SOL * LAMPORTS_PER_SOL;
 
     try {
-        await ctx.answerCbQuery(`⏳ Aggregating wallet balances...`);
+        try { await ctx.answerCbQuery(); } catch(e){}
+        
+        // 🟢 UX FIX: This transaction is heavy and can take 20 seconds. The user needs to know it's working.
+        await safeEditMessageText(ctx, `<i>⏳ Aggregating wallet balances and compiling Dev Suite upgrade transaction...\n\nPlease wait up to 30 seconds. Do not click away.</i>`);
+
         const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
         if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
         if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
@@ -2540,7 +2493,7 @@ bot.action('action_unlock_devsuite', async (ctx) => {
         }
 
         if (lamportsCollected < priceLamports) {
-            return ctx.replyWithHTML(`🔴 <b>Unlock Failed:</b> Could not compile enough liquid SOL after leaving gas buffers.`);
+            return safeEditMessageText(ctx, `🔴 <b>Unlock Failed:</b> Could not compile enough liquid SOL across your active wallets after leaving gas buffers.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_devsuite')]]));
         }
 
         const { blockhash } = await connection.getLatestBlockhash('confirmed');
@@ -2693,16 +2646,22 @@ bot.action('action_claim_payout', async (ctx) => {
     if (!tgId) return;
     const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
     if (!user) return;
+    
     if (user.pendingRewardsSol < 0.1) {
         try { await ctx.answerCbQuery(`❌ Need at least 0.1 SOL. Current: ${user.pendingRewardsSol.toFixed(4)}`, { show_alert: true }); } catch(e){}
         return;
     }
-    try { await ctx.answerCbQuery("⏳ Processing Payout..."); } catch(e){}
+    
+    try { await ctx.answerCbQuery(); } catch(e){}
+
+    // 🟢 UX FIX: Explicit loading state so they don't mash the button
+    await safeEditMessageText(ctx, `<i>⏳ Processing Affiliate Payout...\nBroadcasting Treasury transfer via Jito to bypass congestion.</i>`);
+
     const result = await processAffiliatePayout(user.id);
     if (result.success) {
-        await ctx.replyWithHTML(`✅ <b>Payout Processed!</b>\n\nAmount: ${user.pendingRewardsSol.toFixed(4)} SOL\n🔗 <a href="https://solscan.io/tx/${result.signature}">View Transaction</a>`, { parse_mode: 'HTML' });
+        await safeEditMessageText(ctx, `✅ <b>Payout Processed!</b>\n\nAmount: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n🔗 <a href="https://solscan.io/tx/${result.signature}">View Transaction</a>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Affiliates', 'menu_affiliate')]]));
     } else {
-        await ctx.replyWithHTML(`🔴 <b>Payout Failed</b>\n\n${result.message}`, { parse_mode: 'HTML' });
+        await safeEditMessageText(ctx, `🔴 <b>Payout Failed</b>\n\n${result.message}`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_affiliate')]]));
     }
 });
 
@@ -3438,10 +3397,13 @@ bot.action('action_cancel_dca', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
+    
+    await safeEditMessageText(ctx, `<i>🛑 Pausing Limit & DCA schedules...</i>`);
+    
     const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
     if (user) {
         await prisma.activeOrder.updateMany({ where: { userId: user.id, orderType: { in: ['DCA', 'LIMIT'] }, isActive: true }, data: { isActive: false } });
-        await safeEditMessageText(ctx, `✅ <b>All active DCA and Limit Orders have been cancelled.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_dca')]]));
+        await safeEditMessageText(ctx, `✅ <b>All active DCA and Limit Orders have been successfully cancelled.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_dca')]]));
     }
 });
 
@@ -3478,11 +3440,17 @@ bot.action('menu_vault', async (ctx) => {
 });
 
 bot.action('action_consolidate_wallets', async (ctx) => {
-    try { await ctx.answerCbQuery("⏳ Sweeping sub-wallets to W1..."); } catch(e){}
+    try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
+
+    // 🟢 UX FIX: Explicit visual loading state
+    await safeEditMessageText(ctx, `<i>⏳ Sweeping all sub-wallets into W1...\nTransmitting signed transactions via Jito...</i>`);
+
     const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-    if (!user || !user.vaultAddress) return;
+    if (!user || !user.vaultAddress) {
+        return safeEditMessageText(ctx, `🔴 <b>Error:</b> No active vault found.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_vault')]]));
+    }
 
     const mainPubkey = new PublicKey(user.vaultAddress);
     const subWallets = [
@@ -3490,12 +3458,16 @@ bot.action('action_consolidate_wallets', async (ctx) => {
         { pub: user.vault4, pk: user.pk4 }, { pub: user.vault5, pk: user.pk5 }
     ].filter(w => w.pub && w.pk);
 
+    if (subWallets.length === 0) {
+        return safeEditMessageText(ctx, `⚠️ <b>No active sub-wallets to sweep.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_vault')]]));
+    }
+
     let sweptSol = 0;
     for (const w of subWallets) {
         try {
             const vaultPubkey = new PublicKey(w.pub!);
             const balance = await connection.getBalance(vaultPubkey);
-            const gasBuffer = 50000; // 0.002 SOL
+            const gasBuffer = 50000; // 0.00005 SOL
             if (balance > gasBuffer) {
                 const rawPk = decryptKey(w.pk!);
                 if (!rawPk) continue;
@@ -3509,7 +3481,12 @@ bot.action('action_consolidate_wallets', async (ctx) => {
             }
         } catch(e) {}
     }
-    await ctx.replyWithHTML(`✅ <b>CONSOLIDATION COMPLETE</b>\nSwept ~<b>${sweptSol.toFixed(4)} SOL</b> from sub-wallets into W1.`);
+    
+    if (sweptSol > 0) {
+        await safeEditMessageText(ctx, `✅ <b>CONSOLIDATION COMPLETE</b>\nSwept ~<b>${sweptSol.toFixed(4)} SOL</b> from sub-wallets into W1.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
+    } else {
+        await safeEditMessageText(ctx, `⚠️ <b>No funds swept.</b>\nSub-wallets are either empty or lack enough SOL to cover network gas fees.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
+    }
 });
 
 
@@ -3737,18 +3714,18 @@ bot.action('action_add_copytrade', async (ctx) => {
 
 bot.action('action_clear_copytrade', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    const user = await prisma.user.findUnique({ where: { telegramId: ctx.from?.id.toString() } });
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    
+    await safeEditMessageText(ctx, `<i>🧹 Disconnecting copytrade WebSockets...</i>`);
+
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
     if (user) {
         await prisma.copyTradeConfig.deleteMany({ where: { userId: user.id } });
-        
-        // 🟢 AUDIT FIX: Instantly close the WebSockets when the user clears targets 
-        // to prevent the 30-second phantom leak window.
         syncCopyTradeListeners(bot);
-        
-        await safeEditMessageText(ctx, `✅ <b>All Copy Trade targets have been cleared.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_copytrade')]]));
+        await safeEditMessageText(ctx, `✅ <b>All Copy Trade targets have been cleared and WebSockets disconnected.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_copytrade')]]));
     }
 });
-
 
 // =========================================================
 // 🔍 TOKEN X-RAY SCANNER
@@ -5571,6 +5548,11 @@ app.get('/webapp', (req, res) => {
     } catch (e) {
         res.status(500).send("Error loading WebApp.");
     }
+});
+
+// 🟢 NEW: Server health monitoring endpoint
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime() });
 });
 
 // 🟢 FEATURE 5: Provide JSON Leaderboard data to the Telegram WebApp (index.html)

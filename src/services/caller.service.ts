@@ -641,7 +641,7 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
             const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 });
             if (res.data?.pairs) allPairs.push(...res.data.pairs);
         } catch (e: any) {}
-        await new Promise(r => setTimeout(r, 250)); 
+        await new Promise(r => setTimeout(r, 350)); // 🟢 FIX: Increased to 350ms to respect rate limits
     }
     return allPairs;
 }
@@ -804,8 +804,14 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
         
+        // 🟢 FIX: Safely trap invalid wallet addresses
+        let pubkey: any;
+        try { pubkey = new PublicKey(creatorWallet); } catch { 
+            return { launchCount: 0, avgRugScore: 0, isKnownRugger: false }; 
+        }
+
         const sigs = await rpcLimiter.run(() =>
-            connection.getSignaturesForAddress(new PublicKey(creatorWallet), { limit: 8 }).catch(() => [])
+            connection.getSignaturesForAddress(pubkey, { limit: 8 }).catch(() => [])
         );
 
         let rugCount = 0;
@@ -855,7 +861,9 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
             connection.getParsedAccountInfo(top.address).catch(()=>null)
         );
         
-        const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner || '';
+        // 🟢 FIX: Safer parsing of nested on-chain data using nullish coalescing
+        const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner ?? '';
+        
         const pct = (top.uiAmount || 0) / (largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1) * 100;
 
         const result = {

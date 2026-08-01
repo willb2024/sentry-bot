@@ -50,3 +50,8 @@ export async function checkRedisHealth(): Promise<boolean> {
     return false;
   }
 }
+
+// 🟢 FIX: Heartbeat ping to keep cloud provider TCP connections alive permanently
+setInterval(async () => {
+  try { await redis.ping(); } catch (_) {}
+}, 30000);

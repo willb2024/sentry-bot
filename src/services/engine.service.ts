@@ -427,32 +427,34 @@ export async function executeSnipe(
         ? checkRecentMevActivityCached(targetCA).catch(() => false)
         : Promise.resolve(false);
 
-    if (side === 'sell') {
-        let percentage = 100;
-        if (tokenAmount) {
-            try {
-                const user = await prisma.user.findUnique({ where: { telegramId } });
-                if (user && user.vaultAddress) {
-                    const activePubkeys: PublicKey[] = [new PublicKey(user.vaultAddress)];
-                    if (user.activeWallets >= 2 && user.vault2) activePubkeys.push(new PublicKey(user.vault2));
-                    if (user.activeWallets >= 3 && user.vault3) activePubkeys.push(new PublicKey(user.vault3));
-                    if (user.activeWallets >= 4 && user.vault4) activePubkeys.push(new PublicKey(user.vault4));
-                    if (user.activeWallets >= 5 && user.vault5) activePubkeys.push(new PublicKey(user.vault5));
-
-                    let totalTokens = 0;
-                    await Promise.all(activePubkeys.map(async (pubKey) => {
-                        try {
-                            const parsed = await connection.getParsedTokenAccountsByOwner(pubKey, { mint: new PublicKey(targetCA) }, 'confirmed');
-                            if (parsed.value.length > 0) totalTokens += parsed.value[0].account.data.parsed.info.tokenAmount.uiAmount;
-                        } catch (err) {}
-                    }));
-                    if (totalTokens > 0) percentage = Math.min(100, Math.round((tokenAmount / totalTokens) * 100));
-                }
-            } catch (e) { percentage = 100; }
+        if (side === 'sell') {
+            let percentage = 100;
+            if (tokenAmount) {
+                try {
+                    const user = await prisma.user.findUnique({ where: { telegramId } });
+                    if (user && user.vaultAddress) {
+                        const activePubkeys: PublicKey[] = [new PublicKey(user.vaultAddress)];
+                        if (user.activeWallets >= 2 && user.vault2) activePubkeys.push(new PublicKey(user.vault2));
+                        if (user.activeWallets >= 3 && user.vault3) activePubkeys.push(new PublicKey(user.vault3));
+                        if (user.activeWallets >= 4 && user.vault4) activePubkeys.push(new PublicKey(user.vault4));
+                        if (user.activeWallets >= 5 && user.vault5) activePubkeys.push(new PublicKey(user.vault5));
+    
+                        let totalTokens = 0;
+                        await Promise.all(activePubkeys.map(async (pubKey) => {
+                            try {
+                                const parsed = await connection.getParsedTokenAccountsByOwner(pubKey, { mint: new PublicKey(targetCA) }, 'confirmed');
+                                if (parsed.value.length > 0) totalTokens += parsed.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+                            } catch (err) {}
+                        }));
+                        if (totalTokens > 0) percentage = Math.min(100, Math.round((tokenAmount / totalTokens) * 100));
+                        
+                        // 🟢 FIX: Ensure sellPercentage is never 0 to prevent silent failures
+                        if (percentage === 0 || isNaN(percentage)) percentage = 100;
+                    }
+                } catch (e) { percentage = 100; }
+            }
+            return executeExit(telegramId, targetCA, percentage, isBumper, strategy);
         }
-        return executeExit(telegramId, targetCA, percentage, isBumper, strategy);
-    }
-
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
