@@ -599,10 +599,14 @@ export async function executeSnipe(
                         }
                     }).catch(() => {});
 
-                    // 🟢 FIRE WEBHOOK EVENT
-                    fireWebhook(user.telegramId, 'trade_buy', {
-                        tokenAddress: targetCA, amountSol, signature: txSig, strategy
-                    }).catch(()=>{});
+                  // 🟢 FIRE WEBHOOK EVENT
+                  fireWebhook(user.telegramId, 'trade_buy', {
+                    tokenAddress: targetCA, amountSol, signature: txSig, strategy
+                }).catch(()=>{});
+                
+                // 🟢 FIX: Log live buys into the 30-second rolling window
+                const { recordStatsEvent } = await import('./simulation.service.js');
+                await recordStatsEvent(user.telegramId, 'live', 0).catch(()=>{});
                 }
             });
         });

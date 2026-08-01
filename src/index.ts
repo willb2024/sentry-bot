@@ -1751,6 +1751,64 @@ bot.action('action_create_vault', async (ctx) => {
     }
 });
 
+// 🟢 NEW: Missing /stats command added
+bot.command('stats', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    
+    const loader = await ctx.reply("<i>⏳ Compiling performance metrics...</i>", { parse_mode: 'HTML' });
+    
+    try {
+        const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+        if (!user) return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, "🔴 <b>Error:</b> Please run /start to create a profile.", { parse_mode: 'HTML' });
+        
+        const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+        
+        let text = `📊 <b>YOUR TRADING STATS</b>\n\n`;
+        
+        if (isSim) {
+            const simBal = await getSimBalance(tgId);
+            const simVol = await getSimVolume(tgId);
+            const rawTrades = await redis.get(`sim:trades:${tgId}`);
+            const trades = rawTrades ? JSON.parse(rawTrades) : [];
+            
+            let wins = 0, losses = 0, pnl = 0;
+            trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
+                if (t.profitPercent > 0.5) wins++; else if (t.profitPercent < -0.5) losses++;
+                pnl += t.realizedPnlSol || 0;
+            });
+            
+            const winRate = (wins + losses) > 0 ? ((wins / (wins+losses))*100).toFixed(1) : "0.0";
+            
+            text += `🎮 <b>SIMULATION MODE</b>\n`;
+            text += `• Current Balance: <b>${parseFloat(simBal).toFixed(4)} SOL</b>\n`;
+            text += `• Volume Traded: <b>${simVol.toFixed(4)} SOL</b>\n`;
+            text += `• Net PnL: <b>${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} SOL</b>\n`;
+            text += `• Win Rate: <b>${winRate}%</b> (${wins}W / ${losses}L)\n`;
+        } else {
+            const trades = await prisma.trade.findMany({ where: { userId: user.id }});
+            
+            let wins = 0, losses = 0, pnl = 0;
+            trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
+                if ((t.profitPercent || 0) > 0.5) wins++; else if ((t.profitPercent || 0) < -0.5) losses++;
+                pnl += t.realizedPnlSol || 0;
+            });
+            
+            const winRate = (wins + losses) > 0 ? ((wins / (wins+losses))*100).toFixed(1) : "0.0";
+            
+            text += `⚡ <b>LIVE MAINNET</b>\n`;
+            text += `• Volume Traded: <b>${(user.totalVolumeSol || 0).toFixed(4)} SOL</b>\n`;
+            text += `• Net PnL: <b>${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} SOL</b>\n`;
+            text += `• Win Rate: <b>${winRate}%</b> (${wins}W / ${losses}L)\n`;
+        }
+        
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, text, { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]]) });
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Error fetching stats: ${e.message}`, { parse_mode: 'HTML' });
+    }
+});
+
 bot.action('onboard_step2', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     

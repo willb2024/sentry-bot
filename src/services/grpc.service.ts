@@ -669,6 +669,8 @@ function connectRaydiumFallbackWatcher(bot: any) {
     console.log("🟡 [RAYDIUM] WebSocket push watcher armed for instant execution.");
 }
 
+// src/services/grpc.service.ts (Replace triggerAutoSnipes)
+
 async function triggerAutoSnipes(
     bot: any, mintCa: string, symbol: string, initialBuySol: number, mode: 'PUMP' | 'RAYDIUM', raydiumPoolId?: string
 ) {
@@ -687,8 +689,10 @@ async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
+                let scoreType = "Basic Scoring"; 
+                let score = 0;
+
                 if (liveConfig.minScore > 0) {
-                    let score = 0;
                     try {
                         const { computeTokenScore, getModelScore, getSentimentScore } = await import('./caller.service.js');
                         const { consumeSniperCredit } = await import('./credits.service.js');
@@ -736,19 +740,23 @@ async function triggerAutoSnipes(
                         const useML = creditResult.success && !creditResult.fallback;
 
                         if (useML) {
+                            scoreType = "AI Model";
                             const mlScore = await getModelScore(mintCa, stats);
                             score = mlScore !== null ? mlScore : computeTokenScore(stats).score;
                         } else {
+                            scoreType = "Basic Fallback (No Credits)";
                             score = computeTokenScore(stats).score;
-                            if (creditResult.remaining === 0) {
+                            
+                            // 🟢 MESSAGE: Notify if out of credits but continuing
+                            if (creditResult.fallback) {
                                 const warnKey = `sniper_credits_warn:${liveConfig.user.telegramId}`;
                                 const alreadyWarned = await redis.get(warnKey);
                                 if (!alreadyWarned) {
-                                    await redis.set(warnKey, '1', 'EX', 3600);
+                                    await redis.set(warnKey, '1', 'EX', 1800); // 30 min cooldown
                                     try {
                                         await bot.telegram.sendMessage(
                                             liveConfig.user.telegramId,
-                                            `⚠️ <b>CREDITS DEPLETED</b>\n\nYour auto-sniper is now using basic scoring (less accurate).\nTop up with /credits to re-enable AI scoring.`,
+                                            `⚠️ <b>AI CREDITS DEPLETED</b>\n\nYour Auto-Sniper just evaluated <code>${mintCa}</code> using <b>Basic Scoring</b> because you are out of credits.\n\n<i>Sniper will continue running, but accuracy is reduced. Use /credits to top up!</i>`,
                                             { parse_mode: 'HTML' }
                                         );
                                     } catch (_) {}
@@ -762,7 +770,6 @@ async function triggerAutoSnipes(
                     if (score < liveConfig.minScore) return;
                 }
 
-                // [Rest of execution proceeds unchanged...]
                 const intendedSpend = liveConfig.amountSol * liveConfig.user.activeWallets;
                 if (!isPriceReady) await new Promise(r => setTimeout(r, 1000)); 
 
@@ -789,12 +796,27 @@ async function triggerAutoSnipes(
                     try {
                         const modeText = mode === 'PUMP' ? "Trench Sniper (Pump.fun)" : "Raydium LP Sniper";
                         await bot.telegram.sendMessage(liveConfig.user.telegramId,
-                            `🎯 <b>AUTO-SNIPE SUCCESSFUL!</b>\n\n<b>Engine:</b> ${modeText}\n<b>Token:</b> <code>${mintCa}</code>\n<b>Invested:</b> <b>${spent.toFixed(4)} SOL</b>\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
+                            `🎯 <b>AUTO-SNIPE SUCCESSFUL!</b>\n\n<b>Engine:</b> ${modeText}\n<b>Token:</b> <code>${mintCa}</code>\n<b>Score:</b> ${liveConfig.minScore > 0 ? `${score}/100 ⭐ <i>(${scoreType})</i>` : 'N/A (AI Disabled)'}\n<b>Invested:</b> <b>${spent.toFixed(4)} SOL</b>\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
                             { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                         );
                     } catch (_) {}
                 } else {
                     await redis.del(sniperLockKey);
+                    
+                    // 🟢 MESSAGE: Insufficient Funds failure
+                    if (result.message.includes("Insufficient Funds")) {
+                        const fundWarnKey = `warn_funds:${liveConfig.user.telegramId}`;
+                        if (!(await redis.get(fundWarnKey))) {
+                            await redis.set(fundWarnKey, '1', 'EX', 600); // 10 min cooldown so we don't spam them on every launch
+                            try {
+                                await bot.telegram.sendMessage(
+                                    liveConfig.user.telegramId,
+                                    `🔴 <b>AUTO-SNIPER FAILED: INSUFFICIENT FUNDS</b>\n\nTarget: <code>${mintCa}</code>\nYour wallet does not have enough SOL to execute this snipe (+ gas).\n\n<i>Sniper is still running, but please deposit SOL immediately to catch the next token.</i>`,
+                                    { parse_mode: 'HTML' }
+                                );
+                            } catch (_) {}
+                        }
+                    }
                 }
             } catch (e: any) {}
         }, delayMs);

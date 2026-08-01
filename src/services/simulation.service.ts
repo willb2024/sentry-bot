@@ -170,58 +170,15 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     return wallets;
 }
 
+// Replace recordStatsEvent:
 export async function recordStatsEvent(telegramId: string, mode: 'live' | 'sim', realizedPnlSol: number) {
     const key = `stats_events:${mode}:${telegramId}`;
-    await redis.zadd(key, Date.now(), JSON.stringify({ t: Date.now(), pnl: realizedPnlSol }));
+    const eventId = crypto.randomUUID(); // 🟢 FIX: Forces Redis to track rapid concurrent trades
+    await redis.zadd(key, Date.now(), JSON.stringify({ id: eventId, t: Date.now(), pnl: realizedPnlSol }));
     await redis.zremrangebyscore(key, 0, Date.now() - 3_600_000); 
 }
 
-export async function getStatsForWindow(telegramId: string, mode: 'live' | 'sim', windowSeconds: number) {
-    const key = `stats_events:${mode}:${telegramId}`;
-    const since = Date.now() - windowSeconds * 1000;
-    const raw = await redis.zrangebyscore(key, since, Date.now());
-    const events = raw.map(r => JSON.parse(r));
-    const totalPnl = events.reduce((sum: number, e: any) => sum + e.pnl, 0);
-    const wins = events.filter((e: any) => e.pnl > 0).length;
-    const losses = events.filter((e: any) => e.pnl <= 0).length;
-    return { totalPnl, wins, losses, tradeCount: events.length };
-}
-
-export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number, profitPercent: number = 0) {
-    const key = `sim:trades:${telegramId}`;
-    const existing = JSON.parse(await redis.get(key) || '[]');
-    const realizedPnlSol = isBuy ? 0 : amountInSol * (profitPercent / 100);
-
-    existing.unshift({
-        createdAt: new Date().toISOString(),
-        isBuy, amountInSol, profitPercent, realizedPnlSol
-    });
-    
-    await redis.set(key, JSON.stringify(existing.slice(0, 100))); 
-    await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
-}
-
-export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbol: string }> {
-    const cacheKey = 'sim:real_token_pool';
-    let pool: Array<{ mint: string; symbol: string }> = [];
-    const cached = await redis.get(cacheKey);
-    if (cached) pool = JSON.parse(cached);
-
-    if (pool.length === 0) {
-        try {
-            const { scoreTokens } = await import('./caller.service.js'); 
-            const real = await scoreTokens();
-            pool = real.slice(0, 20).map(t => ({ mint: t.mint, symbol: t.symbol }));
-            if (pool.length > 0) await redis.set(cacheKey, JSON.stringify(pool), 'EX', 60);
-        } catch (_) { }
-    }
-
-    if (pool.length === 0) {
-        return { mint: generateSimTokenCA(), symbol: 'SIMDEMO' }; 
-    }
-    return pool[Math.floor(Math.random() * pool.length)];
-}
-
+// Replace simExecuteSnipe:
 export async function simExecuteSnipe(
     telegramId: string,
     tokenAddress: string,
@@ -283,10 +240,58 @@ export async function simExecuteSnipe(
     
     await redis.set(posKey, JSON.stringify(existing)); 
     await recordSimTrade(telegramId, true, amountSol, 0);
-    await saveSimulationState(telegramId); // 🟢 Auto-save hook
+    
+    await recordStatsEvent(telegramId, 'sim', 0); // 🟢 FIX: Track BUYS in the 30-second window
+    await saveSimulationState(telegramId); 
 
     return { success: true, signature: generateSimSignature(), message: '🟢 Simulation: Jito bundle confirmed.', volumeSpent: amountSol };
 }
+export async function getStatsForWindow(telegramId: string, mode: 'live' | 'sim', windowSeconds: number) {
+    const key = `stats_events:${mode}:${telegramId}`;
+    const since = Date.now() - windowSeconds * 1000;
+    const raw = await redis.zrangebyscore(key, since, Date.now());
+    const events = raw.map(r => JSON.parse(r));
+    const totalPnl = events.reduce((sum: number, e: any) => sum + e.pnl, 0);
+    const wins = events.filter((e: any) => e.pnl > 0).length;
+    const losses = events.filter((e: any) => e.pnl <= 0).length;
+    return { totalPnl, wins, losses, tradeCount: events.length };
+}
+
+export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number, profitPercent: number = 0) {
+    const key = `sim:trades:${telegramId}`;
+    const existing = JSON.parse(await redis.get(key) || '[]');
+    const realizedPnlSol = isBuy ? 0 : amountInSol * (profitPercent / 100);
+
+    existing.unshift({
+        createdAt: new Date().toISOString(),
+        isBuy, amountInSol, profitPercent, realizedPnlSol
+    });
+    
+    await redis.set(key, JSON.stringify(existing.slice(0, 100))); 
+    await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
+}
+
+export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbol: string }> {
+    const cacheKey = 'sim:real_token_pool';
+    let pool: Array<{ mint: string; symbol: string }> = [];
+    const cached = await redis.get(cacheKey);
+    if (cached) pool = JSON.parse(cached);
+
+    if (pool.length === 0) {
+        try {
+            const { scoreTokens } = await import('./caller.service.js'); 
+            const real = await scoreTokens();
+            pool = real.slice(0, 20).map(t => ({ mint: t.mint, symbol: t.symbol }));
+            if (pool.length > 0) await redis.set(cacheKey, JSON.stringify(pool), 'EX', 60);
+        } catch (_) { }
+    }
+
+    if (pool.length === 0) {
+        return { mint: generateSimTokenCA(), symbol: 'SIMDEMO' }; 
+    }
+    return pool[Math.floor(Math.random() * pool.length)];
+}
+
 
 export async function simExecuteExit(
     telegramId: string,
