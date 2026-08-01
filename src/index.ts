@@ -12,6 +12,7 @@ import { isSimulationActive } from './services/simulation.service.js';
 import axios from 'axios';
 import { igniteYellowstoneStream } from './services/grpc.service.js';
 import FormData from 'form-data';
+import { getAdvancedStats, getHourlyPerformance, exportTradesToCsv } from './services/analytics.service.js';
 import { sweepExpiredVips } from './services/vip_promo.service.js';
 import { addTrailingStopToMemory, cancelAllUserGuards, cancelAllGuardsForToken, updateGuardSize } from './services/order.service.js';
 import { generateSecureVault, exportPrivateKey, importPrivateKey, ensureWalletsExist, decryptKey } from './services/vault.service.js';
@@ -5359,6 +5360,31 @@ bot.action(/^confirm_watch_(.+)$/, async (ctx) => {
     await redis.set(`state:guard_ca:${telegramId}`, tokenAddress, 'EX', 120);
 });
 
+bot.command('exporttrades', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const loader = await ctx.replyWithHTML('<i>⏳ Generating your trade ledger...</i>');
+
+    try {
+        const csv = await exportTradesToCsv(tgId);
+        if (!csv) {
+            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                '📊 <b>No trades found.</b>', { parse_mode: 'HTML' });
+        }
+
+        const buffer = Buffer.from(csv, 'utf-8');
+        await ctx.replyWithDocument(
+            { source: buffer, filename: `Sentry_Trades_${tgId}.csv` },
+            { caption: '📊 <b>Your Secure Trade Ledger</b>\nIncludes full PnL, fee breakdowns, and Jito signatures.', parse_mode: 'HTML' }
+        );
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `🔴 <b>Export failed:</b> ${e.message}`, { parse_mode: 'HTML' });
+    }
+});
+
 // 🟢 AUDIT FIX 7: Added /join command handler
 bot.command('join', async (ctx) => {
     const tgId = ctx.from?.id.toString();
@@ -5684,6 +5710,48 @@ app.post('/api/risk-score', async (req, res) => {
     } catch (e) {
         res.status(500).json({ error: 'Server error' });
     }
+});
+
+
+// 📊 Advanced Stats (Sharpe, Drawdown, etc.)
+app.post('/api/analytics/advanced-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const stats = await getAdvancedStats(telegramId);
+        if (!stats) return res.status(404).json({ error: 'User not found' });
+        res.json(stats);
+    } catch (e) { res.status(500).json({ error: 'Server error' }); }
+});
+
+// 🕒 Hourly Performance
+app.post('/api/analytics/hourly', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const hourly = await getHourlyPerformance(telegramId);
+        res.json(hourly);
+    } catch (e) { res.status(500).json({ error: 'Server error' }); }
+});
+
+// 📤 Export Trades (CSV Web)
+app.post('/api/trades/export', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const csv = await exportTradesToCsv(telegramId);
+        if (!csv) return res.status(404).json({ error: 'No trades found' });
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename=trades_${telegramId}.csv`);
+        res.send(csv);
+    } catch (e) { res.status(500).json({ error: 'Server error' }); }
 });
 
 app.post('/api/performance', async (req, res) => {

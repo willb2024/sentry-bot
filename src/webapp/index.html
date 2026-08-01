@@ -188,23 +188,43 @@
                 <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">1</span>
             </div>
 
-          
-          <!-- 🟢 24-HOUR ROLLING STATS WIDGET -->
-<div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
-    <div class="flex items-center gap-3">
-        <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
-            <i class="fa-solid fa-clock-rotate-left text-sm"></i>
-        </div>
-        <div>
-            <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider block">24-Hour Rolling Activity</span>
-            <span class="text-[10px] text-gray-500 font-mono">Live vs Sim Rolling Aggregates</span>
-        </div>
-    </div>
-    <div class="flex gap-2 sm:gap-4 text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
-        <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Live: 0 trades (+0.0000 SOL)</span>
-        <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Sim: 0 trades (+0.0000 SOL)</span>
-    </div>
-</div>
+            <!-- 🟢 24-HOUR ROLLING STATS WIDGET -->
+            <div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
+                <div class="flex items-center gap-3">
+                    <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
+                        <i class="fa-solid fa-clock-rotate-left text-sm"></i>
+                    </div>
+                    <div>
+                        <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider block">24-Hour Rolling Activity</span>
+                        <span class="text-[10px] text-gray-500 font-mono">Live vs Sim Rolling Aggregates</span>
+                    </div>
+                </div>
+                <div class="flex gap-2 sm:gap-4 text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
+                    <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Live: 0 trades (+0.0000 SOL)</span>
+                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Sim: 0 trades (+0.0000 SOL)</span>
+                </div>
+            </div>
+
+            <!-- 🟢 ADVANCED STATS CARD -->
+            <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.01] mb-6">
+                <div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Sharpe Ratio</span>
+                    <div class="text-xl font-bold text-white font-mono mt-1" id="sharpe-ratio">--</div>
+                </div>
+                <div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Max Drawdown</span>
+                    <div class="text-xl font-bold text-neonRed font-mono mt-1" id="max-drawdown">--</div>
+                </div>
+                <div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Profit Factor</span>
+                    <div class="text-xl font-bold text-jupGreen font-mono mt-1" id="profit-factor">--</div>
+                </div>
+                <div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Total Trades</span>
+                    <div class="text-xl font-bold text-white font-mono mt-1" id="total-trades">--</div>
+                </div>
+            </div>
+
             <!-- 🟢 RISK SCORE & STRATEGY ATTRIBUTION GRID -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <!-- Risk Score Card -->
@@ -273,6 +293,21 @@
                     <canvas id="allocationChart"></canvas>
                 </div>
             </div>
+
+            <!-- 🟢 Hourly Performance Heatmap -->
+            <div class="card-flat p-5">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide uppercase">Hourly Performance (UTC)</h3>
+                </div>
+                <div class="h-48 relative w-full">
+                    <canvas id="hourlyChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 🟢 Export Button -->
+            <button onclick="exportTrades()" class="w-full card-flat p-4 flex items-center justify-center gap-2 hover:bg-white/[0.05] transition-all text-white font-bold text-sm">
+                <i class="fa-solid fa-file-csv text-jupGreen"></i> Export Ledger to CSV
+            </button>
 
         </section>
     </main>
@@ -868,7 +903,87 @@
         setFilter(currentFilter);
     }
 
-    // 🟢 FETCH 30-SECOND WINDOW STATS
+    // 🟢 JS FUNCTIONS ADDED FOR ADVANCED STATS, HOURLY PERFORMANCE, AND CSV EXPORT
+    async function exportTrades() {
+        try {
+            const res = await fetch('/api/trades/export', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData })
+            });
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'Sentry_Trades.csv';
+                a.click();
+                window.URL.revokeObjectURL(url);
+                showToast('Ledger Exported!');
+            } else { showToast('No trades found to export'); }
+        } catch (_) { showToast('Export failed'); }
+    }
+
+    async function fetchAdvancedStats() {
+        try {
+            const res = await fetch('/api/analytics/advanced-stats', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData })
+            });
+            if (res.ok) {
+                const stats = await res.json();
+                document.getElementById('sharpe-ratio').innerText = stats.sharpeRatio.toFixed(2);
+                document.getElementById('max-drawdown').innerText = stats.maxDrawdown.toFixed(3) + ' SOL';
+                document.getElementById('profit-factor').innerText = stats.profitFactor.toFixed(2);
+                document.getElementById('total-trades').innerText = stats.totalTrades;
+            }
+        } catch (_) {}
+    }
+
+    async function fetchHourlyPerformance() {
+        try {
+            const res = await fetch('/api/analytics/hourly', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const labels = data.map(d => d.hour + ':00');
+                const pnlData = data.map(d => d.totalPnlSol);
+                const winRateData = data.map(d => d.winRate);
+
+                const ctx = document.getElementById('hourlyChart').getContext('2d');
+                if (window.hourlyChartInst) window.hourlyChartInst.destroy();
+                
+                window.hourlyChartInst = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'PnL (SOL)', data: pnlData,
+                                backgroundColor: pnlData.map(v => v >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'),
+                                borderWidth: 0, yAxisID: 'y'
+                            },
+                            {
+                                label: 'Win Rate %', data: winRateData, type: 'line',
+                                borderColor: '#3b82f6', borderWidth: 2, pointRadius: 1, fill: false, yAxisID: 'y1'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { ticks: { color: '#64748b', maxTicksLimit: 8 }, grid: { display: false } },
+                            y: { position: 'left', ticks: { color: '#64748b' }, border: { display: false } },
+                            y1: { position: 'right', ticks: { color: '#64748b', display: false }, grid: { drawOnChartArea: false } }
+                        }
+                    }
+                });
+            }
+        } catch (_) {}
+    }
+
     async function fetchStatsWindow() {
         try {
             const res = await fetch('/api/stats-window', {
@@ -888,10 +1003,8 @@
         } catch (_) {}
     }
 
-    // 🟢 FETCH ENTERPRISE METRICS (RISK & STRATEGY ATTRIBUTION)
     async function fetchEnterpriseMetrics() {
         try {
-            // Risk Score
             const riskRes = await fetch('/api/risk-score', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ initData: tg.initData })
@@ -903,7 +1016,6 @@
                 document.getElementById('risk-label').innerText = `Assessment: ${riskData.riskLevel} Risk`;
             }
 
-            // Performance Attribution
             const perfRes = await fetch('/api/performance', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ initData: tg.initData })
@@ -929,7 +1041,6 @@
     }
 
     async function fetchLiveData() {
-        // 🎮 SIMULATION FETCH
         try {
             const simRes = await fetch('/api/sim-stats', {
                 method: 'POST',
@@ -949,20 +1060,15 @@
                     const liveSolPrice = solPriceRes.price || 160;
 
                     const simPositions = (simStats.positions || []).map(p => ({
-                        mint: p.mint,
-                        symbol: p.symbol,
-                        amount: p.amount,
+                        mint: p.mint, symbol: p.symbol, amount: p.amount,
                         priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
                         valueUsd: p.valueUsd || (p.amountInSol * liveSolPrice),
                         entryPrice: p.entryPriceUsd || p.entryPrice
                     }));
 
                     userTrades = (simStats.trades || []).map(t => ({
-                        createdAt: t.createdAt,
-                        isBuy: t.isBuy,
-                        amountInSol: t.amountInSol,
-                        profitPercent: t.profitPercent || 0,
-                        realizedPnlSol: t.realizedPnlSol || 0
+                        createdAt: t.createdAt, isBuy: t.isBuy, amountInSol: t.amountInSol,
+                        profitPercent: t.profitPercent || 0, realizedPnlSol: t.realizedPnlSol || 0
                     }));
 
                     let wins = simStats.wins || 0;
@@ -978,25 +1084,14 @@
                     const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00";
                     const pnlUsd = pnlSol * liveSolPrice;
 
-                    const winRate = (wins + losses) > 0
-                        ? ((wins / (wins + losses)) * 100).toFixed(1)
-                        : "0.0";
+                    const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
 
-                    const allocLabels = simPositions.length
-                        ? simPositions.map(p => p.symbol)
-                        : ['No Active Positions'];
-                    const allocData = simPositions.length
-                        ? simPositions.map(p => p.valueUsd || 1)
-                        : [100];
+                    const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : ['No Active Positions'];
+                    const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [100];
 
                     populateDashboard({
-                        networth: networthUsd,
-                        networthSol: networthSol,
-                        pnlPercent: pnlPercent,
-                        pnlUsd: pnlUsd,
-                        winrate: winRate,
-                        winLossText: `${wins} Wins / ${losses} Losses`,
-                        volume: totalVolumeSol.toFixed(4) + " SOL"
+                        networth: networthUsd, networthSol: networthSol, pnlPercent: pnlPercent, pnlUsd: pnlUsd,
+                        winrate: winRate, winLossText: `${wins} Wins / ${losses} Losses`, volume: totalVolumeSol.toFixed(4) + " SOL"
                     }, allocLabels, allocData, simPositions);
 
                     fetch('/api/my-leaderboard', {
@@ -1011,10 +1106,7 @@
                     }).then(r => r.ok ? r.json() : null)
                       .then(data => { if (data) liveAffiliateData = data; }).catch(() => {});
 
-                    setTimeout(() => {
-                        fetchLiveData();
-                    }, 4000);
-
+                    setTimeout(fetchLiveData, 4000);
                     return; 
                 }
             }
@@ -1132,10 +1224,15 @@
         }).catch(() => {});
     }
 
-    // 🟢 START REAL-TIME WIDGET POLLERS
+    // 🟢 START INITIALIZATION & WIDGET POLLERS
     fetchLiveData();
+    fetchAdvancedStats();
+    fetchHourlyPerformance();
+    
     setInterval(fetchStatsWindow, 3000);
     setInterval(fetchEnterpriseMetrics, 15000);
+    setInterval(fetchAdvancedStats, 15000);
+    setInterval(fetchHourlyPerformance, 15000);
 </script>
 </body>
 </html>
