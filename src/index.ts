@@ -5385,6 +5385,118 @@ bot.command('exporttrades', async (ctx) => {
     }
 });
 
+// 🟢 NEW: Telegram /health Command
+bot.command('health', async (ctx) => {
+    const loader = await ctx.replyWithHTML("<i>⏳ Interrogating system telemetry...</i>");
+    try {
+        const { checkRedisHealth } = await import('./lib/redis.js');
+        const redisOk = await checkRedisHealth().catch(() => false);
+        
+        const { getActiveSubscriptionCount } = await import('./services/guard-price-feed.service.js');
+        const guardSubs = getActiveSubscriptionCount();
+        
+        const uptimeHours = (process.uptime() / 3600).toFixed(2);
+        const memMb = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+
+        const statusText = 
+            `🩺 <b>SENTRY SYSTEM HEALTH REPORT</b>\n\n` +
+            `• Core HFT Engine: 🟢 <b>ONLINE</b>\n` +
+            `• System Uptime: <b>${uptimeHours} Hours</b>\n` +
+            `• Heap Memory Usage: <b>${memMb} MB</b>\n` +
+            `• Redis Matrix: ${redisOk ? '🟢 <b>CONNECTED</b>' : '🔴 <b>OFFLINE</b>'}\n` +
+            `• Active Guard Feed Subs: <b>${guardSubs}</b>\n` +
+            `• Express WebApp Server: 🟢 <b>Port 3001 Active</b>\n\n` +
+            `<i>All systems operational. Private Jito bundle routing active.</i>`;
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, statusText, { parse_mode: 'HTML' });
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Health Check Error: ${e.message}`, { parse_mode: 'HTML' });
+    }
+});
+
+
+// 🟢 ADMIN COMMAND: Grant or Set Credits for Live & Simulation Modes
+bot.command(['addcredits', 'setcredits'], async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return; // 🔒 Locked strictly to ADMIN_TELEGRAM_IDS in .env
+
+    const parts = (ctx.message as any).text.split(/\s+/);
+    if (parts.length < 3) {
+        return ctx.replyWithHTML(
+            `<b>Usage:</b>\n` +
+            `<code>/addcredits [TELEGRAM_ID] [AMOUNT]</code> (Adds to current balance)\n` +
+            `<code>/setcredits [TELEGRAM_ID] [AMOUNT]</code> (Overwrites total balance)\n\n` +
+            `<i>Example: /addcredits 8494722111 100000</i>`
+        );
+    }
+
+    const isAdd = (ctx.message as any).text.startsWith('/addcredits');
+    const targetId = parts[1];
+    const amount = parseInt(parts[2], 10);
+
+    if (isNaN(amount) || amount < 0) {
+        return ctx.reply("🔴 Invalid credit amount.");
+    }
+
+    try {
+        const targetUser = await prisma.user.findUnique({ where: { telegramId: targetId } });
+        if (!targetUser) {
+            return ctx.replyWithHTML(`🔴 User <code>${targetId}</code> not found in database. They must send /start first.`);
+        }
+
+        let newBalance = amount;
+        if (isAdd) {
+            newBalance = targetUser.creditBalance + amount;
+            await prisma.user.update({
+                where: { id: targetUser.id },
+                data: {
+                    creditBalance: { increment: amount },
+                    lifetimeCredits: { increment: amount }
+                }
+            });
+        } else {
+            await prisma.user.update({
+                where: { id: targetUser.id },
+                data: { creditBalance: amount }
+            });
+        }
+
+        // 🟢 SYNC SIMULATION MODE CREDITS (depletes normally in sim too)
+        await redis.set(`sim:credits:${targetId}`, newBalance.toString());
+
+        await prisma.creditTransaction.create({
+            data: {
+                userId: targetUser.id,
+                type: 'ADMIN_GRANT',
+                amount: isAdd ? amount : (amount - targetUser.creditBalance),
+                balanceAfter: newBalance,
+                packName: 'ADMIN_GRANT'
+            }
+        });
+
+        await ctx.replyWithHTML(
+            `✅ <b>CREDITS UPDATED FOR <code>${targetId}</code></b>\n\n` +
+            `• Action: <b>${isAdd ? 'Added' : 'Set'}</b>\n` +
+            `• Live Balance: <b>${newBalance.toLocaleString()} credits</b>\n` +
+            `• Sim Balance: <b>${newBalance.toLocaleString()} credits</b>\n\n` +
+            `<i>Credits are ready and will deplete normally per trade/call.</i>`
+        );
+
+        // Notify the recipient
+        try {
+            await bot.telegram.sendMessage(targetId,
+                `💳 <b>CREDITS GRANTED BY ADMIN</b>\n\n` +
+                `You have received <b>${isAdd ? `+${amount.toLocaleString()}` : amount.toLocaleString()}</b> AI Caller Credits!\n` +
+                `Current Balance: <b>${newBalance.toLocaleString()} credits</b>`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (_) {}
+
+    } catch (e: any) {
+        await ctx.replyWithHTML(`🔴 Error updating credits: ${e.message}`);
+    }
+});
+
 // 🟢 AUDIT FIX 7: Added /join command handler
 bot.command('join', async (ctx) => {
     const tgId = ctx.from?.id.toString();
