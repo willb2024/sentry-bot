@@ -2661,8 +2661,10 @@ app.post('/api/stats-window', async (req, res) => {
         if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
         const { getStatsForWindow } = await import('./services/simulation.service.js');
-        const liveStats = await getStatsForWindow(telegramId, 'live', 30);
-        const simStats = await getStatsForWindow(telegramId, 'sim', 30);
+        
+        // 🟢 FIX: Query 24-Hour window (86400 seconds)
+        const liveStats = await getStatsForWindow(telegramId, 'live', 86400);
+        const simStats = await getStatsForWindow(telegramId, 'sim', 86400);
 
         res.json({
             live: liveStats,
@@ -2678,7 +2680,6 @@ app.post('/api/stats-window', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
-
 bot.action('action_enter_ref_code', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();

@@ -171,11 +171,13 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
 }
 
 // Replace recordStatsEvent:
+// 🟢 FIX: Added UUID to prevent Redis ZADD from dropping duplicate/rapid trades
 export async function recordStatsEvent(telegramId: string, mode: 'live' | 'sim', realizedPnlSol: number) {
     const key = `stats_events:${mode}:${telegramId}`;
-    const eventId = crypto.randomUUID(); // 🟢 FIX: Forces Redis to track rapid concurrent trades
-    await redis.zadd(key, Date.now(), JSON.stringify({ id: eventId, t: Date.now(), pnl: realizedPnlSol }));
-    await redis.zremrangebyscore(key, 0, Date.now() - 3_600_000); 
+    const eventId = crypto.randomUUID();
+    const now = Date.now();
+    await redis.zadd(key, now, JSON.stringify({ id: eventId, t: now, pnl: realizedPnlSol }));
+    await redis.zremrangebyscore(key, 0, now - (86400 * 1000 * 7)); // Keep 7 days of rolling history
 }
 
 // Replace simExecuteSnipe:
@@ -241,19 +243,27 @@ export async function simExecuteSnipe(
     await redis.set(posKey, JSON.stringify(existing)); 
     await recordSimTrade(telegramId, true, amountSol, 0);
     
-    await recordStatsEvent(telegramId, 'sim', 0); // 🟢 FIX: Track BUYS in the 30-second window
-    await saveSimulationState(telegramId); 
+    // 🟢 FIX: Log simulated buys into the activity window
+    await recordStatsEvent(telegramId, 'sim', 0); 
+    await saveSimulationState(telegramId);
 
     return { success: true, signature: generateSimSignature(), message: '🟢 Simulation: Jito bundle confirmed.', volumeSpent: amountSol };
 }
-export async function getStatsForWindow(telegramId: string, mode: 'live' | 'sim', windowSeconds: number) {
+
+// 🟢 FIX: Upgraded from 30s to 24-Hour window so active daily trades remain visible
+export async function getStatsForWindow(telegramId: string, mode: 'live' | 'sim', windowSeconds: number = 86400) {
     const key = `stats_events:${mode}:${telegramId}`;
-    const since = Date.now() - windowSeconds * 1000;
+    const since = Date.now() - (windowSeconds * 1000);
     const raw = await redis.zrangebyscore(key, since, Date.now());
-    const events = raw.map(r => JSON.parse(r));
-    const totalPnl = events.reduce((sum: number, e: any) => sum + e.pnl, 0);
+    
+    const events = raw.map((r: string) => {
+        try { return JSON.parse(r); } catch { return null; }
+    }).filter(Boolean);
+
+    const totalPnl = events.reduce((sum: number, e: any) => sum + (e.pnl || 0), 0);
     const wins = events.filter((e: any) => e.pnl > 0).length;
-    const losses = events.filter((e: any) => e.pnl <= 0).length;
+    const losses = events.filter((e: any) => e.pnl < 0).length;
+    
     return { totalPnl, wins, losses, tradeCount: events.length };
 }
 
