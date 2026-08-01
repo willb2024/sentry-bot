@@ -1,11 +1,9 @@
 // src/services/vip_promo.service.ts
-import { PrismaClient } from '@prisma/client';
 import { redis } from '../lib/redis.js';
+import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-const prisma = new PrismaClient();
 
 export type VipSource = 'PROMO' | 'PAID' | 'ADMIN' | 'EXPIRED' | null;
 
@@ -34,7 +32,6 @@ export function resolveBadge(
     daysRemaining: number | null
 ): { badge: string; badgeLabel: string; badgeLine: string } {
 
-    // 🟢 BUG 3 FIX: Corrected parenthesisation so custom VIP sources display badges without colliding
     if (isVip && !isExpired && source !== 'PROMO') {
         return {
             badge: '👑',
@@ -94,7 +91,6 @@ export async function getVipStatus(telegramId: string): Promise<VipStatus> {
     if (user.isVip && user.vipExpiresAt && user.vipExpiresAt < now) {
         await prisma.user.update({
             where: { telegramId },
-            // 🟢 FIX 3.1: Do not overwrite vipSource so we don't erase history
             data: { isVip: false } 
         });
 
@@ -146,7 +142,6 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
         const now = new Date();
         if (user.isVip && !user.vipExpiresAt) return { granted: false, slotsRemaining: await getSlotsRemaining(), reason: 'ALREADY_ACTIVE_VIP' };
 
-        // 🟢 FIX 3.1: Check the persistent flag instead of the volatile source string
         const hadPromo = (user as any).wasEverPromoGranted === true; 
         const hasActivePromo = user.isVip && user.vipExpiresAt && user.vipExpiresAt > now;
 
@@ -175,7 +170,7 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
                 isVip: true,
                 vipExpiresAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000), 
                 vipSource: 'PROMO',
-                wasEverPromoGranted: true // 🟢 FIX 3.1: Permanently mark that they claimed the promo
+                wasEverPromoGranted: true
             }
         });
 
@@ -236,7 +231,6 @@ export async function sweepExpiredVips() {
         if (expiredUsers.length > 0) {
             await prisma.user.updateMany({
                 where: { id: { in: expiredUsers.map(u => u.id) } },
-                // 🟢 FIX 3.1: Do not overwrite vipSource
                 data: { isVip: false } 
             });
             console.log(`🧹 [VIP SWEEP] Demoted ${expiredUsers.length} expired VIPs.`);

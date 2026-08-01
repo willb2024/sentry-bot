@@ -1,11 +1,12 @@
 // src/index.ts
 import { Telegraf, Markup, Context } from 'telegraf';
-import { PrismaClient } from '@prisma/client';
+
 import { startCopyTradeWatcher, syncCopyTradeListeners } from './services/copytrade.service.js';
 import { startDcaEngine } from './services/dca.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice, checkTokenRugRisk } from './services/price.service.js';
 import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
+import { prisma } from './lib/prisma.js'; // 🟢 FIX: Use Singleton
 import dotenv from 'dotenv';
 import { redis } from './lib/redis.js';
 import { isSimulationActive } from './services/simulation.service.js';
@@ -52,7 +53,7 @@ app.use(express.json());
 dotenv.config();
 console.log("🟢 [1/5] Booting Sentry Terminal Core...");
 
-const prisma = new PrismaClient();
+
 const BOT_TOKEN = process.env.BOT_TOKEN || "";
 const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
 

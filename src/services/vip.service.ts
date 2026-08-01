@@ -1,10 +1,9 @@
-import { PrismaClient } from '@prisma/client';
+// src/services/vip.service.ts
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { redis } from '../lib/redis.js';
+import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Import Singleton instead of new PrismaClient()
 import { connection } from '../lib/connection.js';
 import { getVipStatus as getPromoVipStatus } from './vip_promo.service.js';
-
-const prisma = new PrismaClient();
 
 export const VIP_TIERS = {
     trial: {
@@ -31,7 +30,6 @@ export const VIP_TIERS = {
 
 export type VipTierKey = keyof typeof VIP_TIERS;
 
-// 🟢 FIX 1: Added VIP_CREDIT_BONUS so the bot boots correctly
 export const VIP_CREDIT_BONUS: Record<VipTierKey, number> = {
     trial: 50,
     standard: 200,
