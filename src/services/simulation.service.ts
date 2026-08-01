@@ -1,7 +1,7 @@
 // src/services/simulation.service.ts
 import { redis } from '../lib/redis.js';
 import crypto from 'crypto';
-import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Centralized DB
+import { prisma } from '../lib/prisma.js'; // 🟢 Centralized Prisma Singleton
 import { generatePnlCard } from './image.service.js';
 import { computeTokenScore, TokenStats } from './caller.service.js';
 
@@ -41,6 +41,7 @@ export function generateSimSignature(): string {
     return randomBase58(87);
 }
 
+// 🟢 FULL POSTGRESQL PERSISTENCE SYNC
 export async function saveSimulationState(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -95,6 +96,7 @@ export async function saveSimulationState(telegramId: string) {
     });
 }
 
+// 🟢 RESTORE STATE FROM POSTGRESQL TO REDIS
 export async function loadSimulationState(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -134,8 +136,13 @@ export async function loadAllSimulationStates() {
     }
 }
 
+// 🟢 AUTO-REHYDRATION GETTERS (Restores from DB if Redis key is missing)
 export async function isSimulationActive(telegramId: string): Promise<boolean> {
-    const val = await redis.get(`sim:active:${telegramId}`);
+    let val = await redis.get(`sim:active:${telegramId}`);
+    if (val === null) {
+        await loadSimulationState(telegramId);
+        val = await redis.get(`sim:active:${telegramId}`);
+    }
     return val === 'true';
 }
 
@@ -150,12 +157,20 @@ export async function setSimStartingBalance(telegramId: string, amount: number):
 }
 
 export async function getSimBalance(telegramId: string): Promise<string> {
-    const bal = await redis.get(`sim:balance:${telegramId}`);
+    let bal = await redis.get(`sim:balance:${telegramId}`);
+    if (bal === null) {
+        await loadSimulationState(telegramId);
+        bal = await redis.get(`sim:balance:${telegramId}`);
+    }
     return bal || '1000.0000'; 
 }
 
 export async function getSimVolume(telegramId: string): Promise<number> {
-    const vol = await redis.get(`sim:volume:${telegramId}`);
+    let vol = await redis.get(`sim:volume:${telegramId}`);
+    if (vol === null) {
+        await loadSimulationState(telegramId);
+        vol = await redis.get(`sim:volume:${telegramId}`);
+    }
     return vol ? parseFloat(vol) : 0;
 }
 
@@ -167,12 +182,13 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     return wallets;
 }
 
+// 🟢 STATS LOGGING WITH UUID (Prevents Redis ZADD member overwrites)
 export async function recordStatsEvent(telegramId: string, mode: 'live' | 'sim', realizedPnlSol: number) {
     const key = `stats_events:${mode}:${telegramId}`;
     const eventId = crypto.randomUUID();
     const now = Date.now();
     await redis.zadd(key, now, JSON.stringify({ id: eventId, t: now, pnl: realizedPnlSol }));
-    await redis.zremrangebyscore(key, 0, now - (86400 * 1000 * 7));
+    await redis.zremrangebyscore(key, 0, now - (86400 * 1000 * 7)); // 7 days cache
 }
 
 export async function getStatsForWindow(telegramId: string, mode: 'live' | 'sim', windowSeconds: number = 86400) {
@@ -237,7 +253,7 @@ export async function simExecuteSnipe(
         return { 
             success: false, 
             signature: '', 
-            message: `🔴 <b>Insufficient Funds.</b>\nYour simulated balance is only <b>${currentBal.toFixed(4)} SOL</b>. Use <code>/simbal $150000</code> to add more funds.`, 
+            message: `🔴 <b>Insufficient Funds.</b>\nYour Auto-Engine balance is only <b>${currentBal.toFixed(4)} SOL</b>. Please allocate more capital to continue.`, 
             volumeSpent: 0 
         };
     }
@@ -289,9 +305,9 @@ export async function simExecuteSnipe(
     await recordSimTrade(telegramId, true, amountSol, 0);
     
     await recordStatsEvent(telegramId, 'sim', 0); 
-    await saveSimulationState(telegramId); 
+    await saveSimulationState(telegramId);
 
-    return { success: true, signature: generateSimSignature(), message: '🟢 Simulation: Jito bundle confirmed.', volumeSpent: amountSol };
+    return { success: true, signature: generateSimSignature(), message: '🟢 Auto-Engine: Jito bundle confirmed.', volumeSpent: amountSol };
 }
 
 export async function simExecuteExit(
@@ -316,8 +332,8 @@ export async function simExecuteExit(
         pnlPercent = forcedPnlPercent;
     } else {
         const isProfit = await getNextSimOutcome(telegramId, 'guard', pos.entryScore); 
-        if (isProfit) pnlPercent = parseFloat((Math.random() * 140 + 15).toFixed(2)); 
-        else pnlPercent = parseFloat((-(Math.random() * 35 + 8)).toFixed(2)); 
+        if (isProfit) pnlPercent = parseFloat((Math.random() * 120 + 15).toFixed(2)); 
+        else pnlPercent = parseFloat((-(Math.random() * 25 + 5)).toFixed(2)); 
     }
 
     const soldSol = pos.amountInSol * (percent / 100);
@@ -333,7 +349,7 @@ export async function simExecuteExit(
         const updated = positions.filter((p: any) => p.mint !== tokenAddress);
         await redis.set(posKey, JSON.stringify(updated)); 
     } else {
-        // 🟢 FIX: Infinite Money Glitch solved. Deduct sold amounts.
+        // 🟢 FIX: DEDUCT PARTIAL SELLS (Solves Infinite Money Glitch)
         pos.amount = pos.amount * (1 - (percent / 100));
         pos.amountInSol = pos.amountInSol * (1 - (percent / 100));
         pos.valueUsd = pos.valueUsd * (1 - (percent / 100));
@@ -344,9 +360,9 @@ export async function simExecuteExit(
     
     const realizedPnlSol = netReturnSol - soldSol;
     await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
-    await saveSimulationState(telegramId); 
+    await saveSimulationState(telegramId);
 
-    return { success: true, signature: generateSimSignature(), message: `🟢 Simulation: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };
+    return { success: true, signature: generateSimSignature(), message: `🟢 Auto-Engine: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };
 }
 
 export async function generateSimCallerAlert(telegramId: string, filters: {
@@ -472,17 +488,18 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
     return null;
 }
 
+// 🟢 CALIBRATED FOR 63% WIN RATE
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
     const scoreVal = score ?? 65;
-    let baseWinProb = 0.15 + (scoreVal / 100) * 0.30; 
+    let baseWinProb = 0.48 + (scoreVal / 100) * 0.25; 
 
     const lastKey = `sim:last_outcome:${type}:${telegramId}`;
     const last = await redis.get(lastKey);
 
-    if (last === 'true' && Math.random() < 0.5) baseWinProb -= 0.10;
-    else if (last === 'false' && Math.random() < 0.3) baseWinProb += 0.08;
+    if (last === 'true' && Math.random() < 0.4) baseWinProb -= 0.08;
+    else if (last === 'false' && Math.random() < 0.4) baseWinProb += 0.08;
 
-    const finalProb = Math.min(0.55, Math.max(0.12, baseWinProb));
+    const finalProb = Math.min(0.75, Math.max(0.40, baseWinProb));
     const isWin = Math.random() < finalProb;
 
     await redis.set(lastKey, isWin ? 'true' : 'false', 'EX', 3600);

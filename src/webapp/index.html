@@ -189,22 +189,22 @@
             </div>
 
             <!-- 🟢 24-HOUR ROLLING STATS WIDGET -->
-            <div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
-                <div class="flex items-center gap-3">
-                    <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
-                        <i class="fa-solid fa-clock-rotate-left text-sm"></i>
-                    </div>
-                    <div>
-                        <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider block">24-Hour Rolling Activity</span>
-                        <span class="text-[10px] text-gray-500 font-mono">Live vs Sim Rolling Aggregates</span>
-                    </div>
+           <!-- 🟢 24-HOUR ROLLING STATS WIDGET -->
+           <div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
+            <div class="flex items-center gap-3">
+                <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
+                    <i class="fa-solid fa-clock-rotate-left text-sm"></i>
                 </div>
-                <div class="flex gap-2 sm:gap-4 text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
-                    <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Live: 0 trades (+0.0000 SOL)</span>
-                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Sim: 0 trades (+0.0000 SOL)</span>
+                <div>
+                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider block">24-Hour Rolling Activity</span>
+                    <span class="text-[10px] text-gray-500 font-mono">Manual vs Auto-Engine Aggregates</span>
                 </div>
             </div>
-
+            <div class="flex gap-2 sm:gap-4 text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
+                <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Manual: 0 trades (+0.0000 SOL)</span>
+                <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto-Engine: 0 trades (+0.0000 SOL)</span>
+            </div>
+        </div>
             <!-- 🟢 ADVANCED STATS CARD -->
             <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.01] mb-6">
                 <div>
@@ -983,8 +983,26 @@
             }
         } catch (_) {}
     }
-
     async function fetchStatsWindow() {
+        try {
+            const res = await fetch('/api/stats-window', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const live = data.live || { tradeCount: 0, totalPnl: 0 };
+                const sim = data.sim || { tradeCount: 0, totalPnl: 0 };
+                
+                // 🟢 Changed "Live/Sim" to "Manual/Auto-Engine"
+                document.getElementById('stats-live').innerText =
+                    `Manual: ${live.tradeCount} trades (${live.totalPnl >= 0 ? '+' : ''}${live.totalPnl.toFixed(4)} SOL)`;
+                document.getElementById('stats-sim').innerText =
+                    `Auto-Engine: ${sim.tradeCount} trades (${sim.totalPnl >= 0 ? '+' : ''}${sim.totalPnl.toFixed(4)} SOL)`;
+            }
+        } catch (_) {}
+    }  async function fetchStatsWindow() {
         try {
             const res = await fetch('/api/stats-window', {
                 method: 'POST',
