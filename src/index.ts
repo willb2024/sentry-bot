@@ -1718,18 +1718,24 @@ bot.action(/^trade_guide_page_(\d+)$/, async (ctx) => {
     await safeEditMessageText(ctx, TRADE_GUIDE_PAGES[page], buildGuideKeyboard(page));
 });
 
-
 bot.action('action_create_vault', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
+
+    // 🟢 FIX: Verify the user exists in the DB (prevents crashes if they click an old button)
+    const userCheck = await prisma.user.findUnique({ where: { telegramId } });
+    if (!userCheck) {
+        return ctx.replyWithHTML("🔴 <b>Session Expired.</b>\nYour account data was reset. Please send /start to create a new profile.");
+    }
 
     const loader = await ctx.reply("<i>⏳ Encrypting local storage node...</i>", { parse_mode: 'HTML' });
 
     try {
         const vaultData = await generateSecureVault(telegramId);
         
-        await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id);
+        // 🟢 FIX: Add .catch() so Telegram doesn't throw an error if the message is already deleted
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
 
         const step1Text = 
             `👛 <b>STEP 1/3: FUND YOUR VAULT</b>\n\n` +
@@ -1739,8 +1745,9 @@ bot.action('action_create_vault', async (ctx) => {
             `<i>Sentry is 100% MEV-protected. When you are ready, click below to set up your speed and slippage.</i>`;
 
         await ctx.replyWithHTML(step1Text, Markup.inlineKeyboard([[Markup.button.callback('➡️ STEP 2: SETTINGS', 'onboard_step2')]]));
-    } catch (e) {
-        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, "🔴 Vault Generation Failed.");
+    } catch (e: any) {
+        console.error("🔴 Vault Gen Error:", e.message);
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Vault Generation Failed:</b> ${e.message}`, { parse_mode: 'HTML' }).catch(()=>{});
     }
 });
 
@@ -5818,6 +5825,3 @@ process.once('SIGINT', () => { try { if (bot.botInfo) bot.stop('SIGINT'); } catc
 process.once('SIGTERM', () => { try { if (bot.botInfo) bot.stop('SIGTERM'); } catch(e){} prisma.$disconnect(); redis.quit(); });
 
 bootEcosystem();
-
-process.once('SIGINT', () => { try { if (bot.botInfo) bot.stop('SIGINT'); } catch(e){} prisma.$disconnect(); redis.quit(); });
-process.once('SIGTERM', () => { try { if (bot.botInfo) bot.stop('SIGTERM'); } catch(e){} prisma.$disconnect(); redis.quit(); });
