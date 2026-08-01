@@ -308,9 +308,12 @@ async function fetchApiTransaction(
             }
         }
 
-        // 🟢 PARALLEL ROUTING: Fetch Jupiter and Raydium simultaneously
+        
+       // 🟢 NEW FEATURE: METEORA DLMM DIRECT ROUTING
+        // By passing exact dexes, we force Jupiter to immediately query Meteora DLMM pools 
+        // the millisecond they launch, bypassing aggregator cache delays.
         const jupiterPromise = axiosClient.get(
-            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
+            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}&dexes=Meteora%20DLMM,Meteora,Raydium,Pump.fun`,
             { headers: API_HEADERS, timeout: 2500 }
         ).catch(() => null);
         

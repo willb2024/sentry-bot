@@ -48,6 +48,8 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     return 0;
 }
 
+// src/services/copytrade.service.ts (Replace syncCopyTradeListeners)
+
 export async function syncCopyTradeListeners(bot: any) {
     try {
         const activeConfigs = await prisma.copyTradeConfig.findMany({
@@ -60,12 +62,15 @@ export async function syncCopyTradeListeners(bot: any) {
             if (!activeWsListeners.has(walletStr)) {
                 const pubKey = new PublicKey(walletStr);
 
+                // 🟢 FIX: onLogs uses 'processed' for 0ms WebSocket event detection,
+                // while getParsedTransaction uses 'confirmed' to satisfy TypeScript's Finality type constraint.
                 const subId = connection.onLogs(pubKey, async (logs) => {
                     if (logs.err) return;
 
                     const signature = logs.signature;
                     const txDetails = await connection.getParsedTransaction(signature, {
-                        maxSupportedTransactionVersion: 0
+                        maxSupportedTransactionVersion: 0,
+                        commitment: 'confirmed' // 🟢 Fixed TS(2322) error
                     }).catch(() => null);
 
                     if (!txDetails || !txDetails.meta || txDetails.meta.err) return;
@@ -108,7 +113,6 @@ export async function syncCopyTradeListeners(bot: any) {
                             const entryPrice = await fetchLiveEntryPrice(targetTokenMint);
 
                             for (const follower of freshConfigs) {
-                                // 🟢 UPGRADE: Max Trade Size & Direction Filtering
                                 const f: any = follower; 
                                 if (f.copyBuys === false) continue;
                                 const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
@@ -138,11 +142,9 @@ export async function syncCopyTradeListeners(bot: any) {
                         else if (tradeType === 'sell' && sellPercentage >= 1) {
                             console.log(`🎯 [COPY-TRADE] Whale ${walletStr.substring(0,6)} SOLD ${sellPercentage.toFixed(1)}% of: ${targetTokenMint}.`);
                             
-                            // Dynamically import executeExit to avoid circular dependency
                             const { executeExit } = await import('./engine.service.js');
 
                             for (const follower of freshConfigs) {
-                                // 🟢 UPGRADE: Sell Filtering
                                 const f: any = follower; 
                                 if (f.copySells === false) continue;
 
@@ -160,7 +162,7 @@ export async function syncCopyTradeListeners(bot: any) {
                             }
                         }
                     }
-                }, 'confirmed');
+                }, 'processed');
 
                 activeWsListeners.set(walletStr, subId);
             }

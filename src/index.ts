@@ -3846,11 +3846,14 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
     const targetAddress = inputParts[1]!;
     const amountStr = inputParts[2]!.toLowerCase();
     const isMax = amountStr === 'all' || amountStr === 'max';
-    const requestedAmount = isMax ? 0 : parseFloat(amountStr);
     
-    if (!isMax && (isNaN(requestedAmount) || requestedAmount <= 0)) {
+    // 🟢 TS FIX: We force TypeScript to recognize this as a strict 'number' by defaulting to 0
+    const parsedAmount = parseSolAmount(amountStr);
+    const requestedAmount: number = isMax ? 0 : (parsedAmount !== null ? parsedAmount : 0);
+    
+    if (!isMax && requestedAmount <= 0) {
         await redis.del(withdrawLockKey);
-        return ctx.reply("🔴 Invalid amount specified.");
+        return ctx.reply("🔴 Invalid amount specified. Use a number (e.g. 1.5) or USD (e.g. $50).");
     }
 
     try { new PublicKey(targetAddress); } 

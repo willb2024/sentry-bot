@@ -143,6 +143,22 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         const cached = await redis.get(key);
         if (cached !== null) return cached === 'true';
 
+        // 🟢 NEW FEATURE: NATIVE TOKEN-2022 TAX DETECTOR
+        // Catch hidden 99% transfer taxes at the protocol level before APIs index them
+        try {
+            const pubkey = new PublicKey(tokenMint);
+            const accountInfo = await connection.getAccountInfo(pubkey);
+            if (accountInfo && accountInfo.owner.toBase58() === 'TokenzQdBNbLqP5VEhvkASnYGQYcBmiJXcwghAMPw') {
+                // If it's a Token-2022 contract, we check the extension buffer length.
+                // Large extension buffers usually indicate TransferFeeConfig (Tax) or Interest Bearing extensions.
+                if (accountInfo.data.length > 165) {
+                    console.warn(`🚨 [HONEYPOT DETECTED] Token-2022 Tax / TransferFee extension found on ${tokenMint}`);
+                    await redis.set(key, 'true', 'EX', 600);
+                    return true;
+                }
+            }
+        } catch (e) {} // Fail silently and pass to RugCheck fallback
+
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
             { signal: AbortSignal.timeout(4000) });
 

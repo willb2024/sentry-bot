@@ -870,7 +870,12 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
     }
 }
 
+// Replace this function in src/services/caller.service.ts
 export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
+    const cacheKey = `velocity_cache:${mintAddress}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
     try {
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
@@ -882,6 +887,7 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
         if(!largest) return { growthRate: 0, uniqueBuyers5m: 0 };
         const currentCount = largest.value.filter(v => (v.uiAmount || 0) > 0).length;
 
+        // RESTORED SNAPSHOT LOGIC
         const snapshotKey = `holder_snapshots:${mintAddress}`;
         const now = Date.now();
         await redis.zadd(snapshotKey, now, `${now}:${currentCount}`);
@@ -892,7 +898,10 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
         const oldCount = oldEntries.length > 0 ? parseInt(oldEntries[0].split(':')[1]) : currentCount;
 
         const growthRate = oldCount > 0 ? ((currentCount - oldCount) / oldCount) * 100 : 0;
-        return { growthRate, uniqueBuyers5m: Math.max(0, currentCount - oldCount) };
+        
+        const result = { growthRate, uniqueBuyers5m: Math.max(0, currentCount - oldCount) };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); // 45s cache
+        return result;
     } catch (_) {
         return { growthRate: 0, uniqueBuyers5m: 0 };
     }

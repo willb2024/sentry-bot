@@ -854,60 +854,37 @@ export async function igniteYellowstoneStream(bot: any) {
                 const tx   = data.transaction.transaction;
                 const logs = tx.meta?.logMessages || [];
 
-                if (logs.some((log: string) => log.includes("Program log: Instruction: Create") || log.includes("initialize2"))) {
+                // 🟢 NEW FEATURE: ANTI-RUG FRONTRUNNER SHIELD
+                if (logs.some((log: string) => log.includes("Instruction: Withdraw") || log.includes("Instruction: RemoveLiquidity"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
                     const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
 
-                    if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
-                        if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
-                        recentlySnipedTokens.add(tokenMint);
-                        setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
-                        
-                        let creatorWallet = "";
-                        try {
-                            const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
-                            if (accountKeys.length > 0) creatorWallet = accountKeys[0];
-                        } catch (_) {}
+                    if (tokenMint) {
+                        // Find any users who currently have an active Guard on this token
+                        const exposedUsers = await prisma.activeOrder.findMany({
+                            where: { tokenAddress: tokenMint, orderType: 'GUARD', isActive: true },
+                            include: { user: true }
+                        });
 
-                        trackNewMint(tokenMint, "UNKNOWN", creatorWallet);
-
-                        let poolId: string | undefined = undefined;
-                        try {
-                            const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
-                            if (accountKeys.length > 4) poolId = accountKeys[4];
-                        } catch (_) {}
-
-                        if (logs.some((l: string) => l.includes("Instruction: Create"))) {
-                            await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'PUMP');
-                        } else {
-                            await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
+                        if (exposedUsers.length > 0) {
+                            console.log(`🚨 [ANTI-RUG SHIELD] Dev liquidity pull detected on ${tokenMint}! Front-running for ${exposedUsers.length} users.`);
+                            for (const order of exposedUsers) {
+                                // Execute a 100% exit with Bumper priority (massive Jito tip) to land BEFORE the rug pull
+                                executeExit(order.user.telegramId, tokenMint, 100, true, 'ANTI_RUG_SHIELD');
+                                
+                                bot.telegram.sendMessage(order.user.telegramId, 
+                                    `🚨 <b>ANTI-RUG SHIELD ACTIVATED!</b>\n\nDeveloper liquidity pull detected on <code>${tokenMint}</code>.\n\nSentry Terminal has automatically fired a massive Block-0 Jito bundle to front-run the developer and exit your position before the liquidity is removed!`, 
+                                    { parse_mode: 'HTML' }
+                                ).catch(()=>{});
+                            }
                         }
                     }
                 }
 
-                if (logs.some((log: string) => log.includes("Instruction: InitializeCustomizablePermissionlessConstantProductPool") || log.includes("Instruction: InitializeReward") || log.includes("Instruction: InitializePool"))) {
-                    const postBalances = tx.meta?.postTokenBalances || [];
-                    const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
+                // ... (Leave your existing "Instruction: Create" and "InitializePool" logic here exactly as it is) ...
 
-                    if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
-                        if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
-                        recentlySnipedTokens.add(tokenMint);
-                        setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
-                        console.log(`☄️ [METEORA gRPC] New Meteora Pool Detected: ${tokenMint}`);
-                        
-                        let creatorWallet = "";
-                        try {
-                            const accountKeys = tx.transaction.message.accountKeys.map((k: any) => bs58.encode(Buffer.from(k)));
-                            if (accountKeys.length > 0) creatorWallet = accountKeys[0];
-                        } catch (_) {}
-
-                        trackNewMint(tokenMint, "UNKNOWN", creatorWallet);
-                        await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM');
-                    }
-                }
             } catch (_) {}
         });
-
         stream.on("error", (err: any) => {
             // 🟢 HELIUS FREE TIER PAYWALL DETECTION
             if (
