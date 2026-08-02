@@ -480,9 +480,8 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     ]);
   
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
-  
     const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
-  
+
     let displayCredits = user.creditBalance;
     if (isSimMode) {
       const simCreds = await redis.get(`sim:credits:${telegramId}`);
@@ -514,17 +513,14 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     const usdValue = balanceNum * cachedSolUsdPrice;
     const usdBalanceFormatted = usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   
-    // 🟢 NEW: Add a line with the main coin symbol (e.g., SOL) and price
-    const tickerLine = `📈 <b>SOL/USD:</b> $${cachedSolUsdPrice.toFixed(2)}`;
-  
-   // =====================================================================
-// 1. DASHBOARD TEXT FIX (Supported DEXes & Single Line Wallet)
-// =====================================================================
+    // 🟢 MODE BADGE
+    const modeBadge = isSimMode ? `🎮 <b>TRADING MODE:</b> 🟢 SIMULATION` : `⚡ <b>TRADING MODE:</b> 🟢 LIVE MAINNET`;
 
-const layoutTxt = 
+    const layoutTxt = 
         `⚡ <b>${botName.toUpperCase()}</b> ⚡\n` +
         `<i>Routing: Pump.fun | Raydium | Meteora DLMM</i>\n\n` +
         
+        `${modeBadge}\n` +
         `👛 <b>Primary Deposit Node:</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n\n` +
         
         `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
@@ -542,8 +538,6 @@ const layoutTxt =
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
-// ... [Leave the Dashboard Keyboard buttons exactly as they are] ...
-  
     const UI = Markup.inlineKeyboard([
       [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
       [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
@@ -560,7 +554,7 @@ const layoutTxt =
   
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
     else await ctx.replyWithHTML(layoutTxt, UI);
-  }
+}
 
 
 // =========================================================
@@ -656,16 +650,19 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
 // =========================================================
 
 // 🟢 FIX: Properly shuts down DB state to prevent "Ghost State" simulation trap
+// 🟢 FIXED: Accessible /sim command for switching modes
 bot.command('sim', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
-    if (!isAdmin(tgId)) return;
-    try {
-        const current = await redis.get(`sim:active:${tgId}`);
-        const newState = current === 'true' ? 'false' : 'true';
+    if (!tgId) return;
 
-        if (newState === 'true') {
-            await redis.set(`sim:active:${tgId}`, 'true');
-            const { setSimStartingBalance, generateSimWallets, saveSimulationState } = await import('./services/simulation.service.js');
+    try {
+        const { isSimulationActive, setSimStartingBalance, generateSimWallets } = await import('./services/simulation.service.js');
+        const current = await isSimulationActive(tgId);
+        const newState = !current;
+
+        await redis.set(`sim:active:${tgId}`, newState ? 'true' : 'false');
+
+        if (newState) {
             const existing = await redis.get(`sim:balance:${tgId}`);
             const startBal = existing ? parseFloat(existing) : 1000;
             if (!existing) await redis.set(`sim:balance:${tgId}`, startBal.toFixed(4));
@@ -673,35 +670,22 @@ bot.command('sim', async (ctx) => {
 
             const wallets = generateSimWallets();
             await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
-            await saveSimulationState(tgId);
         } else {
-            // 🟢 FIX: Update the database FIRST, so it doesn't immediately reload as 'true'
-            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-            if (user) {
-                await prisma.simState.updateMany({
-                    where: { userId: user.id },
-                    data: { active: false }
-                });
-            }
-            
-            // Now safely delete Redis keys
             const keys = await redis.keys(`sim:*:${tgId}`);
             if (keys.length > 0) await redis.del(...keys);
-            
-            // Force the false state into Redis
-            await redis.set(`sim:active:${tgId}`, 'false');
         }
 
-        const displayBal = await redis.get(`sim:balance:${tgId}`) || '0.0000';
+        const displayBal = await redis.get(`sim:balance:${tgId}`) || '1000';
         await ctx.replyWithHTML(
-            `🎮 <b>SIMULATION MODE: ${newState === 'true' ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
-            `${newState === 'true'
+            `🎮 <b>SIMULATION MODE: ${newState ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
+            `${newState
                 ? `⚠️ <i>All trades, balances, and alerts are now simulated.</i>\n\n` +
-                  `💰 Starting balance: <b>${displayBal} SOL</b>\n` +  
-                  `🎯 Type <code>/simbal [amount]</code> to change it (also resets your PnL% baseline).`
-                : `<i>Platform returned to live mode. All sim data cleared.</i>`
+                  `💰 Starting balance: <b>${displayBal} SOL</b>\n` +
+                  `🎯 Type <code>/simbal [amount]</code> to change it.`
+                : `<i>Platform returned to live mainnet mode. All sim data cleared.</i>`
             }`
         );
+        await sendOrEditDashboard(ctx, tgId, false);
     } catch (e: any) {
         await ctx.replyWithHTML(`🔴 <b>SIM ERROR:</b> ${e.message}`);
     }
@@ -2640,9 +2624,13 @@ bot.action('action_claim_payout', async (ctx) => {
 // =========================================================
 // ⚙️ SETTINGS MENU CONTROLLER
 // =========================================================
+// 🟢 FIXED: Settings menu now includes a 1-click mode switcher button
 async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean = false) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
+
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSimMode = await isSimulationActive(telegramId);
 
     const currentSlippage = user.slippagePercent || 20.0;
     const level = user.priorityLevel || "FAST";
@@ -2655,6 +2643,7 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
     const levelText = `⚙️ <b>SENTRY CONFIGURATION</b>\n\n` +
+        `🎮 <b>Trading Mode:</b> <b>${isSimMode ? '🟢 SIMULATION' : '⚡ LIVE MAINNET'}</b>\n` +
         `👛 <b>Current Slippage:</b> ${currentSlippage}%\n` +
         `🚀 <b>Transaction Speed (Jito Bribe):</b> <b>${level}</b> (${currentFeeDisplay})\n\n` +
         `🚕 <b>SLIPPAGE EXPLAINED:</b>\n` +
@@ -2662,33 +2651,57 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
         `🚀 <b>TRANSACTION SPEED EXPLAINED:</b>\n` +
         `<i>Sentry bypasses public network congestion by tipping the validators (using Jito) to process your trade on Block-0.</i>\n`;
 
-       // =====================================================================
-// 2. REMOVE GIF TOGGLE FROM SETTINGS
-// =====================================================================
-const UI = Markup.inlineKeyboard([
-    [
-        Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
-        Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
-        Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
-    ],
-    [
-        Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed'),
-        Markup.button.callback(hideWallets ? '👁️ Show Wallets' : '🙈 Hide Wallets', 'toggle_hide_wallets')
-    ],
-    [
-        Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')
-    ],
-    [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
-    [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-]);
-
-if (isEdit) await safeEditMessageText(ctx, levelText, UI);
-else await ctx.replyWithHTML(levelText, UI);
-
+    const UI = Markup.inlineKeyboard([
+        [
+            Markup.button.callback(isSimMode ? '🎮 Mode: SIMULATION 🟢' : '⚡ Mode: LIVE MAINNET 🟢', 'toggle_sim_mode')
+        ],
+        [
+            Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
+            Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
+            Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
+        ],
+        [
+            Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed'),
+            Markup.button.callback(hideWallets ? '👁️ Show Wallets' : '🙈 Hide Wallets', 'toggle_hide_wallets')
+        ],
+        [
+            Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')
+        ],
+        [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
 
     if (isEdit) await safeEditMessageText(ctx, levelText, UI);
     else await ctx.replyWithHTML(levelText, UI);
 }
+
+// 🟢 NEW ACTION: Toggles Sim Mode instantly on button click
+bot.action('toggle_sim_mode', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const { isSimulationActive, setSimStartingBalance, generateSimWallets } = await import('./services/simulation.service.js');
+    const current = await isSimulationActive(tgId);
+    const newState = !current;
+
+    await redis.set(`sim:active:${tgId}`, newState ? 'true' : 'false');
+
+    if (newState) {
+        const existing = await redis.get(`sim:balance:${tgId}`);
+        const startBal = existing ? parseFloat(existing) : 1000;
+        if (!existing) await redis.set(`sim:balance:${tgId}`, startBal.toFixed(4));
+        await setSimStartingBalance(tgId, startBal);
+
+        const wallets = generateSimWallets();
+        await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
+    } else {
+        const keys = await redis.keys(`sim:*:${tgId}`);
+        if (keys.length > 0) await redis.del(...keys);
+    }
+
+    await sendOrEditSettings(ctx, tgId, true);
+});
 
 
 
