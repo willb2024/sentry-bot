@@ -536,23 +536,26 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
-    const UI = Markup.inlineKeyboard([
-      [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
-      [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
-      [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-      [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
-      [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-      [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
-      [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
-      [
-        { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
-        Markup.button.callback('📖 How to Trade', 'btn_trade_guide')
-      ]
-    ]);
+        const UI = Markup.inlineKeyboard([
+            [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+            [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
+            [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
+            [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
+            [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+            [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+            [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
+            [
+              { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
+              Markup.button.callback('📖 How to Trade', 'btn_trade_guide')
+            ],
+            // 🟢 ADD THE SUPPORT BUTTON ROW HERE:
+            [Markup.button.callback('💬 Contact Support', 'action_support')]
+          ]);
+        
+          if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
+          else await ctx.replyWithHTML(layoutTxt, UI);
+      }
   
-    if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
-    else await ctx.replyWithHTML(layoutTxt, UI);
-}
 
 
 // =========================================================
@@ -2585,12 +2588,12 @@ bot.action('action_claim_payout', async (ctx) => {
 // ⚙️ SETTINGS MENU CONTROLLER
 // =========================================================
 // 🟢 FIXED: Settings menu now includes a 1-click mode switcher button
-// =========================================================
-// ⚙️ SETTINGS MENU CONTROLLER
-// =========================================================
 async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean = false) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
+
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSimMode = await isSimulationActive(telegramId);
 
     const currentSlippage = user.slippagePercent || 20.0;
     const level = user.priorityLevel || "FAST";
@@ -2602,8 +2605,8 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
 
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
-    // 🟢 DELETED TRADING MODE TEXT HERE
     const levelText = `⚙️ <b>SENTRY CONFIGURATION</b>\n\n` +
+        `🎮 <b>Trading Mode:</b> <b>${isSimMode ? '🟢 SIMULATION' : '⚡ LIVE MAINNET'}</b>\n` +
         `👛 <b>Current Slippage:</b> ${currentSlippage}%\n` +
         `🚀 <b>Transaction Speed (Jito Bribe):</b> <b>${level}</b> (${currentFeeDisplay})\n\n` +
         `🚕 <b>SLIPPAGE EXPLAINED:</b>\n` +
@@ -2611,8 +2614,10 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
         `🚀 <b>TRANSACTION SPEED EXPLAINED:</b>\n` +
         `<i>Sentry bypasses public network congestion by tipping the validators (using Jito) to process your trade on Block-0.</i>\n`;
 
-    // 🟢 DELETED TRADING MODE BUTTON ROW HERE
     const UI = Markup.inlineKeyboard([
+        [
+            Markup.button.callback(isSimMode ? '🎮 Mode: SIMULATION 🟢' : '⚡ Mode: LIVE MAINNET 🟢', 'toggle_sim_mode')
+        ],
         [
             Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
             Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
@@ -2633,82 +2638,21 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
     else await ctx.replyWithHTML(levelText, UI);
 }
 
-// =========================================================
-// 💬 USER SUPPORT & CONTACT SYSTEM
-// =========================================================
 
-// 1️⃣ USER COMMAND: Users send messages to the Dev
-bot.command(['support', 'contact', 'feedback'], async (ctx) => {
-    const text = ctx.message.text.replace(/^\/(support|contact|feedback)/i, '').trim();
-    const tgId = ctx.from?.id.toString();
-    const username = ctx.from?.username ? `@${ctx.from.username}` : `User ID ${tgId}`;
 
-    if (!text) {
-        return ctx.replyWithHTML(
-            `💬 <b>CONTACT DEVELOPER / SUPPORT</b>\n\n` +
-            `To send a message directly to the developer, type:\n` +
-            `<code>/support [your message here]</code>\n\n` +
-            `<i>Example:</i> <code>/support Hey, I need help with my deposit!</code>`
-        );
-    }
 
-    const adminIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',').filter(Boolean);
-    if (adminIds.length === 0) {
-        return ctx.replyWithHTML("🔴 Support is currently unconfigured (ADMIN_TELEGRAM_IDS missing in .env).");
-    }
-
-    let delivered = 0;
-    for (const adminId of adminIds) {
-        try {
-            await bot.telegram.sendMessage(
-                adminId.trim(),
-                `📩 <b>NEW SUPPORT MESSAGE</b>\n\n` +
-                `• <b>From:</b> ${username} (<code>${tgId}</code>)\n` +
-                `• <b>Message:</b> ${text}\n\n` +
-                `<i>To reply to this user, type:</i>\n` +
-                `<code>/reply ${tgId} [your answer]</code>`,
-                { parse_mode: 'HTML' }
-            );
-            delivered++;
-        } catch (e) {}
-    }
-
-    if (delivered > 0) {
-        await ctx.replyWithHTML(`✅ <b>Your message has been delivered directly to the developer!</b>\nYou will receive a response here as soon as it is reviewed.`);
-    } else {
-        await ctx.replyWithHTML(`🔴 Failed to deliver message. Please try again later.`);
-    }
+// 3️⃣ BUTTON ACTION: When users click "Contact Support" on the dashboard
+bot.action('action_support', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await ctx.replyWithHTML(
+        `💬 <b>CONTACT DEVELOPER / SUPPORT</b>\n\n` +
+        `To send a message directly to the developer, type:\n` +
+        `<code>/support [your message here]</code>\n\n` +
+        `<i>Example:</i> <code>/support Hey, I need help with my deposit!</code>\n\n` +
+        `<i>A developer will reply to you directly through this bot.</i>`,
+        Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]])
+    );
 });
-
-// 2️⃣ ADMIN COMMAND: Dev replies back to the user through the bot
-bot.command('reply', async (ctx) => {
-    const tgId = ctx.from?.id?.toString();
-    if (!isAdmin(tgId)) return;
-
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) {
-        return ctx.replyWithHTML(
-            `<b>Usage:</b> <code>/reply [USER_TELEGRAM_ID] [MESSAGE]</code>\n\n` +
-            `<i>Example:</i> <code>/reply 12345678 Hi! Your deposit has been confirmed.</code>`
-        );
-    }
-
-    const targetId = parts[1];
-    const replyMsg = parts.slice(2).join(' ');
-
-    try {
-        await bot.telegram.sendMessage(
-            targetId,
-            `💬 <b>DEVELOPER RESPONSE</b>\n\n${replyMsg}`,
-            { parse_mode: 'HTML' }
-        );
-        await ctx.replyWithHTML(`✅ <b>Reply successfully delivered to user <code>${targetId}</code>!</b>`);
-    } catch (e: any) {
-        await ctx.replyWithHTML(`🔴 <b>Failed to send reply:</b> ${e.message}`);
-    }
-});
-
-
 
 bot.action('menu_settings', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -2828,38 +2772,20 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     else if (config.sniperMode === 'BOTH') modeBtnText = '🟢 Mode: BOTH 🔥';
 
     const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
-        [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
-        [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-        [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
-        [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-        [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
-        [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
-        [
-          { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
-          Markup.button.callback('📖 How to Trade', 'btn_trade_guide')
-        ],
-        // 🟢 ADD THE SUPPORT BUTTON ROW HERE:
-        [Markup.button.callback('💬 Contact Support', 'action_support')]
-      ]);
-    
+        [Markup.button.callback(isCurrentlyActive ? '🛑 SHUT DOWN ENGINE' : '⚡ ARM SNIPER ENGINE', 'toggle_autosnipe')],
+        [Markup.button.callback(modeBtnText, 'toggle_sniper_mode')],
+        [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score')],
+        [Markup.button.callback(`👻 Anti-Dead Shield: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
+        [Markup.button.callback(`✏️ Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
+        [Markup.button.callback(`📊 MC Filter (${mcDisplay})`, 'edit_snipe_mc')],
+        [Markup.button.callback(`✏️ Guard (-${config.autoTrailingDropPercent}%)`, 'edit_snipe_sl'), Markup.button.callback(`🎯 TP (${tpDisplay})`, 'edit_snipe_tp')],
+        [Markup.button.callback(`⏱️ Delay (${config.snipeDelaySeconds}s)`, 'edit_snipe_delay')],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
+
     if (isEdit) await safeEditMessageText(ctx, sniperText, UI);
     else await ctx.replyWithHTML(sniperText, UI);
 }
-
-// 3️⃣ BUTTON ACTION: When users click "Contact Support" on the dashboard
-bot.action('action_support', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await ctx.replyWithHTML(
-        `💬 <b>CONTACT DEVELOPER / SUPPORT</b>\n\n` +
-        `To send a message directly to the developer, type:\n` +
-        `<code>/support [your message here]</code>\n\n` +
-        `<i>Example:</i> <code>/support Hey, I need help with my deposit!</code>\n\n` +
-        `<i>A developer will reply to you directly through this bot.</i>`,
-        Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]])
-    );
-});
-
 
 bot.action('toggle_sniper_mode', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
