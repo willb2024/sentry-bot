@@ -650,9 +650,91 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
 // 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
 // =========================================================
 
-// 🟢 FIX: Properly shuts down DB state to prevent "Ghost State" simulation trap
-// 🟢 FIXED: Accessible /sim command for switching modes
+// =========================================================
+// 💬 USER SUPPORT & CONTACT SYSTEM
+// =========================================================
 
+bot.command('support', async (ctx) => {
+    try {
+        const text = (ctx.message as any).text.replace(/^\/support/i, '').trim();
+        const tgId = ctx.from?.id?.toString();
+        const username = ctx.from?.username ? `@${ctx.from.username}` : `User ID ${tgId}`;
+
+        if (!text) {
+            return await ctx.replyWithHTML(
+                `💬 <b>CONTACT DEVELOPER / SUPPORT</b>\n\n` +
+                `To send a message directly to the developer, type:\n` +
+                `<code>/support [your message here]</code>\n\n` +
+                `<i>Example:</i> <code>/support Hey, I need help with my deposit!</code>`
+            );
+        }
+
+        const adminIdsStr = process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_IDS || process.env.ADMIN_TELEGRAM_ID || '';
+        const adminIds = adminIdsStr.split(',').map(id => id.trim()).filter(Boolean);
+
+        if (adminIds.length === 0) {
+            return await ctx.replyWithHTML("🔴 Support is currently unconfigured (ADMIN_TELEGRAM_ID missing in .env).");
+        }
+
+        let delivered = 0;
+        for (const adminId of adminIds) {
+            try {
+                await bot.telegram.sendMessage(
+                    adminId,
+                    `📩 <b>NEW SUPPORT MESSAGE</b>\n\n` +
+                    `• <b>From:</b> ${username} (<code>${tgId}</code>)\n` +
+                    `• <b>Message:</b> ${text}\n\n` +
+                    `<i>To reply to this user, type:</i>\n` +
+                    `<code>/reply ${tgId} [your answer]</code>`,
+                    { parse_mode: 'HTML' }
+                );
+                delivered++;
+            } catch (err: any) {
+                console.error(`[SUPPORT] Failed to send to admin ${adminId}:`, err.message);
+            }
+        }
+
+        if (delivered > 0) {
+            await ctx.replyWithHTML(`✅ <b>Your message has been delivered directly to the developer!</b>\nYou will receive a response here as soon as it is reviewed.`);
+        } else {
+            await ctx.replyWithHTML(`🔴 <b>Delivery Failed.</b>\nThe Admin has not started a chat with this bot yet. (Telegram requires admins to press /start on the bot first before it can DM them).`);
+        }
+    } catch (e) {
+        console.error("Support Error:", e);
+    }
+});
+
+bot.command('reply', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    const adminIdsStr = process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_IDS || process.env.ADMIN_TELEGRAM_ID || '';
+    const adminIds = adminIdsStr.split(',').map(id => id.trim()).filter(Boolean);
+
+    if (!tgId || !adminIds.includes(tgId)) return; // Only admins can use this
+
+    const text = (ctx.message as any).text || '';
+    const parts = text.split(' ');
+    
+    if (parts.length < 3) {
+        return ctx.replyWithHTML(
+            `<b>Usage:</b> <code>/reply [USER_TELEGRAM_ID] [MESSAGE]</code>\n\n` +
+            `<i>Example:</i> <code>/reply 12345678 Hi! Your deposit has been confirmed.</code>`
+        );
+    }
+
+    const targetId = parts[1];
+    const replyMsg = parts.slice(2).join(' ');
+
+    try {
+        await bot.telegram.sendMessage(
+            targetId,
+            `💬 <b>DEVELOPER RESPONSE</b>\n\n${replyMsg}`,
+            { parse_mode: 'HTML' }
+        );
+        await ctx.replyWithHTML(`✅ <b>Reply successfully delivered to user <code>${targetId}</code>!</b>`);
+    } catch (e: any) {
+        await ctx.replyWithHTML(`🔴 <b>Failed to send reply:</b> ${e.message}\nMake sure the user hasn't blocked the bot.`);
+    }
+});
 
 // =========================================================
 // 👑 VIP MENU SYSTEM
