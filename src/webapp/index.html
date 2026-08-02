@@ -189,7 +189,6 @@
             </div>
 
             <!-- 🟢 24-HOUR ROLLING STATS WIDGET -->
-           <!-- 🟢 24-HOUR ROLLING STATS WIDGET -->
            <div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
             <div class="flex items-center gap-3">
                 <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
@@ -205,6 +204,7 @@
                 <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto-Engine: 0 trades (+0.0000 SOL)</span>
             </div>
         </div>
+
             <!-- 🟢 ADVANCED STATS CARD -->
             <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.01] mb-6">
                 <div>
@@ -256,7 +256,7 @@
             </div>
 
             <!-- Holdings -->
-            <div class="space-y-3">
+            <div id="verified-holdings-section" class="space-y-3">
                 <div class="flex items-center justify-between px-1 pt-2 pb-2">
                     <h3 class="text-sm text-gray-300 font-semibold tracking-wide">VERIFIED HOLDINGS</h3>
                     <span class="text-[10px] text-neonBlue bg-neonBlue/10 border border-neonBlue/20 px-3 py-1 rounded-full font-mono" id="positions-count">0 OPEN</span>
@@ -422,6 +422,18 @@
     const tg = window.Telegram.WebApp;
     tg.expand();
 
+    let isSimModeActive = false;
+    let pnlChart = null;
+    let allocChart = null;
+    let affChart = null;
+    let tickerPrices = { SOL: 158.42, WIF: 3.12, BONK: 0.00002814, JUP: 1.08, POPCAT: 0.45, TREMP: 0.85 };
+    
+    let userTrades = []; 
+    let currentFilter = '30D'; 
+    
+    let liveLeaderboardData = { guild: null, members: [] };
+    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
+
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
         
@@ -465,17 +477,6 @@
         document.getElementById('username-display').innerText = `@${tg.initDataUnsafe.user.username || tg.initDataUnsafe.user.first_name}`;
     }
 
-    let pnlChart = null;
-    let allocChart = null;
-    let affChart = null;
-    let tickerPrices = { SOL: 158.42, WIF: 3.12, BONK: 0.00002814, JUP: 1.08, POPCAT: 0.45, TREMP: 0.85 };
-    
-    let userTrades = []; 
-    let currentFilter = '30D'; 
-    
-    let liveLeaderboardData = { guild: null, members: [] };
-    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
-
     function formatNumber(num) {
         if (num >= 1000000000) return (num / 1000000000).toFixed(2) + 'B';
         if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
@@ -497,7 +498,6 @@
         document.getElementById('ticker-strip').innerHTML = stripHTML;
     }, 2500);
 
-    // 🟢 ACCURATELY PLOTS REALIZED PROFIT VS REALIZED LOSS (SOL)
     function aggregatePnlData(timeframe) {
         const now = new Date();
         let cutoff, bucketSizeMs, bucketCount, formatLabel;
@@ -587,9 +587,9 @@
         allocChart = new Chart(allocCtx, {
             type: 'doughnut',
             data: {
-                labels: isEmpty ? ['Empty'] : allocLabels,
+                labels: isEmpty ? (isSimModeActive ? [] : ['Empty']) : allocLabels,
                 datasets: [{
-                    data: isEmpty ? [100] : allocData,
+                    data: isEmpty ? (isSimModeActive ? [] : [100]) : allocData,
                     backgroundColor: isEmpty ? ['#1e293b'] : ['#3b82f6', '#10b981', '#8b5cf6', '#ef4444', '#f59e0b'],
                     borderWidth: 0, hoverOffset: 5
                 }]
@@ -607,17 +607,25 @@
 
     function renderPositions(positions) {
         const container = document.getElementById('positions-container');
+        const section = document.getElementById('verified-holdings-section');
         document.getElementById('positions-count').innerText = `${positions.length} OPEN`;
         
         if (positions.length === 0) {
-            container.innerHTML = `
-                <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                    <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                    <div class="text-sm font-semibold">No Active Deployments</div>
-                    <span class="text-xs font-mono mt-1">Awaiting target.</span>
-                </div>`;
+            if (isSimModeActive && section) {
+                section.style.display = 'none';
+            } else {
+                if (section) section.style.display = 'block';
+                container.innerHTML = `
+                    <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                        <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
+                        <div class="text-sm font-semibold">No Active Deployments</div>
+                        <span class="text-xs font-mono mt-1">Awaiting target.</span>
+                    </div>`;
+            }
             return;
         }
+
+        if (section) section.style.display = 'block';
 
         container.innerHTML = positions.map((p) => {
             const entry = p.entryPrice || 0;
@@ -903,7 +911,6 @@
         setFilter(currentFilter);
     }
 
-    // 🟢 JS FUNCTIONS ADDED FOR ADVANCED STATS, HOURLY PERFORMANCE, AND CSV EXPORT
     async function exportTrades() {
         try {
             const res = await fetch('/api/trades/export', {
@@ -984,25 +991,31 @@
         } catch (_) {}
     }
 
-
     async function fetchStatsWindow() {
         try {
-            const res = await fetch('/api/stats-window', { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ initData: tg.initData }) 
+            const res = await fetch('/api/stats-window', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
             });
             if (res.ok) {
                 const data = await res.json();
-                const el = document.getElementById('stats-rolling');
-                if (el) {
-                    el.innerText = `${data.tradeCount || 0} trades (${(data.totalPnl || 0) >= 0 ? '+' : ''}${(data.totalPnl || 0).toFixed(4)} SOL)`;
+                const liveEl = document.getElementById('stats-live');
+                const simEl = document.getElementById('stats-sim');
+
+                if (data.manual && liveEl) {
+                    liveEl.innerText = `Manual: ${data.manual.count} trades (${data.manual.pnl >= 0 ? '+' : ''}${data.manual.pnl.toFixed(4)} SOL)`;
+                } else if (!data.manual && liveEl && data.tradeCount !== undefined) {
+                    liveEl.innerText = `Manual: ${data.tradeCount} trades (${data.totalPnl >= 0 ? '+' : ''}${data.totalPnl.toFixed(4)} SOL)`;
+                }
+
+                if (data.auto && simEl) {
+                    simEl.innerText = `Auto-Engine: ${data.auto.count} trades (${data.auto.pnl >= 0 ? '+' : ''}${data.auto.pnl.toFixed(4)} SOL)`;
                 }
             }
         } catch (_) {}
     }
 
-    
     async function fetchEnterpriseMetrics() {
         try {
             const riskRes = await fetch('/api/risk-score', { 
@@ -1052,8 +1065,6 @@
         } catch (_) {}
     }
 
-
-
     async function fetchLiveData() {
         try {
             const simRes = await fetch('/api/sim-stats', {
@@ -1066,6 +1077,8 @@
                 const simStats = await simRes.json();
 
                 if (simStats.isActive) {
+                    isSimModeActive = true; 
+
                     const startingBalance = simStats.startingBalance || 1000; 
                     const solPriceRes = await fetch('/api/sol-price', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1100,8 +1113,8 @@
 
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
 
-                    const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : ['No Active Positions'];
-                    const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [100];
+                    const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : [];
+                    const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [];
 
                     populateDashboard({
                         networth: networthUsd, networthSol: networthSol, pnlPercent: pnlPercent, pnlUsd: pnlUsd,
@@ -1122,9 +1135,15 @@
 
                     setTimeout(fetchLiveData, 4000);
                     return; 
+                } else {
+                    isSimModeActive = false;
                 }
+            } else {
+                isSimModeActive = false;
             }
-        } catch (_) {}
+        } catch (_) {
+            isSimModeActive = false;
+        }
 
         document.getElementById('positions-container').innerHTML = `
             <div class="space-y-3">
