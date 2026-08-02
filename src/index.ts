@@ -4598,8 +4598,8 @@ if (await redis.get(`state:simedit:${telegramId}`)) {
         await redis.set(`sim:volume:${telegramId}`, vol.toString());
         
         // 🟢 Clear holdings automatically so the "Verified Holdings" section empties out
+        // 🟢 Clean sim positions so Verified Holdings shows 0 OPEN until a real/sim trade is placed
         await redis.del(`sim:positions:${telegramId}`);
-
         await saveSimulationState(telegramId);
 
         await ctx.replyWithHTML(`✅ <b>Simulation Database Successfully Overwritten!</b>\n\nAll variables including Balance, Sharpe, Strategies, Risk, Hourly Chart, 24H Activity, PnL, and Win Rate have been permanently stored. Verified Holdings have been cleared. Refresh your WebApp dashboard to see your updates.`);

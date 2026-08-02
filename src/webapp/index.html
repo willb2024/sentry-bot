@@ -579,53 +579,65 @@
             }
         });
 
+        // 🟢 FIXED PORTFOLIO SPLIT PIE CHART: Never renders blank
         const allocCtx = document.getElementById('allocationChart').getContext('2d');
         if (allocChart) allocChart.destroy();
         
-        const isEmpty = allocLabels.length === 0 || allocLabels[0] === 'No Assets' || allocLabels[0] === 'Offline';
+        const hasData = allocLabels && allocLabels.length > 0 && allocData && allocData.length > 0 && allocData.some(v => v > 0);
+        const chartLabels = hasData ? allocLabels : ['Vault Liquid SOL'];
+        const chartData = hasData ? allocData : [100];
+        const chartColors = hasData ? ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444'] : ['#10b981'];
 
         allocChart = new Chart(allocCtx, {
             type: 'doughnut',
             data: {
-                labels: isEmpty ? (isSimModeActive ? [] : ['Empty']) : allocLabels,
+                labels: chartLabels,
                 datasets: [{
-                    data: isEmpty ? (isSimModeActive ? [] : [100]) : allocData,
-                    backgroundColor: isEmpty ? ['#1e293b'] : ['#3b82f6', '#10b981', '#8b5cf6', '#ef4444', '#f59e0b'],
-                    borderWidth: 0, hoverOffset: 5
+                    data: chartData,
+                    backgroundColor: chartColors,
+                    borderWidth: 0,
+                    hoverOffset: 5
                 }]
             },
             options: {
-                responsive: true, maintainAspectRatio: false,
+                responsive: true,
+                maintainAspectRatio: false,
                 plugins: { 
-                    legend: { position: 'right', labels: { color: '#cbd5e1', boxWidth: 10, usePointStyle: true, font: { size: 11 }, padding: 15 } }, 
-                    tooltip: { enabled: !isEmpty, backgroundColor: '#1e293b', padding: 10, cornerRadius: 8 } 
+                    legend: {
+                        position: 'right',
+                        labels: { color: '#cbd5e1', boxWidth: 10, usePointStyle: true, font: { size: 11 }, padding: 15 }
+                    }, 
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        padding: 10,
+                        cornerRadius: 8
+                    } 
                 },
-                cutout: '75%', animation: { animateScale: false }
+                cutout: '75%',
+                animation: { animateScale: false }
             }
         });
     }
 
+    // 🟢 FIXED VERIFIED HOLDINGS: Stays in the UI for both Live & Sim
     function renderPositions(positions) {
-    const container = document.getElementById('positions-container');
-    const section = document.getElementById('verified-holdings-section');
-    document.getElementById('positions-count').innerText = `${positions.length} OPEN`;
-    
-    if (positions.length === 0) {
-        if (isSimModeActive && section) {
-            section.style.display = 'none'; // Hides "Verified Holdings" in sim mode when empty
-        } else {
-            if (section) section.style.display = 'block';
+        const container = document.getElementById('positions-container');
+        const section = document.getElementById('verified-holdings-section');
+        if (section) section.style.display = 'block';
+
+        const count = positions ? positions.length : 0;
+        const countEl = document.getElementById('positions-count');
+        if (countEl) countEl.innerText = `${count} OPEN`;
+        
+        if (!positions || positions.length === 0) {
             container.innerHTML = `
                 <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
                     <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
                     <div class="text-sm font-semibold">No Active Deployments</div>
                     <span class="text-xs font-mono mt-1">Awaiting target.</span>
                 </div>`;
+            return;
         }
-        return;
-    }
-
-    if (section) section.style.display = 'block';
 
         container.innerHTML = positions.map((p) => {
             const entry = p.entryPrice || 0;
@@ -992,29 +1004,6 @@
     }
 
     async function fetchStatsWindow() {
-    try {
-        const res = await fetch('/api/stats-window', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
-        });
-        if (res.ok) {
-            const data = await res.json();
-            const liveEl = document.getElementById('stats-live');
-            const simEl = document.getElementById('stats-sim');
-
-            if (data.manual && liveEl) {
-                liveEl.innerText = `Manual: ${data.manual.count} trades (${data.manual.pnl >= 0 ? '+' : ''}${data.manual.pnl.toFixed(4)} SOL)`;
-            } else if (!data.manual && liveEl && data.tradeCount !== undefined) {
-                liveEl.innerText = `Manual: ${data.tradeCount} trades (${data.totalPnl >= 0 ? '+' : ''}${data.totalPnl.toFixed(4)} SOL)`;
-            }
-
-            if (data.auto && simEl) {
-                simEl.innerText = `Auto-Engine: ${data.auto.count} trades (${data.auto.pnl >= 0 ? '+' : ''}${data.auto.pnl.toFixed(4)} SOL)`;
-            }
-        }
-    } catch (_) {}
-
         try {
             const res = await fetch('/api/stats-window', {
                 method: 'POST',
