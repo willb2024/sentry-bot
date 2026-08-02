@@ -2726,14 +2726,19 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
 // 3️⃣ BUTTON ACTION: When users click "Contact Support" on the dashboard
 bot.action('action_support', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    await ctx.replyWithHTML(
-        `💬 <b>CONTACT DEVELOPER / SUPPORT</b>\n\n` +
-        `To send a message directly to the developer, type:\n` +
+    
+    const supportText = 
+        `💬 <b>SENTRY TERMINAL SUPPORT</b>\n\n` +
+        `Thank you for using our platform. We are deeply committed to providing the most powerful institutional-grade tools to ensure your trading success.\n\n` +
+        `If you have any questions, need guidance on advanced features, or are experiencing any errors within the platform, our core engineering team is here to help.\n\n` +
+        `<b>To send a message directly to the developer, type:</b>\n` +
         `<code>/support [your message here]</code>\n\n` +
-        `<i>Example:</i> <code>/support Hey, I need help with my deposit!</code>\n\n` +
-        `<i>A developer will reply to you directly through this bot.</i>`,
-        Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]])
-    );
+        `<i>Example:</i>\n` +
+        `<code>/support Hey, I need help configuring the Auto-Sniper limits.</code>\n\n` +
+        `<i>A developer will review your request and reply to you directly through this bot.</i>`;
+
+    // 🟢 Using safeEditMessageText so it smoothly replaces the dashboard instead of spamming the chat
+    await safeEditMessageText(ctx, supportText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
 
 bot.action('menu_settings', async (ctx) => {
