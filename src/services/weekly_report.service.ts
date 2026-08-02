@@ -48,6 +48,8 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
     const sellTrades = weekTrades.filter(t => !t.isBuy);
 
     const totalVolumeSol = weekTrades.reduce((sum, t) => sum + t.amountInSol, 0);
+    // 🟢 FIX: Reads actual fees from database instead of guessing 1%
+    const totalFeesPaidSol = weekTrades.reduce((sum, t) => sum + (t.feeChargedSol || 0), 0);
 
     let wins = 0, losses = 0, weeklyPnlSol = 0;
     let bestTrade: { token: string; pnlPercent: number } | null = null;
@@ -72,7 +74,6 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
     const totalClosed = wins + losses;
     const winRate = totalClosed > 0 ? (wins / totalClosed) * 100 : 0;
 
-    const totalFeesPaidSol = sellTrades.reduce((sum, t) => sum + (t.amountInSol * 0.01), 0);
 
     let affiliateEarnedSol = 0;
     user.recruits.forEach(r => {

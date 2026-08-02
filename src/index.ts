@@ -522,25 +522,25 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 // =====================================================================
 
 const layoutTxt = 
-`⚡ <b>${botName.toUpperCase()}</b> ⚡\n` +
-`<i>Routing: Pump.fun | Raydium | Meteora DLMM</i>\n\n` +
+        `⚡ <b>${botName.toUpperCase()}</b> ⚡\n` +
+        `<i>Routing: Pump.fun | Raydium | Meteora DLMM</i>\n\n` +
+        
+        `👛 <b>Primary Deposit Node:</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n\n` +
+        
+        `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
+        `└ ${whaleModeText}\n\n` +
 
-`👛 <b>Primary Deposit Node:</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n\n` +
-
-`💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
-`└ ${whaleModeText}\n\n` +
-
-`🎯 <b>Caller Credits:</b> <code>${displayCredits}</code> Remaining\n` + 
-`└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
-
-`🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
-`${guildDisplay}` + 
-`• Your Points: <b>${sentryPoints} PTS</b> <i>(1 SOL = 10k PTS)</i>${welcomeText}${recruitText}\n\n` +  
-
-`📊 <b>Your Economics:</b>\n` +
-`• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n\n` +
-
-`<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
+        `🎯 <b>Caller Credits:</b> <code>${displayCredits}</code> Remaining\n` + 
+        `└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
+        
+        `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
+        `${guildDisplay}` + 
+        `• Your Points: <b>${sentryPoints} PTS</b> <i>(1 SOL = 10k PTS)</i>${welcomeText}${recruitText}\n\n` +  
+        
+        `📊 <b>Your Economics:</b>\n` +
+        `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n\n` +
+        
+        `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
 // ... [Leave the Dashboard Keyboard buttons exactly as they are] ...
   
@@ -2651,7 +2651,6 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
        // =====================================================================
 // 2. REMOVE GIF TOGGLE FROM SETTINGS
 // =====================================================================
-
 const UI = Markup.inlineKeyboard([
     [
         Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
@@ -2668,6 +2667,9 @@ const UI = Markup.inlineKeyboard([
     [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
     [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
 ]);
+
+if (isEdit) await safeEditMessageText(ctx, levelText, UI);
+else await ctx.replyWithHTML(levelText, UI);
 
 
     if (isEdit) await safeEditMessageText(ctx, levelText, UI);
@@ -6045,14 +6047,23 @@ app.post('/api/analytics/advanced-stats', async (req, res) => {
         const telegramId = extractTelegramId(req.body.initData);
         if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
+        // 🟢 FIX: Initialize empty default object with consistencyScore
         let stats = await getAdvancedStats(telegramId);
-        if (!stats) stats = { sharpeRatio: 0, maxDrawdown: 0, totalTrades: 0, winningTrades: 0, losingTrades: 0, averageWin: 0, averageLoss: 0, profitFactor: 0, totalPnlSol: 0 };
+        if (!stats) {
+            stats = { 
+                sharpeRatio: 0, consistencyScore: 0, maxDrawdown: 0, totalTrades: 0, 
+                winningTrades: 0, losingTrades: 0, averageWin: 0, averageLoss: 0, 
+                profitFactor: 0, totalPnlSol: 0,
+                totalPnl: 0, totalVolume: 0, winRate: 0, wins: 0, losses: 0
+            };
+        }
 
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (await isSimulationActive(telegramId)) {
             const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
             if (forgedRaw) {
                 const f = JSON.parse(forgedRaw);
+                // We know stats isn't null here because of the fallback check above
                 if (f.sharpe !== undefined && f.sharpe !== null) stats.sharpeRatio = f.sharpe;
                 if (f.drawdown !== undefined && f.drawdown !== null) stats.maxDrawdown = f.drawdown;
                 if (f.profit !== undefined && f.profit !== null) stats.profitFactor = f.profit;

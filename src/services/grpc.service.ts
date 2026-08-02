@@ -4,6 +4,7 @@ import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, g
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
+import { getReactionGifUrl } from './reaction.service.js';
 
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { PrismaClient } from '@prisma/client';
@@ -58,6 +59,15 @@ export function getRecentNewMints() {
     return [...recentNewMints];
 }
 
+async function acquireGuardLock(guardId: string, ttlSeconds: number = 20): Promise<boolean> {
+    const result = await redis.set(`lock:guard_exec:${guardId}`, '1', 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+}
+
+async function releaseGuardLock(guardId: string): Promise<void> {
+    await redis.del(`lock:guard_exec:${guardId}`).catch(() => {});
+}
+
 export async function syncInitialSolPrice() {
     try {
         const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
@@ -106,12 +116,12 @@ setInterval(async () => {
 
 setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
-        if (lockedGuards.has(guard.id)) return;
+        if (await redis.get(`lock:guard_exec:${guard.id}`)) return;
         try {
-            const payload = await generatePreSignedExitTx(guard.telegramId, guard.tokenAddress);
-            if (payload) {
-                const valueToStore = typeof payload === 'string' ? payload : JSON.stringify(payload);
-                await redis.set(`presigned_exit:${guard.id}`, valueToStore, 'EX', 20);
+            const { generatePreSignedExitTxMulti } = await import('./engine.service.js');
+            const payloads = await generatePreSignedExitTxMulti(guard.telegramId, guard.tokenAddress);
+            if (payloads.length > 0) {
+                await redis.set(`presigned_exit_multi:${guard.id}`, JSON.stringify(payloads), 'EX', 20);
             }
         } catch (e) {}
     }));
@@ -166,17 +176,33 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
 
 async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: boolean, signature?: string, message?: string }> {
     try {
-        const cachedPayload = await redis.get(`presigned_exit:${guard.id}`);
+        const cachedPayload = await redis.get(`presigned_exit_multi:${guard.id}`);
         if (cachedPayload) {
-            const { swapBase64, tipBase64 } = JSON.parse(cachedPayload);
-            const swapTx = VersionedTransaction.deserialize(Buffer.from(swapBase64, 'base64'));
-            const tipTx = VersionedTransaction.deserialize(Buffer.from(tipBase64, 'base64'));
-            
-            const bundleOk = await sendToJitoBundle(swapTx, tipTx);
-            if (bundleOk) return { success: true, signature: bs58.encode(swapTx.signatures[0]), message: "Instant Exit Executed" };
+            const payloads: Array<{ walletIndex: number; walletAddress: string; swapBase64: string; tipBase64: string }> = JSON.parse(cachedPayload);
+            if (payloads.length > 0) {
+                let firstSig: string | undefined;
+                let anySuccess = false;
+
+                await Promise.allSettled(payloads.map(async (p) => {
+                    const swapTx = VersionedTransaction.deserialize(Buffer.from(p.swapBase64, 'base64'));
+                    const tipTx = VersionedTransaction.deserialize(Buffer.from(p.tipBase64, 'base64'));
+                    const { sendToJitoBundle } = await import('./engine.service.js');
+                    const bundleOk = await sendToJitoBundle(swapTx, tipTx);
+                    if (bundleOk) {
+                        anySuccess = true;
+                        const sig = bs58.encode(swapTx.signatures[0]);
+                        if (!firstSig) firstSig = sig;
+                    }
+                }));
+
+                if (anySuccess) {
+                    return { success: true, signature: firstSig, message: `Instant Multi-Wallet Exit Executed (${payloads.length} wallets)` };
+                }
+            }
         }
     } catch (e) {}
 
+    const { executeExit } = await import('./engine.service.js');
     return await executeExit(guard.telegramId, guard.tokenAddress, 100);
 }
 
@@ -187,7 +213,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
     // 🎮 SIMULATION BRANCH
     // ==============================================
     if (await isSimulationActive(guardSnapshot.telegramId)) {
-        if (lockedGuards.has(guardSnapshot.id)) return;
+        if (await redis.get(`lock:guard_exec:${guardSnapshot.id}`)) return;
 
         const createdKey = `sim:guard_created:${guardSnapshot.id}`;
         let createdAtStr = await redis.get(createdKey);
@@ -199,12 +225,14 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         if (guardSnapshot.maxHoldMinutes && guardSnapshot.createdAt) {
             const ageMinutes = (Date.now() - new Date(guardSnapshot.createdAt).getTime()) / 60000;
             if (ageMinutes >= guardSnapshot.maxHoldMinutes) {
-                lockedGuards.add(guardSnapshot.id);
+                const gotLock = await acquireGuardLock(guardSnapshot.id, 20);
+                if (!gotLock) return;
+
                 const finalPnl = applySimSlippage(0); 
                 await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, finalPnl);
                 await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
                 try { await bot.telegram.sendMessage(guardSnapshot.telegramId, `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guardSnapshot.tokenAddress}</code>\nMax hold time reached. Position sold at market.`, { parse_mode: 'HTML' }); } catch (_) {}
-                setTimeout(() => lockedGuards.delete(guardSnapshot.id), 15_000);
+                await releaseGuardLock(guardSnapshot.id);
                 return;
             }
         }
@@ -221,7 +249,9 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         if (Math.random() > triggerProbability) return;
 
         await redis.del(createdKey);
-        lockedGuards.add(guardSnapshot.id);
+        
+        const gotLock = await acquireGuardLock(guardSnapshot.id, 20);
+        if (!gotLock) return;
 
         await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
 
@@ -274,9 +304,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 { source: imageBuffer },
                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
             );
-
-         
-
         } catch (e: any) {
             try {
                 await bot.telegram.sendMessage(
@@ -286,14 +313,14 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 );
             } catch (_) {}
         }
-        setTimeout(() => lockedGuards.delete(guardSnapshot.id), 15_000);
+        await releaseGuardLock(guardSnapshot.id);
         return; 
     }
 
     // ==============================================
     // ⚡ LIVE GUARD BRANCH
     // ==============================================
-    if (lockedGuards.has(guardSnapshot.id)) return;
+    if (await redis.get(`lock:guard_exec:${guardSnapshot.id}`)) return;
 
     let guard = guardSnapshot;
     if (guardSnapshot.entryPrice === 0) {
@@ -302,12 +329,12 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         guard = fresh;
     }
 
-    if (lockedGuards.has(guard.id)) return;
-
     if (guard.maxHoldMinutes && guard.createdAt) {
         const ageMinutes = (Date.now() - new Date(guard.createdAt).getTime()) / 60000;
         if (ageMinutes >= guard.maxHoldMinutes) {
-            lockedGuards.add(guard.id);
+            const gotLock = await acquireGuardLock(guard.id, 20);
+            if (!gotLock) return;
+
             triggerInstantExit(guard).then(async (result) => {
                 if (result.success || (result as any).message?.includes("No tokens found")) {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
@@ -321,8 +348,8 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                         } catch (_) {}
                     }
                 }
-                setTimeout(() => lockedGuards.delete(guard.id), 15_000);
-            }).catch(() => setTimeout(() => lockedGuards.delete(guard.id), 15_000));
+                await releaseGuardLock(guard.id);
+            }).catch(async () => await releaseGuardLock(guard.id));
             return;
         }
     }
@@ -345,7 +372,9 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
     if (guard.takeProfitPercent && entryPrice > 0) {
         const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
         if (profitPercent >= guard.takeProfitPercent) {
-            lockedGuards.add(guard.id);
+            
+            const gotLock = await acquireGuardLock(guard.id, 20);
+            if (!gotLock) return;
 
             triggerInstantExit(guard).then(async (result) => {
                 if (result.success || (result as any).message?.includes("No tokens found")) {
@@ -382,18 +411,18 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { source: imageBuffer },
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
-
-                         
-
                         } catch (e: any) {
                             console.error("Take profit image send failed:", e.message);
                         }
                     }
-                    setTimeout(() => lockedGuards.delete(guard.id), 15_000);
+                    await releaseGuardLock(guard.id);
                 } else {
-                    setTimeout(() => lockedGuards.delete(guard.id), 15_000);
+                    await releaseGuardLock(guard.id);
                 }
-            }).catch((e: any) => console.error("🔴 TP Execution Error:", e.message));
+            }).catch(async (e: any) => {
+                console.error("🔴 TP Execution Error:", e.message);
+                await releaseGuardLock(guard.id);
+            });
             return; 
         }
     }
@@ -404,7 +433,8 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         const dropPercent = ((guard.highestSeenPrice - currentPriceNative) / guard.highestSeenPrice) * 100;
 
         if (dropPercent >= guard.trailingPercent) {
-            lockedGuards.add(guard.id);
+            const gotLock = await acquireGuardLock(guard.id, 20);
+            if (!gotLock) return;
 
             triggerInstantExit(guard).then(async (result) => {
                 if (result.success || (result as any).message?.includes("No tokens found")) {
@@ -446,17 +476,15 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { source: imageBuffer },
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
-
-                        
                         } catch (e: any) {
                             console.error("Stop loss image send failed:", e.message);
                         }
                     }
-                    setTimeout(() => lockedGuards.delete(guard.id), 15_000);
+                    await releaseGuardLock(guard.id);
                 } else {
-                    setTimeout(() => lockedGuards.delete(guard.id), 15_000);
+                    await releaseGuardLock(guard.id);
                 }
-            }).catch(() => {});
+            }).catch(async () => await releaseGuardLock(guard.id));
         }
     }
 }

@@ -423,38 +423,28 @@ export async function executeSnipe(
         await new Promise(r => setTimeout(r, antiMevDelayMs));
     }
 
-    const mevPromise = (side === 'buy' && !isBumper)
-        ? checkRecentMevActivityCached(targetCA).catch(() => false)
-        : Promise.resolve(false);
+   // 🟢 FIX: Fail-closed MEV check. Trade blocks until check resolves or hard cap hits.
+   const mevPromise = (side === 'buy' && !isBumper)
+   ? checkRecentMevActivityCached(targetCA).catch(() => 'ERROR')
+   : Promise.resolve(false);
 
-        if (side === 'sell') {
-            let percentage = 100;
-            if (tokenAmount) {
-                try {
-                    const user = await prisma.user.findUnique({ where: { telegramId } });
-                    if (user && user.vaultAddress) {
-                        const activePubkeys: PublicKey[] = [new PublicKey(user.vaultAddress)];
-                        if (user.activeWallets >= 2 && user.vault2) activePubkeys.push(new PublicKey(user.vault2));
-                        if (user.activeWallets >= 3 && user.vault3) activePubkeys.push(new PublicKey(user.vault3));
-                        if (user.activeWallets >= 4 && user.vault4) activePubkeys.push(new PublicKey(user.vault4));
-                        if (user.activeWallets >= 5 && user.vault5) activePubkeys.push(new PublicKey(user.vault5));
-    
-                        let totalTokens = 0;
-                        await Promise.all(activePubkeys.map(async (pubKey) => {
-                            try {
-                                const parsed = await connection.getParsedTokenAccountsByOwner(pubKey, { mint: new PublicKey(targetCA) }, 'confirmed');
-                                if (parsed.value.length > 0) totalTokens += parsed.value[0].account.data.parsed.info.tokenAmount.uiAmount;
-                            } catch (err) {}
-                        }));
-                        if (totalTokens > 0) percentage = Math.min(100, Math.round((tokenAmount / totalTokens) * 100));
-                        
-                        // 🟢 FIX: Ensure sellPercentage is never 0 to prevent silent failures
-                        if (percentage === 0 || isNaN(percentage)) percentage = 100;
-                    }
-                } catch (e) { percentage = 100; }
-            }
-            return executeExit(telegramId, targetCA, percentage, isBumper, strategy);
-        }
+if (side === 'buy' && !isBumper) {
+   const HARD_CAP_MS = 800;
+   const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), HARD_CAP_MS));
+   const mevResult = await Promise.race([mevPromise, timeoutPromise]);
+
+   if (mevResult === true) {
+       return { success: false, message: "🚨 MEV Sandwich Bot / High Risk Activity Detected. Trade Blocked." };
+   }
+   if (mevResult === 'TIMEOUT' || mevResult === 'ERROR') {
+       return {
+           success: false,
+           message: mevResult === 'TIMEOUT'
+               ? "⏱️ MEV check timed out — trade blocked for your safety. Try again in a moment."
+               : "⚠️ MEV check failed (RPC error) — trade blocked for your safety. Try again in a moment."
+       };
+   }
+}
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
@@ -475,20 +465,7 @@ export async function executeSnipe(
         
         if (mevResult === true) {
             return { success: false, message: "🚨 MEV Sandwich Bot / High Risk Activity Detected. Trade Blocked." };
-        } else if (mevResult === "TIMEOUT") {
-            mevPromise.then(async (isMev) => {
-                if (isMev) {
-                    try {
-                        const { default: axios } = await import('axios');
-                        await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-                            chat_id: telegramId,
-                            text: `⚠️ <b>Advisory Warning:</b> <code>${targetCA}</code> was successfully sniped, but post-trade analysis detected high MEV activity. Consider tightening your trailing stop.`,
-                            parse_mode: 'HTML'
-                        });
-                    } catch(e) {}
-                }
-            }).catch(()=>{});
-        }
+        } 
 
         // 🟢 Dynamic Slippage Override
         const slippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
@@ -864,39 +841,72 @@ async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
     } catch { return 0.40; }
 }
 
-export async function generatePreSignedExitTx(telegramId: string, targetCA: string): Promise<{ swapBase64: string, tipBase64: string } | null> {
+export interface PreSignedExitPayload {
+    walletIndex: number;
+    walletAddress: string;
+    swapBase64: string;
+    tipBase64: string;
+}
+
+export async function generatePreSignedExitTxMulti(
+    telegramId: string, targetCA: string
+): Promise<PreSignedExitPayload[]> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
-        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return null;
-        
-        if (user.activeWallets > 1) return null;
+        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return [];
 
-        const slippage = 100.0; 
-        const vaultPubkey = new PublicKey(user.vaultAddress);
+        const wallets: Array<{ pub: string; pk: string; index: number }> = [
+            { pub: user.vaultAddress, pk: user.turnkeySubOrgId, index: 0 }
+        ];
+        if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2, index: 1 });
+        if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3, index: 2 });
+        if (user.activeWallets >= 4 && user.vault4 && user.pk4) wallets.push({ pub: user.vault4, pk: user.pk4, index: 3 });
+        if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5, index: 4 });
+
+        const slippage = 100.0;
         const tokenMint = new PublicKey(targetCA);
-        
-        const parsedAccounts = await connection.getParsedTokenAccountsByOwner(vaultPubkey, { mint: tokenMint }, 'confirmed');
-        if (parsedAccounts.value.length === 0) return null;
-
-        const rawBalance = BigInt(parsedAccounts.value[0].account.data.parsed.info.tokenAmount.amount);
-        if (rawBalance === 0n) return null;
-
-        const apiRes = await fetchApiTransaction('sell', targetCA, user.vaultAddress, 0, 0, rawBalance.toString(), 100, slippage, 'TURBO', 0.005, user.turnkeySubOrgId);
-        if (!apiRes.buffer) return null;
-
-        const keypair = getCachedKeypair(user.vaultAddress, user.turnkeySubOrgId);
-        if (!keypair) return null;
-
-        const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
-        swapTx.sign([keypair]);
-
         const latestBlockhash = await getLatestBlockhashWithCache();
-        const tipTx = await buildTipAndFeeTransaction(keypair, telegramId, 0.01, 'TURBO', 0.005, false, latestBlockhash.blockhash);
-        if (!tipTx) return null;
 
-        return {
-            swapBase64: Buffer.from(swapTx.serialize()).toString('base64'),
-            tipBase64: Buffer.from(tipTx.serialize()).toString('base64')
-        };
-    } catch (e) { return null; }
+        const results = await Promise.all(wallets.map(async (w): Promise<PreSignedExitPayload | null> => {
+            try {
+                const vaultPubkey = new PublicKey(w.pub);
+                const parsedAccounts = await connection.getParsedTokenAccountsByOwner(vaultPubkey, { mint: tokenMint }, 'confirmed');
+                if (parsedAccounts.value.length === 0) return null;
+
+                const rawBalance = BigInt(parsedAccounts.value[0].account.data.parsed.info.tokenAmount.amount);
+                if (rawBalance === 0n) return null;
+
+                const apiRes = await fetchApiTransaction('sell', targetCA, w.pub, 0, 0, rawBalance.toString(), 100, slippage, 'TURBO', 0.005, w.pk);
+                if (!apiRes.buffer) return null;
+
+                const keypair = getCachedKeypair(w.pub, w.pk);
+                if (!keypair) return null;
+
+                const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
+                swapTx.sign([keypair]);
+
+                const tipTx = await buildTipAndFeeTransaction(keypair, telegramId, 0.01, 'TURBO', 0.005, false, latestBlockhash.blockhash);
+                if (!tipTx) return null;
+
+                return {
+                    walletIndex: w.index,
+                    walletAddress: w.pub,
+                    swapBase64: Buffer.from(swapTx.serialize()).toString('base64'),
+                    tipBase64: Buffer.from(tipTx.serialize()).toString('base64')
+                };
+            } catch (_) {
+                return null;
+            }
+        }));
+
+        return results.filter((r): r is PreSignedExitPayload => r !== null);
+    } catch (e) {
+        return [];
+    }
+}
+
+export async function generatePreSignedExitTx(telegramId: string, targetCA: string): Promise<{ swapBase64: string, tipBase64: string } | null> {
+    const all = await generatePreSignedExitTxMulti(telegramId, targetCA);
+    const first = all.find(p => p.walletIndex === 0);
+    return first ? { swapBase64: first.swapBase64, tipBase64: first.tipBase64 } : null;
 }

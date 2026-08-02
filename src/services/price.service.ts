@@ -88,30 +88,36 @@ export function decodePumpCurvePrice(base64Data: string): number {
 }
 
 export async function checkRecentMevActivity(tokenMint: string): Promise<boolean> {
-    if (!tokenMint || !BASE58_MINT_REGEX.test(tokenMint)) return false; 
+    if (!tokenMint || !BASE58_MINT_REGEX.test(tokenMint)) return false;
 
     const cacheKey = `mev_check:${tokenMint}`;
     try {
         const cached = await redis.get(cacheKey);
-        if (cached !== null) return cached === 'true';
+        if (cached === 'true') return true;
+        if (cached === 'false') return false;
 
         let pubkey: PublicKey;
-        try { pubkey = new PublicKey(tokenMint); } catch { return false; } // Strict trap
+        try { pubkey = new PublicKey(tokenMint); } catch { return true; } 
 
         const sigs = await rpcLimiter.run(() =>
-            connection.getSignaturesForAddress(pubkey, { limit: 10 }).catch(() => [])
+            connection.getSignaturesForAddress(pubkey, { limit: 10 }).catch(() => null)
         );
+        if (sigs === null) {
+            await redis.set(cacheKey, 'true', 'EX', 30);
+            return true;
+        }
         if (sigs.length === 0) {
             await redis.set(cacheKey, 'false', 'EX', 600);
             return false;
         }
 
         const txs = await rpcLimiter.run(() =>
-            connection.getParsedTransactions(
-                sigs.map((s: any) => s.signature),
-                { maxSupportedTransactionVersion: 0 }
-            ).catch(() => [])
+            connection.getParsedTransactions(sigs.map((s: any) => s.signature), { maxSupportedTransactionVersion: 0 }).catch(() => null)
         );
+        if (txs === null) {
+            await redis.set(cacheKey, 'true', 'EX', 30);
+            return true;
+        }
 
         const buyerMap: Record<string, number[]> = {};
         txs.forEach((tx: any, blockIdx: number) => {
@@ -124,16 +130,14 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
 
         let isMev = false;
         for (const slots of Object.values(buyerMap)) {
-            if (slots.length >= 3 && slots[slots.length - 1] - slots[0] <= 1) {
-                isMev = true;
-                break;
-            }
+            if (slots.length >= 3 && slots[slots.length - 1] - slots[0] <= 1) { isMev = true; break; }
         }
 
         await redis.set(cacheKey, isMev ? 'true' : 'false', 'EX', 600);
         return isMev;
     } catch (e: any) {
-        return false;
+        await redis.set(cacheKey, 'true', 'EX', 30).catch(() => {});
+        return true; 
     }
 }
 
@@ -141,23 +145,20 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
     const key = `rugcheck:${tokenMint}`;
     try {
         const cached = await redis.get(key);
-        if (cached !== null) return cached === 'true';
+        if (cached === 'true') return true;
+        if (cached === 'false') return false;
 
-        // 🟢 NEW FEATURE: NATIVE TOKEN-2022 TAX DETECTOR
-        // Catch hidden 99% transfer taxes at the protocol level before APIs index them
         try {
             const pubkey = new PublicKey(tokenMint);
             const accountInfo = await connection.getAccountInfo(pubkey);
             if (accountInfo && accountInfo.owner.toBase58() === 'TokenzQdBNbLqP5VEhvkASnYGQYcBmiJXcwghAMPw') {
-                // If it's a Token-2022 contract, we check the extension buffer length.
-                // Large extension buffers usually indicate TransferFeeConfig (Tax) or Interest Bearing extensions.
                 if (accountInfo.data.length > 165) {
-                    console.warn(`🚨 [HONEYPOT DETECTED] Token-2022 Tax / TransferFee extension found on ${tokenMint}`);
+                    console.warn(`🚨 [HONEYPOT DETECTED] Token-2022 Tax/TransferFee extension found on ${tokenMint}`);
                     await redis.set(key, 'true', 'EX', 600);
                     return true;
                 }
             }
-        } catch (e) {} // Fail silently and pass to RugCheck fallback
+        } catch (e) {}
 
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
             { signal: AbortSignal.timeout(4000) });
@@ -170,7 +171,6 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
         const isMintable = !!(data.token && data.token.mintAuthority);
         const highScore = data.score > 500;
-
         const topHolders = data.topHolders || [];
         const top10Pct = topHolders.reduce((acc: number, h: any) => acc + (h.pct || 0), 0);
         const isHighlyConcentrated = top10Pct > 40.0;
@@ -180,6 +180,8 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
         return isUnsafe;
     } catch (_) {
-        return false;
+        await redis.set(key, 'uncertain', 'EX', 45).catch(() => {});
+        return true; 
     }
 }
+

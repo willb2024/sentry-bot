@@ -1,4 +1,3 @@
-// src/services/payout.service.ts
 import { PrismaClient } from '@prisma/client';
 import { PublicKey, Keypair, SystemProgram, TransactionMessage, VersionedTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { connection } from '../lib/connection.js'; 
@@ -10,6 +9,36 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const prisma = new PrismaClient();
+
+const DAILY_PAYOUT_CAP_SOL = parseFloat(process.env.TREASURY_DAILY_PAYOUT_CAP_SOL || '50');
+const SINGLE_PAYOUT_ALERT_THRESHOLD_SOL = parseFloat(process.env.PAYOUT_ALERT_THRESHOLD_SOL || '5');
+
+async function getTodaysPayoutTotal(): Promise<number> {
+    const today = new Date().toISOString().split('T')[0];
+    const val = await redis.get(`treasury:payouts:${today}`);
+    return val ? parseFloat(val) : 0;
+}
+
+async function recordPayout(amountSol: number): Promise<void> {
+    const today = new Date().toISOString().split('T')[0];
+    const key = `treasury:payouts:${today}`;
+    await redis.incrbyfloat(key, amountSol);
+    await redis.expire(key, 172800); 
+}
+
+async function alertAdmins(message: string) {
+    try {
+        const adminIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',').filter(Boolean);
+        const botToken = process.env.BOT_TOKEN;
+        if (!botToken) return;
+        for (const id of adminIds) {
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: id, text: message, parse_mode: 'HTML' })
+            }).catch(() => {});
+        }
+    } catch (_) {}
+}
 
 export async function processAffiliatePayout(userId: string): Promise<{ success: boolean; signature?: string; message: string }> {
     const lockKey = `lock:payout:${userId}`;
@@ -24,7 +53,6 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
         if (!user || user.pendingRewardsSol <= 0) throw new Error("No rewards to claim.");
         if (!user.vaultAddress) throw new Error("No vault address found to receive payout.");
 
-        // 🟢 FIX 3.4: Decrypt Treasury Key securely
         const treasuryPrivKeyEncrypted = process.env.TREASURY_PRIVATE_KEY_ENCRYPTED;
         if (!treasuryPrivKeyEncrypted) throw new Error("Platform Error: Treasury Hot Wallet not configured.");
 
@@ -32,6 +60,24 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
         if (!treasuryPrivKey) throw new Error("Platform Error: Treasury key decryption failed.");
 
         amountToPay = user.pendingRewardsSol;
+        
+        // 🟢 DAILY CAP CHECK
+        const todaysTotal = await getTodaysPayoutTotal();
+        if (todaysTotal + amountToPay > DAILY_PAYOUT_CAP_SOL) {
+            await redis.del(lockKey);
+            await alertAdmins(
+                `🚨 <b>PAYOUT CAP HIT</b>\n\nUser ${userId} tried to claim ${amountToPay.toFixed(4)} SOL.\n` +
+                `Today's total would be ${(todaysTotal + amountToPay).toFixed(4)} SOL, exceeding the ${DAILY_PAYOUT_CAP_SOL} SOL daily cap.\n` +
+                `Payout was blocked. Manual review needed.`
+            );
+            return { success: false, message: "Daily payout limit reached platform-wide. Please try again tomorrow or contact support." };
+        }
+
+        // 🟢 SINGLE-PAYOUT ANOMALY ALERT
+        if (amountToPay >= SINGLE_PAYOUT_ALERT_THRESHOLD_SOL) {
+            alertAdmins(`⚠️ <b>Large Payout</b>\n\nUser ${userId} claiming ${amountToPay.toFixed(4)} SOL. Signature will follow.`);
+        }
+
         const lamportsToPay = Math.floor(amountToPay * LAMPORTS_PER_SOL);
 
         await prisma.user.update({ where: { id: user.id }, data: { pendingRewardsSol: 0 } });
@@ -84,6 +130,7 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
             throw new Error("Network congestion. Transaction dropped. Your rewards have been refunded to your balance.");
         }
 
+        await recordPayout(amountToPay);
         await redis.del(lockKey);
         return { success: true, signature: signature, message: "Instant Payout Successful." };
 

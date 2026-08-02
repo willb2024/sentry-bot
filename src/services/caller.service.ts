@@ -74,6 +74,57 @@ export function getScoreBand(score: number): { label: string; sizeSol: string; r
 
 // ------------------ ML Training & Features ------------------
 
+async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
+    const cacheKey = `rug_status_ext:${mint}`;
+    try {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+            const parsed = JSON.parse(cached);
+            if (!parsed.uncertain) return parsed;
+        }
+
+        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, { timeout: 4000 });
+        const data = res.data;
+        const risks = data.risks || [];
+        const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
+        const isMintable = !!(data.token && data.token.mintAuthority);
+        const topHolders = data.topHolders || [];
+        const top10Pct = topHolders.reduce((acc: number, h: any) => acc + (h.pct || 0), 0);
+        const isUnsafe = isHoneypot || isMintable || (data.score > 500) || top10Pct > 40.0;
+
+        const result = { isRug: isUnsafe, top10Pct, uncertain: false };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
+        return result;
+    } catch (_) {
+        const result = { isRug: true, top10Pct: 0, uncertain: true };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); 
+        return result;
+    }
+}
+
+export async function getSentimentScore(tokenSymbol: string): Promise<number> {
+    if (!tokenSymbol || tokenSymbol === 'UNKNOWN') return 0.5;
+    const cacheKey = `sentiment:${tokenSymbol.toUpperCase()}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return parseFloat(cached);
+
+    const bearerToken = process.env.TWITTER_BEARER_TOKEN;
+    if (!bearerToken) return 0.5;
+
+    try {
+        const res = await axios.get(`https://api.twitter.com/2/tweets/search/recent?query=$${encodeURIComponent(tokenSymbol)}&max_results=10`, {
+            headers: { Authorization: `Bearer ${bearerToken}` },
+            timeout: 2000
+        });
+        const tweetCount = res.data?.meta?.result_count || 0;
+        const sentiment = Math.min(1.0, 0.4 + (tweetCount / 20));
+        await redis.set(cacheKey, sentiment.toString(), 'EX', 600);
+        return sentiment;
+    } catch (_) {
+        return 0.5;
+    }
+}
+
 function extractFeatures(token: any): number[] {
     const score = token.totalScore ?? token.score ?? 50;
     const age = token.ageMins ?? 10;
@@ -123,6 +174,59 @@ function solveOLS(X: number[][], y: number[]): { coefficients: number[], interce
     }
 }
 
+
+
+interface NormalizationParams { means: number[]; stds: number[]; }
+
+function computeNormalization(X: number[][]): NormalizationParams {
+    const p = X[0].length;
+    const means = new Array(p).fill(0);
+    const stds = new Array(p).fill(1);
+    for (let j = 0; j < p; j++) {
+        const col = X.map(row => row[j]);
+        const mean = col.reduce((a, b) => a + b, 0) / col.length;
+        const variance = col.reduce((sum, v) => sum + (v - mean) ** 2, 0) / col.length;
+        const std = Math.sqrt(variance);
+        means[j] = mean;
+        stds[j] = std > 1e-8 ? std : 1; 
+    }
+    return { means, stds };
+}
+
+function normalizeRow(row: number[], norm: NormalizationParams): number[] {
+    return row.map((v, j) => (v - norm.means[j]) / norm.stds[j]);
+}
+
+function solveRidgeRegression(X: number[][], y: number[], lambda: number = 0.1): { coefficients: number[], intercept: number } {
+    const n = X.length;
+    const p = X[0].length;
+    let weights = new Array(p).fill(0);
+    let intercept = 0;
+    const lr = 0.05; 
+    const epochs = 2000;
+
+    for (let iter = 0; iter < epochs; iter++) {
+        let interceptGrad = 0;
+        const weightGrads = new Array(p).fill(0);
+        for (let i = 0; i < n; i++) {
+            let pred = intercept;
+            for (let j = 0; j < p; j++) pred += weights[j] * X[i][j];
+            const err = pred - y[i];
+            interceptGrad += err;
+            for (let j = 0; j < p; j++) weightGrads[j] += err * X[i][j] + lambda * weights[j];
+        }
+        intercept -= lr * (interceptGrad / n);
+        for (let j = 0; j < p; j++) weights[j] -= lr * (weightGrads[j] / n);
+    }
+    return { coefficients: weights, intercept };
+}
+
+function predictNormalized(row: number[], weights: number[], intercept: number): number {
+    let pred = intercept;
+    for (let j = 0; j < row.length; j++) pred += weights[j] * row[j];
+    return pred;
+}
+
 export async function trainCallerModel() {
     try {
         const predictions = await prisma.callerPrediction.findMany({
@@ -130,33 +234,63 @@ export async function trainCallerModel() {
             orderBy: { alertedAt: 'asc' }
         });
 
-        if (predictions.length < 20) return;
+        if (predictions.length < 60) {
+            console.log(`🧠 [CALLER ML] Skipping training — only ${predictions.length} samples (need 60+).`);
+            return;
+        }
 
-        const X: number[][] = [];
+        const rawX: number[][] = [];
         const y: number[] = [];
 
         for (const p of predictions) {
-            X.push([
+            rawX.push([
                 p.score, p.ageMins, Math.log(p.liquidity + 1), Math.log(p.volume24h + 1),
                 p.priceChangeM5, p.hasSocials ? 1 : 0, p.isRug ? 1 : 0, p.lpLockPct ?? 0, p.velocityGrowth ?? 0
             ]);
             y.push(Math.log(Math.max(0, p.peakPct!) + 1));
         }
 
-        const { coefficients, intercept } = solveOLS(X, y);
-        const featureNames = ['score', 'age', 'log_liquidity', 'log_volume', 'momentum', 'socials', 'rug', 'lock_pct', 'velocity'];
-
-        let ssTot = 0, ssRes = 0;
-        const meanY = y.reduce((a,b) => a+b, 0) / y.length;
-        for (let i = 0; i < y.length; i++) {
-            const pred = intercept + X[i].reduce((sum, x, j) => sum + x * coefficients[j], 0);
-            ssTot += (y[i] - meanY) ** 2;
-            ssRes += (y[i] - pred) ** 2;
+        const indices = Array.from({ length: rawX.length }, (_, i) => i);
+        for (let i = indices.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [indices[i], indices[j]] = [indices[j], indices[i]];
         }
-        const r2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
+        const splitAt = Math.floor(indices.length * 0.8);
+        const trainIdx = indices.slice(0, splitAt);
+        const valIdx = indices.slice(splitAt);
 
-        await redis.set('caller_model_weights', JSON.stringify({ version: 1, trainedAt: Date.now(), coefficients, featureNames, intercept, metrics: { r2, sampleCount: y.length } }));
-        console.log(`🧠 [CALLER ML] Trained model on ${y.length} samples, R² = ${r2.toFixed(3)}`);
+        const trainX = trainIdx.map(i => rawX[i]);
+        const trainY = trainIdx.map(i => y[i]);
+        const valX = valIdx.map(i => rawX[i]);
+        const valY = valIdx.map(i => y[i]);
+
+        const norm = computeNormalization(trainX);
+        const trainXNorm = trainX.map(row => normalizeRow(row, norm));
+        const valXNorm = valX.map(row => normalizeRow(row, norm));
+
+        const { coefficients, intercept } = solveRidgeRegression(trainXNorm, trainY, 0.1);
+
+        const valMean = valY.reduce((a, b) => a + b, 0) / valY.length;
+        let ssTot = 0, ssRes = 0;
+        for (let i = 0; i < valY.length; i++) {
+            const pred = predictNormalized(valXNorm[i], coefficients, intercept);
+            ssTot += (valY[i] - valMean) ** 2;
+            ssRes += (valY[i] - pred) ** 2;
+        }
+        const valR2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
+
+        const featureNames = ['score', 'age', 'log_liquidity', 'log_volume', 'momentum', 'socials', 'rug', 'lock_pct', 'velocity'];
+        console.log(`🧠 [CALLER ML] Trained on ${trainX.length} samples, validated on ${valX.length}. Out-of-sample R² = ${valR2.toFixed(3)}`);
+
+        const MIN_VAL_R2 = 0.15;
+        const isUsable = valR2 >= MIN_VAL_R2;
+
+        await redis.set('caller_model_weights', JSON.stringify({
+            version: 1, trainedAt: Date.now(), coefficients, featureNames, intercept,
+            normalization: norm, metrics: { valR2, trainSampleCount: trainX.length, valSampleCount: valX.length, isUsable }
+        }));
+
+        if (!isUsable) console.warn(`⚠️ [CALLER ML] Model validation R² (${valR2.toFixed(3)}) below threshold (${MIN_VAL_R2}). Marked unusable — will fall back to heuristic scoring.`);
     } catch (e) {
         console.error(`🔴 [CALLER ML] Training Failed:`, e);
     }
@@ -164,27 +298,44 @@ export async function trainCallerModel() {
 
 export async function getModelScore(mint: string, stats: any): Promise<number | null> {
     try {
-        const features = extractFeatures({ ...stats, mint });
         const weightsRaw = await redis.get('caller_model_weights');
         if (!weightsRaw) return null;
-        
         const weights = JSON.parse(weightsRaw);
-        const logPred = weights.intercept + features.reduce((sum: number, f: number, i: number) => sum + f * weights.coefficients[i], 0);
+
+        if (weights.metrics?.isUsable === false) return null; 
+
+        const features = extractFeatures({ ...stats, mint });
+        const normFeatures = weights.normalization
+            ? features.map((f: number, i: number) => (f - weights.normalization.means[i]) / weights.normalization.stds[i])
+            : features;
+
+        const logPred = weights.intercept + normFeatures.reduce((sum: number, f: number, i: number) => sum + f * weights.coefficients[i], 0);
         const predictedPeak = Math.max(0, Math.exp(logPred) - 1);
-        
-        if (predictedPeak > 0) {
-            return Math.min(100, Math.max(0, Math.log(predictedPeak + 1) * 20));
-        }
+
+        if (predictedPeak > 0) return Math.min(100, Math.max(0, Math.log(predictedPeak + 1) * 20));
     } catch (e) { }
     return null;
 }
 
 export async function scheduleTraining() {
+    let lastTrainedCount = 0;
     setInterval(async () => {
-        console.log('🧠 [CALLER ML] Running hourly model training...');
-        await trainCallerModel();
-    }, 60 * 60 * 1000); 
+        try {
+            const currentCount = await prisma.callerPrediction.count({ where: { finalized: true, peakPct: { not: null } } });
+            const newSamples = currentCount - lastTrainedCount;
+            if (newSamples >= 20) {
+                console.log(`🧠 [CALLER ML] ${newSamples} new finalized predictions since last train — retraining.`);
+                await trainCallerModel();
+                lastTrainedCount = currentCount;
+            } else {
+                console.log(`🧠 [CALLER ML] Only ${newSamples} new samples — skipping retrain.`);
+            }
+        } catch (e) {
+            console.error('🔴 [CALLER ML] Scheduled training check failed:', e);
+        }
+    }, 24 * 60 * 60 * 1000); 
 }
+
 
 export async function storePredictionData(token: any, projection: any, alertKey: string) {
     try {
@@ -223,8 +374,11 @@ export async function getCalibratedProjection(token: any) {
         const weightsRaw = await redis.get('caller_model_weights');
         if (weightsRaw) {
             const weights = JSON.parse(weightsRaw);
-            if (weights.coefficients && weights.coefficients.length === features.length) {
-                const logPred = (weights.intercept || 0) + features.reduce((sum: number, f: number, i: number) => sum + f * (weights.coefficients[i] || 0), 0);
+            if (weights.metrics?.isUsable !== false && weights.coefficients && weights.coefficients.length === features.length) {
+                const normFeatures = weights.normalization
+                    ? features.map((f: number, i: number) => (f - weights.normalization.means[i]) / weights.normalization.stds[i])
+                    : features;
+                const logPred = (weights.intercept || 0) + normFeatures.reduce((sum: number, f: number, i: number) => sum + f * (weights.coefficients[i] || 0), 0);
                 const modelPeak = Math.max(0, Math.exp(logPred) - 1);
                 
                 if (modelPeak > 0) {
@@ -484,30 +638,7 @@ export async function startCoinCaller(bot: any) {
     }, 15000);
 }
 
-export async function getSentimentScore(tokenSymbol: string): Promise<number> {
-    if (!tokenSymbol || tokenSymbol === 'UNKNOWN') return 0.5;
-    const cacheKey = `sentiment:${tokenSymbol.toUpperCase()}`;
-    const cached = await redis.get(cacheKey);
-    if (cached) return parseFloat(cached);
 
-    try {
-        const bearerToken = process.env.TWITTER_BEARER_TOKEN;
-        if (bearerToken) {
-            const res = await axios.get(`https://api.twitter.com/2/tweets/search/recent?query=$${encodeURIComponent(tokenSymbol)}&max_results=10`, {
-                headers: { Authorization: `Bearer ${bearerToken}` },
-                timeout: 2000
-            });
-            const tweetCount = res.data?.meta?.result_count || 0;
-            const sentiment = Math.min(1.0, 0.4 + (tweetCount / 20));
-            await redis.set(cacheKey, sentiment.toString(), 'EX', 600);
-            return sentiment;
-        }
-    } catch (_) {}
-
-    const sentiment = parseFloat((0.3 + Math.random() * 0.5).toFixed(2));
-    await redis.set(cacheKey, sentiment.toString(), 'EX', 600);
-    return sentiment;
-}
 
 export interface TokenStats {
     ageMins: number;
@@ -608,28 +739,7 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
     return { score: Math.max(0, score), reasons };
 }
 
-async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
-    const cacheKey = `rug_status_ext:${mint}`;
-    try {
-        const cached = await redis.get(cacheKey);
-        if (cached) return JSON.parse(cached);
 
-        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, { timeout: 4000 });
-        const data = res.data;
-        const risks = data.risks || [];
-        const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
-        const isMintable = !!(data.token && data.token.mintAuthority);
-        const topHolders = data.topHolders || [];
-        const top10Pct = topHolders.reduce((acc: number, h: any) => acc + (h.pct || 0), 0);
-        const isUnsafe = isHoneypot || isMintable || (data.score > 500) || top10Pct > 40.0;
-
-        const result = { isRug: isUnsafe, top10Pct, uncertain: false };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
-        return result;
-    } catch (_) {
-        return { isRug: false, top10Pct: 0, uncertain: true };
-    }
-}
 
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     if (mints.length === 0) return [];

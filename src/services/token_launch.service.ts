@@ -83,15 +83,18 @@ export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keyp
 export async function launchTokenOnPumpFun(
     telegramId: string, name: string, symbol: string, description: string, metadataUri: string, 
     devBuySol: number, vanityPrefix: string, walletCount: number,
-    dex: 'pump' | 'raydium' = 'pump' // 🟢 DEX TARGET SELECTION
+    dex: 'pump' | 'raydium' = 'pump'
 ): Promise<{ success: boolean; tokenAddress?: string; signature?: string; message: string }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
 
-        // 🟢 RAYDIUM LP FALLBACK LOGIC
+        // 🟢 FIX: hard block instead of silent fallback
         if (dex === 'raydium') {
-            return { success: false, message: "Raydium CPMM Pool deployment module is undergoing SDK V2 calibration. Defaulting to Pump.fun." };
+            return {
+                success: false,
+                message: "🚧 Raydium token launches are not yet available. This feature is in active development — please use Pump.fun launches for now."
+            };
         }
 
         const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
