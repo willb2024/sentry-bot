@@ -4500,6 +4500,10 @@ bot.on("text", async (ctx, next) => {
 // REPLACE THE state:simedit INTERCEPTOR WITH THIS BLOCK
 // =========================================================================
 
+// =========================================================================
+// REPLACE THE state:simedit INTERCEPTOR WITH THIS BLOCK
+// =========================================================================
+
 if (await redis.get(`state:simedit:${telegramId}`)) {
     await redis.del(`state:simedit:${telegramId}`);
     
@@ -5889,6 +5893,10 @@ app.get('/g/:guildCode', async (req, res) => {
 // REPLACE YOUR /simedit AND API ENDPOINTS WITH THIS BLOCK
 // =========================================================================
 
+// =========================================================================
+// REPLACE YOUR /simedit AND API ENDPOINTS WITH THIS BLOCK
+// =========================================================================
+
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
@@ -5919,6 +5927,8 @@ bot.command('simedit', async (ctx) => {
     );
 });
 
+
+// Replace /api/stats-window endpoint in src/index.ts
 app.post('/api/stats-window', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -5956,6 +5966,7 @@ app.post('/api/stats-window', async (req, res) => {
     }
 });
 
+// Replace /api/analytics/hourly endpoint in src/index.ts
 app.post('/api/analytics/hourly', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -5972,7 +5983,7 @@ app.post('/api/analytics/hourly', async (req, res) => {
                     const baseWinRate = 60;
                     const len = f.hourlyChart.length;
                     for (let i = 0; i < 24; i++) {
-                        const pnl = i < len ? f.hourlyChart[i] : (f.hourlyChart[len - 1] || 0); 
+                        const pnl = i < len ? f.hourlyChart[i] : (f.hourlyChart[len - 1] || 0);
                         data.push({
                             hour: i,
                             totalPnlSol: pnl,

@@ -606,26 +606,26 @@
     }
 
     function renderPositions(positions) {
-        const container = document.getElementById('positions-container');
-        const section = document.getElementById('verified-holdings-section');
-        document.getElementById('positions-count').innerText = `${positions.length} OPEN`;
-        
-        if (positions.length === 0) {
-            if (isSimModeActive && section) {
-                section.style.display = 'none';
-            } else {
-                if (section) section.style.display = 'block';
-                container.innerHTML = `
-                    <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                        <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                        <div class="text-sm font-semibold">No Active Deployments</div>
-                        <span class="text-xs font-mono mt-1">Awaiting target.</span>
-                    </div>`;
-            }
-            return;
+    const container = document.getElementById('positions-container');
+    const section = document.getElementById('verified-holdings-section');
+    document.getElementById('positions-count').innerText = `${positions.length} OPEN`;
+    
+    if (positions.length === 0) {
+        if (isSimModeActive && section) {
+            section.style.display = 'none'; // Hides "Verified Holdings" in sim mode when empty
+        } else {
+            if (section) section.style.display = 'block';
+            container.innerHTML = `
+                <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                    <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
+                    <div class="text-sm font-semibold">No Active Deployments</div>
+                    <span class="text-xs font-mono mt-1">Awaiting target.</span>
+                </div>`;
         }
+        return;
+    }
 
-        if (section) section.style.display = 'block';
+    if (section) section.style.display = 'block';
 
         container.innerHTML = positions.map((p) => {
             const entry = p.entryPrice || 0;
@@ -992,6 +992,29 @@
     }
 
     async function fetchStatsWindow() {
+    try {
+        const res = await fetch('/api/stats-window', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: tg.initData || "" })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const liveEl = document.getElementById('stats-live');
+            const simEl = document.getElementById('stats-sim');
+
+            if (data.manual && liveEl) {
+                liveEl.innerText = `Manual: ${data.manual.count} trades (${data.manual.pnl >= 0 ? '+' : ''}${data.manual.pnl.toFixed(4)} SOL)`;
+            } else if (!data.manual && liveEl && data.tradeCount !== undefined) {
+                liveEl.innerText = `Manual: ${data.tradeCount} trades (${data.totalPnl >= 0 ? '+' : ''}${data.totalPnl.toFixed(4)} SOL)`;
+            }
+
+            if (data.auto && simEl) {
+                simEl.innerText = `Auto-Engine: ${data.auto.count} trades (${data.auto.pnl >= 0 ? '+' : ''}${data.auto.pnl.toFixed(4)} SOL)`;
+            }
+        }
+    } catch (_) {}
+
         try {
             const res = await fetch('/api/stats-window', {
                 method: 'POST',

@@ -41,7 +41,9 @@ export function generateSimSignature(): string {
     return randomBase58(87);
 }
 
-// 🟢 FULL POSTGRESQL PERSISTENCE SYNC
+
+
+// Replace saveSimulationState inside src/services/simulation.service.ts
 export async function saveSimulationState(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -73,6 +75,11 @@ export async function saveSimulationState(telegramId: string) {
             forgedRisk: forged.risk ?? null,
             forged24hTrades: forged.trades24h ?? null,
             forged24hPnl: forged.pnl24h ?? null,
+            forgedManual24hCount: forged.manual24hCount ?? null,
+            forgedManual24hPnl: forged.manual24hPnl ?? null,
+            forgedAuto24hCount: forged.auto24hCount ?? null,
+            forgedAuto24hPnl: forged.auto24hPnl ?? null,
+            forgedHourlyChart: forged.hourlyChart ?? null,
             forgedStrat1Name: forged.strat1Name ?? null,
             forgedStrat1Pnl: forged.strat1Pnl ?? null,
             forgedStrat2Name: forged.strat2Name ?? null,
@@ -100,6 +107,11 @@ export async function saveSimulationState(telegramId: string) {
             forgedRisk: forged.risk ?? null,
             forged24hTrades: forged.trades24h ?? null,
             forged24hPnl: forged.pnl24h ?? null,
+            forgedManual24hCount: forged.manual24hCount ?? null,
+            forgedManual24hPnl: forged.manual24hPnl ?? null,
+            forgedAuto24hCount: forged.auto24hCount ?? null,
+            forgedAuto24hPnl: forged.auto24hPnl ?? null,
+            forgedHourlyChart: forged.hourlyChart ?? null,
             forgedStrat1Name: forged.strat1Name ?? null,
             forgedStrat1Pnl: forged.strat1Pnl ?? null,
             forgedStrat2Name: forged.strat2Name ?? null,
@@ -119,7 +131,7 @@ export async function saveSimulationState(telegramId: string) {
     });
 }
 
-// 🟢 RESTORE STATE FROM POSTGRESQL TO REDIS
+// Replace loadSimulationState inside src/services/simulation.service.ts
 export async function loadSimulationState(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -148,6 +160,11 @@ export async function loadSimulationState(telegramId: string) {
         risk: state.forgedRisk,
         trades24h: state.forged24hTrades,
         pnl24h: state.forged24hPnl,
+        manual24hCount: state.forgedManual24hCount,
+        manual24hPnl: state.forgedManual24hPnl,
+        auto24hCount: state.forgedAuto24hCount,
+        auto24hPnl: state.forgedAuto24hPnl,
+        hourlyChart: state.forgedHourlyChart,
         strat1Name: state.forgedStrat1Name,
         strat1Pnl: state.forgedStrat1Pnl,
         strat2Name: state.forgedStrat2Name,

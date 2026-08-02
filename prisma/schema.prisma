@@ -86,31 +86,36 @@ model User {
 }
 
 model SimState {
-  id                 String     @id @default(uuid())
-  userId             String     @unique
-  user               User       @relation(fields: [userId], references: [id])
-  balance            Float      @default(0.0)
-  startingBalance    Float      @default(0.0)
-  volume             Float      @default(0.0)
-  credits            Int        @default(0)
-  active             Boolean    @default(false)
-  autoSnipeActive    Boolean    @default(false)
-  positions          Json?      
+  id                   String     @id @default(uuid())
+  userId               String     @unique
+  user                 User       @relation(fields: [userId], references: [id])
+  balance              Float      @default(0.0)
+  startingBalance      Float      @default(0.0)
+  volume               Float      @default(0.0)
+  credits              Int        @default(0)
+  active               Boolean    @default(false)
+  autoSnipeActive      Boolean    @default(false)
+  positions            Json?      
   
   // 🟢 FORGED STATS OVERRIDES
-  forgedSharpe       Float?
-  forgedDrawdown     Float?
-  forgedProfit       Float?
-  forgedRisk         Float?
-  forged24hTrades    Int?
-  forged24hPnl       Float?
-  forgedStrat1Name   String?
-  forgedStrat1Pnl    Float?
-  forgedStrat2Name   String?
-  forgedStrat2Pnl    Float?
+  forgedSharpe         Float?
+  forgedDrawdown       Float?
+  forgedProfit         Float?
+  forgedRisk           Float?
+  forged24hTrades      Int?
+  forged24hPnl         Float?
+  forgedManual24hCount Int?
+  forgedManual24hPnl   Float?
+  forgedAuto24hCount   Int?
+  forgedAuto24hPnl     Float?
+  forgedHourlyChart    Json?
+  forgedStrat1Name     String?
+  forgedStrat1Pnl      Float?
+  forgedStrat2Name     String?
+  forgedStrat2Pnl      Float?
 
-  updatedAt          DateTime   @updatedAt
-  trades             SimTrade[]
+  updatedAt            DateTime   @updatedAt
+  trades               SimTrade[]
 }
 
 model SimTrade {
