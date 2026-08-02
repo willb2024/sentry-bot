@@ -655,34 +655,49 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
 // 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
 // =========================================================
 
+// 🟢 FIX: Properly shuts down DB state to prevent "Ghost State" simulation trap
 bot.command('sim', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
     try {
         const current = await redis.get(`sim:active:${tgId}`);
         const newState = current === 'true' ? 'false' : 'true';
-        await redis.set(`sim:active:${tgId}`, newState);
 
         if (newState === 'true') {
-            const { setSimStartingBalance, generateSimWallets } = await import('./services/simulation.service.js');
+            await redis.set(`sim:active:${tgId}`, 'true');
+            const { setSimStartingBalance, generateSimWallets, saveSimulationState } = await import('./services/simulation.service.js');
             const existing = await redis.get(`sim:balance:${tgId}`);
             const startBal = existing ? parseFloat(existing) : 1000;
             if (!existing) await redis.set(`sim:balance:${tgId}`, startBal.toFixed(4));
-            await setSimStartingBalance(tgId, startBal); // 🟢 baseline ALWAYS matches actual starting balance
+            await setSimStartingBalance(tgId, startBal);
 
             const wallets = generateSimWallets();
             await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
+            await saveSimulationState(tgId);
         } else {
+            // 🟢 FIX: Update the database FIRST, so it doesn't immediately reload as 'true'
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+            if (user) {
+                await prisma.simState.updateMany({
+                    where: { userId: user.id },
+                    data: { active: false }
+                });
+            }
+            
+            // Now safely delete Redis keys
             const keys = await redis.keys(`sim:*:${tgId}`);
             if (keys.length > 0) await redis.del(...keys);
+            
+            // Force the false state into Redis
+            await redis.set(`sim:active:${tgId}`, 'false');
         }
 
-        const displayBal = await redis.get(`sim:balance:${tgId}`) || '1000';
+        const displayBal = await redis.get(`sim:balance:${tgId}`) || '0.0000';
         await ctx.replyWithHTML(
             `🎮 <b>SIMULATION MODE: ${newState === 'true' ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
             `${newState === 'true'
                 ? `⚠️ <i>All trades, balances, and alerts are now simulated.</i>\n\n` +
-                  `💰 Starting balance: <b>${displayBal} SOL</b>\n` +  // 🟢 dynamic now, no more mismatch
+                  `💰 Starting balance: <b>${displayBal} SOL</b>\n` +  
                   `🎯 Type <code>/simbal [amount]</code> to change it (also resets your PnL% baseline).`
                 : `<i>Platform returned to live mode. All sim data cleared.</i>`
             }`
@@ -691,7 +706,6 @@ bot.command('sim', async (ctx) => {
         await ctx.replyWithHTML(`🔴 <b>SIM ERROR:</b> ${e.message}`);
     }
 });
-
 
 // =========================================================
 // 👑 VIP MENU SYSTEM
@@ -6010,7 +6024,7 @@ app.post('/api/trades/export', async (req, res) => {
 
 
 
-// (Replace `/api/toggle-sim` block to ensure the balance starts at 0 instead of 1000 to prevent inflation)
+// 🟢 FIX: Syncs the WebApp toggle with the Database
 app.post('/api/toggle-sim', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -6018,27 +6032,36 @@ app.post('/api/toggle-sim', async (req, res) => {
         if (!tgId) return res.status(401).json({ error: "Invalid initData" });
         
         const newState = req.body.active ? 'true' : 'false';
-        await redis.set(`sim:active:${tgId}`, newState);
 
         if (newState === 'true') {
+            await redis.set(`sim:active:${tgId}`, 'true');
             const existing = await redis.get(`sim:balance:${tgId}`);
             if (!existing) {
-                const DEFAULT_SIM_BALANCE = 0; // Starts at $0 explicitly
+                const DEFAULT_SIM_BALANCE = 0; 
                 await redis.set(`sim:balance:${tgId}`, DEFAULT_SIM_BALANCE.toFixed(4));
                 const { setSimStartingBalance } = await import('./services/simulation.service.js');
                 await setSimStartingBalance(tgId, DEFAULT_SIM_BALANCE);
             }
-            const { generateSimWallets } = await import('./services/simulation.service.js');
+            const { generateSimWallets, saveSimulationState } = await import('./services/simulation.service.js');
             const wallets = generateSimWallets();
             await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
+            await saveSimulationState(tgId);
         } else {
+            // 🟢 FIX: Update the database FIRST
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+            if (user) {
+                await prisma.simState.updateMany({
+                    where: { userId: user.id },
+                    data: { active: false }
+                });
+            }
             const keys = await redis.keys(`sim:*:${tgId}`);
             if (keys.length > 0) await redis.del(...keys);
+            await redis.set(`sim:active:${tgId}`, 'false');
         }
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: 'Server Error' }); }
 });
-
 // (Replace the API blocks below to route the forged variables dynamically)
 
 // 🟢 FIX: Connects /simedit top-row stats and the Main Line Chart
