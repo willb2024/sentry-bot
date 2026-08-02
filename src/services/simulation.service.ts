@@ -822,3 +822,31 @@ export async function walkSimPositionPrices(telegramId: string): Promise<void> {
 
   if (changed) await redis.set(posKey, JSON.stringify(positions));
 }
+
+// 🟢 SINGLE SOURCE OF TRUTH: Updates both Redis and PostgreSQL sim state
+export async function setSimulationMode(telegramId: string, active: boolean): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { telegramId } });
+
+  if (active) {
+      await redis.set(`sim:active:${telegramId}`, 'true');
+      const existing = await redis.get(`sim:balance:${telegramId}`);
+      const startBal = existing ? parseFloat(existing) : 1000;
+      if (!existing) await redis.set(`sim:balance:${telegramId}`, startBal.toFixed(4));
+      await redis.set(`sim:starting_balance:${telegramId}`, startBal.toFixed(4));
+
+      const wallets = generateSimWallets();
+      await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
+  } else {
+      const keys = await redis.keys(`sim:*:${telegramId}`);
+      if (keys.length > 0) await redis.del(...keys);
+      await redis.set(`sim:active:${telegramId}`, 'false');
+  }
+
+  if (user) {
+      await prisma.simState.upsert({
+          where: { userId: user.id },
+          update: { active },
+          create: { userId: user.id, active, balance: 0, startingBalance: 0, volume: 0, credits: 0, autoSnipeActive: false }
+      });
+  }
+}

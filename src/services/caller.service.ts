@@ -386,15 +386,18 @@ export async function getCalibratedProjection(token: any) {
                     const low = Math.max(0, modelPeak - 1.96 * residualStd);
                     const high = modelPeak + 1.96 * residualStd;
                     const timeframe = humanizeMs((token.ageMins || 10) * 60000 * 2);
-                    return {
-                        target: `+${Math.floor(low)}% to +${Math.floor(high)}%`,
-                        timeframe,
-                        volatility: `ML Model (${weights.metrics?.sampleCount || 0} samples)`,
-                        sampleSize: weights.metrics?.sampleCount || 0,
-                        rawLow: low,
-                        rawHigh: high,
-                        rawTimeMins: (token.ageMins || 10) * 2
-                    };
+                   // Inside getCalibratedProjection ML Route:
+const sampleCount = (weights.metrics?.trainSampleCount || 0) + (weights.metrics?.valSampleCount || 0);
+
+return {
+    target: `+${Math.floor(low)}% to +${Math.floor(high)}%`,
+    timeframe,
+    volatility: `ML Model (${sampleCount} samples)`,
+    sampleSize: sampleCount,
+    rawLow: low,
+    rawHigh: high,
+    rawTimeMins: (token.ageMins || 10) * 2
+};
                 }
             }
         }
@@ -1198,14 +1201,21 @@ export async function scoreTokens() {
                     totalScore: Math.max(0, concentrationAdjustedScore), 
                     ageMins: t.stats.ageMins, 
                     reasons: finalScoreRes.reasons, 
-                    breakdown: { mevRisk: t.isRug || !sellability.sellable || hasMev ? -100 : 0 } 
+                    breakdown: { mevRisk: t.isRug || !sellability.sellable || hasMev ? -100 : 0 },
+                    // 🟢 FIX: propagate these so extractFeatures/storePredictionData see them
+                    isRug: t.isRug,
+                    stats: t.stats
                 };
             }));
             fullyScored.push(...results);
         }
 
         const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 15).map(t => ({
-            ...t.pair, totalScore: t.score, ageMins: t.stats.ageMins, reasons: t.reasons, breakdown: { mevRisk: t.isRug ? -100 : 0 }
+            ...t.pair, totalScore: t.score, ageMins: t.stats.ageMins, reasons: t.reasons, 
+            breakdown: { mevRisk: t.isRug ? -100 : 0 },
+            // 🟢 FIX: same propagation for low-score fallback
+            isRug: t.isRug,
+            stats: t.stats
         }))].sort((a, b) => b.totalScore - a.totalScore);
 
         await redis.set('caller:hot_scored_tokens', JSON.stringify(finalScored), 'EX', 30);

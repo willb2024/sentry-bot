@@ -197,13 +197,9 @@ export async function getCachedTokenPrice(mint: string): Promise<number> {
 
 export async function checkRecentMevActivityCached(tokenMint: string): Promise<boolean> {
     try {
-        const cached = await redis.get(`mev_check:${tokenMint}`);
-        if (cached) return cached === 'true';
-        const hasMev = await checkRecentMevActivity(tokenMint);
-        await redis.set(`mev_check:${tokenMint}`, hasMev ? 'true' : 'false', 'EX', 10);
-        return hasMev;
+        return await checkRecentMevActivity(tokenMint); 
     } catch (_) {
-        return false;
+        return true; // Fail-safe
     }
 }
 
@@ -459,13 +455,7 @@ if (side === 'buy' && !isBumper) {
             return { success: false, message: "Insufficient Funds." };
         }
 
-        // 🟢 Extended 500ms MEV Safety Net
-        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve("TIMEOUT"), 500));
-        const mevResult = await Promise.race([mevPromise, timeoutPromise]);
-        
-        if (mevResult === true) {
-            return { success: false, message: "🚨 MEV Sandwich Bot / High Risk Activity Detected. Trade Blocked." };
-        } 
+     
 
         // 🟢 Dynamic Slippage Override
         const slippage = overrideSlippage ?? user.slippagePercent ?? 20.0;

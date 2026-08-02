@@ -651,45 +651,7 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
 
 // 🟢 FIX: Properly shuts down DB state to prevent "Ghost State" simulation trap
 // 🟢 FIXED: Accessible /sim command for switching modes
-bot.command('sim', async (ctx) => {
-    const tgId = ctx.from?.id?.toString();
-    if (!tgId) return;
 
-    try {
-        const { isSimulationActive, setSimStartingBalance, generateSimWallets } = await import('./services/simulation.service.js');
-        const current = await isSimulationActive(tgId);
-        const newState = !current;
-
-        await redis.set(`sim:active:${tgId}`, newState ? 'true' : 'false');
-
-        if (newState) {
-            const existing = await redis.get(`sim:balance:${tgId}`);
-            const startBal = existing ? parseFloat(existing) : 1000;
-            if (!existing) await redis.set(`sim:balance:${tgId}`, startBal.toFixed(4));
-            await setSimStartingBalance(tgId, startBal);
-
-            const wallets = generateSimWallets();
-            await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
-        } else {
-            const keys = await redis.keys(`sim:*:${tgId}`);
-            if (keys.length > 0) await redis.del(...keys);
-        }
-
-        const displayBal = await redis.get(`sim:balance:${tgId}`) || '1000';
-        await ctx.replyWithHTML(
-            `🎮 <b>SIMULATION MODE: ${newState ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
-            `${newState
-                ? `⚠️ <i>All trades, balances, and alerts are now simulated.</i>\n\n` +
-                  `💰 Starting balance: <b>${displayBal} SOL</b>\n` +
-                  `🎯 Type <code>/simbal [amount]</code> to change it.`
-                : `<i>Platform returned to live mainnet mode. All sim data cleared.</i>`
-            }`
-        );
-        await sendOrEditDashboard(ctx, tgId, false);
-    } catch (e: any) {
-        await ctx.replyWithHTML(`🔴 <b>SIM ERROR:</b> ${e.message}`);
-    }
-});
 
 // =========================================================
 // 👑 VIP MENU SYSTEM
@@ -2675,33 +2637,7 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
     else await ctx.replyWithHTML(levelText, UI);
 }
 
-// 🟢 NEW ACTION: Toggles Sim Mode instantly on button click
-bot.action('toggle_sim_mode', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id?.toString();
-    if (!tgId) return;
 
-    const { isSimulationActive, setSimStartingBalance, generateSimWallets } = await import('./services/simulation.service.js');
-    const current = await isSimulationActive(tgId);
-    const newState = !current;
-
-    await redis.set(`sim:active:${tgId}`, newState ? 'true' : 'false');
-
-    if (newState) {
-        const existing = await redis.get(`sim:balance:${tgId}`);
-        const startBal = existing ? parseFloat(existing) : 1000;
-        if (!existing) await redis.set(`sim:balance:${tgId}`, startBal.toFixed(4));
-        await setSimStartingBalance(tgId, startBal);
-
-        const wallets = generateSimWallets();
-        await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
-    } else {
-        const keys = await redis.keys(`sim:*:${tgId}`);
-        if (keys.length > 0) await redis.del(...keys);
-    }
-
-    await sendOrEditSettings(ctx, tgId, true);
-});
 
 
 
@@ -6036,46 +5972,59 @@ app.post('/api/trades/export', async (req, res) => {
 // (Locate your existing `bot.command('simflex', ...)` and `bot.command('simedit', ...)` block and REPLACE IT ENTIRELY with this)
 
 
+// 1️⃣ Update /sim command
+bot.command('sim', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+    try {
+        const { isSimulationActive, setSimulationMode } = await import('./services/simulation.service.js');
+        const current = await isSimulationActive(tgId);
+        const newState = !current;
+        await setSimulationMode(tgId, newState);
 
-// 🟢 FIX: Syncs the WebApp toggle with the Database
+        const displayBal = await redis.get(`sim:balance:${tgId}`) || '1000';
+        await ctx.replyWithHTML(
+            `🎮 <b>SIMULATION MODE: ${newState ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
+            `${newState
+                ? `⚠️ <i>All trades, balances, and alerts are now simulated.</i>\n\n` +
+                  `💰 Starting balance: <b>${displayBal} SOL</b>\n` +
+                  `🎯 Type <code>/simbal [amount]</code> to change it.`
+                : `<i>Platform returned to live mode. All sim data cleared.</i>`
+            }`
+        );
+        await sendOrEditDashboard(ctx, tgId, false);
+    } catch (e: any) {
+        await ctx.replyWithHTML(`🔴 <b>SIM ERROR:</b> ${e.message}`);
+    }
+});
+
+// 2️⃣ Update toggle_sim_mode button action
+bot.action('toggle_sim_mode', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const { isSimulationActive, setSimulationMode } = await import('./services/simulation.service.js');
+    const current = await isSimulationActive(tgId);
+    await setSimulationMode(tgId, !current);
+
+    await sendOrEditSettings(ctx, tgId, true);
+});
+
+// 3️⃣ Update /api/toggle-sim express route
 app.post('/api/toggle-sim', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const tgId = extractTelegramId(req.body.initData);
         if (!tgId) return res.status(401).json({ error: "Invalid initData" });
         
-        const newState = req.body.active ? 'true' : 'false';
+        const { setSimulationMode } = await import('./services/simulation.service.js');
+        await setSimulationMode(tgId, req.body.active);
 
-        if (newState === 'true') {
-            await redis.set(`sim:active:${tgId}`, 'true');
-            const existing = await redis.get(`sim:balance:${tgId}`);
-            if (!existing) {
-                const DEFAULT_SIM_BALANCE = 0; 
-                await redis.set(`sim:balance:${tgId}`, DEFAULT_SIM_BALANCE.toFixed(4));
-                const { setSimStartingBalance } = await import('./services/simulation.service.js');
-                await setSimStartingBalance(tgId, DEFAULT_SIM_BALANCE);
-            }
-            const { generateSimWallets, saveSimulationState } = await import('./services/simulation.service.js');
-            const wallets = generateSimWallets();
-            await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
-            await saveSimulationState(tgId);
-        } else {
-            // 🟢 FIX: Update the database FIRST
-            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-            if (user) {
-                await prisma.simState.updateMany({
-                    where: { userId: user.id },
-                    data: { active: false }
-                });
-            }
-            const keys = await redis.keys(`sim:*:${tgId}`);
-            if (keys.length > 0) await redis.del(...keys);
-            await redis.set(`sim:active:${tgId}`, 'false');
-        }
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: 'Server Error' }); }
 });
-// (Replace the API blocks below to route the forged variables dynamically)
+
 
 // 🟢 FIX: Connects /simedit top-row stats and the Main Line Chart
 app.post('/api/sim-stats', async (req, res) => {
