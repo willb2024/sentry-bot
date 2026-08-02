@@ -6041,6 +6041,85 @@ app.post('/api/toggle-sim', async (req, res) => {
 
 // (Replace the API blocks below to route the forged variables dynamically)
 
+// 🟢 FIX: Connects /simedit top-row stats and the Main Line Chart
+app.post('/api/sim-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
+
+        const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume } = await import('./services/simulation.service.js');
+        const isActive = await isSimulationActive(tgId);
+        
+        if (!isActive) return res.json({ isActive: false });
+
+        const balance = await getSimBalance(tgId);
+        const startingBalance = await getSimStartingBalance(tgId);
+        const volume = await getSimVolume(tgId);
+        
+        const positionsRaw = await redis.get(`sim:positions:${tgId}`);
+        const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
+        
+        const tradesRaw = await redis.get(`sim:trades:${tgId}`);
+        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+
+        let wins = 0;
+        let losses = 0;
+
+        trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
+            if (t.profitPercent > 0) wins++;
+            else if (t.profitPercent < 0) losses++;
+        });
+
+        res.json({
+            isActive: true,
+            balance,
+            startingBalance,
+            volume,
+            wins,
+            losses,
+            positions,
+            trades
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'Server Error' });
+    }
+});
+
+// 🟢 FIX: Connects /simedit HOURLY_CHART to the Bar Chart
+app.post('/api/analytics/hourly', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(telegramId);
+        
+        if (isSim) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                const f = JSON.parse(forgedRaw);
+                if (f.hourlyChart && Array.isArray(f.hourlyChart)) {
+                    const result = [];
+                    for(let h = 0; h < 24; h++) {
+                        const pnl = f.hourlyChart[h % f.hourlyChart.length] || 0;
+                        const winRate = pnl > 0 ? 60 + Math.random() * 30 : 20 + Math.random() * 30;
+                        result.push({ hour: h, totalPnlSol: pnl, winRate: winRate });
+                    }
+                    return res.json(result);
+                }
+            }
+        }
+        
+        const { getHourlyPerformance } = await import('./services/analytics.service.js');
+        const hourly = await getHourlyPerformance(telegramId);
+        res.json(hourly);
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 app.post('/api/analytics/advanced-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
