@@ -5902,10 +5902,10 @@ bot.command('simedit', async (ctx) => {
         `🛠️ <b>SIMULATION EDITOR (DASHBOARD FORGE)</b>\n\n` +
         `Copy the template below, edit the values exactly as formatted, and reply to this message:\n\n` +
         `<code>BALANCE_SOL: ${currentBal}\n` +
-        `WINS: 113\n` +
-        `LOSSES: 67\n` +
-        `VOL: 250.4\n` +
-        `DAYS: 32\n` +
+        `WINS: 134\n` +
+        `LOSSES: 66\n` +
+        `VOL: 241.04\n` +
+        `DAYS: 34\n` +
         `SHARPE: ${currentForged.sharpe ?? 2.38}\n` +
         `DRAWDOWN: ${currentForged.drawdown ?? -0.140}\n` +
         `PROFIT_FACTOR: ${currentForged.profit ?? 3.30}\n` +
