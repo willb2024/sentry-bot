@@ -127,3 +127,110 @@ export async function exportTradesToCsv(telegramId: string): Promise<string | nu
     }
     return csv;
 }
+
+// src/services/analytics.service.ts (add after existing code)
+
+export async function getCombinedTrades(telegramId: string) {
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (!user) return [];
+  
+    const [liveTrades, simTrades] = await Promise.all([
+      prisma.trade.findMany({
+        where: { userId: user.id, status: 'CONFIRMED' },
+        select: { createdAt: true, isBuy: true, amountInSol: true, profitPercent: true, realizedPnlSol: true, tokenAddress: true, strategy: true }
+      }),
+      prisma.simTrade.findMany({
+        where: { userId: user.id },
+        select: { createdAt: true, isBuy: true, amountInSol: true, profitPercent: true, realizedPnlSol: true, tokenAddress: true }
+      })
+    ]);
+  
+    const combined = [
+      ...liveTrades.map(t => ({ ...t, isSim: false })),
+      ...simTrades.map(t => ({ ...t, isSim: true, strategy: 'SIMULATED' }))
+    ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  
+    return combined;
+  }
+  
+  export function computeCombinedStats(trades: any[]) {
+    let totalVolume = 0, wins = 0, losses = 0, totalPnl = 0;
+    const pnlArray: number[] = [];
+  
+    trades.forEach(t => {
+      if (!t.isBuy) {
+        const amt = Number(t.amountInSol || 0);
+        totalVolume += amt;
+        const pnl = Number(t.realizedPnlSol || 0);
+        totalPnl += pnl;
+        pnlArray.push(pnl);
+        if (pnl > 0.5) wins++;
+        else if (pnl < -0.5) losses++;
+      }
+    });
+  
+    const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
+    const avgWin = wins > 0 ? pnlArray.filter(p => p > 0).reduce((a, b) => a + b, 0) / wins : 0;
+    const avgLoss = losses > 0 ? Math.abs(pnlArray.filter(p => p < 0).reduce((a, b) => a + b, 0)) / losses : 0;
+    const profitFactor = avgLoss > 0 ? avgWin / avgLoss : (wins > 0 ? 999 : 0);
+  
+    const mean = pnlArray.length > 0 ? totalPnl / pnlArray.length : 0;
+    const stdDev = Math.sqrt(pnlArray.reduce((sum, p) => sum + (p - mean) ** 2, 0) / (pnlArray.length || 1));
+    const sharpeRatio = stdDev > 0 ? mean / stdDev : 0;
+  
+    let peak = 0, drawdown = 0, maxDrawdown = 0, runningSum = 0;
+    for (const p of pnlArray) {
+      runningSum += p;
+      if (runningSum > peak) peak = runningSum;
+      drawdown = peak - runningSum;
+      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+    }
+  
+    return {
+      totalVolume,
+      wins,
+      losses,
+      totalPnl,
+      winRate,
+      avgWin,
+      avgLoss,
+      profitFactor,
+      sharpeRatio,
+      maxDrawdown,
+      totalTrades: trades.length
+    };
+  }
+  
+  export async function getCombinedAdvancedStats(telegramId: string) {
+    const trades = await getCombinedTrades(telegramId);
+    return computeCombinedStats(trades);
+  }
+  
+  export async function getCombinedHourlyPerformance(telegramId: string) {
+    const trades = await getCombinedTrades(telegramId);
+    const hourlyMap = new Map();
+    for (let h = 0; h < 24; h++) hourlyMap.set(h, { count: 0, wins: 0, pnl: 0 });
+  
+    for (const t of trades) {
+      if (t.isBuy) continue;
+      const hour = new Date(t.createdAt).getUTCHours();
+      const entry = hourlyMap.get(hour)!;
+      entry.count++;
+      const pnl = Number(t.realizedPnlSol || 0);
+      entry.pnl += pnl;
+      if (pnl > 0) entry.wins++;
+    }
+  
+    return Array.from({ length: 24 }, (_, h) => {
+      const data = hourlyMap.get(h);
+      return {
+        hour: h,
+        tradeCount: data.count,
+        winCount: data.wins,
+        lossCount: data.count - data.wins,
+        totalPnlSol: data.pnl,
+        winRate: data.count > 0 ? (data.wins / data.count) * 100 : 0,
+        averagePnl: data.count > 0 ? data.pnl / data.count : 0
+      };
+    });
+  }

@@ -311,46 +311,7 @@ app.post('/api/sim-trades', async (req, res) => {
 });
 
 // 🟢 FIX: Serves 100% persistent simulation stats to the WebApp for any user in sim mode
-app.post('/api/sim-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-        const { isSimulationActive, getSimBalance, getSimVolume, getSimStartingBalance } = await import('./services/simulation.service.js');
-        
-        if (!await isSimulationActive(telegramId)) return res.json({ isActive: false });
-
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-
-        const balance = await getSimBalance(telegramId);
-        const startingBalance = await getSimStartingBalance(telegramId); 
-        const volume = await getSimVolume(telegramId);
-        
-        const posRaw = await redis.get(`sim:positions:${telegramId}`);
-        const positions = posRaw ? JSON.parse(posRaw) : [];
-        
-        const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
-        const simTrades = tradesRaw ? JSON.parse(tradesRaw) : [];
-
-        let wins = 0, losses = 0;
-        simTrades.filter((t: any) => !t.isBuy).forEach((t: any) => {
-            if (t.profitPercent > 0.5) wins++; else if (t.profitPercent < -0.5) losses++;
-        });
-
-        res.json({
-            isActive: true, 
-            balance: parseFloat(balance), 
-            startingBalance, 
-            volume, 
-            positions, 
-            trades: simTrades, 
-            wins, 
-            losses,
-            winRate: (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0"
-        });
-    } catch (e: any) { res.status(500).json({ isActive: false }); }
-});
 
 
 
@@ -503,97 +464,100 @@ async function getLiveBalance(user: any): Promise<string> {
 // =========================================================
 // 📟 DASHBOARD MENU SYSTEM (CLEAN & AESTHETIC STYLE)
 // =========================================================
+// src/index.ts – replace sendOrEditDashboard
 async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean = false) {
     const userPromise = prisma.user.findUnique({ 
-        where: { telegramId }, include: { _count: { select: { recruits: true } } } 
+      where: { telegramId }, include: { _count: { select: { recruits: true } } } 
     });
     
     const [user, vipStatus, isSimMode] = await Promise.all([
-        userPromise, getVipStatus(telegramId), import('./services/simulation.service.js').then(m => m.isSimulationActive(telegramId))
+      userPromise, getVipStatus(telegramId), import('./services/simulation.service.js').then(m => m.isSimulationActive(telegramId))
     ]);
     if (!user) return; 
-
+  
     const [liveBalance, userGuilds, newVipStatus] = await Promise.all([
-        getLiveBalance(user), prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } }), checkVipStatus(user.telegramId)
+      getLiveBalance(user), prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } }), checkVipStatus(user.telegramId)
     ]);
-
-// 🟢 CLAUDE FIX 3: Check hide wallets setting
-const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
-
-const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
-
-let displayCredits = user.creditBalance;
+  
+    const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
+  
+    const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
+  
+    let displayCredits = user.creditBalance;
     if (isSimMode) {
-        const simCreds = await redis.get(`sim:credits:${telegramId}`);
-        if (simCreds) displayCredits = parseInt(simCreds);
+      const simCreds = await redis.get(`sim:credits:${telegramId}`);
+      if (simCreds) displayCredits = parseInt(simCreds);
     }
-
+  
     const { getSimVolume } = await import('./services/simulation.service.js');
     let displayVolume = user.totalVolumeSol;
     if (isSimMode) displayVolume += await getSimVolume(telegramId);
-
+  
     const basePoints = Math.floor(displayVolume * 10000);
     const welcomeBonus = user.referredById ? 10000 : 0;
     const recruitBonus = user._count.recruits * 2000;
     const sentryPoints = (basePoints + welcomeBonus + recruitBonus).toLocaleString();
-
+  
     const welcomeText = user.referredById ? `\n• Partner Bonus: <b>+10,000 PTS</b>` : ``;
     const recruitText = user._count.recruits > 0 ? `\n• Network Bonus: <b>+${recruitBonus.toLocaleString()} PTS</b> <i>(${user._count.recruits} Recruits)</i>` : ``;
-
+  
     const botName = process.env.BOT_NAME || 'Sentry Terminal';
     
     let guildDisplay = `🏰 <b>Active Guild:</b> <i>None</i>\n`;
     if (userGuilds.length > 0) {
-        const primaryGuild = userGuilds[0];
-        const rankDisplay = primaryGuild.rank ? `#${primaryGuild.rank}` : `Unranked`;
-        guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Your Rank:</b> <b>${rankDisplay}</b> (${primaryGuild.loyaltyPoints.toLocaleString()} GLP)\n`;
+      const primaryGuild = userGuilds[0];
+      const rankDisplay = primaryGuild.rank ? `#${primaryGuild.rank}` : `Unranked`;
+      guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Your Rank:</b> <b>${rankDisplay}</b> (${primaryGuild.loyaltyPoints.toLocaleString()} GLP)\n`;
     }
-
+  
     const balanceNum = parseFloat(liveBalance) || 0;
     const usdValue = balanceNum * cachedSolUsdPrice;
     const usdBalanceFormatted = usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
+  
+    // 🟢 NEW: Add a line with the main coin symbol (e.g., SOL) and price
+    const tickerLine = `📈 <b>SOL/USD:</b> $${cachedSolUsdPrice.toFixed(2)}`;
+  
     const layoutTxt = 
-        `⚡ <b>${botName.toUpperCase()}</b> ⚡\n\n` +
-        
-        `👛 <b>Primary Deposit Node:</b>\n` +
-        `<code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n\n` +
-        
-        `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
-        `└ ${whaleModeText}\n\n` +
-
-        `🎯 <b>Caller Credits:</b> <code>${displayCredits}</code> Remaining\n` + 
-        `└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
-        
-        `└ ${whaleModeText}\n\n` +
-        
-        `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
-        `${guildDisplay}` + 
-        `• Your Points: <b>${sentryPoints} PTS</b> <i>(1 SOL = 10k PTS)</i>${welcomeText}${recruitText}\n\n` +  
-        
-        `📊 <b>Your Economics:</b>\n` +
-        `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
-        
-        `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
-
-        const UI = Markup.inlineKeyboard([
-            [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
-            [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
-            [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-            [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
-            [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-            [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
-            [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
-            
-            // 🟢 FIXED: "How to Trade" added next to "Track Trades"
-            [
-                { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
-                Markup.button.callback('📖 How to Trade', 'btn_trade_guide')
-            ]
-        ])
+      `⚡ <b>${botName.toUpperCase()}</b> ⚡\n\n` +
+      
+      `👛 <b>Primary Deposit Node:</b>\n` +
+      `<code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n` +
+      `${tickerLine}\n\n` +  // <-- added this line
+      
+      `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
+      `└ ${whaleModeText}\n\n` +
+  
+      `🎯 <b>Caller Credits:</b> <code>${displayCredits}</code> Remaining\n` + 
+      `└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
+      
+      `└ ${whaleModeText}\n\n` +
+      
+      `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
+      `${guildDisplay}` + 
+      `• Your Points: <b>${sentryPoints} PTS</b> <i>(1 SOL = 10k PTS)</i>${welcomeText}${recruitText}\n\n` +  
+      
+      `📊 <b>Your Economics:</b>\n` +
+      `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
+      
+      `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
+  
+    const UI = Markup.inlineKeyboard([
+      [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+      [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
+      [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
+      [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
+      [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+      [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+      [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
+      [
+        { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
+        Markup.button.callback('📖 How to Trade', 'btn_trade_guide')
+      ]
+    ]);
+  
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
     else await ctx.replyWithHTML(layoutTxt, UI);
-}
+  }
 
 
 // =========================================================
@@ -5821,6 +5785,72 @@ app.post('/api/my-leaderboard', async (req, res) => {
 });
 
 
+// =========================================================
+// 🔗 COMBINED (LIVE + SIM) API ENDPOINTS
+// =========================================================
+
+app.post('/api/combined-trades', async (req, res) => {
+    try {
+      if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+      const telegramId = extractTelegramId(req.body.initData);
+      if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+  
+      const { getCombinedTrades, computeCombinedStats } = await import('./services/analytics.service.js');
+      const trades = await getCombinedTrades(telegramId);
+      const stats = computeCombinedStats(trades);
+  
+      const alloc = { labels: ['No Holdings'], data: [100] };
+  
+      res.json({
+        trades: trades.map(t => ({
+          createdAt: t.createdAt,
+          isBuy: t.isBuy,
+          amountInSol: t.amountInSol,
+          profitPercent: t.profitPercent || 0,
+          realizedPnlSol: t.realizedPnlSol || 0
+        })),
+        stats: {
+          networth: 0,
+          networthSol: '0.00 SOL',
+          pnlPercent: (stats.totalPnl / (stats.totalVolume || 1) * 100).toFixed(2),
+          pnlUsd: stats.totalPnl * cachedSolUsdPrice,
+          winrate: stats.winRate.toFixed(1),
+          winLossText: `${stats.wins} Wins / ${stats.losses} Losses`,
+          volume: stats.totalVolume.toFixed(2) + ' SOL'
+        },
+        alloc
+      });
+    } catch (e) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+  
+  app.post('/api/combined-advanced-stats', async (req, res) => {
+    try {
+      if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+      const telegramId = extractTelegramId(req.body.initData);
+      if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+      const { getCombinedAdvancedStats } = await import('./services/analytics.service.js');
+      const stats = await getCombinedAdvancedStats(telegramId);
+      res.json(stats);
+    } catch (e) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+  
+  app.post('/api/combined-hourly', async (req, res) => {
+    try {
+      if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+      const telegramId = extractTelegramId(req.body.initData);
+      if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+      const { getCombinedHourlyPerformance } = await import('./services/analytics.service.js');
+      const hourly = await getCombinedHourlyPerformance(telegramId);
+      res.json(hourly);
+    } catch (e) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
 
 // 🟢 FEATURE 5: Public Guild Web Leaderboard
 app.get('/g/:guildCode', async (req, res) => {
@@ -5967,38 +5997,6 @@ app.post('/api/stats-window', async (req, res) => {
 });
 
 // Replace /api/analytics/hourly endpoint in src/index.ts
-app.post('/api/analytics/hourly', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        if (await isSimulationActive(telegramId)) {
-            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                if (f.hourlyChart && Array.isArray(f.hourlyChart)) {
-                    const data = [];
-                    const baseWinRate = 60;
-                    const len = f.hourlyChart.length;
-                    for (let i = 0; i < 24; i++) {
-                        const pnl = i < len ? f.hourlyChart[i] : (f.hourlyChart[len - 1] || 0);
-                        data.push({
-                            hour: i,
-                            totalPnlSol: pnl,
-                            winRate: pnl > 0 ? (baseWinRate + Math.random() * 20) : (pnl < 0 ? (baseWinRate - Math.random() * 20) : 0)
-                        });
-                    }
-                    return res.json(data);
-                }
-            }
-        }
-
-        const hourly = await getHourlyPerformance(telegramId);
-        res.json(hourly);
-    } catch (e) { res.status(500).json({ error: 'Server error' }); }
-});
 
 // 📤 Export Trades (CSV Web)
 app.post('/api/trades/export', async (req, res) => {

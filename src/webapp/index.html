@@ -188,22 +188,22 @@
                 <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">1</span>
             </div>
 
-            <!-- 🟢 24-HOUR ROLLING STATS WIDGET -->
-           <div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
-            <div class="flex items-center gap-3">
-                <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
-                    <i class="fa-solid fa-clock-rotate-left text-sm"></i>
+            <!-- 🟢 UNIFIED 24-HOUR ROLLING ACTIVITY -->
+            <div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
+                <div class="flex items-center gap-3">
+                    <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
+                        <i class="fa-solid fa-clock-rotate-left text-sm"></i>
+                    </div>
+                    <div>
+                        <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider block">24-Hour Rolling Activity</span>
+                        <span class="text-[10px] text-gray-500 font-mono">Real-Time Aggregates</span>
+                    </div>
                 </div>
-                <div>
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider block">24-Hour Rolling Activity</span>
-                    <span class="text-[10px] text-gray-500 font-mono">Manual vs Auto-Engine Aggregates</span>
+                <div class="flex gap-2 sm:gap-4 text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
+                    <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Manual: 0 trades (+0.0000 SOL)</span>
+                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto-Engine: 0 trades (+0.0000 SOL)</span>
                 </div>
             </div>
-            <div class="flex gap-2 sm:gap-4 text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
-                <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Manual: 0 trades (+0.0000 SOL)</span>
-                <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto-Engine: 0 trades (+0.0000 SOL)</span>
-            </div>
-        </div>
 
             <!-- 🟢 ADVANCED STATS CARD -->
             <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.01] mb-6">
@@ -262,7 +262,7 @@
                     <span class="text-[10px] text-neonBlue bg-neonBlue/10 border border-neonBlue/20 px-3 py-1 rounded-full font-mono" id="positions-count">0 OPEN</span>
                 </div>
                 <div id="positions-container" class="space-y-3">
-                    <!-- Skeletons -->
+                    <!-- Skeletons go here dynamically -->
                 </div>
             </div>
 
@@ -278,7 +278,7 @@
                         <button onclick="setFilter('1H')" id="btn-1H" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1H</button>
                         <button onclick="setFilter('1D')" id="btn-1D" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1D</button>
                         <button onclick="setFilter('7D')" id="btn-7D" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">7D</button>
-                        <button onclick="setFilter('30D')" id="btn-30D" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">30D</button>
+                        <button onclick="setFilter('30D')" id="btn-30D" class="glass-btn px-2 py-1 rounded-md font-semibold text-jupGreen glass-btn-active">30D</button>
                         <button onclick="setFilter('1Y')" id="btn-1Y" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1Y</button>
                     </div>
                 </div>
@@ -447,6 +447,7 @@
         dashView.classList.add('hidden-view');
         lbView.classList.add('hidden-view');
         affView.classList.add('hidden-view');
+        
         tabDash.className = "px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap";
         tabLb.className = "px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap";
         tabAff.className = "px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap";
@@ -579,7 +580,6 @@
             }
         });
 
-        // 🟢 FIXED PORTFOLIO SPLIT PIE CHART: Never renders blank
         const allocCtx = document.getElementById('allocationChart').getContext('2d');
         if (allocChart) allocChart.destroy();
         
@@ -619,25 +619,31 @@
         });
     }
 
-    // 🟢 FIXED VERIFIED HOLDINGS: Stays in the UI for both Live & Sim
     function renderPositions(positions) {
         const container = document.getElementById('positions-container');
         const section = document.getElementById('verified-holdings-section');
-        if (section) section.style.display = 'block';
-
-        const count = positions ? positions.length : 0;
-        const countEl = document.getElementById('positions-count');
-        if (countEl) countEl.innerText = `${count} OPEN`;
         
         if (!positions || positions.length === 0) {
-            container.innerHTML = `
-                <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                    <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                    <div class="text-sm font-semibold">No Active Deployments</div>
-                    <span class="text-xs font-mono mt-1">Awaiting target.</span>
-                </div>`;
+            if (isSimModeActive && section) {
+                section.style.display = 'none';
+            } else {
+                if (section) section.style.display = 'block';
+                const countEl = document.getElementById('positions-count');
+                if (countEl) countEl.innerText = `0 OPEN`;
+                
+                container.innerHTML = `
+                    <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                        <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
+                        <div class="text-sm font-semibold">No Active Deployments</div>
+                        <span class="text-xs font-mono mt-1">Awaiting target.</span>
+                    </div>`;
+            }
             return;
         }
+
+        if (section) section.style.display = 'block';
+        const countEl = document.getElementById('positions-count');
+        if (countEl) countEl.innerText = `${positions.length} OPEN`;
 
         container.innerHTML = positions.map((p) => {
             const entry = p.entryPrice || 0;
@@ -877,11 +883,7 @@
         currentFilter = timeframe;
         ['1H', '1D', '7D', '30D', '1Y'].forEach(tf => {
             const btn = document.getElementById(`btn-${tf}`);
-            if (tf === timeframe) {
-                btn.className = 'glass-btn px-2 py-1 rounded-md font-semibold text-jupGreen glass-btn-active';
-            } else {
-                btn.className = 'glass-btn px-2 py-1 rounded-md font-semibold text-gray-400 hover:text-white';
-            }
+            if (btn) btn.className = tf === timeframe ? 'glass-btn px-2 py-1 rounded-md font-semibold text-jupGreen glass-btn-active' : 'glass-btn px-2 py-1 rounded-md font-semibold text-gray-400 hover:text-white';
         });
 
         const chartData = aggregatePnlData(timeframe);
@@ -950,10 +952,10 @@
             });
             if (res.ok) {
                 const stats = await res.json();
-                document.getElementById('sharpe-ratio').innerText = stats.sharpeRatio.toFixed(2);
-                document.getElementById('max-drawdown').innerText = stats.maxDrawdown.toFixed(3) + ' SOL';
-                document.getElementById('profit-factor').innerText = stats.profitFactor.toFixed(2);
-                document.getElementById('total-trades').innerText = stats.totalTrades;
+                document.getElementById('sharpe-ratio').innerText = (stats.sharpeRatio || 0).toFixed(2);
+                document.getElementById('max-drawdown').innerText = (stats.maxDrawdown || 0).toFixed(3) + ' SOL';
+                document.getElementById('profit-factor').innerText = (stats.profitFactor || 0).toFixed(2);
+                document.getElementById('total-trades').innerText = (stats.totalTrades || 0);
             }
         } catch (_) {}
     }
@@ -966,38 +968,18 @@
             });
             if (res.ok) {
                 const data = await res.json();
-                const labels = data.map(d => d.hour + ':00');
-                const pnlData = data.map(d => d.totalPnlSol);
-                const winRateData = data.map(d => d.winRate);
-
                 const ctx = document.getElementById('hourlyChart').getContext('2d');
                 if (window.hourlyChartInst) window.hourlyChartInst.destroy();
-                
                 window.hourlyChartInst = new Chart(ctx, {
                     type: 'bar',
                     data: {
-                        labels: labels,
+                        labels: data.map(d => d.hour + ':00'),
                         datasets: [
-                            {
-                                label: 'PnL (SOL)', data: pnlData,
-                                backgroundColor: pnlData.map(v => v >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'),
-                                borderWidth: 0, yAxisID: 'y'
-                            },
-                            {
-                                label: 'Win Rate %', data: winRateData, type: 'line',
-                                borderColor: '#3b82f6', borderWidth: 2, pointRadius: 1, fill: false, yAxisID: 'y1'
-                            }
+                            { label: 'PnL (SOL)', data: data.map(d => d.totalPnlSol), backgroundColor: data.map(d => d.totalPnlSol >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'), borderWidth: 0, yAxisID: 'y' },
+                            { label: 'Win Rate %', data: data.map(d => d.winRate), type: 'line', borderColor: '#3b82f6', borderWidth: 2, pointRadius: 1, fill: false, yAxisID: 'y1' }
                         ]
                     },
-                    options: {
-                        responsive: true, maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
-                        scales: {
-                            x: { ticks: { color: '#64748b', maxTicksLimit: 8 }, grid: { display: false } },
-                            y: { position: 'left', ticks: { color: '#64748b' }, border: { display: false } },
-                            y1: { position: 'right', ticks: { color: '#64748b', display: false }, grid: { drawOnChartArea: false } }
-                        }
-                    }
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#64748b' }, grid: { display: false } }, y: { display: false }, y1: { display: false } } }
                 });
             }
         } catch (_) {}
@@ -1091,7 +1073,7 @@
                 if (simStats.isActive) {
                     isSimModeActive = true; 
 
-                    const startingBalance = simStats.startingBalance || 1000; 
+                    const startingBalance = simStats.startingBalance || 0; 
                     const solPriceRes = await fetch('/api/sol-price', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ initData: tg.initData || "" })
@@ -1114,9 +1096,8 @@
                     let losses = simStats.losses || 0;
                     let totalVolumeSol = simStats.volume || 0;
 
-                    const totalValueUsd = simPositions.reduce((sum, p) => sum + (p.valueUsd || 0), 0);
                     const simBalanceSol = parseFloat(simStats.balance) || 0;
-                    const networthUsd = Math.max(totalValueUsd, simBalanceSol * liveSolPrice); 
+                    const networthUsd = simBalanceSol * liveSolPrice; 
                     const networthSol = simBalanceSol.toFixed(4) + " SOL";
 
                     const pnlSol = simBalanceSol - startingBalance;
@@ -1137,13 +1118,15 @@
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ initData: tg.initData || "" })
                     }).then(r => r.ok ? r.json() : { guild: null, members: [] })
-                      .then(data => { liveLeaderboardData = data; }).catch(() => {});
+                      .then(data => { liveLeaderboardData = data; if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); })
+                      .catch(() => {});
 
                     fetch('/api/affiliate-stats', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ initData: tg.initData || "" })
                     }).then(r => r.ok ? r.json() : null)
-                      .then(data => { if (data) liveAffiliateData = data; }).catch(() => {});
+                      .then(data => { if (data) liveAffiliateData = data; if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); })
+                      .catch(() => {});
 
                     setTimeout(fetchLiveData, 4000);
                     return; 
@@ -1157,33 +1140,18 @@
             isSimModeActive = false;
         }
 
-        document.getElementById('positions-container').innerHTML = `
-            <div class="space-y-3">
-                <div class="card-flat h-20 skeleton"></div>
-                <div class="card-flat h-20 skeleton"></div>
-            </div>`;
-
-        fetch('/api/positions', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
-        })
+        fetch('/api/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
         .then(r => r.ok ? r.json() : [])
         .catch(() => [])
         .then(positions => {
-            fetch('/api/analytics', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
-            })
+            fetch('/api/analytics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
             .then(res => res.ok ? res.json() : [])
             .catch(() => [])
             .then(async trades => {
                 userTrades = trades || [];
                 const posArray = positions || [];
 
-                const solRes = await fetch('/api/sol-price', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ initData: tg.initData })
-                }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
+                const solRes = await fetch('/api/sol-price', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData }) }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
 
                 const currentSolPrice = solRes.price || 160;
                 let totalValueUsd = 0, totalInvestedUsd = 0, allocLabels = [], allocData = [];
@@ -1204,18 +1172,14 @@
                 userTrades.forEach(t => {
                     totalVolumeSol += parseFloat(t.amountInSol || 0);
                     if (!t.isBuy) {
-                        if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) {
-                            wins++;
-                        } else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) {
-                            losses++;
-                        }
+                        if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) wins++;
+                        else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) losses++;
                         totalRealizedPnlSol += (t.realizedPnlSol || 0);
                     }
                 });
 
                 const totalClosed = wins + losses;
                 const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
-                
                 const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
                 const finalPnlPercent = totalInvestedUsd > 0 ? (realizedPnlUsd / totalInvestedUsd) * 100 : 0;
 
@@ -1227,7 +1191,7 @@
                     winrate: winRate,
                     winLossText: `${wins} Wins / ${losses} Losses`,
                     volume: `${totalVolumeSol.toFixed(2)} SOL`
-                }, allocLabels.length ? allocLabels : ['No Assets'], allocData, posArray);
+                }, allocLabels.length ? allocLabels : ['Vault Liquid SOL'], allocData, posArray);
             });
         })
         .catch(() => {
@@ -1235,44 +1199,23 @@
                 networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0,
                 winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL"
             }, ['Offline'], [100], []);
-
-            document.getElementById('positions-container').innerHTML = `
-                <div class="text-center py-10 card-flat text-neonRed flex flex-col items-center">
-                    <i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i>
-                    <div class="text-sm font-bold">NODE DISCONNECTED</div>
-                    <span class="text-xs text-gray-500 font-mono mt-1">Verify backend API routing.</span>
-                </div>`;
         });
 
-        fetch('/api/my-leaderboard', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
-        })
+        fetch('/api/my-leaderboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
         .then(r => r.ok ? r.json() : { guild: null, members: [] })
-        .then(data => {
-            liveLeaderboardData = data;
-            if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) {
-                renderLeaderboard();
-            }
-        }).catch(() => {});
+        .then(data => { liveLeaderboardData = data; if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); }).catch(() => {});
 
-        fetch('/api/affiliate-stats', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
-        })
+        fetch('/api/affiliate-stats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
         .then(r => r.ok ? r.json() : null)
-        .then(data => {
-            if (data) liveAffiliateData = data;
-            if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) {
-                renderAffiliates();
-            }
-        }).catch(() => {});
+        .then(data => { if (data) liveAffiliateData = data; if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); }).catch(() => {});
     }
 
     // 🟢 START INITIALIZATION & WIDGET POLLERS
     fetchLiveData();
     fetchAdvancedStats();
     fetchHourlyPerformance();
+    fetchStatsWindow();
+    fetchEnterpriseMetrics();
     
     setInterval(fetchStatsWindow, 3000);
     setInterval(fetchEnterpriseMetrics, 15000);
