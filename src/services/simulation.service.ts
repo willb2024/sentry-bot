@@ -59,11 +59,24 @@ export async function saveSimulationState(telegramId: string) {
     const positionsRaw = await redis.get(`sim:positions:${telegramId}`);
     const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
 
+    const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+    const forged = forgedRaw ? JSON.parse(forgedRaw) : {};
+
     await prisma.simState.upsert({
         where: { userId: user.id },
         update: {
             balance, startingBalance, volume, credits, active, autoSnipeActive,
             positions: positions,
+            forgedSharpe: forged.sharpe ?? null,
+            forgedDrawdown: forged.drawdown ?? null,
+            forgedProfit: forged.profit ?? null,
+            forgedRisk: forged.risk ?? null,
+            forged24hTrades: forged.trades24h ?? null,
+            forged24hPnl: forged.pnl24h ?? null,
+            forgedStrat1Name: forged.strat1Name ?? null,
+            forgedStrat1Pnl: forged.strat1Pnl ?? null,
+            forgedStrat2Name: forged.strat2Name ?? null,
+            forgedStrat2Pnl: forged.strat2Pnl ?? null,
             trades: {
                 deleteMany: {},
                 create: trades.map((t: any) => ({
@@ -81,6 +94,16 @@ export async function saveSimulationState(telegramId: string) {
             userId: user.id,
             balance, startingBalance, volume, credits, active, autoSnipeActive,
             positions: positions,
+            forgedSharpe: forged.sharpe ?? null,
+            forgedDrawdown: forged.drawdown ?? null,
+            forgedProfit: forged.profit ?? null,
+            forgedRisk: forged.risk ?? null,
+            forged24hTrades: forged.trades24h ?? null,
+            forged24hPnl: forged.pnl24h ?? null,
+            forgedStrat1Name: forged.strat1Name ?? null,
+            forgedStrat1Pnl: forged.strat1Pnl ?? null,
+            forgedStrat2Name: forged.strat2Name ?? null,
+            forgedStrat2Pnl: forged.strat2Pnl ?? null,
             trades: {
                 create: trades.map((t: any) => ({
                     userId: user.id,
@@ -117,6 +140,20 @@ export async function loadSimulationState(telegramId: string) {
     if (state.positions) {
         await redis.set(`sim:positions:${telegramId}`, JSON.stringify(state.positions));
     }
+
+    const forged = {
+        sharpe: state.forgedSharpe,
+        drawdown: state.forgedDrawdown,
+        profit: state.forgedProfit,
+        risk: state.forgedRisk,
+        trades24h: state.forged24hTrades,
+        pnl24h: state.forged24hPnl,
+        strat1Name: state.forgedStrat1Name,
+        strat1Pnl: state.forgedStrat1Pnl,
+        strat2Name: state.forgedStrat2Name,
+        strat2Pnl: state.forgedStrat2Pnl
+    };
+    await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forged));
     
     const trades = state.trades.map((t: any) => ({
         createdAt: t.createdAt.toISOString(),
@@ -148,7 +185,7 @@ export async function isSimulationActive(telegramId: string): Promise<boolean> {
 
 export async function getSimStartingBalance(telegramId: string): Promise<number> {
     const val = await redis.get(`sim:starting_balance:${telegramId}`);
-    return val ? parseFloat(val) : 1000;
+    return val ? parseFloat(val) : 0.00;
 }
 
 export async function setSimStartingBalance(telegramId: string, amount: number): Promise<void> {
@@ -162,7 +199,7 @@ export async function getSimBalance(telegramId: string): Promise<string> {
         await loadSimulationState(telegramId);
         bal = await redis.get(`sim:balance:${telegramId}`);
     }
-    return bal || '1000.0000'; 
+    return bal || '0.0000';
 }
 
 export async function getSimVolume(telegramId: string): Promise<number> {
@@ -182,7 +219,6 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
     return wallets;
 }
 
-// 🟢 STATS LOGGING WITH UUID (Prevents Redis ZADD member overwrites)
 export async function recordStatsEvent(telegramId: string, mode: 'live' | 'sim', realizedPnlSol: number) {
     const key = `stats_events:${mode}:${telegramId}`;
     const eventId = crypto.randomUUID();
@@ -214,7 +250,7 @@ export async function recordSimTrade(telegramId: string, isBuy: boolean, amountI
 
     existing.unshift({
         createdAt: new Date().toISOString(),
-        isBuy, amountInSol, profitPercent, realizedPnlSol
+        isBuy, amountInSol, profitPercent, realizedPnlSol, strategy: 'Sniper Engine'
     });
     
     await redis.set(key, JSON.stringify(existing.slice(0, 100))); 
@@ -243,18 +279,13 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
 }
 
 export async function simExecuteSnipe(
-    telegramId: string,
-    tokenAddress: string,
-    amountSol: number
+    telegramId: string, tokenAddress: string, amountSol: number
 ): Promise<{ success: boolean, signature: string, message: string, volumeSpent: number }> {
     
     const currentBal = parseFloat(await getSimBalance(telegramId));
     if (currentBal < amountSol + 0.001) {
         return { 
-            success: false, 
-            signature: '', 
-            message: `🔴 <b>Insufficient Funds.</b>\nYour Auto-Engine balance is only <b>${currentBal.toFixed(4)} SOL</b>. Please allocate more capital to continue.`, 
-            volumeSpent: 0 
+            success: false, signature: '', message: `🔴 <b>Insufficient Funds.</b>\nYour Auto-Engine balance is only <b>${currentBal.toFixed(4)} SOL</b>. Please allocate more capital to continue.`, volumeSpent: 0 
         };
     }
 
@@ -311,10 +342,7 @@ export async function simExecuteSnipe(
 }
 
 export async function simExecuteExit(
-    telegramId: string,
-    tokenAddress: string,
-    percent: number,
-    forcedPnlPercent?: number 
+    telegramId: string, tokenAddress: string, percent: number, forcedPnlPercent?: number 
 ): Promise<{ success: boolean, signature: string, message: string }> {
     
     await new Promise(r => setTimeout(r, 1200));
@@ -349,7 +377,6 @@ export async function simExecuteExit(
         const updated = positions.filter((p: any) => p.mint !== tokenAddress);
         await redis.set(posKey, JSON.stringify(updated)); 
     } else {
-        // 🟢 FIX: DEDUCT PARTIAL SELLS (Solves Infinite Money Glitch)
         pos.amount = pos.amount * (1 - (percent / 100));
         pos.amountInSol = pos.amountInSol * (1 - (percent / 100));
         pos.valueUsd = pos.valueUsd * (1 - (percent / 100));
@@ -365,10 +392,7 @@ export async function simExecuteExit(
     return { success: true, signature: generateSimSignature(), message: `🟢 Auto-Engine: Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };
 }
 
-export async function generateSimCallerAlert(telegramId: string, filters: {
-    minScore: number; maxAgeMins: number; minPctChange: number; maxPctChange: number; minLiquidity: number; minVolume24h: number; blockMev: boolean;
-}): Promise<any> {
-    
+export async function generateSimCallerAlert(telegramId: string, filters: any): Promise<any> {
     try {
         const hotRaw = await redis.get('caller:hot_scored_tokens');
         if (hotRaw) {
@@ -408,91 +432,12 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
             }
         }
     } catch(e) {}
-
-    const poolSize = 15; 
-    const candidates: any[] = [];
-    
-    for (let i = 0; i < poolSize; i++) {
-        const ageMins = Math.floor(Math.random() * 120) + 1; 
-        const liqRand = Math.random();
-        let liquidity = 0;
-        if (liqRand < 0.70) liquidity = Math.random() * 7000 + 3000;         
-        else if (liqRand < 0.95) liquidity = Math.random() * 15000 + 10000;  
-        else liquidity = Math.random() * 55000 + 25000;                      
-
-        const volRand = Math.random();
-        let volume24h = 0;
-        if (volRand < 0.60) volume24h = liquidity * (Math.random() * 2 + 0.5);      
-        else if (volRand < 0.90) volume24h = liquidity * (Math.random() * 5 + 2);   
-        else volume24h = liquidity * (Math.random() * 15 + 5);                      
-
-        const momRand = Math.random();
-        let priceChangeM5 = 0;
-        if (momRand < 0.60) priceChangeM5 = (Math.random() * 15) - 10;        
-        else if (momRand < 0.90) priceChangeM5 = (Math.random() * 25) + 5;    
-        else priceChangeM5 = (Math.random() * 120) + 30;                      
-
-        const hasSocials = Math.random() > 0.40; 
-        const isRug = Math.random() < 0.08; 
-
-        const devRep = { launchCount: Math.floor(Math.random() * 12), avgRugScore: Math.random() * 0.3, isKnownRugger: Math.random() < 0.03 };
-        const lpLock = { burned: Math.random() < 0.35, locked: Math.random() < 0.25, lockPct: Math.random() < 0.5 ? Math.random() * 30 : 60 + Math.random() * 40 };
-        const velocity = { growthRate: Math.random() < 0.3 ? Math.random() * 80 : (Math.random() - 0.3) * 40, uniqueBuyers5m: Math.floor(Math.random() * 40) };
-        const sellability = { sellable: Math.random() > 0.05, estimatedTaxPct: Math.random() * 10 };
-
-        const stats: TokenStats = { 
-            ageMins, volume24h, liquidity, priceChangeM5: parseFloat(priceChangeM5.toFixed(1)), 
-            hasSocials, isRug, devRep, lpLock, velocity, sellability 
-        };
-        let { score, reasons } = computeTokenScore(stats);
-        if (score >= 100) score = Math.floor(Math.random() * 7) + 92; 
-
-        const realToken = await getRealTokenForSimDisplay();
-
-        candidates.push({
-            mint: realToken.mint, symbol: realToken.symbol, score, reasons, ageMins, priceChangeM5: stats.priceChangeM5,
-            mevRisk: stats.isRug ? -100 : 0, liquidity: stats.liquidity, volume: stats.volume24h     
-        });
-    }
-
-    const matching = candidates.filter(t =>
-        t.score >= filters.minScore && t.ageMins <= filters.maxAgeMins &&
-        t.priceChangeM5 >= filters.minPctChange && t.priceChangeM5 <= filters.maxPctChange &&
-        t.liquidity >= filters.minLiquidity && t.volume >= filters.minVolume24h &&
-        (!filters.blockMev || t.mevRisk >= 0)
-    );
-
-    if (matching.length > 0) {
-        let bestMatch = null;
-        let isReshow = false;
-        for (const t of matching) {
-            const seen = await redis.get(`sim_alerted:${telegramId}:${t.mint}`);
-            if (!seen) {
-                bestMatch = t;
-                await redis.set(`sim_alerted:${telegramId}:${t.mint}`, '1', 'EX', 300);
-                break;
-            }
-        }
-        if (!bestMatch) {
-            bestMatch = matching.sort((a: any, b: any) => (b.totalScore ?? b.score) - (a.totalScore ?? a.score))[0];
-            isReshow = true;
-        }
-        return {
-            mint: bestMatch.mint, symbol: bestMatch.symbol, score: bestMatch.totalScore ?? bestMatch.score,
-            reasons: bestMatch.reasons || [], ageMins: bestMatch.ageMins, priceChangeM5: bestMatch.priceChangeM5 || 0,
-            mevRisk: bestMatch.breakdown?.mevRisk ?? bestMatch.mevRisk ?? 0, liquidity: bestMatch.liquidity, volume: bestMatch.volume,
-            isReshow
-        };
-    }
-    
     return null;
 }
 
-// 🟢 CALIBRATED FOR 63% WIN RATE
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
     const scoreVal = score ?? 65;
     let baseWinProb = 0.48 + (scoreVal / 100) * 0.25; 
-
     const lastKey = `sim:last_outcome:${type}:${telegramId}`;
     const last = await redis.get(lastKey);
 
@@ -639,14 +584,6 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
             telegramId, { source: imageBuffer },
             { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
         );
-
-        if (user?.reactionGifsEnabled) {
-            (async () => {
-                const { getReactionGifUrl } = await import('./reaction.service.js');
-                const gifUrl = await getReactionGifUrl(isProfit);
-                if (gifUrl) bot.telegram.sendAnimation(telegramId, gifUrl, { caption: isProfit ? '💰' : '💪' }).catch(() => {});
-            })();
-        }
 
     } catch (e: any) {
         try { await bot.telegram.sendMessage(telegramId, captionText, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }); } catch (_) {}

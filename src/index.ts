@@ -1067,36 +1067,7 @@ bot.command('batch', async (ctx) => {
     });
 });
 
-// 🟢 NEW: Endpoint to sync WebApp toggle with Backend Simulation state
-app.post('/api/toggle-sim', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const tgId = extractTelegramId(req.body.initData);
-        if (!tgId) return res.status(401).json({ error: "Invalid initData" });
-        
-        const newState = req.body.active ? 'true' : 'false';
-        await redis.set(`sim:active:${tgId}`, newState);
 
-        if (newState === 'true') {
-            const existing = await redis.get(`sim:balance:${tgId}`);
-            // 🟢 FIX A.6: Start them at exactly 1000 so the Net Worth lines up beautifully
-            if (!existing) {
-                const DEFAULT_SIM_BALANCE = 1000;
-                await redis.set(`sim:balance:${tgId}`, DEFAULT_SIM_BALANCE.toFixed(4));
-                const { setSimStartingBalance } = await import('./services/simulation.service.js');
-                await setSimStartingBalance(tgId, DEFAULT_SIM_BALANCE);
-            }
-            const { generateSimWallets } = await import('./services/simulation.service.js');
-            const wallets = generateSimWallets();
-            await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
-        } else {
-            
-            const keys = await redis.keys(`sim:*:${tgId}`);
-            if (keys.length > 0) await redis.del(...keys);
-        }
-        res.json({ success: true });
-    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
-});
 
 bot.action('action_start_guild_wizard', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -2647,107 +2618,12 @@ bot.action('action_unlock_devsuite', async (ctx) => {
 });
 
 
-// 🟢 KEEP ONLY THIS ONE SINGLE /simedit COMMAND HANDLER:
-bot.command('simedit', async (ctx) => {
-    const tgId = ctx.from?.id?.toString();
-    if (!isAdmin(tgId)) return;
 
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 5 || parts.length > 6) {
-        return ctx.replyWithHTML('<b>Usage:</b> <code>/simedit [WINS] [LOSSES] [TOTAL_VOLUME_SOL] [DAYS_ACTIVE] [OPTIONAL_CREDITS]</code>');
-    }
 
-    const wins = parseInt(parts[1]);
-    const losses = parseInt(parts[2]);
-    const totalVol = parseFloat(parts[3]);
-    const daysActive = parseInt(parts[4]);
-    const credits = parts.length === 6 ? parseInt(parts[5]) : undefined;
 
-    if (isNaN(wins) || isNaN(losses) || isNaN(totalVol) || isNaN(daysActive) || daysActive < 1) {
-        return ctx.reply("🔴 Invalid numbers provided.");
-    }
 
-    const totalTrades = wins + losses || 1;
-    const volPerTrade = totalVol / totalTrades;
-    const now = Date.now();
-    const fakeTrades = [];
-    
-    const calcTradeSize = 1.0; 
-    let totalRealizedPnl = 0;
 
-    for (let i = 0; i < wins; i++) {
-        const pnlPercent = Math.random() * 120 + 20; 
-        const realizedPnlSol = calcTradeSize * (pnlPercent / 100);
-        totalRealizedPnl += realizedPnlSol;
-        fakeTrades.push({
-            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
-        });
-    }
-    for (let i = 0; i < losses; i++) {
-        const pnlPercent = -(Math.random() * 25 + 5); 
-        const realizedPnlSol = calcTradeSize * (pnlPercent / 100);
-        totalRealizedPnl += realizedPnlSol;
-        fakeTrades.push({
-            createdAt: new Date(now - Math.random() * daysActive * 86400000).toISOString(),
-            isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: volPerTrade * (pnlPercent / 100)
-        });
-    }
 
-    if (fakeTrades.length > 0) fakeTrades[0].createdAt = new Date(now - daysActive * 86400000).toISOString();
-    fakeTrades.sort(() => Math.random() - 0.5);
-
-    await redis.set(`sim:trades:${tgId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
-    await redis.set(`sim:volume:${tgId}`, totalVol.toString());
-
-    if (credits !== undefined) {
-        await redis.set(`sim:credits:${tgId}`, credits.toString());
-    }
-
-    const { getSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
-    const startBal = await getSimStartingBalance(tgId!);
-    const newBalance = Math.max(10, startBal + totalRealizedPnl); 
-    await redis.set(`sim:balance:${tgId}`, newBalance.toFixed(4));
-
-    await saveSimulationState(tgId!);
-
-    await ctx.replyWithHTML(
-        `✅ <b>Simulated Stats Forged & Aligned!</b>\n\n` +
-        `Wins: <b>${wins}</b> | Losses: <b>${losses}</b>\n` +
-        `Volume: <b>${totalVol} SOL</b> | Days: <b>${daysActive}</b>\n` +
-        `Win Rate: <b>${((wins/(wins+losses))*100).toFixed(1)}%</b>\n` +
-        `New Balance: <b>${newBalance.toFixed(4)} SOL</b>\n\n` +
-        `<i>Dashboard PnL, Net Worth, and Win Rate are now fully aligned.</i>`
-    );
-});
-
-// STATS WINDOW API ENDPOINT (For WebApp)
-app.post('/api/stats-window', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const { getStatsForWindow } = await import('./services/simulation.service.js');
-        
-        // 🟢 FIX: Query 24-Hour window (86400 seconds)
-        const liveStats = await getStatsForWindow(telegramId, 'live', 86400);
-        const simStats = await getStatsForWindow(telegramId, 'sim', 86400);
-
-        res.json({
-            live: liveStats,
-            sim: simStats,
-            combined: {
-                totalPnl: liveStats.totalPnl + simStats.totalPnl,
-                wins: liveStats.wins + simStats.wins,
-                losses: liveStats.losses + simStats.losses,
-                tradeCount: liveStats.tradeCount + simStats.tradeCount
-            }
-        });
-    } catch (e) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
 bot.action('action_enter_ref_code', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -4583,16 +4459,18 @@ async function deleteKeysPattern(pattern: string) {
     } while (cursor !== '0');
 }
 
+// =========================================================
+// ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
+// =========================================================
 bot.on("text", async (ctx, next) => {
     const text = ctx.message.text.trim();
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return next();
 
-    
-
     // 🟢 GLOBAL CANCEL
     if (text.toLowerCase() === '/cancel' || text.toLowerCase() === 'cancel') {
         const keysToClear = [
+            `state:simedit:${telegramId}`, // <-- ADDED FOR SIMEDIT CANCEL
             `state:guard:${telegramId}`, `state:dca:${telegramId}`, `state:limit:${telegramId}`, 
             `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`, `state:autosnipe_amt:${telegramId}`, 
             `state:autosnipe_sl:${telegramId}`, `state:autosnipe_delay:${telegramId}`, `state:autosnipe_tp:${telegramId}`, 
@@ -4606,7 +4484,8 @@ bot.on("text", async (ctx, next) => {
             `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`,
             `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`,
             `state:guild_airdrop:${telegramId}`, `vip:awaiting_tx:${telegramId}`,
-            `state:set_pin:${telegramId}`, `state:withdraw_pin:${telegramId}`
+            `state:set_pin:${telegramId}`, `state:withdraw_pin:${telegramId}`,
+            `state:credits_tx:${telegramId}`, `credits:pending:${telegramId}`
         ];
         
         await redis.del(...keysToClear); 
@@ -4616,42 +4495,130 @@ bot.on("text", async (ctx, next) => {
         await sendOrEditDashboard(ctx, telegramId, false);
         return;
     }
-// 🟢 CREDIT PAYMENT HANDLER
-const pendingCreditsTx = await redis.get(`state:credits_tx:${telegramId}`);
-if (pendingCreditsTx) {
-    await redis.del(`state:credits_tx:${telegramId}`);
-    const txSig = text.trim();
-    const loader = await ctx.replyWithHTML(`<i>⏳ Verifying payment...</i>`);
-    try {
-        const rawPending = await redis.get(`credits:pending:${telegramId}`);
-        if (!rawPending) throw new Error("Session expired. Please restart the purchase.");
-        const packKey = rawPending;
 
-        const { verifyVipPayment } = await import('./services/vip.service.js');
-        const { CREDIT_PACKS, addCredits } = await import('./services/credits.service.js');
+    // 🟢 DASHBOARD SIMULATION FORGER
+    if (await redis.get(`state:simedit:${telegramId}`)) {
+        await redis.del(`state:simedit:${telegramId}`);
         
-        // Safely assert the key to avoid the 'any' indexing error
-        const pack = CREDIT_PACKS[packKey as keyof typeof CREDIT_PACKS];
-        const priceSol = pack.priceUsd / cachedSolUsdPrice;
-        const treasury = process.env.TREASURY_WALLET_ADDRESS!;
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-
-        const verifyRes = await verifyVipPayment(txSig, priceSol * 0.9, treasury, user!.vaultAddress!); // 10% slippage tolerance on SOL price swings
-        if (verifyRes.valid) {
-            const result = await addCredits(telegramId, packKey as any, txSig);
-            await redis.del(`credits:pending:${telegramId}`);
-            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
-                `✅ <b>CREDITS ADDED!</b>\n\n+${pack.credits} credits.\nNew Balance: <b>${result.newBalance} credits</b>`,
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller', callback_data: 'menu_caller' }]]} });
-        } else {
-            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
-                `🔴 <b>Verification Failed:</b> ${verifyRes.reason}`, { parse_mode: 'HTML' });
+        const lines = text.split('\n');
+        const data: any = {};
+        for (const line of lines) {
+            const parts = line.split(':');
+            if (parts.length < 2) continue;
+            const key = parts[0].trim().toUpperCase();
+            const val = parts.slice(1).join(':').trim();
+            data[key] = val;
         }
-    } catch (e: any) {
-        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Error: ${e.message}`, { parse_mode: 'HTML' });
+
+        try {
+            const wins = parseInt(data['WINS']) || 0;
+            const losses = parseInt(data['LOSSES']) || 0;
+            const vol = parseFloat(data['VOL']) || 0;
+            const days = parseInt(data['DAYS']) || 1;
+            
+           // 🟢 FIX: Add ": any" to bypass strict property checks
+           const forged: any = {
+            sharpe: parseFloat(data['SHARPE']) || 0,
+            drawdown: parseFloat(data['DRAWDOWN']) || 0,
+            profit: parseFloat(data['PROFIT_FACTOR']) || 0,
+            risk: parseFloat(data['RISK_SCORE']) || 0,
+            trades24h: parseInt(data['24H_TRADES']) || 0,
+            pnl24h: parseFloat(data['24H_PNL']) || 0,
+        };
+        
+        if (data['STRAT1']) {
+            const parts = data['STRAT1'].split('|');
+            forged.strat1Name = parts[0]?.trim() || 'Manual / Direct';
+            forged.strat1Pnl = parseFloat(parts[1]) || 0;
+        }
+        if (data['STRAT2']) {
+            const parts = data['STRAT2'].split('|');
+            forged.strat2Name = parts[0]?.trim() || 'Sniper Engine';
+            forged.strat2Pnl = parseFloat(parts[1]) || 0;
+        }
+
+            await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forged));
+
+            // Organically generate the history for PnL/Winrate/Volume
+            const totalTrades = wins + losses || 1;
+            const volPerTrade = vol / totalTrades;
+            const now = Date.now();
+            const fakeTrades = [];
+            let totalRealizedPnl = 0;
+
+            for (let i = 0; i < wins; i++) {
+                const pnlPercent = Math.random() * 120 + 20; 
+                const realizedPnlSol = 1.0 * (pnlPercent / 100);
+                totalRealizedPnl += realizedPnlSol;
+                fakeTrades.push({
+                    createdAt: new Date(now - Math.random() * days * 86400000).toISOString(),
+                    isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: 1.0 * (pnlPercent / 100)
+                });
+            }
+            for (let i = 0; i < losses; i++) {
+                const pnlPercent = -(Math.random() * 25 + 5); 
+                const realizedPnlSol = 1.0 * (pnlPercent / 100);
+                totalRealizedPnl += realizedPnlSol;
+                fakeTrades.push({
+                    createdAt: new Date(now - Math.random() * days * 86400000).toISOString(),
+                    isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: 1.0 * (pnlPercent / 100)
+                });
+            }
+
+            fakeTrades.sort(() => Math.random() - 0.5);
+
+            await redis.set(`sim:trades:${telegramId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
+            await redis.set(`sim:volume:${telegramId}`, vol.toString());
+
+            const { getSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
+            const startBal = await getSimStartingBalance(telegramId);
+            const newBalance = startBal + totalRealizedPnl;
+            
+            await redis.set(`sim:balance:${telegramId}`, newBalance.toFixed(4));
+            await saveSimulationState(telegramId);
+
+            await ctx.replyWithHTML(`✅ <b>Simulation Database Successfully Overwritten!</b>\n\nAll variables including Sharpe, Strategies, Risk, 24H Activity, PnL, and Win Rate have been permanently stored in Postgres. Refresh your dashboard to see your updates.`);
+        } catch(e) {
+            await ctx.reply("🔴 Error parsing format. Please make sure you copy the template exactly.");
+        }
+        return;
     }
-    return;
-}
+
+    // 🟢 CREDIT PAYMENT HANDLER
+    const pendingCreditsTx = await redis.get(`state:credits_tx:${telegramId}`);
+    if (pendingCreditsTx) {
+        await redis.del(`state:credits_tx:${telegramId}`);
+        const txSig = text.trim();
+        const loader = await ctx.replyWithHTML(`<i>⏳ Verifying payment...</i>`);
+        try {
+            const rawPending = await redis.get(`credits:pending:${telegramId}`);
+            if (!rawPending) throw new Error("Session expired. Please restart the purchase.");
+            const packKey = rawPending;
+
+            const { verifyVipPayment } = await import('./services/vip.service.js');
+            const { CREDIT_PACKS, addCredits } = await import('./services/credits.service.js');
+            
+            const pack = CREDIT_PACKS[packKey as keyof typeof CREDIT_PACKS];
+            const priceSol = pack.priceUsd / cachedSolUsdPrice;
+            const treasury = process.env.TREASURY_WALLET_ADDRESS!;
+            const user = await prisma.user.findUnique({ where: { telegramId } });
+
+            const verifyRes = await verifyVipPayment(txSig, priceSol * 0.9, treasury, user!.vaultAddress!); // 10% slippage tolerance on SOL price swings
+            if (verifyRes.valid) {
+                const result = await addCredits(telegramId, packKey as any, txSig);
+                await redis.del(`credits:pending:${telegramId}`);
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+                    `✅ <b>CREDITS ADDED!</b>\n\n+${pack.credits} credits.\nNew Balance: <b>${result.newBalance} credits</b>`,
+                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller', callback_data: 'menu_caller' }]]} });
+            } else {
+                await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+                    `🔴 <b>Verification Failed:</b> ${verifyRes.reason}`, { parse_mode: 'HTML' });
+            }
+        } catch (e: any) {
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Error: ${e.message}`, { parse_mode: 'HTML' });
+        }
+        return;
+    }
     
     // 🟢 VIP PAYMENT HANDLER
     const pendingVipTier = await redis.get(`vip:awaiting_tx:${telegramId}`);
@@ -4701,14 +4668,12 @@ if (pendingCreditsTx) {
     }
 
     // 🟢 SECURITY: Withdrawal Execution
-    // 🟢 SECURITY: Withdrawal Execution
     const pendingWithdrawalStr = await redis.get(`state:withdraw_pin:${telegramId}`);
     if (pendingWithdrawalStr) {
         await redis.del(`state:withdraw_pin:${telegramId}`);
         try { await ctx.deleteMessage(ctx.message.message_id); } catch(e){} 
 
         const user = await prisma.user.findUnique({ where: { telegramId } });
-        // 🟢 FIX 1.2: Match the salt used when the PIN was originally set!
         const userSalt = telegramId + process.env.BOT_TOKEN!;
         const submittedHash = crypto.scryptSync(text.trim(), userSalt, 32).toString('hex');
 
@@ -5896,61 +5861,8 @@ app.get('/g/:guildCode', async (req, res) => {
 // =========================================================
 
 
-// ---------------------------------------------------------
-// 📊 ENTERPRISE ANALYTICS: RISK SCORE & PERFORMANCE
-// ---------------------------------------------------------
-
-app.post('/api/risk-score', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const positions = await getUserPositions(telegramId);
-        if (!positions || positions.length === 0) {
-            return res.json({ score: 0, riskLevel: 'Safe', details: { topConcentration: 0, rugCount: 0 } });
-        }
-
-        const { getTokenRiskDetails } = await import('./services/price.service.js');
-        
-        let totalValue = 0;
-        let rugCount = 0;
-
-        // 🟢 FIX: Added explicit `p: any` and `t: any` type annotations
-        const enriched = await Promise.all(positions.map(async (p: any) => {
-            const rug = await getTokenRiskDetails(p.mint);
-            totalValue += p.valueUsd;
-            if (rug.isUnsafe) rugCount++;
-            return { ...p, rug };
-        }));
-
-        const topConcentration = Math.max(...enriched.map((t: any) => t.valueUsd / (totalValue || 1)));
-        
-        let score = 0;
-        if (topConcentration > 0.50) score += 30;
-        if (topConcentration > 0.80) score += 15;
-        if (rugCount > 0) score += 40;
-        
-        const riskLevel = score > 70 ? 'High' : score > 40 ? 'Medium' : 'Low';
-        res.json({ score: Math.min(100, score), riskLevel, details: { topConcentration, rugCount } });
-    } catch (e) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
 
 
-// 📊 Advanced Stats (Sharpe, Drawdown, etc.)
-app.post('/api/analytics/advanced-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const stats = await getAdvancedStats(telegramId);
-        if (!stats) return res.status(404).json({ error: 'User not found' });
-        res.json(stats);
-    } catch (e) { res.status(500).json({ error: 'Server error' }); }
-});
 
 // 🕒 Hourly Performance
 app.post('/api/analytics/hourly', async (req, res) => {
@@ -5980,28 +5892,214 @@ app.post('/api/trades/export', async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Server error' }); }
 });
 
+// (Locate your existing `bot.command('simflex', ...)` and `bot.command('simedit', ...)` block and REPLACE IT ENTIRELY with this)
+
+bot.command('simedit', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    
+    await redis.set(`state:simedit:${tgId}`, 'AWAITING', 'EX', 300);
+    
+    const currentForged = JSON.parse(await redis.get(`sim:forged:${tgId}`) || '{}');
+
+    await ctx.replyWithHTML(
+        `🛠️ <b>SIMULATION EDITOR (DASHBOARD FORGE)</b>\n\n` +
+        `Copy the template below, edit the values exactly as formatted, and reply to this message:\n\n` +
+        `<code>WINS: 113\n` +
+        `LOSSES: 67\n` +
+        `VOL: 250.4\n` +
+        `DAYS: 32\n` +
+        `SHARPE: ${currentForged.sharpe ?? 2.45}\n` +
+        `DRAWDOWN: ${currentForged.drawdown ?? -0.12}\n` +
+        `PROFIT_FACTOR: ${currentForged.profit ?? 1.80}\n` +
+        `RISK_SCORE: ${currentForged.risk ?? 0}\n` +
+        `24H_TRADES: ${currentForged.trades24h ?? 0}\n` +
+        `24H_PNL: ${currentForged.pnl24h ?? 0.00}\n` +
+        `STRAT1: Manual / Direct | ${currentForged.strat1Pnl ?? 0.00}\n` +
+        `STRAT2: Sniper Engine | ${currentForged.strat2Pnl ?? 0.00}</code>\n\n` +
+        `<i>Values will be permanently saved to Postgres. Future trades will stack organically on top of these. Type /cancel to abort.</i>`
+    );
+});
+
+
+// (Replace `/api/toggle-sim` block to ensure the balance starts at 0 instead of 1000 to prevent inflation)
+app.post('/api/toggle-sim', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: "Invalid initData" });
+        
+        const newState = req.body.active ? 'true' : 'false';
+        await redis.set(`sim:active:${tgId}`, newState);
+
+        if (newState === 'true') {
+            const existing = await redis.get(`sim:balance:${tgId}`);
+            if (!existing) {
+                const DEFAULT_SIM_BALANCE = 0; // Starts at $0 explicitly
+                await redis.set(`sim:balance:${tgId}`, DEFAULT_SIM_BALANCE.toFixed(4));
+                const { setSimStartingBalance } = await import('./services/simulation.service.js');
+                await setSimStartingBalance(tgId, DEFAULT_SIM_BALANCE);
+            }
+            const { generateSimWallets } = await import('./services/simulation.service.js');
+            const wallets = generateSimWallets();
+            await redis.set(`sim:wallets:${tgId}`, JSON.stringify(wallets));
+        } else {
+            const keys = await redis.keys(`sim:*:${tgId}`);
+            if (keys.length > 0) await redis.del(...keys);
+        }
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
+});
+
+// (Replace the API blocks below to route the forged variables dynamically)
+
+app.post('/api/analytics/advanced-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        let stats = await getAdvancedStats(telegramId);
+        if (!stats) stats = { sharpeRatio: 0, maxDrawdown: 0, totalTrades: 0, winningTrades: 0, losingTrades: 0, averageWin: 0, averageLoss: 0, profitFactor: 0, totalPnlSol: 0 };
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        if (await isSimulationActive(telegramId)) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                const f = JSON.parse(forgedRaw);
+                if (f.sharpe !== undefined && f.sharpe !== null) stats.sharpeRatio = f.sharpe;
+                if (f.drawdown !== undefined && f.drawdown !== null) stats.maxDrawdown = f.drawdown;
+                if (f.profit !== undefined && f.profit !== null) stats.profitFactor = f.profit;
+            }
+            const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
+            stats.totalTrades = simTrades.length;
+        }
+
+        res.json(stats);
+    } catch (e) { res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/risk-score', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        if (await isSimulationActive(telegramId)) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                const f = JSON.parse(forgedRaw);
+                if (f.risk !== undefined && f.risk !== null) {
+                    return res.json({ score: f.risk, riskLevel: f.risk > 70 ? 'High' : 'Safe', details: { topConcentration: 0, rugCount: 0 } });
+                }
+            }
+        }
+
+        const positions = await getUserPositions(telegramId);
+        if (!positions || positions.length === 0) return res.json({ score: 0, riskLevel: 'Safe', details: { topConcentration: 0, rugCount: 0 } });
+
+        const { getTokenRiskDetails } = await import('./services/price.service.js');
+        let totalValue = 0; let rugCount = 0;
+
+        const enriched = await Promise.all(positions.map(async (p: any) => {
+            const rug = await getTokenRiskDetails(p.mint);
+            totalValue += p.valueUsd;
+            if (rug.isUnsafe) rugCount++;
+            return { ...p, rug };
+        }));
+
+        const topConcentration = Math.max(...enriched.map((t: any) => t.valueUsd / (totalValue || 1)));
+        
+        let score = 0;
+        if (topConcentration > 0.50) score += 30;
+        if (topConcentration > 0.80) score += 15;
+        if (rugCount > 0) score += 40;
+        
+        const riskLevel = score > 70 ? 'High' : score > 40 ? 'Medium' : 'Low';
+        res.json({ score: Math.min(100, score), riskLevel, details: { topConcentration, rugCount } });
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.post('/api/stats-window', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const { getStatsForWindow, isSimulationActive } = await import('./services/simulation.service.js');
+        
+        let tradeCount = 0;
+        let totalPnl = 0;
+
+        const isSim = await isSimulationActive(telegramId);
+        if (isSim) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                const f = JSON.parse(forgedRaw);
+                tradeCount += f.trades24h || 0;
+                totalPnl += f.pnl24h || 0;
+            }
+            const simStats = await getStatsForWindow(telegramId, 'sim', 86400);
+            tradeCount += simStats.tradeCount;
+            totalPnl += simStats.totalPnl;
+        } else {
+            const liveStats = await getStatsForWindow(telegramId, 'live', 86400);
+            tradeCount += liveStats.tradeCount;
+            totalPnl += liveStats.totalPnl;
+        }
+
+        res.json({ tradeCount, totalPnl });
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 app.post('/api/performance', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = extractTelegramId(req.body.initData);
         if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-        if (!user) return res.status(404).json({ error: 'User not found' });
-
-        const trades = await prisma.trade.findMany({
-            where: { userId: user.id, isBuy: false, status: 'CONFIRMED' },
-            select: { strategy: true, realizedPnlSol: true, amountInSol: true }
-        });
-
         const strategyStats: Record<string, { totalPnl: number, totalVolume: number, count: number }> = {};
-        trades.forEach(t => {
-            const s = t.strategy || 'MANUAL';
-            if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
-            strategyStats[s].totalPnl += t.realizedPnlSol || 0;
-            strategyStats[s].totalVolume += t.amountInSol || 0;
-            strategyStats[s].count += 1;
-        });
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        
+        const isSim = await isSimulationActive(telegramId);
+        if (isSim) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                const f: any = JSON.parse(forgedRaw);
+                if ((f as any)?.strat1Name) strategyStats[(f as any).strat1Name] = { totalPnl: (f as any).strat1Pnl || 0, totalVolume: 0, count: 0 };
+                if ((f as any)?.strat2Name) strategyStats[(f as any).strat2Name] = { totalPnl: (f as any).strat2Pnl || 0, totalVolume: 0, count: 0 };
+            }
+            
+            // Allow real-time new sim trades to append natively
+            const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
+            simTrades.forEach((t: any) => {
+               if (!t.isBuy) {
+                   const s = t.strategy || 'Sniper Engine';
+                   if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
+                   strategyStats[s].totalPnl += t.realizedPnlSol || 0;
+                   strategyStats[s].totalVolume += t.amountInSol || 0;
+                   strategyStats[s].count += 1;
+               }
+            });
+        } else {
+            const user = await prisma.user.findUnique({ where: { telegramId } });
+            const trades = await prisma.trade.findMany({
+                where: { userId: user!.id, isBuy: false, status: 'CONFIRMED' },
+                select: { strategy: true, realizedPnlSol: true, amountInSol: true }
+            });
+            trades.forEach(t => {
+                const s = t.strategy || 'MANUAL';
+                if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
+                strategyStats[s].totalPnl += t.realizedPnlSol || 0;
+                strategyStats[s].totalVolume += t.amountInSol || 0;
+                strategyStats[s].count += 1;
+            });
+        }
 
         res.json(strategyStats);
     } catch (e) {
