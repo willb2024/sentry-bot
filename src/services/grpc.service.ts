@@ -4,7 +4,7 @@ import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, g
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
-import { getReactionGifUrl } from './reaction.service.js';
+
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
@@ -275,11 +275,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
             );
 
-            if (user?.reactionGifsEnabled) {
-                getReactionGifUrl(pnlPercent >= 0).then(gifUrl => {
-                    if (gifUrl) bot.telegram.sendAnimation(guardSnapshot.telegramId, gifUrl, { caption: pnlPercent >= 0 ? '💰' : '💪' }).catch(() => {});
-                });
-            }
+         
 
         } catch (e: any) {
             try {
@@ -387,11 +383,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
 
-                            if (user?.reactionGifsEnabled) {
-                                getReactionGifUrl(profitPercent >= 0).then(gifUrl => {
-                                    if (gifUrl) bot.telegram.sendAnimation(guard.telegramId, gifUrl, { caption: profitPercent >= 0 ? '💰' : '💪' }).catch(() => {});
-                                });
-                            }
+                         
 
                         } catch (e: any) {
                             console.error("Take profit image send failed:", e.message);
@@ -455,12 +447,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                                 { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
                             );
 
-                            if (user?.reactionGifsEnabled) {
-                                getReactionGifUrl(totalPnlPercent >= 0).then(gifUrl => {
-                                    if (gifUrl) bot.telegram.sendAnimation(guard.telegramId, gifUrl, { caption: totalPnlPercent >= 0 ? '💰' : '💪' }).catch(() => {});
-                                });
-                            }
-
+                        
                         } catch (e: any) {
                             console.error("Stop loss image send failed:", e.message);
                         }

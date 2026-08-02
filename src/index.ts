@@ -517,29 +517,32 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     // 🟢 NEW: Add a line with the main coin symbol (e.g., SOL) and price
     const tickerLine = `📈 <b>SOL/USD:</b> $${cachedSolUsdPrice.toFixed(2)}`;
   
-    const layoutTxt = 
-      `⚡ <b>${botName.toUpperCase()}</b> ⚡\n\n` +
-      
-      `👛 <b>Primary Deposit Node:</b>\n` +
-      `<code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n` +
-      `${tickerLine}\n\n` +  // <-- added this line
-      
-      `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
-      `└ ${whaleModeText}\n\n` +
-  
-      `🎯 <b>Caller Credits:</b> <code>${displayCredits}</code> Remaining\n` + 
-      `└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
-      
-      `└ ${whaleModeText}\n\n` +
-      
-      `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
-      `${guildDisplay}` + 
-      `• Your Points: <b>${sentryPoints} PTS</b> <i>(1 SOL = 10k PTS)</i>${welcomeText}${recruitText}\n\n` +  
-      
-      `📊 <b>Your Economics:</b>\n` +
-      `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
-      
-      `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
+   // =====================================================================
+// 1. DASHBOARD TEXT FIX (Supported DEXes & Single Line Wallet)
+// =====================================================================
+
+const layoutTxt = 
+`⚡ <b>${botName.toUpperCase()}</b> ⚡\n` +
+`<i>Routing: Pump.fun | Raydium | Meteora DLMM</i>\n\n` +
+
+`👛 <b>Primary Deposit Node:</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n\n` +
+
+`💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
+`└ ${whaleModeText}\n\n` +
+
+`🎯 <b>Caller Credits:</b> <code>${displayCredits}</code> Remaining\n` + 
+`└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
+
+`🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
+`${guildDisplay}` + 
+`• Your Points: <b>${sentryPoints} PTS</b> <i>(1 SOL = 10k PTS)</i>${welcomeText}${recruitText}\n\n` +  
+
+`📊 <b>Your Economics:</b>\n` +
+`• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n\n` +
+
+`<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
+
+// ... [Leave the Dashboard Keyboard buttons exactly as they are] ...
   
     const UI = Markup.inlineKeyboard([
       [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
@@ -2645,40 +2648,34 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
         `🚀 <b>TRANSACTION SPEED EXPLAINED:</b>\n` +
         `<i>Sentry bypasses public network congestion by tipping the validators (using Jito) to process your trade on Block-0.</i>\n`;
 
-        const UI = Markup.inlineKeyboard([
-            [
-                Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
-                Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
-                Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
-            ],
-            [
-                Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed'),
-                Markup.button.callback(hideWallets ? '👁️ Show Wallets' : '🙈 Hide Wallets', 'toggle_hide_wallets')
-            ],
-            [
-                Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage'),
-                // 🟢 ADD THIS LINE:
-                Markup.button.callback(user.reactionGifsEnabled ? '🎬 Trade GIFs: ON' : '🎬 Trade GIFs: OFF', 'toggle_reaction_gifs')
-            ],
-            [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
-            [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-        ]);
+       // =====================================================================
+// 2. REMOVE GIF TOGGLE FROM SETTINGS
+// =====================================================================
+
+const UI = Markup.inlineKeyboard([
+    [
+        Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
+        Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
+        Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
+    ],
+    [
+        Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed'),
+        Markup.button.callback(hideWallets ? '👁️ Show Wallets' : '🙈 Hide Wallets', 'toggle_hide_wallets')
+    ],
+    [
+        Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')
+    ],
+    [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
+    [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+]);
+
 
     if (isEdit) await safeEditMessageText(ctx, levelText, UI);
     else await ctx.replyWithHTML(levelText, UI);
 }
 
 
-bot.action('toggle_reaction_gifs', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-    if (user) {
-        await prisma.user.update({ where: { id: user.id }, data: { reactionGifsEnabled: !user.reactionGifsEnabled } });
-        await sendOrEditSettings(ctx, tgId, true);
-    }
-});
+
 
 bot.action('menu_settings', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3292,14 +3289,7 @@ bot.action(/^sell_(10|25|50|75|100)_(.+)$/, async (ctx) => {
                 }
             }
 
-            // 🟢 REACTION GIF (Sim & Live, Fire-and-Forget)
-            if (user?.reactionGifsEnabled) {
-                (async () => {
-                    const { getReactionGifUrl } = await import('./services/reaction.service.js');
-                    const gifUrl = await getReactionGifUrl(isWin);
-                    if (gifUrl) bot.telegram.sendAnimation(tgId, gifUrl, { caption: isWin ? '💰' : '💪' }).catch(() => {});
-                })();
-            }
+         
 
             // Clean up or adjust trailing guards
             if (percentage === 100) {
