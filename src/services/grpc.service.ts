@@ -704,6 +704,49 @@ export async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
+                // 🟢 MAX BUDGET EXHAUSTED CHECK WITH SESSION PNL SUMMARY (LIVE MAINNET)
+                const intendedSpend = liveConfig.amountSol * liveConfig.user.activeWallets;
+                if (liveConfig.maxBudgetSol && (liveConfig.totalSpentSol + intendedSpend) > liveConfig.maxBudgetSol) {
+                    const lockBudgetMsgKey = `lock:budget_msg:${liveConfig.id}`;
+                    if (await redis.set(lockBudgetMsgKey, '1', 'EX', 3600, 'NX')) {
+                        await prisma.autoSnipeConfig.update({
+                            where: { id: liveConfig.id },
+                            data: { isActive: false }
+                        });
+
+                        // Calculate Live Session Net PnL from trades
+                        const sessionStartTime = await redis.get(`autosnipe_session_start:${liveConfig.user.telegramId}`);
+                        let sessionPnlSol = 0;
+                        if (sessionStartTime) {
+                            const trades = await prisma.trade.findMany({
+                                where: {
+                                    userId: liveConfig.user.id,
+                                    strategy: 'SNIPER',
+                                    createdAt: { gte: new Date(parseInt(sessionStartTime)) }
+                                }
+                            });
+                            sessionPnlSol = trades.reduce((sum, t) => sum + (t.realizedPnlSol || 0), 0);
+                        }
+
+                        const pnlSign = sessionPnlSol >= 0 ? '+' : '';
+                        const pnlEmoji = sessionPnlSol >= 0 ? '💰' : '🩸';
+                        const spentSol = liveConfig.totalSpentSol;
+                        const pnlPct = spentSol > 0 ? (sessionPnlSol / spentSol) * 100 : 0;
+
+                        try {
+                            await bot.telegram.sendMessage(
+                                liveConfig.user.telegramId,
+                                `✅ <b>AUTO-SNIPER COMPLETE: Max Budget Reached</b>\n\n` +
+                                `• Total Spent: <b>${spentSol.toFixed(4)} SOL</b> / ${liveConfig.maxBudgetSol} SOL\n` +
+                                `• ${pnlEmoji} Session Net PnL: <b>${pnlSign}${sessionPnlSol.toFixed(4)} SOL</b> (${pnlSign}${pnlPct.toFixed(1)}%)\n\n` +
+                                `<i>Your Auto-Sniper engine has automatically powered down to protect your budget.</i>`,
+                                { parse_mode: 'HTML' }
+                            );
+                        } catch (_) {}
+                    }
+                    return;
+                }
+
                 let scoreType = "Basic Scoring"; 
                 let score = 0;
                 let matchedTokenForCard: any = null; 
@@ -769,7 +812,7 @@ export async function triggerAutoSnipes(
                         const heuristicResult = computeTokenScore(stats);
                         score = heuristicResult.score;
 
-                        // 🟢 PREVENT CREDIT DRAINING: Abort early if the basic score is garbage
+                        // 🟢 PREVENT CREDIT DRAINING: Abort early if basic score is below threshold
                         if (score < liveConfig.minScore) return;
                         
                         // 🟢 AI CREDIT CONSUMPTION
@@ -799,7 +842,7 @@ export async function triggerAutoSnipes(
                             }
                         }
 
-                        // 🛑 FINAL SCORE CHECK (In case ML adjusted it below the threshold)
+                        // 🛑 FINAL SCORE CHECK (In case ML adjusted it below threshold)
                         if (score < liveConfig.minScore) return; 
 
                         // 🟢 Only build rich card & log for training if Deep Scoring is enabled
@@ -827,7 +870,6 @@ export async function triggerAutoSnipes(
                 }
 
                 // 🟢 EXECUTION BLOCK
-                const intendedSpend = liveConfig.amountSol * liveConfig.user.activeWallets;
                 if (!isPriceReady) await new Promise(r => setTimeout(r, 1000)); 
 
                 const sniperLockKey = `lock:autosnipe:${liveConfig.id}:${mintCa}`;
@@ -835,7 +877,6 @@ export async function triggerAutoSnipes(
                 if (!isSnipeLocked) return;
 
                 // 🟢 DYNAMIC SLIPPAGE BUMP FOR DEEP SCORING
-                // If Deep Scoring takes ~2s, the price might move. Bump slippage by +5% to ensure execution.
                 const executionSlippage = liveConfig.useDeepScoring ? (liveConfig.user.slippagePercent + 5) : undefined;
 
                 const result = await executeSnipe(liveConfig.user.telegramId, mintCa, liveConfig.amountSol, 'buy', undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'SNIPER');
@@ -857,13 +898,11 @@ export async function triggerAutoSnipes(
                     try {
                         const modeText = mode === 'PUMP' ? "Trench Sniper (Pump.fun)" : "Raydium LP Sniper";
 
-                        // 🟢 Use Full Caller Rich Card if Deep Scoring is enabled
                         let cardBody = "";
                         if (matchedTokenForCard && projectionForCard) {
                             const { formatCallerAlertMessage } = await import('./caller.service.js');
                             cardBody = await formatCallerAlertMessage(matchedTokenForCard, projectionForCard, {});
-                            // Strip out the "Click below to buy" footer from the caller alert template
-                            cardBody = cardBody.replace(`<i>Click below to buy instantly via Jito:</i>`, ''); 
+                            cardBody = cardBody.replace(`<i>Click below to buy instantly via Jito:</i>`, '');
                         }
 
                         const header = `🎯 <b>AUTO-SNIPE EXECUTED!</b>\n\n<b>Engine:</b> ${modeText}\n<b>Invested:</b> <b>${spent.toFixed(4)} SOL</b>\n\n`;
@@ -885,7 +924,7 @@ export async function triggerAutoSnipes(
                     if (result.message.includes("Insufficient Funds")) {
                         const fundWarnKey = `warn_funds:${liveConfig.user.telegramId}`;
                         if (!(await redis.get(fundWarnKey))) {
-                            await redis.set(fundWarnKey, '1', 'EX', 600); // Only warn once per 10 mins
+                            await redis.set(fundWarnKey, '1', 'EX', 600);
                             try {
                                 await bot.telegram.sendMessage(
                                     liveConfig.user.telegramId,

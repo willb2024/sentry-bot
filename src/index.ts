@@ -2914,10 +2914,25 @@ bot.action('toggle_autosnipe', async (ctx) => {
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
     if (!user || !user.autoSnipeConfig) return;
     const newState = !user.autoSnipeConfig.isActive;
+
+    if (newState) {
+        // 🟢 Track session start time for session PnL calculation on budget exit
+        await redis.set(`autosnipe_session_start:${tgId}`, Date.now().toString());
+    }
+
     await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { isActive: newState } });
-    if (newState) try { await ctx.telegram.sendMessage(ctx.chat!.id, `📡 <b>SNIPER ARMED & SCANNING PUMP.FUN</b>\n\nYour engine is now actively listening to the Solana Mempool. It will execute via Jito MEV.`, { parse_mode: 'HTML' }); } catch(e) {}
+    if (newState) {
+        try { 
+            await ctx.telegram.sendMessage(
+                ctx.chat!.id, 
+                `📡 <b>SNIPER ARMED & SCANNING PUMP.FUN</b>\n\nYour engine is now actively listening to the Solana Mempool. It will execute via Jito MEV.`, 
+                { parse_mode: 'HTML' }
+            ); 
+        } catch(e) {}
+    }
     await sendOrEditSniper(ctx, tgId!, true);
 });
+
 bot.action('toggle_antidead', async (ctx) => {
     try { await ctx.answerCbQuery("👻 Anti-Dead Coin Shield Toggled!"); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -4558,87 +4573,103 @@ if (await redis.get(`state:simedit:${telegramId}`)) {
         const losses = parseInt(data['LOSSES']) || 0;
         const vol = parseFloat(data['VOL']) || 0;
         const days = parseInt(data['DAYS']) || 1;
+        const bal = parseFloat(data['BALANCE_SOL']) || 100;
         
-        const forged: any = {
-            sharpe: parseFloat(data['SHARPE']) || 0,
-            drawdown: parseFloat(data['DRAWDOWN']) || 0,
-            profit: parseFloat(data['PROFIT_FACTOR']) || 0,
-            risk: parseFloat(data['RISK_SCORE']) || 0,
-        };
+        let strat1Pnl = 136.5147;
+        let strat2Pnl = 22.7524;
+        let strat1Name = 'Sniper Engine';
+        let strat2Name = 'Manual / Direct';
 
-        if (data['MANUAL_24H']) {
-            const parts = data['MANUAL_24H'].split('|');
-            forged.manual24hCount = parseInt(parts[0]) || 0;
-            forged.manual24hPnl = parseFloat(parts[1]) || 0;
-        }
-        if (data['AUTO_24H']) {
-            const parts = data['AUTO_24H'].split('|');
-            forged.auto24hCount = parseInt(parts[0]) || 0;
-            forged.auto24hPnl = parseFloat(parts[1]) || 0;
-        }
-        if (data['HOURLY_CHART']) {
-            forged.hourlyChart = data['HOURLY_CHART'].split(',').map((s: string) => parseFloat(s.trim()) || 0);
-        }
-        
         if (data['STRAT1']) {
             const parts = data['STRAT1'].split('|');
-            forged.strat1Name = parts[0]?.trim() || 'Manual / Direct';
-            forged.strat1Pnl = parseFloat(parts[1]) || 0;
+            strat1Name = parts[0]?.trim() || 'Sniper Engine';
+            strat1Pnl = parseFloat(parts[1]) || 136.5147;
         }
         if (data['STRAT2']) {
             const parts = data['STRAT2'].split('|');
-            forged.strat2Name = parts[0]?.trim() || 'Sniper Engine';
-            forged.strat2Pnl = parseFloat(parts[1]) || 0;
+            strat2Name = parts[0]?.trim() || 'Manual / Direct';
+            strat2Pnl = parseFloat(parts[1]) || 22.7524;
         }
 
+        const targetTotalRealizedPnl = strat1Pnl + strat2Pnl;
         const totalTrades = wins + losses || 1;
         const volPerTrade = vol / totalTrades;
         const now = Date.now();
         const fakeTrades = [];
-        let totalRealizedPnl = 0;
+
+        // 🟢 LOCK OLDEST TRADE TO EXACTLY 'DAYS' AGO
+        const oldestTime = now - (days * 86400000);
+
+        const avgLossPnlSol = - (volPerTrade * 0.12);
+        const totalLossPnlSol = losses * avgLossPnlSol;
+        const requiredWinPnlSol = targetTotalRealizedPnl - totalLossPnlSol;
+        const avgWinPnlSol = wins > 0 ? requiredWinPnlSol / wins : 0;
 
         for (let i = 0; i < wins; i++) {
-            const pnlPercent = Math.random() * 120 + 20; 
-            const realizedPnlSol = 1.0 * (pnlPercent / 100);
-            totalRealizedPnl += realizedPnlSol;
+            const variation = (Math.random() * 0.3 - 0.15) * avgWinPnlSol;
+            const pnlSol = avgWinPnlSol + variation;
+            const pnlPercent = volPerTrade > 0 ? (pnlSol / volPerTrade) * 100 : 35;
+            const tradeTime = (i === 0) ? oldestTime : (now - Math.random() * (days - 1) * 86400000);
+
             fakeTrades.push({
-                createdAt: new Date(now - Math.random() * days * 86400000).toISOString(),
-                isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: 1.0 * (pnlPercent / 100)
+                createdAt: new Date(tradeTime).toISOString(),
+                isBuy: false,
+                amountInSol: volPerTrade,
+                profitPercent: parseFloat(pnlPercent.toFixed(2)),
+                realizedPnlSol: parseFloat(pnlSol.toFixed(4)),
+                strategy: Math.random() < (strat1Pnl / (targetTotalRealizedPnl || 1)) ? strat1Name : strat2Name
             });
         }
+
         for (let i = 0; i < losses; i++) {
-            const pnlPercent = -(Math.random() * 25 + 5); 
-            const realizedPnlSol = 1.0 * (pnlPercent / 100);
-            totalRealizedPnl += realizedPnlSol;
+            const variation = (Math.random() * 0.3 - 0.15) * avgLossPnlSol;
+            const pnlSol = avgLossPnlSol + variation;
+            const pnlPercent = volPerTrade > 0 ? (pnlSol / volPerTrade) * 100 : -12;
+            const tradeTime = now - Math.random() * (days - 1) * 86400000;
+
             fakeTrades.push({
-                createdAt: new Date(now - Math.random() * days * 86400000).toISOString(),
-                isBuy: false, amountInSol: volPerTrade, profitPercent: pnlPercent, realizedPnlSol: 1.0 * (pnlPercent / 100)
+                createdAt: new Date(tradeTime).toISOString(),
+                isBuy: false,
+                amountInSol: volPerTrade,
+                profitPercent: parseFloat(pnlPercent.toFixed(2)),
+                realizedPnlSol: parseFloat(pnlSol.toFixed(4)),
+                strategy: Math.random() < (strat1Pnl / (targetTotalRealizedPnl || 1)) ? strat1Name : strat2Name
             });
         }
 
-        fakeTrades.sort(() => Math.random() - 0.5);
-        
-        const { setSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
+        fakeTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        fakeTrades[fakeTrades.length - 1].createdAt = new Date(oldestTime).toISOString();
 
-        if (data['BALANCE_SOL']) {
-            const bal = parseFloat(data['BALANCE_SOL']);
-            if (!isNaN(bal)) {
-                await redis.set(`sim:balance:${telegramId}`, bal.toFixed(4));
-                const startBal = bal - totalRealizedPnl;
-                await setSimStartingBalance(telegramId, startBal);
-            }
-        }
+        const forged: any = {
+            sharpe: parseFloat(data['SHARPE']) || 2.84,
+            drawdown: parseFloat(data['DRAWDOWN']) || -0.185,
+            profit: parseFloat(data['PROFIT_FACTOR']) || 3.13,
+            risk: parseFloat(data['RISK_SCORE']) || 14,
+            days: days,
+            manual24hCount: data['MANUAL_24H'] ? parseInt(data['MANUAL_24H'].split('|')[0]) : 1,
+            manual24hPnl: data['MANUAL_24H'] ? parseFloat(data['MANUAL_24H'].split('|')[1]) : 0.85,
+            auto24hCount: data['AUTO_24H'] ? parseInt(data['AUTO_24H'].split('|')[0]) : 6,
+            auto24hPnl: data['AUTO_24H'] ? parseFloat(data['AUTO_24H'].split('|')[1]) : 4.25,
+            hourlyChart: data['HOURLY_CHART'] ? data['HOURLY_CHART'].split(',').map((s: string) => parseFloat(s.trim()) || 0) : [],
+            strat1Name,
+            strat1Pnl,
+            strat2Name,
+            strat2Pnl
+        };
+
+        await redis.set(`sim:balance:${telegramId}`, bal.toFixed(4));
+        const startBal = bal - targetTotalRealizedPnl;
+        const { setSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
+        await setSimStartingBalance(telegramId, startBal);
 
         await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forged));
         await redis.set(`sim:trades:${telegramId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
         await redis.set(`sim:volume:${telegramId}`, vol.toString());
         
-        // 🟢 Clear holdings automatically so the "Verified Holdings" section empties out
-        // 🟢 Clean sim positions so Verified Holdings shows 0 OPEN until a real/sim trade is placed
         await redis.del(`sim:positions:${telegramId}`);
         await saveSimulationState(telegramId);
 
-        await ctx.replyWithHTML(`✅ <b>Simulation Database Successfully Overwritten!</b>\n\nAll variables including Balance, Sharpe, Strategies, Risk, Hourly Chart, 24H Activity, PnL, and Win Rate have been permanently stored. Verified Holdings have been cleared. Refresh your WebApp dashboard to see your updates.`);
+        await ctx.replyWithHTML(`✅ <b>Simulation Database Successfully Overwritten!</b>\n\nAll variables including Balance, Sharpe, Strategies, Risk, Hourly Chart, 24H Activity, PnL, Win Rate (66%), and Total Trading Days (${days}) are 100% mathematically aligned. Refresh your WebApp dashboard to see your updates.`);
     } catch(e) {
         await ctx.reply("🔴 Error parsing format. Please make sure you copy the template exactly.");
     }

@@ -688,6 +688,7 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
 
 async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
   let totalSimSpent = 0;
+  let sessionSimPnlSol = 0; // 🟢 Track total net PnL for this session
 
   while (await redis.get(`sim:autosnipe:${telegramId}`) === 'true' && await isSimulationActive(telegramId)) {
     const user = await prisma.user.findUnique({ where: { telegramId: telegramId }, include: { autoSnipeConfig: true } });
@@ -695,12 +696,24 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
 
     const amountSol = config?.amountSol || 0.1;
     const slPercent = config?.autoTrailingDropPercent || 20;
-    const tpPercent = config?.autoTakeProfitPercent || 50;
+    const tpPercent = config?.autoTakeProfitPercent; // Can be null or undefined when OFF
     const maxBudget = config?.maxBudgetSol || 10.0;
     const minScore = config?.minScore || 0;
 
+    // 🟢 BUDGET EXHAUSTED CHECK WITH SESSION PNL SUMMARY
     if (totalSimSpent + amountSol > maxBudget) {
-      await bot.telegram.sendMessage(telegramId, `✅ <b>AUTO-SNIPER COMPLETE: Max Budget Reached</b>\n\nYour sniper has spent a total of <b>${totalSimSpent.toFixed(4)} SOL</b> and has automatically powered down.`, { parse_mode: 'HTML' });
+      const pnlSign = sessionSimPnlSol >= 0 ? '+' : '';
+      const pnlEmoji = sessionSimPnlSol >= 0 ? '💰' : '🩸';
+      const pnlPct = totalSimSpent > 0 ? (sessionSimPnlSol / totalSimSpent) * 100 : 0;
+
+      await bot.telegram.sendMessage(
+        telegramId,
+        `✅ <b>AUTO-SNIPER COMPLETE: Max Budget Reached</b>\n\n` +
+        `• Total Spent: <b>${totalSimSpent.toFixed(4)} SOL</b> / ${maxBudget} SOL\n` +
+        `• ${pnlEmoji} Session Net PnL: <b>${pnlSign}${sessionSimPnlSol.toFixed(4)} SOL</b> (${pnlSign}${pnlPct.toFixed(1)}%)\n\n` +
+        `<i>Your Auto-Sniper engine has automatically powered down.</i>`,
+        { parse_mode: 'HTML' }
+      );
       break;
     }
 
@@ -724,10 +737,9 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
     }
 
     if (!tokenCA) {
-      const rand = Math.random();
-      if (rand < 0.6) simScore = Math.floor(Math.random() * 21) + 30;
-      else if (rand < 0.9) simScore = Math.floor(Math.random() * 21) + 50;
-      else simScore = Math.floor(Math.random() * 21) + 70;
+      const minS = Math.max(50, minScore);
+      simScore = Math.floor(Math.random() * (96 - minS + 1)) + minS;
+      if (simScore % 5 === 0) simScore += (Math.random() > 0.5 ? 2 : -1);
 
       if (simScore < minScore) {
         await new Promise(r => setTimeout(r, 1500));
@@ -738,9 +750,29 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
       tokenCA = realTok.mint;
     }
 
-    const isProfit = await getNextSimOutcome(telegramId, 'guard', simScore);
-    const targetPnl = isProfit ? (tpPercent || 50) : -Math.abs(slPercent || 20);
-    const finalPnl = applySimSlippage(targetPnl);
+    // 🟢 REALISTIC PNL CALCULATION BASED ON TP AND SL SETTINGS
+    const isWin = await getNextSimOutcome(telegramId, 'guard', simScore);
+
+    let finalPnl: number;
+    if (tpPercent && tpPercent > 0) {
+      // Both TP and SL are active
+      if (isWin) {
+        finalPnl = applySimSlippage(tpPercent); // Hits Take Profit target
+      } else {
+        finalPnl = applySimSlippage(-Math.abs(slPercent)); // Hits Stop Loss target
+      }
+    } else {
+      // Take Profit is OFF — Strictly Trailing Stop Loss
+      if (isWin) {
+        // Token ran up +30% to +110%, then dropped slPercent from peak
+        const peakRunUp = Math.random() * 80 + 30;
+        const netMultiplier = (1 + peakRunUp / 100) * (1 - slPercent / 100);
+        finalPnl = applySimSlippage((netMultiplier - 1) * 100);
+      } else {
+        // Immediate drop: hits Stop Loss directly at -slPercent
+        finalPnl = applySimSlippage(-Math.abs(slPercent));
+      }
+    }
 
     const buyRes = await simExecuteSnipe(telegramId, tokenCA, amountSol);
     if (!buyRes.success) {
@@ -748,28 +780,34 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
       await redis.set(`sim:autosnipe:${telegramId}`, 'false');
       break;
     }
-    totalSimSpent += buyRes.volumeSpent;
+
+    const actualSpent = buyRes.volumeSpent;
+    totalSimSpent += actualSpent;
 
     const buyMsg =
       `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\n` +
       `Token: <code>${tokenCA.substring(0,8)}...</code>\n` +
       `AI Score: <b>${simScore}/100</b> ⭐\n` +
-      `Invested: <b>${buyRes.volumeSpent.toFixed(3)} SOL</b>\n` +
+      `Invested: <b>${actualSpent.toFixed(3)} SOL</b>\n` +
       `Trailing Drop: <b>-${slPercent}%</b>\n` +
-      `Take Profit: <b>${config?.autoTakeProfitPercent ? `+${tpPercent}%` : 'OFF'}</b>\n\n` +
+      `Take Profit: <b>${tpPercent ? `+${tpPercent}%` : 'OFF'}</b>\n\n` +
       `🔗 <a href="https://solscan.io/tx/${buyRes.signature}">View on Solscan</a>`;
 
     await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
 
-    // 🟢 CUSTOM SIM TIMING LOOPS based on Deep Scoring Toggle
     const useDeep = config?.useDeepScoring || false;
-    const holdDelay = useDeep ? 5000 : 3000; // 5s hold for Deep, 3s hold for Fast
+    const holdDelay = useDeep ? 5000 : 3000;
     await new Promise(r => setTimeout(r, holdDelay));
 
     const sellRes = await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
-    await sendSimPnlCard(telegramId, bot, tokenCA, buyRes.volumeSpent, finalPnl, slPercent, 0, 0);
 
-    const loopDelay = useDeep ? 5000 : 2000; // 5s scan interval for Deep, 2s scan interval for Fast
+    // 🟢 ACCUMULATE SESSION NET PNL
+    const tradePnlSol = actualSpent * (finalPnl / 100);
+    sessionSimPnlSol += tradePnlSol;
+
+    await sendSimPnlCard(telegramId, bot, tokenCA, actualSpent, finalPnl, slPercent, 0, 0);
+
+    const loopDelay = useDeep ? 5000 : 2000;
     await new Promise(r => setTimeout(r, loopDelay));
 
     if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
