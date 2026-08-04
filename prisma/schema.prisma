@@ -227,6 +227,7 @@ model AutoSnipeConfig {
   requireSocials          Boolean  @default(true)
   maxDevBuyPercent        Float    @default(10.0)
   autoTrailingDropPercent Float    @default(20.0) 
+  useDeepScoring          Boolean  @default(false)
   autoTakeProfitPercent   Float?
   minScore                Int      @default(0) 
   minMarketCap            Float    @default(0.0)
