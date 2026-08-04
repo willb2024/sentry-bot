@@ -315,7 +315,7 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
 }
 
 // ------------------------------------------------------------------
-// Simulated Trade Execution (Buy)
+// Simulated Trade Execution (Buy) — DYNAMIC SIZING (0.01 - 3.45 SOL)
 // ------------------------------------------------------------------
 export async function simExecuteSnipe(
   telegramId: string,
@@ -324,20 +324,36 @@ export async function simExecuteSnipe(
 ): Promise<{ success: boolean; signature: string; message: string; volumeSpent: number }> {
 
   const currentBal = parseFloat(await getSimBalance(telegramId));
-  if (currentBal < amountSol + 0.001) {
-    return {
-      success: false,
-      signature: '',
-      message: `🔴 Insufficient Funds. Balance: ${currentBal.toFixed(4)} SOL`,
-      volumeSpent: 0
-    };
+  
+  // 🟢 DYNAMIC SIZING ENGINE: Vary size from 0.01 SOL up to 3.45 SOL
+  let actualSolSpent = amountSol;
+  if (amountSol <= 0.05) {
+    // Generate dynamic trade size across 0.01 - 3.45 SOL range
+    actualSolSpent = parseFloat((Math.random() * 3.44 + 0.01).toFixed(3));
+  } else {
+    // Apply +/- 30% organic variance bounded between 0.01 and 3.45 SOL
+    const variance = (Math.random() * 0.6 + 0.7);
+    actualSolSpent = parseFloat(Math.min(3.45, Math.max(0.01, amountSol * variance)).toFixed(3));
   }
 
-  // Random delay 1–8 seconds
-  const delay = 1000 + Math.random() * 7000;
+  if (currentBal < actualSolSpent + 0.001) {
+    // Fallback to remaining available balance if spend exceeds current balance
+    actualSolSpent = Math.max(0.01, parseFloat((currentBal * 0.8).toFixed(3)));
+    if (currentBal < 0.015) {
+      return {
+        success: false,
+        signature: '',
+        message: `🔴 Insufficient Funds. Balance: ${currentBal.toFixed(4)} SOL`,
+        volumeSpent: 0
+      };
+    }
+  }
+
+  // Random execution delay 1–4 seconds
+  const delay = 1000 + Math.random() * 3000;
   await new Promise(r => setTimeout(r, delay));
 
-  const newBal = Math.max(0, currentBal - amountSol - 0.001).toFixed(4);
+  const newBal = Math.max(0, currentBal - actualSolSpent - 0.001).toFixed(4);
   await redis.set(`sim:balance:${telegramId}`, newBal);
 
   const posKey = `sim:positions:${telegramId}`;
@@ -362,13 +378,17 @@ export async function simExecuteSnipe(
   if (entryPriceSol === 0) {
     entryPriceSol = parseFloat((Math.random() * 0.000008 + 0.0000005).toFixed(12));
     if (symbol === 'UNKNOWN') {
-      const tokenNames = ['DEGEN', 'CHAD', 'PEPE', 'BONK', 'WIF', 'POPCAT', 'GIGA'];
+      const tokenNames = ['DEGEN', 'CHAD', 'PEPE', 'BONK', 'WIF', 'POPCAT', 'GIGA', 'PNUT', 'GOAT', 'MOODENG'];
       symbol = tokenNames[Math.floor(Math.random() * tokenNames.length)];
     }
   }
   if (entryPriceUsd === 0) entryPriceUsd = entryPriceSol * solUsdPrice;
 
-  const tokenAmount = Math.floor(amountSol / entryPriceSol);
+  const tokenAmount = Math.floor(actualSolSpent / entryPriceSol);
+
+  // 🟢 DYNAMIC SPREAD VARIANCE (-3% to +3% entry shift so values never clone)
+  const entrySpread = (Math.random() * 0.06) - 0.03;
+  const initialValueUsd = (actualSolSpent * solUsdPrice) * (0.99 + entrySpread);
 
   existing.push({
     mint: tokenAddress,
@@ -376,15 +396,16 @@ export async function simExecuteSnipe(
     amount: tokenAmount,
     entryPrice: entryPriceSol,
     entryPriceUsd,
-    priceUsd: entryPriceUsd,
-    valueUsd: amountSol * solUsdPrice,
-    amountInSol: amountSol,
+    priceUsd: entryPriceUsd * (1 + entrySpread),
+    valueUsd: parseFloat(initialValueUsd.toFixed(2)),
+    amountInSol: actualSolSpent,
     highestSeenPrice: entryPriceSol,
-    entryScore: Math.floor(Math.random() * 40) + 50
+    entryScore: Math.floor(Math.random() * 40) + 50,
+    volatilitySeed: (Math.random() * 2 - 1) // Unique per-token volatility seed
   });
 
   await redis.set(posKey, JSON.stringify(existing));
-  await recordSimTrade(telegramId, true, amountSol, 0, 'SIMULATED_BUY');
+  await recordSimTrade(telegramId, true, actualSolSpent, 0, 'SIMULATED_BUY');
   await recordStatsEvent(telegramId, 'sim', 0);
   await saveSimulationState(telegramId);
 
@@ -392,7 +413,7 @@ export async function simExecuteSnipe(
     success: true,
     signature: generateSimSignature(),
     message: '🟢 Simulated buy executed.',
-    volumeSpent: amountSol
+    volumeSpent: actualSolSpent
   };
 }
 
@@ -406,8 +427,8 @@ export async function simExecuteExit(
   forcedPnlPercent?: number
 ): Promise<{ success: boolean; signature: string; message: string }> {
 
-  // Random delay 1–8 seconds
-  const delay = 1000 + Math.random() * 7000;
+  // Random delay 1–4 seconds
+  const delay = 1000 + Math.random() * 3000;
   await new Promise(r => setTimeout(r, delay));
 
   const posKey = `sim:positions:${telegramId}`;
@@ -434,7 +455,7 @@ export async function simExecuteExit(
   const rawReturn = soldSol * (1 + pnlPercent / 100);
   const platformFee = rawReturn * 0.01;
   const jitoTip = 0.0015;
-  const netReturnSol = rawReturn - platformFee - jitoTip;
+  const netReturnSol = Math.max(0, rawReturn - platformFee - jitoTip);
 
   const currentBal = parseFloat(await getSimBalance(telegramId));
   await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
@@ -462,7 +483,7 @@ export async function simExecuteExit(
 }
 
 // ------------------------------------------------------------------
-// Simulated Caller Alert Generator (FIXED)
+// Simulated Caller Alert Generator
 // ------------------------------------------------------------------
 export async function generateSimCallerAlert(telegramId: string, filters: {
   minScore: number;
@@ -618,7 +639,6 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
     }
   }
 
-  // No match at all
   return null;
 }
 
@@ -728,35 +748,35 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
       await redis.set(`sim:autosnipe:${telegramId}`, 'false');
       break;
     }
-    totalSimSpent += amountSol;
+    totalSimSpent += buyRes.volumeSpent;
 
     const buyMsg =
-    `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\n` +
-    `Token: <code>${tokenCA.substring(0,8)}...</code>\n` +
-    `AI Score: <b>${simScore}/100</b> ⭐\n` +
-    `Invested: <b>${amountSol} SOL</b>\n` +
-    `Trailing Drop: <b>-${slPercent}%</b>\n` +
-    `Take Profit: <b>${config?.autoTakeProfitPercent ? `+${tpPercent}%` : 'OFF'}</b>\n\n` +
-    `🔗 <a href="https://solscan.io/tx/${buyRes.signature}">View on Solscan</a>`;
+      `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\n` +
+      `Token: <code>${tokenCA.substring(0,8)}...</code>\n` +
+      `AI Score: <b>${simScore}/100</b> ⭐\n` +
+      `Invested: <b>${buyRes.volumeSpent.toFixed(3)} SOL</b>\n` +
+      `Trailing Drop: <b>-${slPercent}%</b>\n` +
+      `Take Profit: <b>${config?.autoTakeProfitPercent ? `+${tpPercent}%` : 'OFF'}</b>\n\n` +
+      `🔗 <a href="https://solscan.io/tx/${buyRes.signature}">View on Solscan</a>`;
 
-  await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+    await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
 
-  // 🟢 CUSTOM SIM TIMING LOOPS based on Deep Scoring Toggle
-  const useDeep = config?.useDeepScoring || false;
-  const holdDelay = useDeep ? 5000 : 3000; // 5s hold for Deep, 3s hold for Fast
-  await new Promise(r => setTimeout(r, holdDelay));
+    // 🟢 CUSTOM SIM TIMING LOOPS based on Deep Scoring Toggle
+    const useDeep = config?.useDeepScoring || false;
+    const holdDelay = useDeep ? 5000 : 3000; // 5s hold for Deep, 3s hold for Fast
+    await new Promise(r => setTimeout(r, holdDelay));
 
-  const sellRes = await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
-  await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, finalPnl, slPercent, 0, 0);
+    const sellRes = await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
+    await sendSimPnlCard(telegramId, bot, tokenCA, buyRes.volumeSpent, finalPnl, slPercent, 0, 0);
 
-  const loopDelay = useDeep ? 5000 : 2000; // 5s scan interval for Deep, 2s scan interval for Fast
-  await new Promise(r => setTimeout(r, loopDelay));
+    const loopDelay = useDeep ? 5000 : 2000; // 5s scan interval for Deep, 2s scan interval for Fast
+    await new Promise(r => setTimeout(r, loopDelay));
 
-  if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
-}
+    if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
+  }
 
-await redis.set(`sim:autosnipe:${telegramId}`, 'false');
-await saveSimulationState(telegramId);
+  await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+  await saveSimulationState(telegramId);
 }
 
 // ------------------------------------------------------------------
@@ -801,7 +821,7 @@ async function sendSimPnlCard(telegramId: string, bot: any, tokenAddress: string
 }
 
 // ------------------------------------------------------------------
-// Walk Sim Position Prices (for live simulation guard triggers)
+// Walk Sim Position Prices (DIVERGENT PER-TOKEN ACTION)
 // ------------------------------------------------------------------
 export async function walkSimPositionPrices(telegramId: string): Promise<void> {
   const posKey = `sim:positions:${telegramId}`;
@@ -812,19 +832,49 @@ export async function walkSimPositionPrices(telegramId: string): Promise<void> {
   if (positions.length === 0) return;
 
   let changed = false;
+  const solUsdPrice = 160;
+
   for (const p of positions) {
+    // Assign a unique volatility seed per position if missing so they diverge
+    if (p.volatilitySeed === undefined) {
+      p.volatilitySeed = (Math.random() * 2 - 1); // -1.0 to +1.0
+    }
+
     const scoreBias = ((p.entryScore ?? 50) - 50) / 50;
-    const stepPct = (Math.random() - 0.5 + scoreBias * 0.4) * 6;
-    const newPriceUsd = Math.max(p.entryPriceUsd * 0.05, p.priceUsd * (1 + stepPct / 100));
+    
+    // Individual price step with high variance (-5% to +6% per tick, unique per token)
+    const randomStep = (Math.random() - 0.48 + scoreBias * 0.2 + p.volatilitySeed * 0.1) * 7.5;
+    
+    const newPriceUsd = Math.max(p.entryPriceUsd * 0.02, p.priceUsd * (1 + randomStep / 100));
 
     p.priceUsd = newPriceUsd;
-    p.valueUsd = p.amount * newPriceUsd;
+    
+    // PnL ratio scales the actual SOL value dynamically
+    const pnlRatio = newPriceUsd / (p.entryPriceUsd || 1);
+    p.valueUsd = parseFloat(((p.amountInSol * solUsdPrice) * pnlRatio).toFixed(2));
+    
     if (newPriceUsd > (p.highestSeenPrice || 0)) p.highestSeenPrice = newPriceUsd;
     changed = true;
   }
 
   if (changed) await redis.set(posKey, JSON.stringify(positions));
 }
+
+// 🟢 GLOBAL SIMULATION PRICE ENGINE
+// Ensures token prices in the dashboard bounce realistically every 3 seconds for all users
+setInterval(async () => {
+  try {
+    const simStates = await prisma.simState.findMany({ 
+      where: { active: true }, 
+      select: { user: { select: { telegramId: true } } } 
+    });
+    for (const state of simStates) {
+      if (state.user?.telegramId) {
+        await walkSimPositionPrices(state.user.telegramId);
+      }
+    }
+  } catch (e) {}
+}, 3000);
 
 // 🟢 SINGLE SOURCE OF TRUTH: Updates both Redis and PostgreSQL sim state
 export async function setSimulationMode(telegramId: string, active: boolean): Promise<void> {
