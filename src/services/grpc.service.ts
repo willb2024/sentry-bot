@@ -341,6 +341,8 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 if (result.success || (result as any).message?.includes("No tokens found")) {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     if (result.success) {
+
+                        
                         try {
                             await bot.telegram.sendMessage(
                                 guard.telegramId, 
@@ -997,6 +999,26 @@ export async function igniteYellowstoneStream(bot: any) {
             console.warn("🟡 [HELIUS gRPC] Initial stream connection unauthenticated. Arming Raydium WS fallback.");
             isGrpcDisabled = true;
             connectRaydiumFallbackWatcher(bot);
+        }
+    }
+}
+
+
+// 🟢 LIVE PNL SESSION TRACKING HELPER
+async function updateLiveSessionPnl(telegramId: string, mint: string, pnlPercent: number, amountInSol: number) {
+    const sessionId = await redis.get(`autosnipe:session_id:live:${telegramId}`);
+    if (!sessionId) return;
+    
+    const sessionKey = `live:session_trades:${sessionId}`;
+    const trades = await redis.lrange(sessionKey, 0, -1);
+    
+    // Find the matching trade from this session and update its PnL
+    for (let i = trades.length - 1; i >= 0; i--) {
+        const t = JSON.parse(trades[i]);
+        if (t.mint === mint && t.realizedPnlSol === 0) {
+            t.realizedPnlSol = amountInSol * (pnlPercent / 100);
+            await redis.lset(sessionKey, i, JSON.stringify(t));
+            break;
         }
     }
 }

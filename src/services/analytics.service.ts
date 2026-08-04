@@ -259,3 +259,37 @@ export async function getCombinedHourlyPerformance(telegramId: string) {
     }
     return result;
 }
+
+export function computeSimTradeStats(trades: any[]) {
+    const sells = trades.filter(t => !t.isBuy);
+    const wins = sells.filter(t => (t.realizedPnlSol || 0) > 0);
+    const losses = sells.filter(t => (t.realizedPnlSol || 0) <= 0);
+    
+    const grossWin = wins.reduce((s, t) => s + (t.realizedPnlSol || 0), 0);
+    const grossLoss = Math.abs(losses.reduce((s, t) => s + (t.realizedPnlSol || 0), 0));
+    const profitFactor = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? 999 : 0);
+
+    let equity = 0, peak = 0, maxDrawdown = 0;
+    const sorted = [...sells].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    for (const t of sorted) {
+        equity += (t.realizedPnlSol || 0);
+        peak = Math.max(peak, equity);
+        maxDrawdown = Math.min(maxDrawdown, equity - peak);
+    }
+
+    const dailyPnlMap = new Map<string, number>();
+    sells.forEach(t => {
+        const day = new Date(t.createdAt).toISOString().split('T')[0];
+        dailyPnlMap.set(day, (dailyPnlMap.get(day) || 0) + (t.realizedPnlSol || 0));
+    });
+    const dailyReturns = Array.from(dailyPnlMap.values());
+    
+    let sharpeRatio = 0;
+    if (dailyReturns.length >= 2) {
+        const dailyMean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
+        const dailyStd = Math.sqrt(dailyReturns.reduce((sum, r) => sum + (r - dailyMean) ** 2, 0) / dailyReturns.length);
+        if (dailyStd > 0) sharpeRatio = (dailyMean / dailyStd) * Math.sqrt(365);
+    }
+
+    return { profitFactor, maxDrawdown: Math.abs(maxDrawdown), sharpeRatio };
+}

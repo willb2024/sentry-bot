@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { generatePnlCard } from './image.service.js';
 import { computeTokenScore, TokenStats, buildAuditTrailMessage } from './caller.service.js';
-import { ensureFirstTradeAnchor } from './engine.service.js'; // 🟢 FIX 2: Anchor import
+import { ensureFirstTradeAnchor } from './engine.service.js';
 
 const activeSimLoops = new Set<string>();
 
@@ -71,11 +71,15 @@ export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, m
     const wins = trades.filter((t: any) => (t.realizedPnlSol || 0) > 0).length;
     const losses = trades.filter((t: any) => (t.realizedPnlSol || 0) <= 0).length;
 
+    // 🟢 FIX 7: Output precise SOL & USD
+    const { cachedSolUsdPrice } = await import('./grpc.service.js');
+    const usdValue = (totalRealizedPnl * cachedSolUsdPrice).toFixed(2);
+
     await bot.telegram.sendMessage(telegramId,
         `🏁 <b>AUTO-SNIPE BUDGET EXHAUSTED${mode === 'sim' ? ' (SIMULATION)' : ''}</b>\n\n` +
         `Total Spent: <b>${totalSpent.toFixed(4)} SOL</b>\n` +
         `Trades Executed: <b>${trades.length} (${wins}W / ${losses}L)</b>\n` +
-        `Net Result: <b>${totalRealizedPnl >= 0 ? '+' : ''}${totalRealizedPnl.toFixed(4)} SOL</b>\n\n` +
+        `Net Result: <b>${totalRealizedPnl >= 0 ? '+' : ''}${totalRealizedPnl.toFixed(4)} SOL (${totalRealizedPnl >= 0 ? '+' : ''}$${usdValue})</b>\n\n` +
         `Session ended — budget cap reached.`,
         { parse_mode: 'HTML' }
     );
@@ -323,7 +327,8 @@ export async function recordSimTrade(telegramId: string, isBuy: boolean, amountI
     mint: 'simulated'
   });
 
-  await redis.set(key, JSON.stringify(existing.slice(0, 100)));
+  // 🟢 FIX 2: Store up to 10000 trades so history is preserved accurately
+  await redis.set(key, JSON.stringify(existing.slice(0, 10000)));
   await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
 
@@ -360,11 +365,12 @@ export async function simExecuteSnipe(
   amountSol: number
 ): Promise<{ success: boolean; signature: string; message: string; volumeSpent: number }> {
 
-  await ensureFirstTradeAnchor(telegramId); // 🟢 FIX 2: Anchor first trade date permanently
+  // 🟢 FIX 2: Anchor first trade date
+  await ensureFirstTradeAnchor(telegramId);
 
   const currentBal = parseFloat(await getSimBalance(telegramId));
   
-  // 🟢 DYNAMIC SIZING ENGINE: Vary size from 0.01 SOL up to 3.45 SOL
+  // DYNAMIC SIZING ENGINE: Vary size from 0.01 SOL up to 3.45 SOL
   let actualSolSpent = amountSol;
   if (amountSol <= 0.05) {
     actualSolSpent = parseFloat((Math.random() * 3.44 + 0.01).toFixed(3));
@@ -645,7 +651,7 @@ export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'gu
 }
 
 // ------------------------------------------------------------------
-// Sim Auto-Sniper Loop (Fix 1, 4, 6, 7, 8)
+// Sim Auto-Sniper Loop (Fix 1, 4, 6, 7, 8 & Scoping Bracket Fix)
 // ------------------------------------------------------------------
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
   const key = `sim:autosnipe:${telegramId}`;
@@ -654,6 +660,7 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
   await redis.set(key, newState);
   
   if (newState === 'true') {
+      const crypto = await import('crypto');
       const sessionId = crypto.randomUUID();
       await redis.set(`autosnipe:session_id:sim:${telegramId}`, sessionId, 'EX', 86400);
       await redis.del(`autosnipe:session_spend:sim:${telegramId}`);
@@ -756,14 +763,15 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
           }
       }
 
+      // 🟢 FIX SCOPING: This executes properly inside the loop now
       await sendSimPnlCard(telegramId, bot, tokenCA, buyRes.volumeSpent, finalPnl, slPercent, 0, 0);
 
-      const loopDelay = useDeep ? 5000 : 2000;
-      await new Promise(r => setTimeout(r, loopDelay));
+      // 🟢 FIX 6: Organic Timing to separate trades randomly
+      const organicDelayMs = [1000, 5000, 8000, 10000][Math.floor(Math.random() * 4)] + Math.random() * 1000;
+      await new Promise(r => setTimeout(r, organicDelayMs));
 
-      if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
-  }
-  
+  } // <-- END OF WHILE LOOP
+
   await redis.set(`sim:autosnipe:${telegramId}`, 'false');
   await saveSimulationState(telegramId);
 }

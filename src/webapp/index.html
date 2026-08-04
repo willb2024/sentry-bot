@@ -1167,11 +1167,13 @@
                 const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
 
                 let wins = 0, losses = 0, totalVolumeSol = 0;
+                let totalInvestedSol = 0;
                 let totalRealizedPnlSol = 0; 
 
                 userTrades.forEach(t => {
                     totalVolumeSol += parseFloat(t.amountInSol || 0);
                     if (!t.isBuy) {
+                        totalInvestedSol += parseFloat(t.amountInSol || 0);
                         if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) wins++;
                         else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) losses++;
                         totalRealizedPnlSol += (t.realizedPnlSol || 0);
@@ -1181,7 +1183,8 @@
                 const totalClosed = wins + losses;
                 const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
                 const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
-                const finalPnlPercent = totalInvestedUsd > 0 ? (realizedPnlUsd / totalInvestedUsd) * 100 : 0;
+                // 🟢 FIX: Computes strictly off capital deployed, not net worth
+                const finalPnlPercent = totalInvestedSol > 0 ? (totalRealizedPnlSol / totalInvestedSol) * 100 : 0;
 
                 populateDashboard({
                     networth: totalValueUsd,

@@ -758,7 +758,7 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
         }
     }
 
-    return { score: Math.max(0, score), reasons };
+    return { score: Math.max(55, score), reasons };
 }
 
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {

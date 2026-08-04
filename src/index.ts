@@ -201,8 +201,8 @@ app.post('/api/analytics', async (req, res) => {
 
         const trades = await prisma.trade.findMany({
             where: { userId: user.id },
-            orderBy: { createdAt: 'desc' },
-            take: 100
+            orderBy: { createdAt: 'desc' }
+            // REMOVED: take: 100
         });
 
         const mappedTrades = trades.map((t: any) => ({
@@ -6095,22 +6095,25 @@ app.post('/api/stats-window', async (req, res) => {
         
         const isSim = await isSimulationActive(telegramId);
         if (isSim) {
-            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                if (f.manual24hCount !== undefined || f.auto24hCount !== undefined) {
-                    return res.json({
-                        manual: { count: f.manual24hCount || 0, pnl: f.manual24hPnl || 0 },
-                        auto: { count: f.auto24hCount || 0, pnl: f.auto24hPnl || 0 }
-                    });
-                }
-            }
-            const simStats = await getStatsForWindow(telegramId, 'sim', 86400);
+            const now = Date.now();
+            const oneDayAgo = now - 86400000;
+            const rawTrades = await redis.get(`sim:trades:${telegramId}`);
+            const simTrades = rawTrades ? JSON.parse(rawTrades) : [];
+            
+            // 🟢 FIX: Filter strictly by exact Date.now() 24h trailing window
+            const recentTrades = simTrades.filter((t: any) => new Date(t.createdAt).getTime() > oneDayAgo && !t.isBuy);
+            
+            const manualTrades = recentTrades.filter((t: any) => t.strategy === 'Manual / Direct');
+            const autoTrades = recentTrades.filter((t: any) => t.strategy !== 'Manual / Direct');
+            
+            const manualPnl = manualTrades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0);
+            const autoPnl = autoTrades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0);
+            
             return res.json({
-                manual: { count: 0, pnl: 0 },
-                auto: { count: simStats.tradeCount, pnl: simStats.totalPnl }
+                manual: { count: manualTrades.length, pnl: manualPnl },
+                auto: { count: autoTrades.length, pnl: autoPnl }
             });
-        } else {
+        } {
             const liveStats = await getStatsForWindow(telegramId, 'live', 86400);
             return res.json({
                 manual: { count: liveStats.tradeCount, pnl: liveStats.totalPnl },
@@ -6295,19 +6298,19 @@ app.post('/api/analytics/advanced-stats', async (req, res) => {
 
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (await isSimulationActive(telegramId)) {
-            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                // We know stats isn't null here because of the fallback check above
-                if (f.sharpe !== undefined && f.sharpe !== null) stats.sharpeRatio = f.sharpe;
-                if (f.drawdown !== undefined && f.drawdown !== null) stats.maxDrawdown = f.drawdown;
-                if (f.profit !== undefined && f.profit !== null) stats.profitFactor = f.profit;
-            }
             const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
+            const { computeSimTradeStats } = await import('./services/analytics.service.js');
+            
+            // 🟢 FIX: Compute dynamically from trade history every render
+            const dynamicStats = computeSimTradeStats(simTrades);
+            
+            stats.sharpeRatio = dynamicStats.sharpeRatio;
+            stats.maxDrawdown = dynamicStats.maxDrawdown;
+            stats.profitFactor = dynamicStats.profitFactor;
             stats.totalTrades = simTrades.length;
         }
-
         res.json(stats);
+
     } catch (e) { res.status(500).json({ error: 'Server error' }); }
 });
 
