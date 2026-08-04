@@ -731,29 +731,32 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
     totalSimSpent += amountSol;
 
     const buyMsg =
-      `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\n` +
-      `Token: <code>${tokenCA.substring(0,8)}...</code>\n` +
-      `AI Score: <b>${simScore}/100</b> ⭐\n` +
-      `Invested: <b>${amountSol} SOL</b>\n` +
-      `Trailing Drop: <b>-${slPercent}%</b>\n` +
-      `Take Profit: <b>${config?.autoTakeProfitPercent ? `+${tpPercent}%` : 'OFF'}</b>\n\n` +
-      `🔗 <a href="https://solscan.io/tx/${buyRes.signature}">View on Solscan</a>`;
+    `🟢 <b>BUY & GUARD SUCCESSFUL!</b>\n\n` +
+    `Token: <code>${tokenCA.substring(0,8)}...</code>\n` +
+    `AI Score: <b>${simScore}/100</b> ⭐\n` +
+    `Invested: <b>${amountSol} SOL</b>\n` +
+    `Trailing Drop: <b>-${slPercent}%</b>\n` +
+    `Take Profit: <b>${config?.autoTakeProfitPercent ? `+${tpPercent}%` : 'OFF'}</b>\n\n` +
+    `🔗 <a href="https://solscan.io/tx/${buyRes.signature}">View on Solscan</a>`;
 
-    await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+  await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
 
-    const holdDelay = 1000 + Math.random() * 7000;
-    await new Promise(r => setTimeout(r, holdDelay));
+  // 🟢 CUSTOM SIM TIMING LOOPS based on Deep Scoring Toggle
+  const useDeep = config?.useDeepScoring || false;
+  const holdDelay = useDeep ? 5000 : 3000; // 5s hold for Deep, 3s hold for Fast
+  await new Promise(r => setTimeout(r, holdDelay));
 
-    const sellRes = await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
-    await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, finalPnl, slPercent, 0, 0);
+  const sellRes = await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
+  await sendSimPnlCard(telegramId, bot, tokenCA, amountSol, finalPnl, slPercent, 0, 0);
 
-    await new Promise(r => setTimeout(r, 1500 + Math.random() * 2000));
+  const loopDelay = useDeep ? 5000 : 2000; // 5s scan interval for Deep, 2s scan interval for Fast
+  await new Promise(r => setTimeout(r, loopDelay));
 
-    if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
-  }
+  if (await redis.get(`sim:autosnipe:${telegramId}`) !== 'true') break;
+}
 
-  await redis.set(`sim:autosnipe:${telegramId}`, 'false');
-  await saveSimulationState(telegramId);
+await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+await saveSimulationState(telegramId);
 }
 
 // ------------------------------------------------------------------

@@ -686,7 +686,7 @@ function connectRaydiumFallbackWatcher(bot: any) {
 
 // src/services/grpc.service.ts (Replace triggerAutoSnipes)
 
-async function triggerAutoSnipes(
+export async function triggerAutoSnipes(
     bot: any, mintCa: string, symbol: string, initialBuySol: number, mode: 'PUMP' | 'RAYDIUM', raydiumPoolId?: string
 ) {
     const activeSnipers = [...cachedActiveSnipers];
@@ -706,16 +706,20 @@ async function triggerAutoSnipes(
 
                 let scoreType = "Basic Scoring"; 
                 let score = 0;
+                let matchedTokenForCard: any = null; 
+                let projectionForCard: any = null;
 
                 if (liveConfig.minScore > 0) {
                     try {
-                        const { computeTokenScore, getModelScore, getSentimentScore } = await import('./caller.service.js');
+                        const { computeTokenScore, getModelScore, getSentimentScore, getCalibratedProjection, storePredictionData, getDevReputation, checkLpLockStatus, trackHolderVelocity, simulateSellability } = await import('./caller.service.js');
                         const { consumeSniperCredit } = await import('./credits.service.js');
+                        const { checkTokenRugRisk, checkRecentMevActivity } = await import('./price.service.js');
 
                         const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
                         const ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
+                        const creatorWallet = seen?.creator || '';
 
-                        let liqUsd = 0, volUsd = 0, priceChangeM5 = 0, hasSocials = false, isRug = false;
+                        let liqUsd = 0, volUsd = 0, priceChangeM5 = 0, hasSocials = false;
 
                         if (mode === 'PUMP') {
                             const { getBondingCurveAddress } = await import('./price.service.js');
@@ -742,49 +746,87 @@ async function triggerAutoSnipes(
                             }
                         }
 
-                        try {
-                            const { checkTokenRugRisk } = await import('./price.service.js');
-                            isRug = await checkTokenRugRisk(mintCa);
-                        } catch (_) {}
+                        let isRug = false, hasMev = false, devRep: any = { launchCount: 0, avgRugScore: 0, isKnownRugger: false }, lpLock: any = { locked: false, burned: false, lockPct: 0 }, velocity: any = { growthRate: 0, uniqueBuyers5m: 0 }, sellability: any = { sellable: true, estimatedTaxPct: 0 };
+
+                        // 🟢 FAST VS DEEP SCORE TOGGLE
+                        if (liveConfig.useDeepScoring) {
+                            [isRug, hasMev, devRep, lpLock, velocity, sellability] = await Promise.all([
+                                checkTokenRugRisk(mintCa).catch(() => true),
+                                checkRecentMevActivity(mintCa).catch(() => true),
+                                getDevReputation(creatorWallet).catch(() => ({ launchCount: 0, avgRugScore: 0, isKnownRugger: false })),
+                                checkLpLockStatus(mintCa).catch(() => ({ locked: false, burned: false, lockPct: 0 })),
+                                trackHolderVelocity(mintCa).catch(() => ({ growthRate: 0, uniqueBuyers5m: 0 })),
+                                mode === 'PUMP' ? Promise.resolve({ sellable: true, estimatedTaxPct: 0 }) : simulateSellability(mintCa).catch(() => ({ sellable: true, estimatedTaxPct: 0 }))
+                            ]);
+                        }
 
                         const sentiment = await getSentimentScore(symbol);
-                        const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials, isRug, sentiment };
+                        const stats = {
+                            ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials, isRug,
+                            devRep, lpLock, velocity, sellability, sentiment
+                        };
 
-                        // 🟢 CREDIT CHECK FOR ML SCORING
+                        const heuristicResult = computeTokenScore(stats);
+                        score = heuristicResult.score;
+
+                        // 🟢 PREVENT CREDIT DRAINING: Abort early if the basic score is garbage
+                        if (score < liveConfig.minScore) return;
+                        
+                        // 🟢 AI CREDIT CONSUMPTION
                         const creditResult = await consumeSniperCredit(liveConfig.user.telegramId, mintCa);
                         const useML = creditResult.success && !creditResult.fallback;
 
                         if (useML) {
                             scoreType = "AI Model";
                             const mlScore = await getModelScore(mintCa, stats);
-                            score = mlScore !== null ? mlScore : computeTokenScore(stats).score;
+                            if (mlScore !== null) {
+                                score = mlScore;
+                            }
                         } else {
                             scoreType = "Basic Fallback (No Credits)";
-                            score = computeTokenScore(stats).score;
-                            
-                            // 🟢 MESSAGE: Notify if out of credits but continuing
                             if (creditResult.fallback) {
                                 const warnKey = `sniper_credits_warn:${liveConfig.user.telegramId}`;
-                                const alreadyWarned = await redis.get(warnKey);
-                                if (!alreadyWarned) {
-                                    await redis.set(warnKey, '1', 'EX', 1800); // 30 min cooldown
+                                if (!(await redis.get(warnKey))) {
+                                    await redis.set(warnKey, '1', 'EX', 1800);
                                     try {
                                         await bot.telegram.sendMessage(
                                             liveConfig.user.telegramId,
-                                            `⚠️ <b>AI CREDITS DEPLETED</b>\n\nYour Auto-Sniper just evaluated <code>${mintCa}</code> using <b>Basic Scoring</b> because you are out of credits.\n\n<i>Sniper will continue running, but accuracy is reduced. Use /credits to top up!</i>`,
+                                            `⚠️ <b>AI CREDITS DEPLETED</b>\n\nYour Auto-Sniper evaluated <code>${mintCa}</code> using <b>Basic Scoring</b>. Sniper will continue running with reduced accuracy. Use /credits to top up!`,
                                             { parse_mode: 'HTML' }
                                         );
                                     } catch (_) {}
                                 }
                             }
                         }
+
+                        // 🛑 FINAL SCORE CHECK (In case ML adjusted it below the threshold)
+                        if (score < liveConfig.minScore) return; 
+
+                        // 🟢 Only build rich card & log for training if Deep Scoring is enabled
+                        if (liveConfig.useDeepScoring) {
+                            matchedTokenForCard = {
+                                mint: mintCa, symbol, totalScore: Math.round(score), reasons: heuristicResult.reasons,
+                                ageMins, priceChangeM5, liquidity: liqUsd, volume: volUsd,
+                                breakdown: { mevRisk: isRug || !sellability.sellable || hasMev ? -100 : 0 },
+                                isRug, stats
+                            };
+                            projectionForCard = await getCalibratedProjection(matchedTokenForCard);
+
+                            const historyData = {
+                                mint: mintCa, symbol, score: matchedTokenForCard.totalScore, priceAtAlert: 0, alertedAt: Date.now(),
+                                tokenAgeAtAlertMins: ageMins, predictedRangeLow: projectionForCard.rawLow, 
+                                predictedRangeHigh: projectionForCard.rawHigh, predictedTimeframeMins: projectionForCard.rawTimeMins
+                            };
+                            const historyKey = `AUTOSNIPE:${mintCa}:${Date.now()}`;
+                            await redis.hset('caller_history', historyKey, JSON.stringify(historyData));
+                            await storePredictionData(matchedTokenForCard, projectionForCard, historyKey).catch(() => {});
+                        }
                     } catch (e) {
                         return; 
                     }
-
-                    if (score < liveConfig.minScore) return;
                 }
 
+                // 🟢 EXECUTION BLOCK
                 const intendedSpend = liveConfig.amountSol * liveConfig.user.activeWallets;
                 if (!isPriceReady) await new Promise(r => setTimeout(r, 1000)); 
 
@@ -792,7 +834,11 @@ async function triggerAutoSnipes(
                 const isSnipeLocked = await redis.set(sniperLockKey, '1', 'EX', 86400, 'NX');
                 if (!isSnipeLocked) return;
 
-                const result = await executeSnipe(liveConfig.user.telegramId, mintCa, liveConfig.amountSol, 'buy', undefined, false, raydiumPoolId, undefined, 0, undefined, 'SNIPER');
+                // 🟢 DYNAMIC SLIPPAGE BUMP FOR DEEP SCORING
+                // If Deep Scoring takes ~2s, the price might move. Bump slippage by +5% to ensure execution.
+                const executionSlippage = liveConfig.useDeepScoring ? (liveConfig.user.slippagePercent + 5) : undefined;
+
+                const result = await executeSnipe(liveConfig.user.telegramId, mintCa, liveConfig.amountSol, 'buy', undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'SNIPER');
 
                 if (result.success) {
                     const spent = result.volumeSpent || intendedSpend;
@@ -810,19 +856,36 @@ async function triggerAutoSnipes(
 
                     try {
                         const modeText = mode === 'PUMP' ? "Trench Sniper (Pump.fun)" : "Raydium LP Sniper";
-                        await bot.telegram.sendMessage(liveConfig.user.telegramId,
-                            `🎯 <b>AUTO-SNIPE SUCCESSFUL!</b>\n\n<b>Engine:</b> ${modeText}\n<b>Token:</b> <code>${mintCa}</code>\n<b>Score:</b> ${liveConfig.minScore > 0 ? `${score}/100 ⭐ <i>(${scoreType})</i>` : 'N/A (AI Disabled)'}\n<b>Invested:</b> <b>${spent.toFixed(4)} SOL</b>\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
-                            { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                        );
+
+                        // 🟢 Use Full Caller Rich Card if Deep Scoring is enabled
+                        let cardBody = "";
+                        if (matchedTokenForCard && projectionForCard) {
+                            const { formatCallerAlertMessage } = await import('./caller.service.js');
+                            cardBody = await formatCallerAlertMessage(matchedTokenForCard, projectionForCard, {});
+                            // Strip out the "Click below to buy" footer from the caller alert template
+                            cardBody = cardBody.replace(`<i>Click below to buy instantly via Jito:</i>`, ''); 
+                        }
+
+                        const header = `🎯 <b>AUTO-SNIPE EXECUTED!</b>\n\n<b>Engine:</b> ${modeText}\n<b>Invested:</b> <b>${spent.toFixed(4)} SOL</b>\n\n`;
+                        const footer = `\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
+
+                        const finalMsg = cardBody
+                            ? header + cardBody + footer
+                            : `🎯 <b>AUTO-SNIPE SUCCESSFUL!</b>\n\n<b>Engine:</b> ${modeText}\n<b>Token:</b> <code>${mintCa}</code>\n<b>Score:</b> ${liveConfig.minScore > 0 ? `${score}/100 ⭐ (${scoreType})` : 'N/A'}\n<b>Invested:</b> <b>${spent.toFixed(4)} SOL</b>${footer}`;
+
+                        await bot.telegram.sendMessage(liveConfig.user.telegramId, finalMsg, {
+                            parse_mode: 'HTML', link_preview_options: { is_disabled: true },
+                            reply_markup: { inline_keyboard: [
+                                [{ text: '💼 View Positions', callback_data: 'menu_positions' }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${mintCa}` }]
+                            ]}
+                        });
                     } catch (_) {}
                 } else {
                     await redis.del(sniperLockKey);
-                    
-                    // 🟢 MESSAGE: Insufficient Funds failure
                     if (result.message.includes("Insufficient Funds")) {
                         const fundWarnKey = `warn_funds:${liveConfig.user.telegramId}`;
                         if (!(await redis.get(fundWarnKey))) {
-                            await redis.set(fundWarnKey, '1', 'EX', 600); // 10 min cooldown so we don't spam them on every launch
+                            await redis.set(fundWarnKey, '1', 'EX', 600); // Only warn once per 10 mins
                             try {
                                 await bot.telegram.sendMessage(
                                     liveConfig.user.telegramId,
@@ -837,6 +900,7 @@ async function triggerAutoSnipes(
         }, delayMs);
     }
 }
+
 
 export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
@@ -885,6 +949,7 @@ export async function igniteYellowstoneStream(bot: any) {
                             console.log(`🚨 [ANTI-RUG SHIELD] Dev liquidity pull detected on ${tokenMint}! Front-running for ${exposedUsers.length} users.`);
                             for (const order of exposedUsers) {
                                 // Execute a 100% exit with Bumper priority (massive Jito tip) to land BEFORE the rug pull
+                                const { executeExit } = await import('./engine.service.js');
                                 executeExit(order.user.telegramId, tokenMint, 100, true, 'ANTI_RUG_SHIELD');
                                 
                                 bot.telegram.sendMessage(order.user.telegramId, 
@@ -895,9 +960,6 @@ export async function igniteYellowstoneStream(bot: any) {
                         }
                     }
                 }
-
-                // ... (Leave your existing "Instruction: Create" and "InitializePool" logic here exactly as it is) ...
-
             } catch (_) {}
         });
         stream.on("error", (err: any) => {

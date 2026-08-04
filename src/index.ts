@@ -2816,6 +2816,7 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const antiDeadObj = config.antiDeadCoin ? "🟢 ON (Active)" : "🔴 OFF (Disabled)"; 
     const devBagDisplay = `${config.maxDevBuyPercent}%`; 
     const scoreDisplay = config.minScore > 0 ? `${config.minScore}/100 ⭐` : `OFF`;
+    const deepScoringObj = config.useDeepScoring ? "🔍 Deep Score (High Accuracy)" : "⚡ Fast Score (Low Latency)"; // 🟢 ADDED
 
     const sniperText = 
         `🎯 <b>TRENCH AUTO-SNIPER ENGINE</b> 🎯\n` +
@@ -2826,6 +2827,9 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
 
         `• <b>Target Mode:</b> <b>${modeDisplay}</b>\n` +
         `  ├ <i>Specifies listing venues to check (Pump.fun curve, Raydium pool, or both).</i>\n\n` +
+
+        `• <b>Scoring Mode:</b> <b>${deepScoringObj}</b>\n` +
+        `  ├ <i>Fast = Minimum latency for block-0 frontrunning. Deep = Full AI & ML checks (slower but safer).</i>\n\n` +
 
         `• <b>Spend Amount:</b> <b>${config.amountSol} SOL</b> per wallet\n` +
         `  ├ <i>Capital spent per node. Multi-wallet mode fires this concurrently.</i>\n\n` +
@@ -2861,7 +2865,7 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const UI = Markup.inlineKeyboard([
         [Markup.button.callback(isCurrentlyActive ? '🛑 SHUT DOWN ENGINE' : '⚡ ARM SNIPER ENGINE', 'toggle_autosnipe')],
         [Markup.button.callback(modeBtnText, 'toggle_sniper_mode')],
-        [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score')],
+        [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score'), Markup.button.callback(`🧠 Mode: ${config.useDeepScoring ? '🔍 Deep' : '⚡ Fast'}`, 'toggle_snipe_deep_score')],
         [Markup.button.callback(`👻 Anti-Dead Shield: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
         [Markup.button.callback(`✏️ Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
         [Markup.button.callback(`📊 MC Filter (${mcDisplay})`, 'edit_snipe_mc')],
@@ -2947,6 +2951,20 @@ bot.action('edit_snipe_sl', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     await redis.set(`state:autosnipe_sl:${ctx.from?.id.toString()}`, 'AWAITING', 'EX', 120);
     await ctx.replyWithHTML(`🛡️ <b>EDIT TRAILING GUARD</b>\nReply with the Trailing Stop-Loss percentage.\n<i>Example: 20</i>`);
+});
+
+
+bot.action('toggle_snipe_deep_score', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
+    if (!user || !user.autoSnipeConfig) return;
+    
+    await prisma.autoSnipeConfig.update({ 
+        where: { id: user.autoSnipeConfig.id }, 
+        data: { useDeepScoring: !user.autoSnipeConfig.useDeepScoring } 
+    });
+    await sendOrEditSniper(ctx, tgId!, true);
 });
 
 bot.action('edit_snipe_tp', async (ctx) => {
