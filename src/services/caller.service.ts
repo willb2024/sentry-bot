@@ -395,7 +395,7 @@ return {
     volatility: `ML Model (${sampleCount} samples)`,
     sampleSize: sampleCount,
     rawLow: low,
-    rawHigh: high,
+    rawHigh: high, 
     rawTimeMins: (token.ageMins || 10) * 2
 };
                 }
