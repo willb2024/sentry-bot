@@ -174,8 +174,6 @@ function solveOLS(X: number[][], y: number[]): { coefficients: number[], interce
     }
 }
 
-
-
 interface NormalizationParams { means: number[]; stds: number[]; }
 
 function computeNormalization(X: number[][]): NormalizationParams {
@@ -336,7 +334,6 @@ export async function scheduleTraining() {
     }, 24 * 60 * 60 * 1000); 
 }
 
-
 export async function storePredictionData(token: any, projection: any, alertKey: string) {
     try {
         await prisma.callerPrediction.upsert({
@@ -386,18 +383,17 @@ export async function getCalibratedProjection(token: any) {
                     const low = Math.max(0, modelPeak - 1.96 * residualStd);
                     const high = modelPeak + 1.96 * residualStd;
                     const timeframe = humanizeMs((token.ageMins || 10) * 60000 * 2);
-                   // Inside getCalibratedProjection ML Route:
-const sampleCount = (weights.metrics?.trainSampleCount || 0) + (weights.metrics?.valSampleCount || 0);
+                    const sampleCount = (weights.metrics?.trainSampleCount || 0) + (weights.metrics?.valSampleCount || 0);
 
-return {
-    target: `+${Math.floor(low)}% to +${Math.floor(high)}%`,
-    timeframe,
-    volatility: `ML Model (${sampleCount} samples)`,
-    sampleSize: sampleCount,
-    rawLow: low,
-    rawHigh: high, 
-    rawTimeMins: (token.ageMins || 10) * 2
-};
+                    return {
+                        target: `+${Math.floor(low)}% to +${Math.floor(high)}%`,
+                        timeframe,
+                        volatility: `ML Model (${sampleCount} samples)`,
+                        sampleSize: sampleCount,
+                        rawLow: low,
+                        rawHigh: high, 
+                        rawTimeMins: (token.ageMins || 10) * 2
+                    };
                 }
             }
         }
@@ -499,6 +495,29 @@ export async function formatCallerAlertMessage(
         `<b>Audit Trail:</b>\n${(matchedToken.reasons || []).map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
         historicalContext +
         `<i>Click below to buy instantly via Jito:</i>`;
+}
+
+// 🟢 NEW: Unified Audit Trail Formatter (Fix 8)
+export function buildAuditTrailMessage(
+    mint: string,
+    score: number,
+    stats: { ageMins: number; volume: number; liquidity: number; priceChangeM5: number },
+    invested: number,
+    trailingDrop: number,
+    takeProfit: number | string,
+    isSimulated: boolean
+): string {
+    return `🟢 <b>BUY & GUARD SUCCESSFUL!${isSimulated ? ' (SIM)' : ''}</b>\n\n` +
+           `Token: <code>${mint.substring(0, 8)}...</code>\n` +
+           `AI Score: ${score}/100 ⭐\n\n` +
+           `Audit Trail:\n` +
+           `${stats.ageMins < 60 ? '✅' : '⚠️'} 🕐 Age: ${Math.floor(stats.ageMins)}m\n` +
+           `${stats.volume > 20000 ? '✅' : '⚠️'} 💰 Vol: $${(stats.volume / 1000).toFixed(1)}k\n` +
+           `${stats.priceChangeM5 > 15 ? '✅' : '⚠️'} 📈 Mom: ${stats.priceChangeM5 >= 0 ? '+' : ''}${stats.priceChangeM5.toFixed(1)}%\n` +
+           `${stats.liquidity > 20000 ? '✅' : '⚠️'} 💧 Liq: $${(stats.liquidity / 1000).toFixed(1)}k\n\n` +
+           `Invested: <b>${invested} SOL</b>\n` +
+           `Trailing Drop: <b>-${trailingDrop}%</b>\n` +
+           `Take Profit: <b>${typeof takeProfit === 'number' ? '+' + takeProfit + '%' : takeProfit}</b>`;
 }
 
 export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { matches: any[]; isRelaxed: boolean } {
@@ -742,8 +761,6 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
     return { score: Math.max(0, score), reasons };
 }
 
-
-
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     if (mints.length === 0) return [];
     const chunks = chunkArray(mints, 30);
@@ -754,7 +771,7 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
             const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 });
             if (res.data?.pairs) allPairs.push(...res.data.pairs);
         } catch (e: any) {}
-        await new Promise(r => setTimeout(r, 350)); // 🟢 FIX: Increased to 350ms to respect rate limits
+        await new Promise(r => setTimeout(r, 350)); 
     }
     return allPairs;
 }
@@ -917,7 +934,6 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
         const { connection } = await import('../lib/connection.js');
         const { PublicKey } = await import('@solana/web3.js');
         
-        // 🟢 FIX: Safely trap invalid wallet addresses
         let pubkey: any;
         try { pubkey = new PublicKey(creatorWallet); } catch { 
             return { launchCount: 0, avgRugScore: 0, isKnownRugger: false }; 
@@ -974,7 +990,6 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
             connection.getParsedAccountInfo(top.address).catch(()=>null)
         );
         
-        // 🟢 FIX: Safer parsing of nested on-chain data using nullish coalescing
         const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner ?? '';
         
         const pct = (top.uiAmount || 0) / (largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1) * 100;
@@ -991,7 +1006,6 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
     }
 }
 
-// Replace this function in src/services/caller.service.ts
 export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
     const cacheKey = `velocity_cache:${mintAddress}`;
     const cached = await redis.get(cacheKey);
@@ -1008,7 +1022,6 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
         if(!largest) return { growthRate: 0, uniqueBuyers5m: 0 };
         const currentCount = largest.value.filter(v => (v.uiAmount || 0) > 0).length;
 
-        // RESTORED SNAPSHOT LOGIC
         const snapshotKey = `holder_snapshots:${mintAddress}`;
         const now = Date.now();
         await redis.zadd(snapshotKey, now, `${now}:${currentCount}`);
@@ -1021,7 +1034,7 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
         const growthRate = oldCount > 0 ? ((currentCount - oldCount) / oldCount) * 100 : 0;
         
         const result = { growthRate, uniqueBuyers5m: Math.max(0, currentCount - oldCount) };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); // 45s cache
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); 
         return result;
     } catch (_) {
         return { growthRate: 0, uniqueBuyers5m: 0 };
@@ -1081,7 +1094,6 @@ export async function scoreTokens() {
             }
         }
         
-        // 🟢 Filter out malformed strings before they hit web3.js
         const uniquePairs = Array.from(mergedMap.values()).filter((p: any) => BASE58_MINT_REGEX.test(p.mint));
 
         const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
@@ -1154,7 +1166,6 @@ export async function scoreTokens() {
 
         const fullyScored: any[] = [];
         
-        // 🟢 Drop maximum deep-checks from 40 down to 15 to alleviate RPC hammering
         const stage2Chunks = chunkArray(passedStage1.slice(0, 15), 5);
         
         for (const chunk of stage2Chunks) {
@@ -1202,7 +1213,6 @@ export async function scoreTokens() {
                     ageMins: t.stats.ageMins, 
                     reasons: finalScoreRes.reasons, 
                     breakdown: { mevRisk: t.isRug || !sellability.sellable || hasMev ? -100 : 0 },
-                    // 🟢 FIX: propagate these so extractFeatures/storePredictionData see them
                     isRug: t.isRug,
                     stats: t.stats
                 };
@@ -1213,7 +1223,6 @@ export async function scoreTokens() {
         const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 15).map(t => ({
             ...t.pair, totalScore: t.score, ageMins: t.stats.ageMins, reasons: t.reasons, 
             breakdown: { mevRisk: t.isRug ? -100 : 0 },
-            // 🟢 FIX: same propagation for low-score fallback
             isRug: t.isRug,
             stats: t.stats
         }))].sort((a, b) => b.totalScore - a.totalScore);

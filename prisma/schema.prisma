@@ -16,6 +16,8 @@ model User {
   username            String?
   
   autoSnipeConfig     AutoSnipeConfig?
+
+  firstTradeAt        DateTime?
   
   activeWallets       Int      @default(1)
   vault2              String?  @unique

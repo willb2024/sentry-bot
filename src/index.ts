@@ -479,9 +479,18 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
       getLiveBalance(user), prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } }), checkVipStatus(user.telegramId)
     ]);
   
+    // 🟢 TYPO FIXED HERE (Removed the stray "c" before the comment)
+    // Inside sendOrEditDashboard(...)
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
     const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
 
+    // ONE static snapshot for the dashboard render to prevent jitter
+    const solUsdSnapshot = cachedSolUsdPrice;
+
+    const totalTradingDays = user.firstTradeAt
+        ? Math.max(1, Math.floor((Date.now() - user.firstTradeAt.getTime()) / 86_400_000) + 1)
+        : 0;
+        
     let displayCredits = user.creditBalance;
     if (isSimMode) {
       const simCreds = await redis.get(`sim:credits:${telegramId}`);
@@ -513,8 +522,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     const usdValue = balanceNum * cachedSolUsdPrice;
     const usdBalanceFormatted = usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   
-    // 🟢 DELETED THE MODE BADGE LOGIC HERE
-
     const layoutTxt = 
         `⚡ <b>${botName.toUpperCase()}</b> ⚡\n` +
         `<i>Routing: Pump.fun | Raydium | Meteora DLMM</i>\n\n` +
@@ -548,13 +555,12 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
               { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
               Markup.button.callback('📖 How to Trade', 'btn_trade_guide')
             ],
-            // 🟢 ADD THE SUPPORT BUTTON ROW HERE:
             [Markup.button.callback('💬 Contact Support', 'action_support')]
           ]);
         
           if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
           else await ctx.replyWithHTML(layoutTxt, UI);
-      }
+}
   
 
 
@@ -2897,6 +2903,18 @@ bot.action('menu_sniper', async (ctx) => {
     await sendOrEditSniper(ctx, ctx.from!.id.toString(), true);
 });
 
+// Add this helper function somewhere near the top/utilities in src/index.ts
+export async function getTotalTradeCount(telegramId: string, mode: 'live' | 'sim'): Promise<number> {
+    if (mode === 'sim') {
+        const raw = await redis.get(`sim:trades:${telegramId}`);
+        const trades = raw ? JSON.parse(raw) : [];
+        return trades.length;
+    }
+    const user = await prisma.user.findUnique({ where: { telegramId }});
+    if (!user) return 0;
+    return prisma.trade.count({ where: { userId: user.id } });
+}
+
 bot.action('toggle_autosnipe', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -2913,25 +2931,30 @@ bot.action('toggle_autosnipe', async (ctx) => {
 
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
     if (!user || !user.autoSnipeConfig) return;
+    
     const newState = !user.autoSnipeConfig.isActive;
-
+    
+    // 🟢 FIX 4 & 7: Generate a new Session ID for Live Budget Capping tracking
     if (newState) {
-        // 🟢 Track session start time for session PnL calculation on budget exit
-        await redis.set(`autosnipe_session_start:${tgId}`, Date.now().toString());
+        const crypto = await import('crypto');
+        const sessionId = crypto.randomBytes(16).toString('hex');
+        await redis.set(`autosnipe:session_id:live:${tgId}`, sessionId, 'EX', 86400);
+        await redis.del(`autosnipe:session_spend:live:${tgId}`);
+        await redis.del(`live:session_trades:${sessionId}`);
     }
 
     await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { isActive: newState } });
+    
     if (newState) {
         try { 
-            await ctx.telegram.sendMessage(
-                ctx.chat!.id, 
-                `📡 <b>SNIPER ARMED & SCANNING PUMP.FUN</b>\n\nYour engine is now actively listening to the Solana Mempool. It will execute via Jito MEV.`, 
-                { parse_mode: 'HTML' }
-            ); 
+            await ctx.telegram.sendMessage(ctx.chat!.id, `📡 <b>SNIPER ARMED & SCANNING PUMP.FUN</b>\n\nYour engine is now actively listening to the Solana Mempool. It will execute via Jito MEV.`, { parse_mode: 'HTML' }); 
         } catch(e) {}
     }
+    
     await sendOrEditSniper(ctx, tgId!, true);
 });
+
+
 
 bot.action('toggle_antidead', async (ctx) => {
     try { await ctx.answerCbQuery("👻 Anti-Dead Coin Shield Toggled!"); } catch(e){}

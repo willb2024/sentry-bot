@@ -286,11 +286,13 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             const jitoTip = 0.0015;
             const solPnl = rawSolPnl - platformFee - jitoTip;
             
-            const pnlMessage = pnlPercent >= 0
-                ? `💰 <b>Net Profit: +${solPnl.toFixed(4)} SOL</b> (+${pnlPercent.toFixed(1)}%)`
-                : `🩸 <b>Incurred Loss: -${Math.abs(solPnl).toFixed(4)} SOL</b> (${pnlPercent.toFixed(1)}%)`;
-            
-            const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n${pnlPercent < 0 ? `📉 <b>Peak Drop: -${actualPeakDrop}%</b>\n` : ''}${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
+            // 🟢 EXPLICIT SIMULATION GUARD STOP-LOSS MESSAGE
+            const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\n` +
+                `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
+                `${pnlPercent < 0 ? `Configured Drop Threshold: <b>-${guardSnapshot.trailingPercent}%</b>\nActual Peak Drop: <b>-${actualPeakDrop}%</b>\n` : ''}` +
+                `Realized PnL (incl. fees): <b>${pnlPercent.toFixed(1)}%</b>\n\n` +
+                `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
+                `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
 
             const imgId = crypto.randomBytes(8).toString('hex');
             await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
@@ -445,9 +447,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
 
                         try {
                             const user          = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
-                            const multiplier    = user?.activeWallets || 1;
                             const totalPnlPercent = entryPrice > 0 ? ((currentPriceNative - entryPrice) / entryPrice) * 100 : 0;
-                            const pnlSol        = (guard.amountInSol * (Math.abs(totalPnlPercent) / 100)) * multiplier;
 
                             const imgId = crypto.randomBytes(8).toString('hex');
                             const imageBuffer = await generatePnlCard(guard.tokenAddress, totalPnlPercent, user?.referralCode ?? undefined);
@@ -465,11 +465,14 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                             const tweetText = encodeURIComponent(`Just exited $${guard.tokenAddress.substring(0,4).toUpperCase()} on Sentry Terminal ⚡\n${totalPnlPercent >= 0 ? '+' : ''}${totalPnlPercent.toFixed(1)}% ${timeString}\nJito MEV bundle — zero sandwich attacks\n🔗 solscan.io/tx/${result.signature}\nt.me/${process.env.BOT_USERNAME || 'SentryTerminalBot'}?start=${user?.referralCode || ''}`);
                             const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share Guard to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
 
-                            const pnlMessage = totalPnlPercent >= 0
-                                ? `💰 <b>Net Profit: +${pnlSol.toFixed(4)} SOL</b> (+${totalPnlPercent.toFixed(1)}%)`
-                                : `🩸 <b>Incurred Loss: -${pnlSol.toFixed(4)} SOL</b> (${Math.abs(totalPnlPercent).toFixed(1)}%)`;
-
-                            const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n📉 <b>Peak Drop: -${dropPercent.toFixed(1)}%</b>\n${pnlMessage}\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
+                            // 🟢 EXPLICIT LIVE GUARD STOP-LOSS MESSAGE
+                            const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\n` +
+                                `Token: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n` +
+                                `Configured Drop Threshold: <b>-${guard.trailingPercent}%</b>\n` +
+                                `Actual Peak Drop: <b>-${dropPercent.toFixed(1)}%</b>\n` +
+                                `Realized PnL (incl. fees): <b>${totalPnlPercent.toFixed(1)}%</b>\n\n` +
+                                `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
+                                `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
                             await bot.telegram.sendPhoto(
                                 guard.telegramId,
@@ -684,8 +687,6 @@ function connectRaydiumFallbackWatcher(bot: any) {
     console.log("🟡 [RAYDIUM] WebSocket push watcher armed for instant execution.");
 }
 
-// src/services/grpc.service.ts (Replace triggerAutoSnipes)
-
 export async function triggerAutoSnipes(
     bot: any, mintCa: string, symbol: string, initialBuySol: number, mode: 'PUMP' | 'RAYDIUM', raydiumPoolId?: string
 ) {
@@ -704,65 +705,24 @@ export async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
-                // 🟢 MAX BUDGET EXHAUSTED CHECK WITH SESSION PNL SUMMARY (LIVE MAINNET)
-                const intendedSpend = liveConfig.amountSol * liveConfig.user.activeWallets;
-                if (liveConfig.maxBudgetSol && (liveConfig.totalSpentSol + intendedSpend) > liveConfig.maxBudgetSol) {
-                    const lockBudgetMsgKey = `lock:budget_msg:${liveConfig.id}`;
-                    if (await redis.set(lockBudgetMsgKey, '1', 'EX', 3600, 'NX')) {
-                        await prisma.autoSnipeConfig.update({
-                            where: { id: liveConfig.id },
-                            data: { isActive: false }
-                        });
-
-                        // Calculate Live Session Net PnL from trades
-                        const sessionStartTime = await redis.get(`autosnipe_session_start:${liveConfig.user.telegramId}`);
-                        let sessionPnlSol = 0;
-                        if (sessionStartTime) {
-                            const trades = await prisma.trade.findMany({
-                                where: {
-                                    userId: liveConfig.user.id,
-                                    strategy: 'SNIPER',
-                                    createdAt: { gte: new Date(parseInt(sessionStartTime)) }
-                                }
-                            });
-                            sessionPnlSol = trades.reduce((sum, t) => sum + (t.realizedPnlSol || 0), 0);
-                        }
-
-                        const pnlSign = sessionPnlSol >= 0 ? '+' : '';
-                        const pnlEmoji = sessionPnlSol >= 0 ? '💰' : '🩸';
-                        const spentSol = liveConfig.totalSpentSol;
-                        const pnlPct = spentSol > 0 ? (sessionPnlSol / spentSol) * 100 : 0;
-
-                        try {
-                            await bot.telegram.sendMessage(
-                                liveConfig.user.telegramId,
-                                `✅ <b>AUTO-SNIPER COMPLETE: Max Budget Reached</b>\n\n` +
-                                `• Total Spent: <b>${spentSol.toFixed(4)} SOL</b> / ${liveConfig.maxBudgetSol} SOL\n` +
-                                `• ${pnlEmoji} Session Net PnL: <b>${pnlSign}${sessionPnlSol.toFixed(4)} SOL</b> (${pnlSign}${pnlPct.toFixed(1)}%)\n\n` +
-                                `<i>Your Auto-Sniper engine has automatically powered down to protect your budget.</i>`,
-                                { parse_mode: 'HTML' }
-                            );
-                        } catch (_) {}
-                    }
-                    return;
-                }
-
                 let scoreType = "Basic Scoring"; 
                 let score = 0;
-                let matchedTokenForCard: any = null; 
-                let projectionForCard: any = null;
+                let ageMins = 0;
+                let volUsd = 0;
+                let liqUsd = 0;
+                let priceChangeM5 = 0;
 
                 if (liveConfig.minScore > 0) {
                     try {
-                        const { computeTokenScore, getModelScore, getSentimentScore, getCalibratedProjection, storePredictionData, getDevReputation, checkLpLockStatus, trackHolderVelocity, simulateSellability } = await import('./caller.service.js');
+                        const { computeTokenScore, getModelScore, getSentimentScore, getDevReputation, checkLpLockStatus, trackHolderVelocity, simulateSellability } = await import('./caller.service.js');
                         const { consumeSniperCredit } = await import('./credits.service.js');
                         const { checkTokenRugRisk, checkRecentMevActivity } = await import('./price.service.js');
 
                         const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
-                        const ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
+                        ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
                         const creatorWallet = seen?.creator || '';
 
-                        let liqUsd = 0, volUsd = 0, priceChangeM5 = 0, hasSocials = false;
+                        let hasSocials = false;
 
                         if (mode === 'PUMP') {
                             const { getBondingCurveAddress } = await import('./price.service.js');
@@ -791,7 +751,6 @@ export async function triggerAutoSnipes(
 
                         let isRug = false, hasMev = false, devRep: any = { launchCount: 0, avgRugScore: 0, isKnownRugger: false }, lpLock: any = { locked: false, burned: false, lockPct: 0 }, velocity: any = { growthRate: 0, uniqueBuyers5m: 0 }, sellability: any = { sellable: true, estimatedTaxPct: 0 };
 
-                        // 🟢 FAST VS DEEP SCORE TOGGLE
                         if (liveConfig.useDeepScoring) {
                             [isRug, hasMev, devRep, lpLock, velocity, sellability] = await Promise.all([
                                 checkTokenRugRisk(mintCa).catch(() => true),
@@ -812,10 +771,8 @@ export async function triggerAutoSnipes(
                         const heuristicResult = computeTokenScore(stats);
                         score = heuristicResult.score;
 
-                        // 🟢 PREVENT CREDIT DRAINING: Abort early if basic score is below threshold
                         if (score < liveConfig.minScore) return;
                         
-                        // 🟢 AI CREDIT CONSUMPTION
                         const creditResult = await consumeSniperCredit(liveConfig.user.telegramId, mintCa);
                         const useML = creditResult.success && !creditResult.fallback;
 
@@ -842,47 +799,41 @@ export async function triggerAutoSnipes(
                             }
                         }
 
-                        // 🛑 FINAL SCORE CHECK (In case ML adjusted it below threshold)
                         if (score < liveConfig.minScore) return; 
-
-                        // 🟢 Only build rich card & log for training if Deep Scoring is enabled
-                        if (liveConfig.useDeepScoring) {
-                            matchedTokenForCard = {
-                                mint: mintCa, symbol, totalScore: Math.round(score), reasons: heuristicResult.reasons,
-                                ageMins, priceChangeM5, liquidity: liqUsd, volume: volUsd,
-                                breakdown: { mevRisk: isRug || !sellability.sellable || hasMev ? -100 : 0 },
-                                isRug, stats
-                            };
-                            projectionForCard = await getCalibratedProjection(matchedTokenForCard);
-
-                            const historyData = {
-                                mint: mintCa, symbol, score: matchedTokenForCard.totalScore, priceAtAlert: 0, alertedAt: Date.now(),
-                                tokenAgeAtAlertMins: ageMins, predictedRangeLow: projectionForCard.rawLow, 
-                                predictedRangeHigh: projectionForCard.rawHigh, predictedTimeframeMins: projectionForCard.rawTimeMins
-                            };
-                            const historyKey = `AUTOSNIPE:${mintCa}:${Date.now()}`;
-                            await redis.hset('caller_history', historyKey, JSON.stringify(historyData));
-                            await storePredictionData(matchedTokenForCard, projectionForCard, historyKey).catch(() => {});
-                        }
                     } catch (e) {
                         return; 
                     }
                 }
 
-                // 🟢 EXECUTION BLOCK
+                // 🟢 EXECUTION BLOCK & BUDGET CHECK
+                const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
+                const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
+                const currentSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
+                const intendedSpend = liveConfig.amountSol * liveConfig.user.activeWallets;
+
+                if (liveConfig.maxBudgetSol && currentSpend + intendedSpend > liveConfig.maxBudgetSol) {
+                    await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
+                    await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
+                    return; 
+                }
+
                 if (!isPriceReady) await new Promise(r => setTimeout(r, 1000)); 
 
                 const sniperLockKey = `lock:autosnipe:${liveConfig.id}:${mintCa}`;
                 const isSnipeLocked = await redis.set(sniperLockKey, '1', 'EX', 86400, 'NX');
                 if (!isSnipeLocked) return;
 
-                // 🟢 DYNAMIC SLIPPAGE BUMP FOR DEEP SCORING
                 const executionSlippage = liveConfig.useDeepScoring ? (liveConfig.user.slippagePercent + 5) : undefined;
-
                 const result = await executeSnipe(liveConfig.user.telegramId, mintCa, liveConfig.amountSol, 'buy', undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'SNIPER');
 
                 if (result.success) {
                     const spent = result.volumeSpent || intendedSpend;
+                    
+                    await addSessionSpend(liveConfig.user.telegramId, spent, 'live');
+                    if (sessionId) {
+                        await redis.rpush(`live:session_trades:${sessionId}`, JSON.stringify({ mint: mintCa, amountInSol: spent, realizedPnlSol: 0 }));
+                    }
+
                     await prisma.autoSnipeConfig.update({
                         where: { id: liveConfig.id },
                         data:  { totalSpentSol: { increment: spent } }
@@ -896,21 +847,20 @@ export async function triggerAutoSnipes(
                     );
 
                     try {
-                        const modeText = mode === 'PUMP' ? "Trench Sniper (Pump.fun)" : "Raydium LP Sniper";
-
-                        let cardBody = "";
-                        if (matchedTokenForCard && projectionForCard) {
-                            const { formatCallerAlertMessage } = await import('./caller.service.js');
-                            cardBody = await formatCallerAlertMessage(matchedTokenForCard, projectionForCard, {});
-                            cardBody = cardBody.replace(`<i>Click below to buy instantly via Jito:</i>`, '');
-                        }
-
-                        const header = `🎯 <b>AUTO-SNIPE EXECUTED!</b>\n\n<b>Engine:</b> ${modeText}\n<b>Invested:</b> <b>${spent.toFixed(4)} SOL</b>\n\n`;
-                        const footer = `\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
-
-                        const finalMsg = cardBody
-                            ? header + cardBody + footer
-                            : `🎯 <b>AUTO-SNIPE SUCCESSFUL!</b>\n\n<b>Engine:</b> ${modeText}\n<b>Token:</b> <code>${mintCa}</code>\n<b>Score:</b> ${liveConfig.minScore > 0 ? `${score}/100 ⭐ (${scoreType})` : 'N/A'}\n<b>Invested:</b> <b>${spent.toFixed(4)} SOL</b>${footer}`;
+                        const { buildAuditTrailMessage } = await import('./caller.service.js');
+                        const auditStats = {
+                            ageMins: ageMins,
+                            volume: volUsd,
+                            liquidity: liqUsd,
+                            priceChangeM5: priceChangeM5
+                        };
+                        
+                        const baseMsg = buildAuditTrailMessage(
+                            mintCa, score, auditStats, spent, liveConfig.autoTrailingDropPercent,
+                            liveConfig.autoTakeProfitPercent || 'OFF', false
+                        );
+                        
+                        const finalMsg = `${baseMsg}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
                         await bot.telegram.sendMessage(liveConfig.user.telegramId, finalMsg, {
                             parse_mode: 'HTML', link_preview_options: { is_disabled: true },
@@ -972,13 +922,11 @@ export async function igniteYellowstoneStream(bot: any) {
                 const tx   = data.transaction.transaction;
                 const logs = tx.meta?.logMessages || [];
 
-                // 🟢 NEW FEATURE: ANTI-RUG FRONTRUNNER SHIELD
                 if (logs.some((log: string) => log.includes("Instruction: Withdraw") || log.includes("Instruction: RemoveLiquidity"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
                     const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
 
                     if (tokenMint) {
-                        // Find any users who currently have an active Guard on this token
                         const exposedUsers = await prisma.activeOrder.findMany({
                             where: { tokenAddress: tokenMint, orderType: 'GUARD', isActive: true },
                             include: { user: true }
@@ -987,7 +935,6 @@ export async function igniteYellowstoneStream(bot: any) {
                         if (exposedUsers.length > 0) {
                             console.log(`🚨 [ANTI-RUG SHIELD] Dev liquidity pull detected on ${tokenMint}! Front-running for ${exposedUsers.length} users.`);
                             for (const order of exposedUsers) {
-                                // Execute a 100% exit with Bumper priority (massive Jito tip) to land BEFORE the rug pull
                                 const { executeExit } = await import('./engine.service.js');
                                 executeExit(order.user.telegramId, tokenMint, 100, true, 'ANTI_RUG_SHIELD');
                                 
@@ -1002,7 +949,6 @@ export async function igniteYellowstoneStream(bot: any) {
             } catch (_) {}
         });
         stream.on("error", (err: any) => {
-            // 🟢 HELIUS FREE TIER PAYWALL DETECTION
             if (
                 err.message.includes("401") || 
                 err.message.includes("UNAUTHENTICATED") || 

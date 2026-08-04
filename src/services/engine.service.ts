@@ -195,6 +195,13 @@ export async function getCachedTokenPrice(mint: string): Promise<number> {
     return 0;
 }
 
+export async function ensureFirstTradeAnchor(telegramId: string) {
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (user && !user.firstTradeAt) {
+        await prisma.user.update({ where: { telegramId }, data: { firstTradeAt: new Date() } });
+    }
+}
+
 export async function checkRecentMevActivityCached(tokenMint: string): Promise<boolean> {
     try {
         return await checkRecentMevActivity(tokenMint); 
