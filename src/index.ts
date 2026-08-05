@@ -142,12 +142,7 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-app.post('/api/sol-price', (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        res.json({ price: cachedSolUsdPrice });
-    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
-});
+
 
 // 🟢 ADD THIS HELPER FUNCTION
 function extractTelegramId(initData: string): string | null {
@@ -189,6 +184,16 @@ function parseSolAmount(input: string, allowZero = false): number | null {
     return solVal;
 }
 
+
+// 🟢 GLOBAL API ENDPOINTS (MUST BE AT THE TOP, BEFORE TELEGRAM HANDLERS)
+
+app.post('/api/sol-price', (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        res.json({ price: cachedSolUsdPrice });
+    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
+});
+
 app.post('/api/analytics', async (req, res) => {
     const initData = req.body.initData;
     if (!initData) return res.status(401).json({ error: "No initData" });
@@ -197,28 +202,105 @@ app.post('/api/analytics', async (req, res) => {
 
     try {
         const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-        if (!user) return res.json([]);
+        if (!user) return res.json({ trades: [], stats: null });
 
+        // Fetch ONLY the latest 50 trades for the ledger
         const trades = await prisma.trade.findMany({
             where: { userId: user.id },
-            orderBy: { createdAt: 'desc' }
-            // REMOVED: take: 100
+            orderBy: { createdAt: 'desc' },
+            take: 50
         });
 
         const mappedTrades = trades.map((t: any) => ({
-            createdAt: t.createdAt,
-            isBuy: t.isBuy,
-            amountInSol: t.amountInSol,
-            // 🟢 FIX: Send actual realized data instead of hardcoded 0
-            profitPercent: t.profitPercent || 0,
-            realizedPnlSol: t.realizedPnlSol || 0
+            createdAt: t.createdAt, isBuy: t.isBuy, amountInSol: t.amountInSol,
+            profitPercent: t.profitPercent || 0, realizedPnlSol: t.realizedPnlSol || 0
         }));
+
+        const { getAdvancedStats } = await import('./services/analytics.service.js');
+        const stats = await getAdvancedStats(tgId);
         
-        res.json(mappedTrades);
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
+        // 🟢 FIX: Return the Object format the WebApp expects
+        res.json({ trades: mappedTrades, stats });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
+
+app.post('/api/sim-trades', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
+        if (!isAdmin(telegramId)) return res.status(403).json({ error: 'Admin only' });
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        if (!await isSimulationActive(telegramId)) return res.json([]);
+        const raw = await redis.get(`sim:trades:${telegramId}`);
+        res.json(raw ? JSON.parse(raw) : []);
+    } catch (e: any) { res.status(500).json([]); }
+});
+
+// 🟢 NEW: Persistent Simulation Stats Endpoint
+app.post('/api/sim-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
+
+        const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume, getSimCounters, getSimFirstTradeAt } = await import('./services/simulation.service.js');
+        const isActive = await isSimulationActive(tgId);
+        if (!isActive) return res.json({ isActive: false });
+
+        const balance = await getSimBalance(tgId);
+        const startingBalance = await getSimStartingBalance(tgId);
+        const volume = await getSimVolume(tgId);
+        const positionsRaw = await redis.get(`sim:positions:${tgId}`);
+        const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
+        const tradesRaw = await redis.get(`sim:trades:${tgId}`);
+        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+
+        const counters = await getSimCounters(tgId);
+        const firstTradeAt = await getSimFirstTradeAt(tgId);
+
+        res.json({
+            isActive: true, balance, startingBalance, volume,
+            wins: counters.wins, losses: counters.losses,
+            totalTrades: counters.totalTrades,
+            totalInvestedSol: counters.totalInvestedSol,
+            totalPnlSol: counters.totalPnlSol,
+            firstTradeAt, positions, trades: trades.slice(0, 50)
+        });
+    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
+});
+
+// 🟢 NEW: Toggle Simulation Mode Endpoint
+app.post('/api/toggle-sim', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: "Invalid initData" });
+        const { setSimulationMode } = await import('./services/simulation.service.js');
+        await setSimulationMode(tgId, req.body.active);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
+});
+
+app.post('/api/positions', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
+        const positions = await getUserPositions(telegramId);
+        if (positions && positions.length > 0) {
+            for (const p of positions) {
+                const guards = await redis.smembers(`token_guards:${telegramId}:${p.mint}`);
+                if (guards.length > 0) {
+                    const raw = await redis.get(`order:trail:${guards[0]}`);
+                    if (raw) (p as any).entryPrice = JSON.parse(raw).entryPrice || 0;
+                }
+            }
+        }
+        res.json(positions);
+    } catch (e) { res.status(500).json([]); }
+});
+
+
+
 
 // 🟢 GAP 2 FIX: Serves the raw binary PNG of the PnL card from Redis cache
 app.get('/pnl-img/:imgId', async (req, res) => {
@@ -283,32 +365,9 @@ app.get('/share/:imgId', async (req, res) => {
     }
 });
 
-// src/index.ts
 
-app.post('/api/sim-trades', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData))
-            return res.status(403).json({ error: 'Unauthorized' });
 
-        const telegramId = JSON.parse(
-            new URLSearchParams(req.body.initData).get('user')!
-        ).id.toString();
 
-        // Strict security: Only admins can access simulated trades
-        if (!isAdmin(telegramId))
-            return res.status(403).json({ error: 'Admin only' });
-
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        if (!await isSimulationActive(telegramId))
-            return res.json([]);
-
-        const raw = await redis.get(`sim:trades:${telegramId}`);
-        const trades = raw ? JSON.parse(raw) : [];
-        res.json(trades);
-    } catch (e: any) {
-        res.status(500).json([]);
-    }
-});
 
 // 🟢 FIX: Serves 100% persistent simulation stats to the WebApp for any user in sim mode
 
