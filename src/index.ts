@@ -553,9 +553,12 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
             // 🟢 UPDATED ROW: Launch Token + Track Trades (Grouped together)
             [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }],
             // 🟢 UPDATED ROW: Cancel All + Contact Support (Grouped together)
-            [Markup.button.callback('🛑 Cancel All', 'action_global_cancel'), Markup.button.callback('💬 Contact Support', 'action_support')],
+
             // 🟢 UPDATED ROW: Both Guides grouped at the bottom
-            [Markup.button.callback('📖 How to Trade', 'btn_trade_guide'), Markup.button.callback('⚙️ Configuration Guide', 'btn_config_guide')]
+            [Markup.button.callback('📖 How to Trade', 'btn_trade_guide'), Markup.button.callback('⚙️ Configuration Guide', 'btn_config_guide')],
+            
+            [Markup.button.callback('🛑 Cancel All', 'action_global_cancel'), Markup.button.callback('💬 Contact Support', 'action_support')],
+            
         ]);
         
           if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
