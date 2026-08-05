@@ -543,20 +543,24 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
-        const UI = Markup.inlineKeyboard([
-            [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
-            [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
-            [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-            [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
-            [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-            [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
-            [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
-            [
-              { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
-              Markup.button.callback('📖 How to Trade', 'btn_trade_guide')
-            ],
-            [Markup.button.callback('💬 Contact Support', 'action_support')]
-          ]);
+        // Replace your existing UI buttons with this updated layout:
+const UI = Markup.inlineKeyboard([
+    [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+    [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
+    [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
+    [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
+    [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+    [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+    [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
+    [
+      { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
+      Markup.button.callback('📖 How to Trade', 'btn_trade_guide') // Existing guide
+    ],
+    [
+      Markup.button.callback('💬 Contact Support', 'action_support'), // Existing support
+      Markup.button.callback('⚙️ Configuration Guide', 'btn_config_guide') // 🟢 NEW GUIDE BUTTON
+    ]
+]);
         
           if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
           else await ctx.replyWithHTML(layoutTxt, UI);
@@ -1562,7 +1566,135 @@ bot.action('btn_guide', async (ctx) => {
 });
 
 
+// 🟢 NEW: COMPLETE PLATFORM CONFIGURATION GUIDE (PAGINATED)
+const CONFIG_GUIDE_PAGES: string[] = [
+    // PAGE 1: GENERAL SETTINGS & SPEED
+    `⚙️ <b>SENTRY CONFIGURATION GUIDE</b> <i>(1/8)</i>\n\n` +
+    `🌐 <b>GLOBAL ADVANTAGE: Optimizing Your Terminal</b>\n` +
+    `<i>To get the best results, you must tune Sentry for your specific risk tolerance. Here is how to configure every module for maximum efficiency.</i>\n\n` +
+    `🚀 <b>1. TRANSACTION SPEED (JITO PRIORITY FEES)</b>\n` +
+    `In <b>/settings</b>, choose your priority fee:\n` +
+    `• <b>Eco 🍃 (0.0005 SOL):</b> Best for quiet market hours. Saves costs.\n` +
+    `• <b>Fast 🐎 (0.001 SOL):</b> Ideal for standard volume. Guarantees top-block execution.\n` +
+    `• <b>Turbo ⚡ (0.005 SOL):</b> Vital for high-volatility hyper launches. Out-bids 99% of retail.\n` +
+    `• <b>Custom ⚙️:</b> Set 0.02 SOL to front-run institutional snipers on hyped launches.\n\n` +
+    `💧 <b>2. SLIPPAGE (VOLATILITY PROTECTION)</b>\n` +
+    `Set slippage to <b>20%</b> in /settings. This ensures your buys/panic-sells never fail on Pump.fun's volatile bonding curves.\n\n` +
+    `🎮 <b>3. TRADING MODE (LIVE vs SIMULATION)</b>\n` +
+    `Toggle <b>Simulation Mode</b> in /settings to test strategies with zero real capital. Track your stats perfectly in the WebApp, then switch back to Live Mainnet when ready.`,
 
+    // PAGE 2: AUTO-SNIPER ENGINE
+    `🎯 <b>CONFIGURATION GUIDE — AUTO-SNIPER</b> <i>(2/8)</i>\n\n` +
+    `🤖 <b>HOW TO CONFIGURE THE AUTO-SNIPER FOR MAX PROFITS</b>\n\n` +
+    `• <b>Target Mode:</b> Set to <b>BOTH</b> to scan Pump.fun & Raydium simultaneously.\n` +
+    `• <b>Scoring Mode:</b> Always use <b>🔍 Deep Scoring</b>. The 3-5 second delay allows Sentry to check for serial ruggers, hidden taxes, and MEV bots before buying.\n` +
+    `• <b>AI Min Score:</b> Set to <b>55</b>. This gives you the largest pool of potential gems. Deep Scoring will filter out the scam 55s.\n` +
+    `• <b>Anti-Dead Shield:</b> 🟢 <b>TURN THIS ON.</b> If a dev launches a token but doesn't buy any of their own supply, it is a 99% chance of a dead rug. This blocks it.\n` +
+    `• <b>Max Dev Bag:</b> Set to <b>10%</b>. If the dev buys more than 10% of the supply at mint, Sentry aborts the trade.\n` +
+    `• <b>Max Budget:</b> Set a global safety cap (e.g., 10 SOL). The sniper automatically shuts down once this spend limit is reached to protect your wallet.\n` +
+    `• <b>Block Delay:</b> Set to <b>2 Seconds</b>. Instantly buying at 0ms often fails due to bonding curve lag; 2s ensures a live price while keeping you ahead of retail.`,
+
+    // PAGE 3: AI COIN CALLER ENGINE
+    `📡 <b>CONFIGURATION GUIDE — AI COIN CALLER</b> <i>(3/8)</i>\n\n` +
+    `🤖 <b>HOW TO TUNE THE AI SCANNER FOR BREAKOUTS</b>\n\n` +
+    `The AI Coin Caller scans mempools every 15 seconds. To get the highest quality alerts:\n\n` +
+    `• <b>Min Score (55):</b> Keeps the pool massive. The ML model handles the rest by assigning Calibrated Price Projections based on historical breakout patterns.\n` +
+    `• <b>Max Token Age:</b> Set to <b>10 minutes</b>. In the memecoin space, a token older than 10-20 minutes is already heavily farmed. You want to catch it at birth.\n` +
+    `• <b>Momentum % Range:</b> Set between <b>10% and 500%</b>. This captures tokens right as they start their upward trajectory, but won't alert you on pump-and-dumps that are already +1,000%.\n` +
+    `• <b>Min Liquidity:</b> Set to <b>$3,000</b>. This ensures you catch brand new, unindexed Pump.fun coins, while the Anti-Rug Shield ensures safety.\n` +
+    `• <b>MEV Shield:</b> 🟢 <b>TURN THIS ON.</b> Blocks high-frequency sandwich bot activity before it eats your slippage.\n\n` +
+    `💡 <b>PRO TIP:</b> When you see an alert with "Calibrated (ML Trained)", the ML model has high confidence in the peak projection. These are the highest conviction alerts.`,
+
+    // PAGE 4: VAULT & WHALE MODE
+    `🔑 <b>CONFIGURATION GUIDE — VAULT & KEYS</b> <i>(4/8)</i>\n\n` +
+    `🐙 <b>HOW TO ACTIVATE WHALE MODE (MULTI-WALLET EXECUTION)</b>\n\n` +
+    `Pump.fun limits how many tokens a single wallet can buy at launch. Sentry bypasses this by firing up to 5 wallets simultaneously in the same millisecond via Jito.\n\n` +
+    `• <b>Step 1:</b> Open <b>Vault & Keys</b> from the dashboard.\n` +
+    `• <b>Step 2:</b> Click the numbers to activate up to 5 wallets (W1 to W5). \n` +
+    `• <b>Step 3:</b> Send SOL to <b>each individual address</b>. Sentry aggregates the balances automatically.\n` +
+    `• <b>Step 4:</b> When you execute a Snipe, Sentry fires <b>simultaneous transactions</b> across all active wallets, securing a massive bag at Block-0.\n\n` +
+    `🔒 <b>SECURITY BEST PRACTICES:</b>\n` +
+    `• <b>Set a Withdrawal PIN:</b> Protects your funds if your Telegram is compromised.\n` +
+    `• <b>Export Keys:</b> Always keep an offline backup of your private keys. This message auto-deletes after 60 seconds.\n` +
+    `• <b>Consolidate:</b> Use the "Sweep All to W1" button to instantly pull SOL from sub-wallets back to your main vault.`,
+
+    // PAGE 5: DCA & LIMIT ORDERS
+    `⏳ <b>CONFIGURATION GUIDE — DCA & LIMIT ENGINE</b> <i>(5/8)</i>\n\n` +
+    `📉 <b>HOW TO CONFIGURE LIMIT ORDERS (BUY THE DIP)</b>\n\n` +
+    `Type <code>/dca</code> to deploy.\n` +
+    `• <b>Example:</b> <code>[CA] [TARGET PRICE] [AMOUNT]</code>\n` +
+    `• <b>Best practice:</b> Set a Limit Order 15-20% below current market cap. Sentry monitors the price 24/7 and executes instantly via Jito when the target hits.\n\n` +
+    `🔁 <b>HOW TO CONFIGURE TWAP / DCA SCHEDULES</b>\n\n` +
+    `Type <code>/dca</code> to deploy.\n` +
+    `• <b>Example:</b> <code>[CA] [INTERVAL MINS] [AMOUNT] [DROP %] [TP %] [MAX BUDGET]</code>\n` +
+    `• <b>Best practice:</b> Set an interval of 60-120 minutes for a small amount (e.g., $10), and a trailing guard of -15%. This allows your bot to slowly accumulate a massive bag without alerting the market to your buying pattern.\n\n` +
+    `🛡️ <b>PRO TIP:</b> Every Limit Order and DCA fill automatically arms a Guard (Trailing Stop Loss). You never have to manually manage entry costs.`,
+
+    // PAGE 6: LAUNCHPAD & DEVELOPER SUITE
+    `🚀 <b>CONFIGURATION GUIDE — LAUNCHPAD & DEV SUITE</b> <i>(6/8)</i>\n\n` +
+    `💥 <b>HOW TO LAUNCH A TOKEN WITH BLOCK-0 PROTECTION</b>\n\n` +
+    `Tap <b>Launch Token</b>. Sentry mines a Vanity CA (e.g., CAT...pump) and bundles the entire deployment into an un-snipeable Jito Block-0.\n` +
+    `• <b>Best Practice for Devs:</b> Distribute your initial buy across <b>4 wallets</b>. This conceals your true bag size from the community and prevents front-running. Always deploy an <b>Auto-Guard</b> (e.g., -40% stop-loss) to protect your initial capital.\n\n` +
+    `🛠️ <b>HOW TO USE THE PRO DEV SUITE (INSTITUTIONAL TOOLS)</b>\n\n` +
+    `• <b>Volume Bumper:</b> If your token drops off the front page, use the <b>Volume Bumper</b> (Type <code>/bumper</code>). Sentry executes wash-trades across all 5 wallets simultaneously via Jito to artificially spike volume and push you back to the top of DexScreener.\n` +
+    `• <b>The Nuke Button:</b> If you need to exit your entire position instantly, use the <b>Nuke</b> command. Sentry compiles sell orders from all 5 of your wallets into a single encrypted Jito block, exiting your supply in <b>0ms</b> at the absolute peak price.`,
+
+    // PAGE 7: COPY TRADING & GUILD SYSTEM
+    `👥 <b>CONFIGURATION GUIDE — COPY TRADING & GUILDS</b> <i>(7/8)</i>\n\n` +
+    `🐋 <b>HOW TO MIRROR WHALE WALLETS (RISK FREE)</b>\n\n` +
+    `Tap <b>Copy Trade</b> and paste a whale wallet address.\n` +
+    `• <b>Best Practice:</b> Before adding a wallet, Sentry automatically scans their last 20 transactions via Helius. If the wallet has an average hold time of under 30 seconds, Sentry flags it as a <b>High Bot Probability</b>. <i>Avoid copying these wallets to prevent sandwich attacks.</i>\n\n` +
+    `🏰 <b>HOW TO BUILD A LOYAL COMMUNITY (SENTRY GUILDS)</b>\n\n` +
+    `Type <code>/createguild</code> (completely free!) to launch your own loyalty engine.\n` +
+    `• <b>Best Practice:</b> Set a clear reward description (e.g., "Top 50 traders get whitelisted for our next token launch").\n` +
+    `• <b>Passive Income:</b> You earn <b>50% of the platform fees</b> for every trade your Guild members make. \n` +
+    `• <b>Reward Distribution:</b> Use the guild management panel to execute <b>Tiered Airdrops</b> or <b>Individual Payouts</b> directly to the top 50 members on the leaderboard.`,
+
+    // PAGE 8: WEB DASHBOARD & USEFUL COMMANDS
+    `📊 <b>CONFIGURATION GUIDE — WEB APP & COMMANDS</b> <i>(8/8)</i>\n\n` +
+    `📈 <b>HOW TO READ YOUR WEB DASHBOARD FOR SUCCESS</b>\n\n` +
+    `• <b>Sharpe Ratio (Annualized):</b> Anything above 2.0 is elite. This measures your risk-adjusted return. Higher is safer.\n` +
+    `• <b>Max Drawdown:</b> Keep this under 2.0 SOL. It tracks the biggest cumulative loss from peak to trough. If it spikes, lower your position sizes.\n` +
+    `• <b>Profit Factor:</b> A 4.0+ profit factor means you make $4 for every $1 lost. This is the gold standard for algorithmic trading.\n` +
+    `• <b>Strategy Attribution:</b> This tells you exactly which engine is making you money (Sniper vs Manual). If Manual is winning, focus there. If Sniper is winning, increase your Auto-Sniper budget.\n` +
+    `• <b>Positions:</b> Use the 10% - 100% sell buttons to quickly scale out of bags. Hitting the 10% button instantly sends a Jito bundle.\n` +
+    `• <b>24-Hour Rolling Activity:</b> Tracks exactly how many trades your manual and Auto-Engine are firing in the last day.\n\n` +
+    `⌨️ <b>MUST-KNOW FAST COMMANDS:</b>\n` +
+    `• <code>/watch [CA] [TARGET_PRICE]</code> → Set persistent Redis price alerts.\n` +
+    `• <code>/batch</code> → Snipe multiple CA's at once using new lines.\n` +
+    `• <code>/stats</code> → Instantly pull your Win Rate, PnL, and Volume.\n` +
+    `• <code>/calendar</code> → See the top 10 verified launches under 2 hours old.\n` +
+    `• <code>/exporttrades</code> → Download your full CSV tax ledger.\n` +
+    `• <code>/health</code> → Check the bot's Redis and RPC connectivity.`
+];
+
+
+
+// 🟢 NEW: Configuration Guide Navigation
+function buildConfigGuideKeyboard(page: number) {
+    const buttons = [];
+    const navRow = [];
+    if (page > 0) navRow.push(Markup.button.callback('⬅️ Prev', `config_guide_page_${page - 1}`));
+    if (page < CONFIG_GUIDE_PAGES.length - 1) navRow.push(Markup.button.callback('Next ➡️', `config_guide_page_${page + 1}`));
+    if (navRow.length > 0) buttons.push(navRow);
+    buttons.push([Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]);
+    return Markup.inlineKeyboard(buttons);
+}
+
+
+// 🟢 NEW: Configuration Guide Button Handler
+bot.action('btn_config_guide', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[0], buildConfigGuideKeyboard(0));
+});
+
+// 🟢 NEW: Configuration Guide Page Navigation Handler
+bot.action(/^config_guide_page_(\d+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const page = parseInt(ctx.match[1]);
+    if (page < 0 || page >= CONFIG_GUIDE_PAGES.length) return;
+    await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[page], buildConfigGuideKeyboard(page));
+});
 // =========================================================
 // 📖 FULL OPERATIONS MANUAL (PAGINATED WITH PREV/NEXT)
 // =========================================================
