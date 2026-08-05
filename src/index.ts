@@ -5917,39 +5917,44 @@ app.post('/api/my-leaderboard', async (req, res) => {
 
 app.post('/api/combined-trades', async (req, res) => {
     try {
-      if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-      const telegramId = extractTelegramId(req.body.initData);
-      if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-  
-      const { getCombinedTrades, computeCombinedStats } = await import('./services/analytics.service.js');
-      const trades = await getCombinedTrades(telegramId);
-      const stats = computeCombinedStats(trades);
-  
-      const alloc = { labels: ['No Holdings'], data: [100] };
-  
-      res.json({
-        trades: trades.map(t => ({
-          createdAt: t.createdAt,
-          isBuy: t.isBuy,
-          amountInSol: t.amountInSol,
-          profitPercent: t.profitPercent || 0,
-          realizedPnlSol: t.realizedPnlSol || 0
-        })),
-        stats: {
-          networth: 0,
-          networthSol: '0.00 SOL',
-          pnlPercent: (stats.totalPnl / (stats.totalVolume || 1) * 100).toFixed(2),
-          pnlUsd: stats.totalPnl * cachedSolUsdPrice,
-          winrate: stats.winRate.toFixed(1),
-          winLossText: `${stats.wins} Wins / ${stats.losses} Losses`,
-          volume: stats.totalVolume.toFixed(2) + ' SOL'
-        },
-        alloc
-      });
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const { getCombinedTrades, computeCombinedStats } = await import('./services/analytics.service.js');
+        const trades = await getCombinedTrades(telegramId);
+        const stats = computeCombinedStats(trades);
+
+        const alloc = { labels: ['No Holdings'], data: [100] };
+
+        // 🟢 FIX: PnL % calculation against total invested capital across closed trades
+        const pnlPercentCalc = stats.totalInvestedSol > 0 
+            ? ((stats.totalPnl / stats.totalInvestedSol) * 100).toFixed(2) 
+            : '0.00';
+
+        res.json({
+            trades: trades.map(t => ({
+                createdAt: t.createdAt,
+                isBuy: t.isBuy,
+                amountInSol: t.amountInSol,
+                profitPercent: t.profitPercent || 0,
+                realizedPnlSol: t.realizedPnlSol || 0
+            })),
+            stats: {
+                networth: 0,
+                networthSol: '0.00 SOL',
+                pnlPercent: pnlPercentCalc,
+                pnlUsd: stats.totalPnl * cachedSolUsdPrice,
+                winrate: stats.winRate.toFixed(1),
+                winLossText: `${stats.wins} Wins / ${stats.losses} Losses`,
+                volume: stats.totalVolume.toFixed(2) + ' SOL'
+            },
+            alloc
+        });
     } catch (e) {
-      res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Server error' });
     }
-  });
+});
   
   app.post('/api/combined-advanced-stats', async (req, res) => {
     try {
@@ -6285,33 +6290,25 @@ app.post('/api/analytics/advanced-stats', async (req, res) => {
         const telegramId = extractTelegramId(req.body.initData);
         if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-        // 🟢 FIX: Initialize empty default object with consistencyScore
-        let stats = await getAdvancedStats(telegramId);
-        if (!stats) {
-            stats = { 
-                sharpeRatio: 0, consistencyScore: 0, maxDrawdown: 0, totalTrades: 0, 
-                winningTrades: 0, losingTrades: 0, averageWin: 0, averageLoss: 0, 
-                profitFactor: 0, totalPnlSol: 0,
-                totalPnl: 0, totalVolume: 0, winRate: 0, wins: 0, losses: 0
-            };
-        }
+        const { getAdvancedStats, computeSimTradeStats } = await import('./services/analytics.service.js');
+        const stats = await getAdvancedStats(telegramId);
 
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (await isSimulationActive(telegramId)) {
             const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
-            const { computeSimTradeStats } = await import('./services/analytics.service.js');
-            
-            // 🟢 FIX: Compute dynamically from trade history every render
             const dynamicStats = computeSimTradeStats(simTrades);
             
             stats.sharpeRatio = dynamicStats.sharpeRatio;
             stats.maxDrawdown = dynamicStats.maxDrawdown;
             stats.profitFactor = dynamicStats.profitFactor;
             stats.totalTrades = simTrades.length;
+            stats.totalInvestedSol = dynamicStats.totalInvestedSol;
         }
-        res.json(stats);
 
-    } catch (e) { res.status(500).json({ error: 'Server error' }); }
+        res.json(stats);
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
 app.post('/api/risk-score', async (req, res) => {
