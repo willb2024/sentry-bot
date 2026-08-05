@@ -188,7 +188,7 @@
                 <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">1</span>
             </div>
 
-            <!-- 🟢 UNIFIED 24-HOUR ROLLING ACTIVITY -->
+            <!-- 24-HOUR ROLLING ACTIVITY -->
             <div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
                 <div class="flex items-center gap-3">
                     <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
@@ -205,7 +205,7 @@
                 </div>
             </div>
 
-            <!-- 🟢 ADVANCED STATS CARD -->
+            <!-- ADVANCED STATS CARD -->
             <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.01] mb-6">
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Sharpe Ratio (Annualized)</span>
@@ -225,7 +225,7 @@
                 </div>
             </div>
 
-            <!-- 🟢 RISK SCORE & STRATEGY ATTRIBUTION GRID -->
+            <!-- RISK SCORE & STRATEGY ATTRIBUTION GRID -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <!-- Risk Score Card -->
                 <div class="card-flat p-5">
@@ -294,7 +294,7 @@
                 </div>
             </div>
 
-            <!-- 🟢 Hourly Performance Heatmap -->
+            <!-- Hourly Performance Heatmap -->
             <div class="card-flat p-5">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide uppercase">Hourly Performance (UTC)</h3>
@@ -304,7 +304,7 @@
                 </div>
             </div>
 
-            <!-- 🟢 Export Button -->
+            <!-- Export Button -->
             <button onclick="exportTrades()" class="w-full card-flat p-4 flex items-center justify-center gap-2 hover:bg-white/[0.05] transition-all text-white font-bold text-sm">
                 <i class="fa-solid fa-file-csv text-jupGreen"></i> Export Ledger to CSV
             </button>
@@ -947,7 +947,7 @@
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ initData: tg.initData || "" })
                     }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
-                    const liveSolPrice = solRes.price || 160;
+                    const liveSolPrice = solPriceRes.price || 160;
 
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint, symbol: p.symbol, amount: p.amount,
@@ -1084,34 +1084,6 @@
         });
     }
 
-        document.getElementById('stat-networth').innerText = '$' + stats.networth.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-        document.getElementById('stat-networth-sub').innerText = stats.networthSol;
-        
-        const isGain = stats.pnlPercent >= 0;
-        const pnlColorClass = isGain ? 'text-jupGreen' : 'text-neonRed';
-        
-        document.getElementById('stat-pnl').innerText = `${isGain && stats.pnlPercent !== 0 ? '+' : ''}${stats.pnlPercent}%`;
-        document.getElementById('stat-pnl').className = `text-3xl sm:text-4xl font-bold mt-1 transition-colors ${pnlColorClass}`;
-        document.getElementById('stat-pnl-sub').innerText = `${isGain && stats.pnlUsd !== 0 ? '+' : '-'}$${Math.abs(stats.pnlUsd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits:2})} net profit`;
-        
-        document.getElementById('stat-winrate').innerText = stats.winrate + '%';
-        document.getElementById('stat-winrate-sub').innerText = stats.winLossText;
-        document.getElementById('stat-volume').innerText = stats.volume;
-
-        let tradingDays = 1;
-        if (userTrades && userTrades.length > 0) {
-            const oldestTrade = new Date(Math.min(...userTrades.map(t => new Date(t.createdAt).getTime())));
-            const diffTime = Math.abs(new Date() - oldestTrade);
-            tradingDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
-        }
-        document.getElementById('stat-trading-days').innerText = tradingDays;
-
-        const chartData = aggregatePnlData(currentFilter);
-        initCharts(chartData.labels, chartData.profitData, chartData.lossData, allocLabels, allocData);
-        renderPositions(positions);
-        setFilter(currentFilter);
-    
-
     async function exportTrades() {
         try {
             const res = await fetch('/api/trades/export', {
@@ -1246,160 +1218,6 @@
         } catch (_) {}
     }
 
-    async function fetchLiveData() {
-        try {
-            const simRes = await fetch('/api/sim-stats', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
-            });
-
-            if (simRes.ok) {
-                const simStats = await simRes.json();
-
-                if (simStats.isActive) {
-                    isSimModeActive = true; 
-
-                    const startingBalance = simStats.startingBalance || 0; 
-                    const solPriceRes = await fetch('/api/sol-price', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ initData: tg.initData || "" })
-                    }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
-                    const liveSolPrice = solPriceRes.price || 160;
-
-                    const simPositions = (simStats.positions || []).map(p => ({
-                        mint: p.mint, symbol: p.symbol, amount: p.amount,
-                        priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
-                        valueUsd: p.valueUsd || (p.amountInSol * liveSolPrice),
-                        entryPrice: p.entryPriceUsd || p.entryPrice
-                    }));
-
-                    userTrades = (simStats.trades || []).map(t => ({
-                        createdAt: t.createdAt, isBuy: t.isBuy, amountInSol: t.amountInSol,
-                        profitPercent: t.profitPercent || 0, realizedPnlSol: t.realizedPnlSol || 0
-                    }));
-
-                    let wins = simStats.wins || 0;
-                    let losses = simStats.losses || 0;
-                    let totalVolumeSol = simStats.volume || 0;
-
-                    const simBalanceSol = parseFloat(simStats.balance) || 0;
-                    const networthUsd = simBalanceSol * liveSolPrice; 
-                    const networthSol = simBalanceSol.toFixed(4) + " SOL";
-
-                    const pnlSol = simBalanceSol - startingBalance;
-                    const pnlPercent = startingBalance > 0 ? ((pnlSol / startingBalance) * 100).toFixed(2) : "0.00";
-                    const pnlUsd = pnlSol * liveSolPrice;
-
-                    const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
-
-                    const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : [];
-                    const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [];
-
-                    populateDashboard({
-                        networth: networthUsd, networthSol: networthSol, pnlPercent: pnlPercent, pnlUsd: pnlUsd,
-                        winrate: winRate, winLossText: `${wins} Wins / ${losses} Losses`, volume: totalVolumeSol.toFixed(4) + " SOL"
-                    }, allocLabels, allocData, simPositions);
-
-                    fetch('/api/my-leaderboard', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ initData: tg.initData || "" })
-                    }).then(r => r.ok ? r.json() : { guild: null, members: [] })
-                      .then(data => { liveLeaderboardData = data; if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); })
-                      .catch(() => {});
-
-                    fetch('/api/affiliate-stats', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ initData: tg.initData || "" })
-                    }).then(r => r.ok ? r.json() : null)
-                      .then(data => { if (data) liveAffiliateData = data; if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); })
-                      .catch(() => {});
-
-                    setTimeout(fetchLiveData, 4000);
-                    return; 
-                } else {
-                    isSimModeActive = false;
-                }
-            } else {
-                isSimModeActive = false;
-            }
-        } catch (_) {
-            isSimModeActive = false;
-        }
-
-        fetch('/api/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
-        .then(r => r.ok ? r.json() : [])
-        .catch(() => [])
-        .then(positions => {
-            fetch('/api/analytics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
-            .then(res => res.ok ? res.json() : [])
-            .catch(() => [])
-            .then(async trades => {
-                userTrades = trades || [];
-                const posArray = positions || [];
-
-                const solRes = await fetch('/api/sol-price', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData }) }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
-
-                const currentSolPrice = solRes.price || 160;
-                let totalValueUsd = 0, totalInvestedUsd = 0, allocLabels = [], allocData = [];
-
-                posArray.forEach(p => {
-                    totalValueUsd += p.valueUsd || 0;
-                    allocLabels.push(p.symbol);
-                    allocData.push(p.valueUsd || 0);
-                    if (p.entryPrice && p.amount) totalInvestedUsd += (p.amount * p.entryPrice);
-                    else totalInvestedUsd += (p.valueUsd || 0);
-                });
-
-                const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
-
-                let wins = 0, losses = 0, totalVolumeSol = 0;
-                let totalInvestedSol = 0;
-                let totalRealizedPnlSol = 0; 
-
-                userTrades.forEach(t => {
-                    totalVolumeSol += parseFloat(t.amountInSol || 0);
-                    if (!t.isBuy) {
-                        totalInvestedSol += parseFloat(t.amountInSol || 0);
-                        if (typeof t.profitPercent === 'number' && t.profitPercent > 0.5) wins++;
-                        else if (typeof t.profitPercent === 'number' && t.profitPercent < -0.5) losses++;
-                        totalRealizedPnlSol += (t.realizedPnlSol || 0);
-                    }
-                });
-
-                const totalClosed = wins + losses;
-                const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
-                const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
-                // 🟢 FIX: Computes strictly off capital deployed, not net worth
-                const finalPnlPercent = totalInvestedSol > 0 ? (totalRealizedPnlSol / totalInvestedSol) * 100 : 0;
-
-                populateDashboard({
-                    networth: totalValueUsd,
-                    networthSol: networthSol,
-                    pnlPercent: finalPnlPercent.toFixed(2),
-                    pnlUsd: realizedPnlUsd, 
-                    winrate: winRate,
-                    winLossText: `${wins} Wins / ${losses} Losses`,
-                    volume: `${totalVolumeSol.toFixed(2)} SOL`
-                }, allocLabels.length ? allocLabels : ['Vault Liquid SOL'], allocData, posArray);
-            });
-        })
-        .catch(() => {
-            populateDashboard({
-                networth: 0, networthSol: "0.00 SOL", pnlPercent: 0, pnlUsd: 0,
-                winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL"
-            }, ['Offline'], [100], []);
-        });
-
-        fetch('/api/my-leaderboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
-        .then(r => r.ok ? r.json() : { guild: null, members: [] })
-        .then(data => { liveLeaderboardData = data; if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); }).catch(() => {});
-
-        fetch('/api/affiliate-stats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => { if (data) liveAffiliateData = data; if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); }).catch(() => {});
-    }
-
     // 🟢 START INITIALIZATION & WIDGET POLLERS
     fetchLiveData();
     fetchAdvancedStats();
@@ -1407,8 +1225,6 @@
     fetchStatsWindow();
     fetchEnterpriseMetrics();
 
-    
-    
     setInterval(fetchStatsWindow, 3000);
     setInterval(fetchEnterpriseMetrics, 15000);
     setInterval(fetchAdvancedStats, 15000);
