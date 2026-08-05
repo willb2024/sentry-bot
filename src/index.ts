@@ -543,24 +543,20 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
-        // Replace your existing UI buttons with this updated layout:
-const UI = Markup.inlineKeyboard([
-    [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
-    [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
-    [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
-    [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
-    [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-    [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
-    [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), Markup.button.callback('🛑 Cancel All', 'action_global_cancel')],
-    [
-      { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } },
-      Markup.button.callback('📖 How to Trade', 'btn_trade_guide') // Existing guide
-    ],
-    [
-      Markup.button.callback('💬 Contact Support', 'action_support'), // Existing support
-      Markup.button.callback('⚙️ Configuration Guide', 'btn_config_guide') // 🟢 NEW GUIDE BUTTON
-    ]
-]);
+        const UI = Markup.inlineKeyboard([
+            [Markup.button.callback('🎯 Sniper Module', 'menu_sniper'), Markup.button.callback('🎯 AI Coin Caller', 'menu_caller')],
+            [Markup.button.callback('⏳ Limit / DCA Engine', 'menu_dca'), Markup.button.callback('🛡️ Trailing Stops', 'menu_trailing')],
+            [Markup.button.callback('💼 Positions', 'menu_positions'), Markup.button.callback('👥 Copy Trade', 'menu_copytrade')],
+            [Markup.button.callback('💰 Affiliates', 'menu_affiliate'), Markup.button.callback('💳 Buy Credits', 'menu_credits')],
+            [Markup.button.callback('🏰 Sentry Guilds', 'action_guild_menu'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+            [Markup.button.callback('📤 Withdraw', 'btn_withdraw_prompt'), Markup.button.callback('🔑 Vault & Keys', 'menu_vault')],
+            // 🟢 UPDATED ROW: Launch Token + Track Trades (Grouped together)
+            [Markup.button.callback('🚀 Launch Token', 'menu_token_launcher'), { text: '📊 Track Trades', web_app: { url: process.env.WEBAPP_URL || 'https://your-webapp-url.com/webapp' } }],
+            // 🟢 UPDATED ROW: Cancel All + Contact Support (Grouped together)
+            [Markup.button.callback('🛑 Cancel All', 'action_global_cancel'), Markup.button.callback('💬 Contact Support', 'action_support')],
+            // 🟢 UPDATED ROW: Both Guides grouped at the bottom
+            [Markup.button.callback('📖 How to Trade', 'btn_trade_guide'), Markup.button.callback('⚙️ Configuration Guide', 'btn_config_guide')]
+        ]);
         
           if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
           else await ctx.replyWithHTML(layoutTxt, UI);
@@ -1662,8 +1658,7 @@ const CONFIG_GUIDE_PAGES: string[] = [
     `• <code>/batch</code> → Snipe multiple CA's at once using new lines.\n` +
     `• <code>/stats</code> → Instantly pull your Win Rate, PnL, and Volume.\n` +
     `• <code>/calendar</code> → See the top 10 verified launches under 2 hours old.\n` +
-    `• <code>/exporttrades</code> → Download your full CSV tax ledger.\n` +
-    `• <code>/health</code> → Check the bot's Redis and RPC connectivity.`
+    `• <code>/exporttrades</code> → Download your full CSV tax ledger.\n` 
 ];
 
 
