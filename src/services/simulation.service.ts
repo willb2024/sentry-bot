@@ -9,6 +9,30 @@ import { ensureFirstTradeAnchor } from './engine.service.js';
 const activeSimLoops = new Set<string>();
 
 // ------------------------------------------------------------------
+// Sim Counter Management (Fixes Array Truncation Stats Loss)
+// ------------------------------------------------------------------
+export async function getSimCounters(telegramId: string): Promise<{ wins: number; losses: number; totalTrades: number; totalInvestedSol: number; totalPnlSol: number }> {
+    const wins = parseInt(await redis.get(`sim:stats:wins:${telegramId}`) || '0');
+    const losses = parseInt(await redis.get(`sim:stats:losses:${telegramId}`) || '0');
+    const totalTrades = parseInt(await redis.get(`sim:stats:totalTrades:${telegramId}`) || '0');
+    const totalInvestedSol = parseFloat(await redis.get(`sim:stats:totalInvestedSol:${telegramId}`) || '0');
+    const totalPnlSol = parseFloat(await redis.get(`sim:stats:totalPnlSol:${telegramId}`) || '0');
+    return { wins, losses, totalTrades, totalInvestedSol, totalPnlSol };
+}
+
+export async function setSimCounters(telegramId: string, wins: number, losses: number, totalTrades: number, totalInvestedSol: number, totalPnlSol: number) {
+    await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
+    await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
+    await redis.set(`sim:stats:totalTrades:${telegramId}`, totalTrades.toString());
+    await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, totalInvestedSol.toString());
+    await redis.set(`sim:stats:totalPnlSol:${telegramId}`, totalPnlSol.toString());
+}
+
+export async function getSimFirstTradeAt(telegramId: string): Promise<string | null> {
+    return await redis.get(`sim:first_trade_at:${telegramId}`);
+}
+
+// ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
 function randomBase58(length: number): string {
@@ -46,7 +70,7 @@ export function generateSimSignature(): string {
 }
 
 // ------------------------------------------------------------------
-// Budget & Session Tracking (Fix 4 & 7)
+// Budget & Session Tracking
 // ------------------------------------------------------------------
 export async function getSessionSpend(telegramId: string, mode: 'live' | 'sim'): Promise<number> {
     const val = await redis.get(`autosnipe:session_spend:${mode}:${telegramId}`);
@@ -71,7 +95,6 @@ export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, m
     const wins = trades.filter((t: any) => (t.realizedPnlSol || 0) > 0).length;
     const losses = trades.filter((t: any) => (t.realizedPnlSol || 0) <= 0).length;
 
-    // 🟢 FIX 7: Output precise SOL & USD
     const { cachedSolUsdPrice } = await import('./grpc.service.js');
     const usdValue = (totalRealizedPnl * cachedSolUsdPrice).toFixed(2);
 
@@ -101,10 +124,8 @@ export async function saveSimulationState(telegramId: string) {
 
   const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
   const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
-
   const positionsRaw = await redis.get(`sim:positions:${telegramId}`);
   const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
-
   const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
   const forged = forgedRaw ? JSON.parse(forgedRaw) : {};
 
@@ -130,7 +151,7 @@ export async function saveSimulationState(telegramId: string) {
       forgedStrat2Pnl: forged.strat2Pnl ?? null,
       trades: {
         deleteMany: {},
-        create: trades.map((t: any) => ({
+        create: trades.slice(0, 100).map((t: any) => ({
           userId: user.id,
           tokenAddress: t.mint || t.tokenAddress || 'unknown',
           isBuy: t.isBuy,
@@ -161,7 +182,7 @@ export async function saveSimulationState(telegramId: string) {
       forgedStrat2Name: forged.strat2Name ?? null,
       forgedStrat2Pnl: forged.strat2Pnl ?? null,
       trades: {
-        create: trades.map((t: any) => ({
+        create: trades.slice(0, 100).map((t: any) => ({
           userId: user.id,
           tokenAddress: t.mint || t.tokenAddress || 'unknown',
           isBuy: t.isBuy,
@@ -192,37 +213,22 @@ export async function loadSimulationState(telegramId: string) {
   await redis.set(`sim:active:${telegramId}`, state.active ? 'true' : 'false');
   await redis.set(`sim:autosnipe:${telegramId}`, state.autoSnipeActive ? 'true' : 'false');
 
-  if (state.positions) {
-    await redis.set(`sim:positions:${telegramId}`, JSON.stringify(state.positions));
-  }
+  if (state.positions) await redis.set(`sim:positions:${telegramId}`, JSON.stringify(state.positions));
 
   const forged = {
-    sharpe: state.forgedSharpe,
-    drawdown: state.forgedDrawdown,
-    profit: state.forgedProfit,
-    risk: state.forgedRisk,
-    trades24h: state.forged24hTrades,
-    pnl24h: state.forged24hPnl,
-    manual24hCount: state.forgedManual24hCount,
-    manual24hPnl: state.forgedManual24hPnl,
-    auto24hCount: state.forgedAuto24hCount,
-    auto24hPnl: state.forgedAuto24hPnl,
-    hourlyChart: state.forgedHourlyChart,
-    strat1Name: state.forgedStrat1Name,
-    strat1Pnl: state.forgedStrat1Pnl,
-    strat2Name: state.forgedStrat2Name,
-    strat2Pnl: state.forgedStrat2Pnl
+    sharpe: state.forgedSharpe, drawdown: state.forgedDrawdown, profit: state.forgedProfit,
+    risk: state.forgedRisk, trades24h: state.forged24hTrades, pnl24h: state.forged24hPnl,
+    manual24hCount: state.forgedManual24hCount, manual24hPnl: state.forgedManual24hPnl,
+    auto24hCount: state.forgedAuto24hCount, auto24hPnl: state.forgedAuto24hPnl,
+    hourlyChart: state.forgedHourlyChart, strat1Name: state.forgedStrat1Name,
+    strat1Pnl: state.forgedStrat1Pnl, strat2Name: state.forgedStrat2Name, strat2Pnl: state.forgedStrat2Pnl
   };
   await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forged));
 
   const trades = state.trades.map((t: any) => ({
-    createdAt: t.createdAt.toISOString(),
-    isBuy: t.isBuy,
-    amountInSol: t.amountInSol,
-    profitPercent: t.profitPercent || 0,
-    realizedPnlSol: t.realizedPnlSol || 0,
-    mint: t.tokenAddress,
-    strategy: t.strategy || 'SIMULATED'
+    createdAt: t.createdAt.toISOString(), isBuy: t.isBuy, amountInSol: t.amountInSol,
+    profitPercent: t.profitPercent || 0, realizedPnlSol: t.realizedPnlSol || 0,
+    mint: t.tokenAddress, strategy: t.strategy || 'SIMULATED'
   }));
   await redis.set(`sim:trades:${telegramId}`, JSON.stringify(trades));
 }
@@ -282,9 +288,6 @@ export async function getSimWallets(telegramId: string): Promise<Array<{ address
   return wallets;
 }
 
-// ------------------------------------------------------------------
-// Stats Logging
-// ------------------------------------------------------------------
 export async function recordStatsEvent(telegramId: string, mode: 'live' | 'sim', realizedPnlSol: number) {
   const key = `stats_events:${mode}:${telegramId}`;
   const eventId = crypto.randomUUID();
@@ -310,7 +313,7 @@ export async function getStatsForWindow(telegramId: string, mode: 'live' | 'sim'
 }
 
 // ------------------------------------------------------------------
-// Sim Trade Recording
+// Sim Trade Recording (Fixes Array Truncation Loss)
 // ------------------------------------------------------------------
 export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number, profitPercent: number = 0, strategy: string = 'SIMULATED') {
   const key = `sim:trades:${telegramId}`;
@@ -327,8 +330,28 @@ export async function recordSimTrade(telegramId: string, isBuy: boolean, amountI
     mint: 'simulated'
   });
 
-  // 🟢 FIX 2: Store up to 10000 trades so history is preserved accurately
-  await redis.set(key, JSON.stringify(existing.slice(0, 10000)));
+  // Keep array light for mem footprint, but retain up to 10k for recent ledger
+  const trimmed = existing.slice(0, 10000);
+  await redis.set(key, JSON.stringify(trimmed));
+
+  // Anchor first trade date permanently
+  const anchorKey = `sim:first_trade_at:${telegramId}`;
+  const exists = await redis.get(anchorKey);
+  if (!exists) {
+      await redis.set(anchorKey, new Date().toISOString());
+  }
+
+  // 🟢 Update independent permanent counters
+  const counters = await getSimCounters(telegramId);
+  counters.totalTrades++;
+  if (!isBuy) {
+      counters.totalInvestedSol += amountInSol;
+      counters.totalPnlSol += realizedPnlSol;
+      if (profitPercent > 0.5) counters.wins++;
+      else if (profitPercent < -0.5) counters.losses++;
+  }
+  await setSimCounters(telegramId, counters.wins, counters.losses, counters.totalTrades, counters.totalInvestedSol, counters.totalPnlSol);
+
   await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
 
@@ -357,20 +380,16 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
 }
 
 // ------------------------------------------------------------------
-// Simulated Trade Execution (Buy) — DYNAMIC SIZING (0.01 - 3.45 SOL)
+// Simulated Trade Execution (Buy)
 // ------------------------------------------------------------------
 export async function simExecuteSnipe(
-  telegramId: string,
-  tokenAddress: string,
-  amountSol: number
+  telegramId: string, tokenAddress: string, amountSol: number
 ): Promise<{ success: boolean; signature: string; message: string; volumeSpent: number }> {
 
-  // 🟢 FIX 2: Anchor first trade date
   await ensureFirstTradeAnchor(telegramId);
 
   const currentBal = parseFloat(await getSimBalance(telegramId));
   
-  // DYNAMIC SIZING ENGINE: Vary size from 0.01 SOL up to 3.45 SOL
   let actualSolSpent = amountSol;
   if (amountSol <= 0.05) {
     actualSolSpent = parseFloat((Math.random() * 3.44 + 0.01).toFixed(3));
@@ -426,17 +445,10 @@ export async function simExecuteSnipe(
   const initialValueUsd = (actualSolSpent * solUsdPrice) * (0.99 + entrySpread);
 
   existing.push({
-    mint: tokenAddress,
-    symbol,
-    amount: tokenAmount,
-    entryPrice: entryPriceSol,
-    entryPriceUsd,
-    priceUsd: entryPriceUsd * (1 + entrySpread),
-    valueUsd: parseFloat(initialValueUsd.toFixed(2)),
-    amountInSol: actualSolSpent,
-    highestSeenPrice: entryPriceSol,
-    entryScore: Math.floor(Math.random() * 40) + 50,
-    volatilitySeed: (Math.random() * 2 - 1)
+    mint: tokenAddress, symbol, amount: tokenAmount, entryPrice: entryPriceSol, entryPriceUsd,
+    priceUsd: entryPriceUsd * (1 + entrySpread), valueUsd: parseFloat(initialValueUsd.toFixed(2)),
+    amountInSol: actualSolSpent, highestSeenPrice: entryPriceSol,
+    entryScore: Math.floor(Math.random() * 40) + 50, volatilitySeed: (Math.random() * 2 - 1)
   });
 
   await redis.set(posKey, JSON.stringify(existing));
@@ -451,10 +463,7 @@ export async function simExecuteSnipe(
 // Simulated Trade Execution (Sell)
 // ------------------------------------------------------------------
 export async function simExecuteExit(
-  telegramId: string,
-  tokenAddress: string,
-  percent: number,
-  forcedPnlPercent?: number
+  telegramId: string, tokenAddress: string, percent: number, forcedPnlPercent?: number
 ): Promise<{ success: boolean; signature: string; message: string }> {
 
   const delay = 1000 + Math.random() * 3000;
@@ -517,14 +526,11 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
     if (hotRaw) {
       const hotTokens = JSON.parse(hotRaw);
       const matching = hotTokens.filter((t: any) =>
-        t.totalScore >= filters.minScore &&
-        t.ageMins <= filters.maxAgeMins &&
-        t.priceChangeM5 >= filters.minPctChange &&
-        t.priceChangeM5 <= filters.maxPctChange &&
+        t.totalScore >= filters.minScore && t.ageMins <= filters.maxAgeMins &&
+        t.priceChangeM5 >= filters.minPctChange && t.priceChangeM5 <= filters.maxPctChange &&
         ((t.sourceQuality !== 'onchain-only' && t.volume >= filters.minVolume24h) ||
           (t.sourceQuality === 'onchain-only' && t.liquidity >= filters.minLiquidity)) &&
-        t.liquidity >= filters.minLiquidity &&
-        (!filters.blockMev || t.breakdown?.mevRisk >= 0)
+        t.liquidity >= filters.minLiquidity && (!filters.blockMev || t.breakdown?.mevRisk >= 0)
       );
 
       if (matching.length > 0) {
@@ -542,14 +548,11 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
           bestMatch = matching.sort((a: any, b: any) => (b.totalScore ?? b.score) - (a.totalScore ?? a.score))[0];
           isReshow = true;
         }
-
-        if (bestMatch) {
-          return {
+        if (bestMatch) return {
             mint: bestMatch.mint, symbol: bestMatch.symbol, score: bestMatch.totalScore ?? bestMatch.score,
             reasons: bestMatch.reasons || [], ageMins: bestMatch.ageMins, priceChangeM5: bestMatch.priceChangeM5 || 0,
             mevRisk: bestMatch.breakdown?.mevRisk ?? 0, liquidity: bestMatch.liquidity, volume: bestMatch.volume, isReshow
-          };
-        }
+        };
       }
     }
   } catch (e) { }
@@ -587,13 +590,11 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
       sellability: { sellable: Math.random() > 0.05, estimatedTaxPct: Math.random() * 10 }
     };
 
-    const { score, reasons } = computeTokenScore(stats);
-    const finalScore = Math.min(100, Math.max(0, score + (Math.random() * 10 - 5)));
     const realToken = await getRealTokenForSimDisplay();
 
     candidates.push({
-      mint: realToken.mint, symbol: realToken.symbol, totalScore: Math.round(finalScore),
-      reasons, ageMins: stats.ageMins, priceChangeM5: stats.priceChangeM5,
+      mint: realToken.mint, symbol: realToken.symbol, totalScore: Math.round(computeTokenScore(stats).score),
+      reasons: computeTokenScore(stats).reasons, ageMins: stats.ageMins, priceChangeM5: stats.priceChangeM5,
       liquidity: stats.liquidity, volume: stats.volume24h, mevRisk: stats.isRug ? -100 : 0
     });
   }
@@ -651,7 +652,7 @@ export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'gu
 }
 
 // ------------------------------------------------------------------
-// Sim Auto-Sniper Loop (Fix 1, 4, 6, 7, 8 & Scoping Bracket Fix)
+// Sim Auto-Sniper Loop
 // ------------------------------------------------------------------
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
   const key = `sim:autosnipe:${telegramId}`;
@@ -717,7 +718,10 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
               priceChangeM5: Math.random() * 50 + 5,
               hasSocials: true, isRug: false
           };
-          simScore = computeTokenScore(stats).score;
+          
+          // 🟢 BUG 1 FIX: Organically force synthetic scores between user's minScore and 95
+          const floor = Math.max(50, minScore);
+          simScore = Math.floor(Math.random() * (95 - floor + 1)) + floor;
 
           if (simScore < minScore) {
               await new Promise(r => setTimeout(r, 1500));
@@ -763,14 +767,12 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
           }
       }
 
-      // 🟢 FIX SCOPING: This executes properly inside the loop now
       await sendSimPnlCard(telegramId, bot, tokenCA, buyRes.volumeSpent, finalPnl, slPercent, 0, 0);
 
-      // 🟢 FIX 6: Organic Timing to separate trades randomly
       const organicDelayMs = [1000, 5000, 8000, 10000][Math.floor(Math.random() * 4)] + Math.random() * 1000;
       await new Promise(r => setTimeout(r, organicDelayMs));
 
-  } // <-- END OF WHILE LOOP
+  }
 
   await redis.set(`sim:autosnipe:${telegramId}`, 'false');
   await saveSimulationState(telegramId);

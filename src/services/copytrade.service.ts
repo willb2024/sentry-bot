@@ -62,15 +62,13 @@ export async function syncCopyTradeListeners(bot: any) {
             if (!activeWsListeners.has(walletStr)) {
                 const pubKey = new PublicKey(walletStr);
 
-                // 🟢 FIX: onLogs uses 'processed' for 0ms WebSocket event detection,
-                // while getParsedTransaction uses 'confirmed' to satisfy TypeScript's Finality type constraint.
                 const subId = connection.onLogs(pubKey, async (logs) => {
                     if (logs.err) return;
 
                     const signature = logs.signature;
                     const txDetails = await connection.getParsedTransaction(signature, {
                         maxSupportedTransactionVersion: 0,
-                        commitment: 'confirmed' // 🟢 Fixed TS(2322) error
+                        commitment: 'confirmed'
                     }).catch(() => null);
 
                     if (!txDetails || !txDetails.meta || txDetails.meta.err) return;
@@ -89,14 +87,10 @@ export async function syncCopyTradeListeners(bot: any) {
                             const postAmt = Number(post.uiTokenAmount.uiAmount);
                             
                             if (postAmt > preAmt) {
-                                tradeType = 'buy';
-                                targetTokenMint = post.mint;
-                                break;
+                                tradeType = 'buy'; targetTokenMint = post.mint; break;
                             } else if (postAmt < preAmt && preAmt > 0) {
-                                tradeType = 'sell';
-                                targetTokenMint = post.mint;
-                                sellPercentage = ((preAmt - postAmt) / preAmt) * 100;
-                                break;
+                                tradeType = 'sell'; targetTokenMint = post.mint;
+                                sellPercentage = ((preAmt - postAmt) / preAmt) * 100; break;
                             }
                         }
                     }
@@ -107,9 +101,7 @@ export async function syncCopyTradeListeners(bot: any) {
                             include: { user: true }
                         });
 
-                        // 🟢 HANDLE BUY MIRRORING
                         if (tradeType === 'buy') {
-                            console.log(`🎯 [COPY-TRADE] Whale ${walletStr.substring(0,6)} BOUGHT: ${targetTokenMint}.`);
                             const entryPrice = await fetchLiveEntryPrice(targetTokenMint);
 
                             for (const follower of freshConfigs) {
@@ -117,33 +109,23 @@ export async function syncCopyTradeListeners(bot: any) {
                                 if (f.copyBuys === false) continue;
                                 const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
 
-                                executeSnipe(follower.user.telegramId, targetTokenMint, sizeToTrade)
+                                // 🟢 FIX: Passing custom slippage limit into executeSnipe
+                                executeSnipe(follower.user.telegramId, targetTokenMint, sizeToTrade, 'buy', undefined, false, undefined, f.slippagePercent || undefined)
                                     .then(async (res) => {
                                         if (res.success) {
                                             try {
                                                 await addTrailingStopToMemory(
-                                                    follower.user.telegramId, targetTokenMint!,
-                                                    follower.autoTrailingDropPercent, sizeToTrade,
-                                                    entryPrice, follower.autoTakeProfitPercent || undefined
+                                                    follower.user.telegramId, targetTokenMint!, follower.autoTrailingDropPercent,
+                                                    sizeToTrade, entryPrice, follower.autoTakeProfitPercent || undefined
                                                 );
                                             } catch (guardErr) {}
-                                            
-                                            try {
-                                                await bot.telegram.sendMessage(follower.user.telegramId,
-                                                    `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${targetTokenMint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`,
-                                                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                                                );
-                                            } catch (_) {}
+                                            try { await bot.telegram.sendMessage(follower.user.telegramId, `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${targetTokenMint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }); } catch (_) {}
                                         }
                                     }).catch(() => {});
                             }
                         } 
-                        // 🟢 HANDLE SELL MIRRORING
                         else if (tradeType === 'sell' && sellPercentage >= 1) {
-                            console.log(`🎯 [COPY-TRADE] Whale ${walletStr.substring(0,6)} SOLD ${sellPercentage.toFixed(1)}% of: ${targetTokenMint}.`);
-                            
                             const { executeExit } = await import('./engine.service.js');
-
                             for (const follower of freshConfigs) {
                                 const f: any = follower; 
                                 if (f.copySells === false) continue;
@@ -151,33 +133,23 @@ export async function syncCopyTradeListeners(bot: any) {
                                 executeExit(follower.user.telegramId, targetTokenMint, sellPercentage)
                                     .then(async (res) => {
                                         if (res.success) {
-                                            try {
-                                                await bot.telegram.sendMessage(follower.user.telegramId,
-                                                    `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${sellPercentage.toFixed(1)}%</b> of <code>${targetTokenMint}</code>\n<i>Sentry has automatically mirrored this exit.</i>\n\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`,
-                                                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                                                );
-                                            } catch (_) {}
+                                            try { await bot.telegram.sendMessage(follower.user.telegramId, `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${sellPercentage.toFixed(1)}%</b> of <code>${targetTokenMint}</code>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }); } catch (_) {}
                                         }
                                     }).catch(() => {});
                             }
                         }
                     }
                 }, 'processed');
-
                 activeWsListeners.set(walletStr, subId);
             }
         }
-
-        // Cleanup orphaned listeners
         for (const [walletStr, subId] of activeWsListeners.entries()) {
             if (!targetWallets.includes(walletStr)) {
                 try { connection.removeOnLogsListener(subId); } catch (e) {}
                 finally { activeWsListeners.delete(walletStr); }
             }
         }
-    } catch (e: any) {
-        console.error(`🔴 [COPY-TRADE] Sync Listeners Fault: ${e.message}`);
-    }
+    } catch (e: any) { console.error(`🔴 [COPY-TRADE] Sync Fault: ${e.message}`); }
 }
 
 export async function startCopyTradeWatcher(bot: any) {

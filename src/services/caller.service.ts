@@ -1075,15 +1075,10 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
 export async function scoreTokens() {
     try {
         const [newMints, pumpFallback, restFallback, boosted, raydiumPairs] = await Promise.all([
-            fetchRecentNewMints(),
-            fetchFreshPumpTokens(),
-            fetchFreshViaRest(),
-            fetchBoostedPairs(),
-            fetchFreshRaydiumPairs() 
+            fetchRecentNewMints(), fetchFreshPumpTokens(), fetchFreshViaRest(), fetchBoostedPairs(), fetchFreshRaydiumPairs() 
         ]);
 
         const allPairs = [...newMints, ...pumpFallback, ...restFallback, ...boosted, ...raydiumPairs];
-        
         const sourceRank: Record<string, number> = { 'dexscreener': 3, 'pump-fallback': 3, 'rest-fallback': 2, 'onchain-only': 1 };
         const mergedMap = new Map<string, any>();
         
@@ -1115,15 +1110,11 @@ export async function scoreTokens() {
                             if (buf.length >= 40) {
                                 const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
                                 const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
-                                
                                 const liqUsd = virtualSolReserves * cachedSolUsdPrice;
                                 const volUsd = realSolReserves * cachedSolUsdPrice * 2; 
-
                                 if (chunk[idx].liquidity === 0) chunk[idx].liquidity = liqUsd;
                                 if (chunk[idx].volume === 0) chunk[idx].volume = volUsd;
-                                if (chunk[idx].price === 0) {
-                                    chunk[idx].price = decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice;
-                                }
+                                if (chunk[idx].price === 0) chunk[idx].price = decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice;
                             }
                         }
                     });
@@ -1134,82 +1125,75 @@ export async function scoreTokens() {
 
         const stage1Scored: any[] = [];
         const stage1Chunks = chunkArray(uniquePairs, 8);
-        
         for (const chunk of stage1Chunks) {
             const results = await Promise.all(chunk.map(async (pair) => {
                 const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
                 const observedVolStr = await redis.get(`observed_vol:${pair.mint}`);
-                
-                let hasMev = false;
-
                 const stats: TokenStats = {
-                    ageMins: (Date.now() - pair.pairCreatedAt) / 60000,
-                    volume24h: pair.volume,
-                    liquidity: pair.liquidity,
-                    priceChangeM5: pair.priceChangeM5,
-                    hasSocials: pair.socials.length > 0,
-                    isRug,
-                    uncertain,
-                    sourceQuality: pair.sourceQuality,
-                    observedVol: observedVolStr ? parseFloat(observedVolStr) : undefined
+                    ageMins: (Date.now() - pair.pairCreatedAt) / 60000, volume24h: pair.volume, liquidity: pair.liquidity,
+                    priceChangeM5: pair.priceChangeM5, hasSocials: pair.socials.length > 0, isRug, uncertain,
+                    sourceQuality: pair.sourceQuality, observedVol: observedVolStr ? parseFloat(observedVolStr) : undefined
                 };
-
                 const sentiment = await getSentimentScore(pair.symbol);
                 const { score, reasons } = computeTokenScore({ ...stats, sentiment });
-                
-                return { pair, stats, score, reasons, isRug, top10Pct, hasMev, sentiment };
+                return { pair, stats, score, reasons, isRug, top10Pct, hasMev: false, sentiment };
             }));
             stage1Scored.push(...results);
         }
 
         const passedStage1 = stage1Scored.filter(t => t.score >= 15).sort((a,b) => b.score - a.score);
-
         const fullyScored: any[] = [];
-        
         const stage2Chunks = chunkArray(passedStage1.slice(0, 15), 5);
         
         for (const chunk of stage2Chunks) {
             const results = await Promise.all(chunk.map(async (t) => {
                 const stillOnCurve = t.pair.mint.toLowerCase().endsWith('pump') && t.pair.sourceQuality !== 'dexscreener' && t.pair.sourceQuality !== 'pump-fallback';
-                
                 let sellability = { sellable: true, estimatedTaxPct: 0 };
-                if (!stillOnCurve) {
-                    sellability = await simulateSellability(t.pair.mint);
-                }
+                if (!stillOnCurve) sellability = await simulateSellability(t.pair.mint);
 
                 const mevCacheKey = `mev_check:${t.pair.mint}`;
                 const cachedMev = await redis.get(mevCacheKey);
-                let hasMev = false;
-                if (cachedMev !== null) {
-                    hasMev = cachedMev === 'true';
-                } else {
+                let hasMev = cachedMev !== null ? cachedMev === 'true' : false;
+                if (cachedMev === null) {
                     const { checkRecentMevActivity } = await import('./price.service.js');
                     hasMev = await checkRecentMevActivity(t.pair.mint);
                     await redis.set(mevCacheKey, hasMev ? 'true' : 'false', 'EX', 300);
                 }
 
                 const [devRep, lpLock, velocity] = await Promise.all([
-                    getDevReputation(t.pair.creatorWallet || ''), 
-                    checkLpLockStatus(t.pair.mint),
-                    trackHolderVelocity(t.pair.mint)
+                    getDevReputation(t.pair.creatorWallet || ''), checkLpLockStatus(t.pair.mint), trackHolderVelocity(t.pair.mint)
                 ]);
 
-                t.stats.devRep = devRep;
-                t.stats.lpLock = lpLock;
-                t.stats.velocity = velocity;
-                t.stats.sellability = sellability;
+                t.stats.devRep = devRep; t.stats.lpLock = lpLock; t.stats.velocity = velocity; t.stats.sellability = sellability;
 
                 const finalScoreRes = computeTokenScore({ ...t.stats, sentiment: t.sentiment });
-                
                 let concentrationAdjustedScore = finalScoreRes.score;
+
                 if (!t.isRug && t.top10Pct > 25) {
                     concentrationAdjustedScore -= Math.floor((t.top10Pct - 25) * 1.5);
                     finalScoreRes.reasons.push(`⚠️ Top 10 holders own ${t.top10Pct.toFixed(1)}%`);
                 }
+                
+                let finalCalculatedScore = Math.max(0, concentrationAdjustedScore);
+
+                // 🟢 FIX: ML PIPELINE INJECTION (GLOBAL)
+                try {
+                    const weightsRaw = await redis.get('caller_model_weights');
+                    if (weightsRaw) {
+                        const weights = JSON.parse(weightsRaw);
+                        if (weights.metrics?.isUsable !== false) {
+                            const mlScore = await getModelScore(t.pair.mint, t.stats);
+                            if (mlScore !== null) {
+                                finalCalculatedScore = (mlScore * 0.6) + (finalCalculatedScore * 0.4);
+                                finalScoreRes.reasons.push(`🤖 ML Confident: ${mlScore.toFixed(0)}%`);
+                            }
+                        }
+                    }
+                } catch (_) {}
 
                 return { 
                     ...t.pair, 
-                    totalScore: Math.max(0, concentrationAdjustedScore), 
+                    totalScore: Math.round(finalCalculatedScore), 
                     ageMins: t.stats.ageMins, 
                     reasons: finalScoreRes.reasons, 
                     breakdown: { mevRisk: t.isRug || !sellability.sellable || hasMev ? -100 : 0 },
@@ -1222,9 +1206,7 @@ export async function scoreTokens() {
 
         const finalScored = [...fullyScored, ...stage1Scored.filter(t => t.score < 15).map(t => ({
             ...t.pair, totalScore: t.score, ageMins: t.stats.ageMins, reasons: t.reasons, 
-            breakdown: { mevRisk: t.isRug ? -100 : 0 },
-            isRug: t.isRug,
-            stats: t.stats
+            breakdown: { mevRisk: t.isRug ? -100 : 0 }, isRug: t.isRug, stats: t.stats
         }))].sort((a, b) => b.totalScore - a.totalScore);
 
         await redis.set('caller:hot_scored_tokens', JSON.stringify(finalScored), 'EX', 30);

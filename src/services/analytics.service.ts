@@ -12,7 +12,7 @@ export interface AdvancedStats {
     averageLoss: number;
     profitFactor: number;
     totalPnlSol: number;
-    totalInvestedSol: number; // 🟢 FIX: Defined in interface
+    totalInvestedSol: number; 
     
     // BACKWARD COMPATIBILITY
     totalPnl: number;
@@ -37,28 +37,32 @@ const emptyStats: AdvancedStats = {
     averageWin: 0, averageLoss: 0, profitFactor: 0, totalPnlSol: 0, totalInvestedSol: 0, totalPnl: 0, totalVolume: 0, winRate: 0, wins: 0, losses: 0 
 };
 
+// 🟢 BUG 4 FIX: Uses Prisma Aggregations instead of pulling all rows into memory
 export async function getAdvancedStats(telegramId: string): Promise<AdvancedStats> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return emptyStats;
 
-    const trades = await prisma.trade.findMany({
-        where: { userId: user.id, status: 'CONFIRMED' },
+    const sells = await prisma.trade.findMany({
+        where: { userId: user.id, isBuy: false, realizedPnlSol: { not: null } },
+        select: { realizedPnlSol: true, amountInSol: true, createdAt: true },
         orderBy: { createdAt: 'asc' }
     });
 
-    if (trades.length === 0) return emptyStats;
+    if (sells.length === 0) return emptyStats;
 
-    const totalVolume = trades.reduce((sum, t) => sum + (Number(t.amountInSol) || 0), 0);
-    const sells = trades.filter(t => !t.isBuy && t.realizedPnlSol !== null && t.realizedPnlSol !== undefined);
+    const totalTradesCount = await prisma.trade.count({ where: { userId: user.id, status: 'CONFIRMED' } });
     
+    const totalVolumeAgg = await prisma.trade.aggregate({
+        where: { userId: user.id, status: 'CONFIRMED' },
+        _sum: { amountInSol: true }
+    });
+    
+    const totalVolume = totalVolumeAgg._sum.amountInSol || 0;
     const totalInvestedSol = sells.reduce((sum, t) => sum + (Number(t.amountInSol) || 0), 0);
+    const totalPnl = sells.reduce((sum, t) => sum + (Number(t.realizedPnlSol) || 0), 0);
 
-    if (sells.length === 0) return { ...emptyStats, totalTrades: trades.length, totalVolume };
-
-    const pnlArray = sells.map(t => Number(t.realizedPnlSol) || 0);
-    const totalPnl = pnlArray.reduce((a, b) => a + b, 0);
-    const winsArray = pnlArray.filter(p => p > 0);
-    const lossesArray = pnlArray.filter(p => p < 0);
+    const winsArray = sells.filter(t => (t.realizedPnlSol || 0) > 0).map(t => t.realizedPnlSol!);
+    const lossesArray = sells.filter(t => (t.realizedPnlSol || 0) < 0).map(t => t.realizedPnlSol!);
 
     const winningTrades = winsArray.length;
     const losingTrades = lossesArray.length;
@@ -67,7 +71,7 @@ export async function getAdvancedStats(telegramId: string): Promise<AdvancedStat
     const profitFactor = averageLoss > 0 ? averageWin / averageLoss : (winningTrades > 0 ? 999 : 0);
 
     const mean = totalPnl / sells.length;
-    const stdDev = Math.sqrt(pnlArray.reduce((sum, p) => sum + (p - mean) ** 2, 0) / sells.length);
+    const stdDev = Math.sqrt(sells.reduce((sum, t) => sum + ((t.realizedPnlSol || 0) - mean) ** 2, 0) / sells.length);
     const consistencyScore = stdDev > 0 ? mean / stdDev : 0;
 
     const dailyPnlMap = new Map<string, number>();
@@ -89,8 +93,8 @@ export async function getAdvancedStats(telegramId: string): Promise<AdvancedStat
     }
 
     let peak = 0, drawdown = 0, maxDrawdown = 0, runningSum = 0;
-    for (const p of pnlArray) {
-        runningSum += p;
+    for (const t of sells) {
+        runningSum += (t.realizedPnlSol || 0);
         if (runningSum > peak) peak = runningSum;
         drawdown = peak - runningSum;
         if (drawdown > maxDrawdown) maxDrawdown = drawdown;
@@ -99,7 +103,7 @@ export async function getAdvancedStats(telegramId: string): Promise<AdvancedStat
     const winRate = (winningTrades + losingTrades) > 0 ? (winningTrades / (winningTrades + losingTrades)) * 100 : 0;
 
     return {
-        sharpeRatio, consistencyScore, maxDrawdown, totalTrades: trades.length, winningTrades, losingTrades,
+        sharpeRatio, consistencyScore, maxDrawdown, totalTrades: totalTradesCount, winningTrades, losingTrades,
         averageWin, averageLoss, profitFactor: isFinite(profitFactor) ? profitFactor : 0, totalPnlSol: totalPnl,
         totalInvestedSol, totalPnl, totalVolume, winRate, wins: winningTrades, losses: losingTrades
     };

@@ -410,10 +410,10 @@ export async function executeSnipe(
     telegramId: string, targetCA: string, amountSol: number,
     side: 'buy' | 'sell' = 'buy', tokenAmount?: number,
     isBumper: boolean = false, raydiumPoolId?: string,
-    overrideSlippage?: number, // 🟢 UPGRADE: Dynamic CopyTrade Slippage
-    antiMevDelayMs: number = 0, // 🟢 UPGRADE: Anti-MEV Delay Execution
-    customRpcUrl?: string, // 🟢 UPGRADE: Private Custom RPC Routing
-    strategy: string = 'MANUAL' // 🟢 UPGRADE: Performance Attribution Strategy Tag
+    overrideSlippage?: number,
+    antiMevDelayMs: number = 0,
+    customRpcUrl?: string,
+    strategy: string = 'MANUAL'
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
@@ -421,33 +421,23 @@ export async function executeSnipe(
         return await simExecuteSnipe(telegramId, targetCA, amountSol);
     }
     
-    // 🟢 Anti-MEV Strategy Delay
     if (antiMevDelayMs > 0) {
         await new Promise(r => setTimeout(r, antiMevDelayMs));
     }
 
-   // 🟢 FIX: Fail-closed MEV check. Trade blocks until check resolves or hard cap hits.
-   const mevPromise = (side === 'buy' && !isBumper)
-   ? checkRecentMevActivityCached(targetCA).catch(() => 'ERROR')
-   : Promise.resolve(false);
+    const mevPromise = (side === 'buy' && !isBumper)
+        ? checkRecentMevActivityCached(targetCA).catch(() => 'ERROR')
+        : Promise.resolve(false);
 
-if (side === 'buy' && !isBumper) {
-   const HARD_CAP_MS = 800;
-   const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), HARD_CAP_MS));
-   const mevResult = await Promise.race([mevPromise, timeoutPromise]);
+    if (side === 'buy' && !isBumper) {
+        const HARD_CAP_MS = 800;
+        const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), HARD_CAP_MS));
+        const mevResult = await Promise.race([mevPromise, timeoutPromise]);
 
-   if (mevResult === true) {
-       return { success: false, message: "🚨 MEV Sandwich Bot / High Risk Activity Detected. Trade Blocked." };
-   }
-   if (mevResult === 'TIMEOUT' || mevResult === 'ERROR') {
-       return {
-           success: false,
-           message: mevResult === 'TIMEOUT'
-               ? "⏱️ MEV check timed out — trade blocked for your safety. Try again in a moment."
-               : "⚠️ MEV check failed (RPC error) — trade blocked for your safety. Try again in a moment."
-       };
-   }
-}
+        if (mevResult === true) return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
+        if (mevResult === 'TIMEOUT' || mevResult === 'ERROR') return { success: false, message: "⚠️ MEV check timeout — trade blocked." };
+    }
+
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
@@ -458,13 +448,8 @@ if (side === 'buy' && !isBumper) {
             liveBalanceSol = balanceLamports / LAMPORTS_PER_SOL;
         }
 
-        if (liveBalanceSol < amountSol + 0.005) {
-            return { success: false, message: "Insufficient Funds." };
-        }
+        if (liveBalanceSol < amountSol + 0.005) return { success: false, message: "Insufficient Funds." };
 
-     
-
-        // 🟢 Dynamic Slippage Override
         const slippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
@@ -484,23 +469,19 @@ if (side === 'buy' && !isBumper) {
         
         const walletReport: string[] = [];
         const walletErrors: string[] = [];
-
         const latestBlockhash = await getLatestBlockhashWithCache();
 
         const executionPromises = wallets.map(async (w, index) => {
             let wBal = getLiveWalletBalance(w.publicKey.toBase58());
-            if (wBal === null) {
-                wBal = (await connection.getBalance(w.publicKey).catch(()=>0)) / LAMPORTS_PER_SOL;
-            }
+            if (wBal === null) wBal = (await connection.getBalance(w.publicKey).catch(()=>0)) / LAMPORTS_PER_SOL;
+            
             const requiredBuffer = 0.001 + (amountSol * 0.01) + 0.0005;
             if (wBal < amountSol + requiredBuffer) {
                 walletErrors[index] = `Insufficient Funds`; walletReport[index] = `W${index + 1}: 🔴 Gas`; return;
             }
 
             const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, undefined, raydiumPoolId);
-            if (!apiRes.buffer) {
-                walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return;
-            }
+            if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
 
             const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             swapTx.sign([w]);
@@ -510,7 +491,6 @@ if (side === 'buy' && !isBumper) {
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
-            // 🟢 Private Custom RPC Submission Path
             if (customRpcUrl) {
                 try {
                     const customConnection = new Connection(customRpcUrl, 'confirmed');
@@ -519,11 +499,7 @@ if (side === 'buy' && !isBumper) {
             }
 
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
-            if (!bundleOk) {
-                walletErrors[index] = "Transaction dropped. High slippage fallback aborted or network congested."; 
-                walletReport[index] = `W${index + 1}: 🔴 Drop`; 
-                return;
-            }
+            if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return; }
 
             if (!firstSignature) firstSignature = txSig;
             successCount++;
@@ -535,41 +511,30 @@ if (side === 'buy' && !isBumper) {
                     const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = amountSol * feeRate;
                     
-                    const maxDistributable = feeCharged * 0.70;
+                    // 🟢 FIXED BIGINT DISTRIBUTION MATH
+                    const feeChargedLamports = BigInt(Math.floor(amountSol * 1_000_000_000 * feeRate));
+                    let affiliateCutLamports = 0n;
+                    let guildOwnerCutLamports = 0n;
 
-                    let affiliateCut = 0;
                     if (user.referredById) {
-                        const dynamicRate = await getDynamicAffiliateRate(user.referredById); 
-                        affiliateCut = feeCharged * dynamicRate;
-                        await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } }).catch(()=>{});
+                        const dynamicRate = await getDynamicAffiliateRate(user.referredById);
+                        affiliateCutLamports = (feeChargedLamports * BigInt(Math.floor(dynamicRate * 100))) / 100n;
+                        await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: Number(affiliateCutLamports) / 1_000_000_000 } } }).catch(()=>{});
                     }
 
-                    let guildOwnerCut = 0;
-                    let guildOwnerId: string | null = null;
                     try {
                         const activeGuildMembership = await prisma.guildMembership.findFirst({ where: { userId: user.id, isActive: true }, include: { guild: true } });
                         if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
-                            guildOwnerId = activeGuildMembership.guild.ownerId;
-                            
-                            const availableForGuild = maxDistributable - affiliateCut;
-                            if (availableForGuild > 0) {
-                                const standardGuildCut = feeCharged * 0.50; 
-                                guildOwnerCut = Math.min(standardGuildCut, availableForGuild);
-                                
-                                if (guildOwnerId === user.referredById) {
-                                    const combined = affiliateCut + guildOwnerCut;
-                                    if (combined > feeCharged) guildOwnerCut = feeCharged - affiliateCut;
-                                }
-                                
-                                await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } }).catch(()=>{});
-                            }
+                            guildOwnerCutLamports = (feeChargedLamports * 40n) / 100n; // Fixed 40% Guild Split
+                            await prisma.user.update({ where: { id: activeGuildMembership.guild.ownerId }, data: { pendingRewardsSol: { increment: Number(guildOwnerCutLamports) / 1_000_000_000 } } }).catch(()=>{});
                         }
                     } catch (_) {}
+
+                    const affiliateCut = Number(affiliateCutLamports) / 1_000_000_000;
 
                     await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: amountSol } } }).catch(()=>{});
                     awardGuildPoints(user.telegramId, amountSol).catch(() => {});
                     
-                    // 🟢 SAVES STRATEGY TAG TO PRISMA FOR PERFORMANCE ATTRIBUTION
                     await prisma.trade.create({
                         data: {
                             userId: user.id, tokenAddress: targetCA, isBuy: true, amountInSol: amountSol,
@@ -578,14 +543,9 @@ if (side === 'buy' && !isBumper) {
                         }
                     }).catch(() => {});
 
-                 // 🟢 FIRE WEBHOOK EVENT
-                 fireWebhook(user.telegramId, 'trade_buy', {
-                    tokenAddress: targetCA, amountSol, signature: txSig, strategy
-                }).catch(()=>{});
-
-                // 🟢 FIX: Log live buys into the activity window
-                const { recordStatsEvent } = await import('./simulation.service.js');
-                await recordStatsEvent(user.telegramId, 'live', 0).catch(()=>{});
+                    fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol, signature: txSig, strategy }).catch(()=>{});
+                    const { recordStatsEvent } = await import('./simulation.service.js');
+                    await recordStatsEvent(user.telegramId, 'live', 0).catch(()=>{});
                 }
             });
         });
@@ -601,19 +561,15 @@ if (side === 'buy' && !isBumper) {
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); 
 
         return {
-            success: true,
-            signature: firstSignature,
-            message: `🟢 Trade Submitted to Validators (${successCount}/${wallets.length} Wallets).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}\n⚡ <i>Confirming in background...</i>`,
-            volumeSpent: totalVolume
+            success: true, signature: firstSignature, volumeSpent: totalVolume,
+            message: `🟢 Trade Submitted (${successCount}/${wallets.length}).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}\n⚡ <i>Confirming...</i>`
         };
-    } catch (error: any) {
-        return { success: false, message: `🔴 Execution Fault: ${error.message}` };
-    }
+    } catch (error: any) { return { success: false, message: `🔴 Execution Fault: ${error.message}` }; }
 }
 
 export async function executeExit(
     telegramId: string, targetCA: string, sellPercentage: number = 100, isBumper: boolean = false,
-    strategy: string = 'MANUAL' // 🟢 STRATEGY ATTRIBUTION TAG
+    strategy: string = 'MANUAL'
 ): Promise<{ success: boolean; signature?: string; message: string }> {
 
     const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
@@ -649,7 +605,6 @@ export async function executeExit(
 
         const executionPromises = wallets.map(async (w, index) => {
             const vaultPubkey = w.publicKey;
-
             if (balances[index] < 1_500_000) { walletErrors[index] = `Gas.`; walletReport[index] = `W${index + 1}: 🔴 Gas`; return; }
 
             const parsedTokenAccounts = await connection.getParsedTokenAccountsByOwner(vaultPubkey, { mint: tokenMint }, 'confirmed');
@@ -678,11 +633,7 @@ export async function executeExit(
             let txSig = bs58.encode(swapTx.signatures[0]);
             
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
-            if (!bundleOk) {
-                walletErrors[index] = "Transaction dropped. High slippage fallback aborted or network congested."; 
-                walletReport[index] = `W${index + 1}: 🔴 Drop`; 
-                return;
-            }
+            if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return; }
 
             if (!firstSignature) firstSignature = txSig;
             successCount++;
@@ -702,36 +653,26 @@ export async function executeExit(
                     const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = actualSolReceived * feeRate;
                     
-                    let affiliateCut = 0;
+                    // 🟢 FIXED BIGINT DISTRIBUTION MATH
+                    const feeChargedLamports = BigInt(Math.floor(actualSolReceived * 1_000_000_000 * feeRate));
+                    let affiliateCutLamports = 0n;
+                    let guildOwnerCutLamports = 0n;
+
                     if (user.referredById) {
                         const dynamicRate = await getDynamicAffiliateRate(user.referredById);
-                        affiliateCut = feeCharged * dynamicRate;
-                        await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: affiliateCut } } }).catch(()=>{});
+                        affiliateCutLamports = (feeChargedLamports * BigInt(Math.floor(dynamicRate * 100))) / 100n;
+                        await prisma.user.update({ where: { id: user.referredById }, data: { pendingRewardsSol: { increment: Number(affiliateCutLamports) / 1_000_000_000 } } }).catch(()=>{});
                     }
 
-                    let guildOwnerCut = 0;
-                    let guildOwnerId: string | null = null;
                     try {
                         const activeGuildMembership = await prisma.guildMembership.findFirst({ where: { userId: user.id, isActive: true }, include: { guild: true } });
                         if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
-                            guildOwnerId = activeGuildMembership.guild.ownerId;
-                            
-                            const maxDistributable = feeCharged * 0.70;
-                            const availableForGuild = maxDistributable - affiliateCut;
-                            
-                            if (availableForGuild > 0) {
-                                const standardGuildCut = feeCharged * 0.50; 
-                                guildOwnerCut = Math.min(standardGuildCut, availableForGuild);
-                                
-                                if (guildOwnerId === user.referredById) {
-                                    const combined = affiliateCut + guildOwnerCut;
-                                    if (combined > feeCharged) guildOwnerCut = feeCharged - affiliateCut;
-                                }
-                                
-                                await prisma.user.update({ where: { id: guildOwnerId }, data: { pendingRewardsSol: { increment: guildOwnerCut } } }).catch(()=>{});
-                            }
+                            guildOwnerCutLamports = (feeChargedLamports * 40n) / 100n; // Fixed 40%
+                            await prisma.user.update({ where: { id: activeGuildMembership.guild.ownerId }, data: { pendingRewardsSol: { increment: Number(guildOwnerCutLamports) / 1_000_000_000 } } }).catch(()=>{});
                         }
                     } catch (_) {}
+
+                    const affiliateCut = Number(affiliateCutLamports) / 1_000_000_000;
 
                     let volumeToRecord = actualSolReceived; 
                     try {
@@ -748,14 +689,12 @@ export async function executeExit(
                     const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
                     await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(()=>{});
-                    
                     const { awardGuildPoints } = await import('./guild.service.js');
                     awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
                     
                     const { recordStatsEvent } = await import('./simulation.service.js');
                     await recordStatsEvent(user.telegramId, 'live', realizedPnlSol).catch(()=>{});
 
-                    // 🟢 SAVES STRATEGY TAG TO PRISMA FOR PERFORMANCE ATTRIBUTION
                     await prisma.trade.create({
                         data: {
                             userId: user.id, tokenAddress: targetCA, isBuy: false, amountInSol: volumeToRecord,
@@ -765,38 +704,22 @@ export async function executeExit(
                         }
                     }).catch(() => {});
 
-                    // 🟢 FIRE WEBHOOK EVENT
-                    fireWebhook(user.telegramId, 'trade_sell', {
-                        tokenAddress: targetCA, percentage: sellPercentage, realizedPnlSol, profitPercent, signature: txSig, strategy
-                    }).catch(()=>{});
+                    fireWebhook(user.telegramId, 'trade_sell', { tokenAddress: targetCA, percentage: sellPercentage, realizedPnlSol, profitPercent, signature: txSig, strategy }).catch(()=>{});
 
                     if (!isBumper) {
-                        const captionHtml = `${profitPercent >= 0 ? '🟢' : '🔴'} <b>SELL CONFIRMED</b>\n\n` +
-                                `Token: <code>${targetCA.substring(0,8)}...</code>\n` +
-                                `PnL: <b>${profitPercent >= 0 ? '+' : ''}${profitPercent.toFixed(2)}%</b>\n` +
-                                `🔗 <a href="https://solscan.io/tx/${txSig}">View on Solscan</a>`;
+                        const captionHtml = `${profitPercent >= 0 ? '🟢' : '🔴'} <b>SELL CONFIRMED</b>\n\nToken: <code>${targetCA.substring(0,8)}...</code>\nPnL: <b>${profitPercent >= 0 ? '+' : ''}${profitPercent.toFixed(2)}%</b>\n🔗 <a href="https://solscan.io/tx/${txSig}">View on Solscan</a>`;
                         try {
                             const { generatePnlCard } = await import('./image.service.js');
                             const imageBuffer = await generatePnlCard(targetCA, profitPercent, user.referralCode ?? undefined);
-                            
                             const FormData = (await import('form-data')).default || await import('form-data');
                             const form: any = new FormData();
-                            form.append('chat_id', telegramId);
-                            form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' });
-                            form.append('caption', captionHtml);
-                            form.append('parse_mode', 'HTML');
-                            
+                            form.append('chat_id', telegramId); form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' }); form.append('caption', captionHtml); form.append('parse_mode', 'HTML');
                             const axiosClient = (await import('axios')).default;
-                            await axiosClient.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, {
-                                headers: form.getHeaders(),
-                                timeout: 5000
-                            });
+                            await axiosClient.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, { headers: form.getHeaders(), timeout: 5000 });
                         } catch (e) {
                             try {
                                 const axiosClient = (await import('axios')).default;
-                                await axiosClient.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-                                    chat_id: telegramId, text: captionHtml, parse_mode: 'HTML', link_preview_options: { is_disabled: true }
-                                });
+                                await axiosClient.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, { chat_id: telegramId, text: captionHtml, parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                             } catch (_) {}
                         }
                     }
@@ -813,7 +736,6 @@ export async function executeExit(
 
         const breakdown = walletReport.filter(r => !r.includes("Empty")).join(" | ");
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10);
-
         return { success: true, signature: firstSignature, message: `🟢 Exit Submitted (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}\n⚡ <i>Confirming in background...</i>` };
     } catch (error: any) { return { success: false, message: `🔴 Error: ${error.message}` }; }
 }

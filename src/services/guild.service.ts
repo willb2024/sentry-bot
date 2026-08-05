@@ -22,9 +22,9 @@ export async function createGuild(
     try {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
+        // 🟢 FIX: Removed Dev Suite check and 2.0 SOL price requirement entirely.
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
 
-        // 🟢 FIX: Guild creation is free. Removed Dev Suite requirement and 2.0 SOL transfer.
         const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
         const randomTwoDigit = Math.floor(10 + Math.random() * 90);
         const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
@@ -36,7 +36,7 @@ export async function createGuild(
                 name,
                 description,
                 rewardDescription,
-                feePaidSol: 0
+                feePaidSol: 0 // Free
             }
         });
 

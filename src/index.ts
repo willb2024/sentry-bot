@@ -4533,18 +4533,20 @@ async function deleteKeysPattern(pattern: string) {
     } while (cursor !== '0');
 }
 
+
 // =========================================================
 // ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
 // =========================================================
 bot.on("text", async (ctx, next) => {
+    if (!ctx.message || !('text' in ctx.message)) return next();
     const text = ctx.message.text.trim();
-    const telegramId = ctx.from?.id.toString();
+    const telegramId = ctx.from?.id?.toString();
     if (!telegramId) return next();
 
     // 🟢 GLOBAL CANCEL
     if (text.toLowerCase() === '/cancel' || text.toLowerCase() === 'cancel') {
         const keysToClear = [
-            `state:simedit:${telegramId}`, // <-- ADDED FOR SIMEDIT CANCEL
+            `state:simedit:${telegramId}`,
             `state:guard:${telegramId}`, `state:dca:${telegramId}`, `state:limit:${telegramId}`, 
             `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`, `state:autosnipe_amt:${telegramId}`, 
             `state:autosnipe_sl:${telegramId}`, `state:autosnipe_delay:${telegramId}`, `state:autosnipe_tp:${telegramId}`, 
@@ -4570,134 +4572,131 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
-  // =========================================================================
-// REPLACE THE state:simedit INTERCEPTOR WITH THIS BLOCK
-// =========================================================================
-
-// =========================================================================
-// REPLACE THE state:simedit INTERCEPTOR WITH THIS BLOCK
-// =========================================================================
-
-if (await redis.get(`state:simedit:${telegramId}`)) {
-    await redis.del(`state:simedit:${telegramId}`);
-    
-    const lines = text.split('\n');
-    const data: any = {};
-    for (const line of lines) {
-        const parts = line.split(':');
-        if (parts.length < 2) continue;
-        const key = parts[0].trim().toUpperCase();
-        const val = parts.slice(1).join(':').trim();
-        data[key] = val;
-    }
-
-    try {
-        const wins = parseInt(data['WINS']) || 0;
-        const losses = parseInt(data['LOSSES']) || 0;
-        const vol = parseFloat(data['VOL']) || 0;
-        const days = parseInt(data['DAYS']) || 1;
-        const bal = parseFloat(data['BALANCE_SOL']) || 100;
+    // =========================================================================
+    // SIMEDIT INTERCEPTOR (CLEAN BLOCK)
+    // =========================================================================
+    if (await redis.get(`state:simedit:${telegramId}`)) {
+        await redis.del(`state:simedit:${telegramId}`);
         
-        let strat1Pnl = 136.5147;
-        let strat2Pnl = 22.7524;
-        let strat1Name = 'Sniper Engine';
-        let strat2Name = 'Manual / Direct';
-
-        if (data['STRAT1']) {
-            const parts = data['STRAT1'].split('|');
-            strat1Name = parts[0]?.trim() || 'Sniper Engine';
-            strat1Pnl = parseFloat(parts[1]) || 136.5147;
-        }
-        if (data['STRAT2']) {
-            const parts = data['STRAT2'].split('|');
-            strat2Name = parts[0]?.trim() || 'Manual / Direct';
-            strat2Pnl = parseFloat(parts[1]) || 22.7524;
+        const lines = text.split('\n');
+        const data: any = {};
+        for (const line of lines) {
+            const parts = line.split(':');
+            if (parts.length < 2) continue;
+            const key = parts[0].trim().toUpperCase();
+            const val = parts.slice(1).join(':').trim();
+            data[key] = val;
         }
 
-        const targetTotalRealizedPnl = strat1Pnl + strat2Pnl;
-        const totalTrades = wins + losses || 1;
-        const volPerTrade = vol / totalTrades;
-        const now = Date.now();
-        const fakeTrades = [];
+        try {
+            const wins = parseInt(data['WINS']) || 0;
+            const losses = parseInt(data['LOSSES']) || 0;
+            const vol = parseFloat(data['VOL']) || 0;
+            const days = parseInt(data['DAYS']) || 1;
+            const bal = parseFloat(data['BALANCE_SOL']) || 100;
+            
+            let strat1Pnl = 136.5147;
+            let strat2Pnl = 22.7524;
+            let strat1Name = 'Sniper Engine';
+            let strat2Name = 'Manual / Direct';
 
-        // 🟢 LOCK OLDEST TRADE TO EXACTLY 'DAYS' AGO
-        const oldestTime = now - (days * 86400000);
+            if (data['STRAT1']) {
+                const parts = data['STRAT1'].split('|');
+                strat1Name = parts[0]?.trim() || 'Sniper Engine';
+                strat1Pnl = parseFloat(parts[1]) || 136.5147;
+            }
+            if (data['STRAT2']) {
+                const parts = data['STRAT2'].split('|');
+                strat2Name = parts[0]?.trim() || 'Manual / Direct';
+                strat2Pnl = parseFloat(parts[1]) || 22.7524;
+            }
 
-        const avgLossPnlSol = - (volPerTrade * 0.12);
-        const totalLossPnlSol = losses * avgLossPnlSol;
-        const requiredWinPnlSol = targetTotalRealizedPnl - totalLossPnlSol;
-        const avgWinPnlSol = wins > 0 ? requiredWinPnlSol / wins : 0;
+            const targetTotalRealizedPnl = strat1Pnl + strat2Pnl;
+            const totalTrades = wins + losses || 1;
+            const volPerTrade = vol / totalTrades;
+            const now = Date.now();
+            const fakeTrades = [];
 
-        for (let i = 0; i < wins; i++) {
-            const variation = (Math.random() * 0.3 - 0.15) * avgWinPnlSol;
-            const pnlSol = avgWinPnlSol + variation;
-            const pnlPercent = volPerTrade > 0 ? (pnlSol / volPerTrade) * 100 : 35;
-            const tradeTime = (i === 0) ? oldestTime : (now - Math.random() * (days - 1) * 86400000);
+            const oldestTime = now - (days * 86400000);
 
-            fakeTrades.push({
-                createdAt: new Date(tradeTime).toISOString(),
-                isBuy: false,
-                amountInSol: volPerTrade,
-                profitPercent: parseFloat(pnlPercent.toFixed(2)),
-                realizedPnlSol: parseFloat(pnlSol.toFixed(4)),
-                strategy: Math.random() < (strat1Pnl / (targetTotalRealizedPnl || 1)) ? strat1Name : strat2Name
-            });
+            const avgLossPnlSol = - (volPerTrade * 0.12);
+            const totalLossPnlSol = losses * avgLossPnlSol;
+            const requiredWinPnlSol = targetTotalRealizedPnl - totalLossPnlSol;
+            const avgWinPnlSol = wins > 0 ? requiredWinPnlSol / wins : 0;
+
+            for (let i = 0; i < wins; i++) {
+                const variation = (Math.random() * 0.3 - 0.15) * avgWinPnlSol;
+                const pnlSol = avgWinPnlSol + variation;
+                const pnlPercent = volPerTrade > 0 ? (pnlSol / volPerTrade) * 100 : 35;
+                const tradeTime = (i === 0) ? oldestTime : (now - Math.random() * (days - 1) * 86400000);
+
+                fakeTrades.push({
+                    createdAt: new Date(tradeTime).toISOString(),
+                    isBuy: false,
+                    amountInSol: volPerTrade,
+                    profitPercent: parseFloat(pnlPercent.toFixed(2)),
+                    realizedPnlSol: parseFloat(pnlSol.toFixed(4)),
+                    strategy: Math.random() < (strat1Pnl / (targetTotalRealizedPnl || 1)) ? strat1Name : strat2Name
+                });
+            }
+
+            for (let i = 0; i < losses; i++) {
+                const variation = (Math.random() * 0.3 - 0.15) * avgLossPnlSol;
+                const pnlSol = avgLossPnlSol + variation;
+                const pnlPercent = volPerTrade > 0 ? (pnlSol / volPerTrade) * 100 : -12;
+                const tradeTime = now - Math.random() * (days - 1) * 86400000;
+
+                fakeTrades.push({
+                    createdAt: new Date(tradeTime).toISOString(),
+                    isBuy: false,
+                    amountInSol: volPerTrade,
+                    profitPercent: parseFloat(pnlPercent.toFixed(2)),
+                    realizedPnlSol: parseFloat(pnlSol.toFixed(4)),
+                    strategy: Math.random() < (strat1Pnl / (targetTotalRealizedPnl || 1)) ? strat1Name : strat2Name
+                });
+            }
+
+            fakeTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            fakeTrades[fakeTrades.length - 1].createdAt = new Date(oldestTime).toISOString();
+
+            const forged: any = {
+                sharpe: parseFloat(data['SHARPE']) || 2.84,
+                drawdown: parseFloat(data['DRAWDOWN']) || -0.185,
+                profit: parseFloat(data['PROFIT_FACTOR']) || 3.13,
+                risk: parseFloat(data['RISK_SCORE']) || 14,
+                days: days,
+                manual24hCount: data['MANUAL_24H'] ? parseInt(data['MANUAL_24H'].split('|')[0]) : 1,
+                manual24hPnl: data['MANUAL_24H'] ? parseFloat(data['MANUAL_24H'].split('|')[1]) : 0.85,
+                auto24hCount: data['AUTO_24H'] ? parseInt(data['AUTO_24H'].split('|')[0]) : 6,
+                auto24hPnl: data['AUTO_24H'] ? parseFloat(data['AUTO_24H'].split('|')[1]) : 4.25,
+                hourlyChart: data['HOURLY_CHART'] ? data['HOURLY_CHART'].split(',').map((s: string) => parseFloat(s.trim()) || 0) : [],
+                strat1Name, strat1Pnl, strat2Name, strat2Pnl
+            };
+
+            const { setSimCounters } = await import('./services/simulation.service.js');
+            const totalInvestedSol = fakeTrades.reduce((s, t) => s + t.amountInSol, 0);
+            const totalPnlSol = fakeTrades.reduce((s, t) => s + t.realizedPnlSol, 0);
+            
+            await setSimCounters(telegramId, wins, losses, fakeTrades.length, totalInvestedSol, totalPnlSol);
+            await redis.set(`sim:first_trade_at:${telegramId}`, new Date(oldestTime).toISOString());
+
+            await redis.set(`sim:balance:${telegramId}`, bal.toFixed(4));
+            const startBal = bal - targetTotalRealizedPnl;
+            const { setSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
+            await setSimStartingBalance(telegramId, startBal);
+
+            await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forged));
+            await redis.set(`sim:trades:${telegramId}`, JSON.stringify(fakeTrades.slice(0, 10000)), 'EX', 86400 * 30);
+            await redis.set(`sim:volume:${telegramId}`, vol.toString());
+            await redis.del(`sim:positions:${telegramId}`);
+            await saveSimulationState(telegramId);
+
+            await ctx.replyWithHTML(`✅ <b>Simulation Database Successfully Overwritten!</b>`);
+        } catch(e) {
+            await ctx.reply("🔴 Error parsing format.");
         }
-
-        for (let i = 0; i < losses; i++) {
-            const variation = (Math.random() * 0.3 - 0.15) * avgLossPnlSol;
-            const pnlSol = avgLossPnlSol + variation;
-            const pnlPercent = volPerTrade > 0 ? (pnlSol / volPerTrade) * 100 : -12;
-            const tradeTime = now - Math.random() * (days - 1) * 86400000;
-
-            fakeTrades.push({
-                createdAt: new Date(tradeTime).toISOString(),
-                isBuy: false,
-                amountInSol: volPerTrade,
-                profitPercent: parseFloat(pnlPercent.toFixed(2)),
-                realizedPnlSol: parseFloat(pnlSol.toFixed(4)),
-                strategy: Math.random() < (strat1Pnl / (targetTotalRealizedPnl || 1)) ? strat1Name : strat2Name
-            });
-        }
-
-        fakeTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        fakeTrades[fakeTrades.length - 1].createdAt = new Date(oldestTime).toISOString();
-
-        const forged: any = {
-            sharpe: parseFloat(data['SHARPE']) || 2.84,
-            drawdown: parseFloat(data['DRAWDOWN']) || -0.185,
-            profit: parseFloat(data['PROFIT_FACTOR']) || 3.13,
-            risk: parseFloat(data['RISK_SCORE']) || 14,
-            days: days,
-            manual24hCount: data['MANUAL_24H'] ? parseInt(data['MANUAL_24H'].split('|')[0]) : 1,
-            manual24hPnl: data['MANUAL_24H'] ? parseFloat(data['MANUAL_24H'].split('|')[1]) : 0.85,
-            auto24hCount: data['AUTO_24H'] ? parseInt(data['AUTO_24H'].split('|')[0]) : 6,
-            auto24hPnl: data['AUTO_24H'] ? parseFloat(data['AUTO_24H'].split('|')[1]) : 4.25,
-            hourlyChart: data['HOURLY_CHART'] ? data['HOURLY_CHART'].split(',').map((s: string) => parseFloat(s.trim()) || 0) : [],
-            strat1Name,
-            strat1Pnl,
-            strat2Name,
-            strat2Pnl
-        };
-
-        await redis.set(`sim:balance:${telegramId}`, bal.toFixed(4));
-        const startBal = bal - targetTotalRealizedPnl;
-        const { setSimStartingBalance, saveSimulationState } = await import('./services/simulation.service.js');
-        await setSimStartingBalance(telegramId, startBal);
-
-        await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forged));
-        await redis.set(`sim:trades:${telegramId}`, JSON.stringify(fakeTrades), 'EX', 86400 * 30);
-        await redis.set(`sim:volume:${telegramId}`, vol.toString());
-        
-        await redis.del(`sim:positions:${telegramId}`);
-        await saveSimulationState(telegramId);
-
-        await ctx.replyWithHTML(`✅ <b>Simulation Database Successfully Overwritten!</b>\n\nAll variables including Balance, Sharpe, Strategies, Risk, Hourly Chart, 24H Activity, PnL, Win Rate (66%), and Total Trading Days (${days}) are 100% mathematically aligned. Refresh your WebApp dashboard to see your updates.`);
-    } catch(e) {
-        await ctx.reply("🔴 Error parsing format. Please make sure you copy the template exactly.");
+        return;
     }
-    return;
-}
 
     // 🟢 CREDIT PAYMENT HANDLER
     const pendingCreditsTx = await redis.get(`state:credits_tx:${telegramId}`);
@@ -4718,7 +4717,7 @@ if (await redis.get(`state:simedit:${telegramId}`)) {
             const treasury = process.env.TREASURY_WALLET_ADDRESS!;
             const user = await prisma.user.findUnique({ where: { telegramId } });
 
-            const verifyRes = await verifyVipPayment(txSig, priceSol * 0.9, treasury, user!.vaultAddress!); // 10% slippage tolerance on SOL price swings
+            const verifyRes = await verifyVipPayment(txSig, priceSol * 0.9, treasury, user!.vaultAddress!);
             if (verifyRes.valid) {
                 const result = await addCredits(telegramId, packKey as any, txSig);
                 await redis.del(`credits:pending:${telegramId}`);
@@ -6050,14 +6049,7 @@ app.get('/g/:guildCode', async (req, res) => {
 
 
 
-// =========================================================================
-// REPLACE YOUR /simedit AND API ENDPOINTS WITH THIS BLOCK
-// =========================================================================
-
-// =========================================================================
-// REPLACE YOUR /simedit AND API ENDPOINTS WITH THIS BLOCK
-// =========================================================================
-
+// 🟢 BUG 2 & 3 FIX: `/simedit` parses the template and updates the Redis Counters & Anchor
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) return;
@@ -6087,6 +6079,11 @@ bot.command('simedit', async (ctx) => {
         `<i>Values will be permanently saved. Future trades will stack organically. Type /cancel to abort.</i>`
     );
 });
+
+
+// 🟢 FIX 4: Send the isolated Counters and Anchor back to the WebApp
+
+
 
 
 // Replace /api/stats-window endpoint in src/index.ts
@@ -6191,6 +6188,83 @@ bot.action('toggle_sim_mode', async (ctx) => {
 });
 
 // 3️⃣ Update /api/toggle-sim express route
+// 🟢 GLOBAL EXPRESS ROUTES (MUST BE OUTSIDE TELEGRAM HANDLERS)
+app.post('/api/analytics', async (req, res) => {
+    const initData = req.body.initData;
+    if (!initData) return res.status(401).json({ error: "No initData" });
+    const tgId = extractTelegramId(initData);
+    if (!tgId) return res.status(401).json({ error: "Invalid initData" });
+
+    try {
+        const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+        if (!user) return res.json({ trades: [], stats: null });
+
+        const trades = await prisma.trade.findMany({
+            where: { userId: user.id },
+            orderBy: { createdAt: 'desc' },
+            take: 50
+        });
+
+        const mappedTrades = trades.map((t: any) => ({
+            createdAt: t.createdAt,
+            isBuy: t.isBuy,
+            amountInSol: t.amountInSol,
+            profitPercent: t.profitPercent || 0,
+            realizedPnlSol: t.realizedPnlSol || 0
+        }));
+
+        const { getAdvancedStats } = await import('./services/analytics.service.js');
+        const stats = await getAdvancedStats(tgId);
+        
+        res.json({ trades: mappedTrades, stats });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/sim-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
+
+        const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume, getSimCounters, getSimFirstTradeAt } = await import('./services/simulation.service.js');
+        const isActive = await isSimulationActive(tgId);
+        
+        if (!isActive) return res.json({ isActive: false });
+
+        const balance = await getSimBalance(tgId);
+        const startingBalance = await getSimStartingBalance(tgId);
+        const volume = await getSimVolume(tgId);
+        
+        const positionsRaw = await redis.get(`sim:positions:${tgId}`);
+        const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
+        
+        const tradesRaw = await redis.get(`sim:trades:${tgId}`);
+        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+
+        const counters = await getSimCounters(tgId);
+        const firstTradeAt = await getSimFirstTradeAt(tgId);
+
+        res.json({
+            isActive: true,
+            balance,
+            startingBalance,
+            volume,
+            wins: counters.wins,
+            losses: counters.losses,
+            totalTrades: counters.totalTrades,
+            totalInvestedSol: counters.totalInvestedSol,
+            totalPnlSol: counters.totalPnlSol,
+            firstTradeAt,
+            positions,
+            trades: trades.slice(0, 50) 
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'Server Error' });
+    }
+});
+
 app.post('/api/toggle-sim', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
