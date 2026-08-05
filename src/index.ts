@@ -1580,8 +1580,6 @@ const CONFIG_GUIDE_PAGES: string[] = [
     `• <b>Custom ⚙️:</b> Set 0.02 SOL to front-run institutional snipers on hyped launches.\n\n` +
     `💧 <b>2. SLIPPAGE (VOLATILITY PROTECTION)</b>\n` +
     `Set slippage to <b>20%</b> in /settings. This ensures your buys/panic-sells never fail on Pump.fun's volatile bonding curves.\n\n` +
-    `🎮 <b>3. TRADING MODE (LIVE vs SIMULATION)</b>\n` +
-    `Toggle <b>Simulation Mode</b> in /settings to test strategies with zero real capital. Track your stats perfectly in the WebApp, then switch back to Live Mainnet when ready.`,
 
     // PAGE 2: AUTO-SNIPER ENGINE
     `🎯 <b>CONFIGURATION GUIDE — AUTO-SNIPER</b> <i>(2/8)</i>\n\n` +
