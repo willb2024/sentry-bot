@@ -564,12 +564,14 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
   
     const botName = process.env.BOT_NAME || 'Sentry Terminal';
     
-    let guildDisplay = `🏰 <b>Active Guild:</b> <i>None</i>\n`;
-    if (userGuilds.length > 0) {
-      const primaryGuild = userGuilds[0];
-      const rankDisplay = primaryGuild.rank ? `#${primaryGuild.rank}` : `Unranked`;
-      guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Your Rank:</b> <b>${rankDisplay}</b> (${primaryGuild.loyaltyPoints.toLocaleString()} GLP)\n`;
-    }
+    let guildDisplay = `🏰 <b>Active Guild:</b> <i>None</i>\n` + 
+    `└ <i>Join a community to compete on leaderboards for rewards.</i>\n`;
+if (userGuilds.length > 0) {
+const primaryGuild = userGuilds[0];
+const rankDisplay = primaryGuild.rank ? `#${primaryGuild.rank}` : `Unranked`;
+guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Your Rank:</b> <b>${rankDisplay}</b> (${primaryGuild.loyaltyPoints.toLocaleString()} GLP)\n` +
+  `└ <i>Every trade automatically boosts your rank for community rewards.</i>\n`;
+}
   
     const balanceNum = parseFloat(liveBalance) || 0;
     const usdValue = balanceNum * cachedSolUsdPrice;
@@ -590,7 +592,8 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         `${guildDisplay}\n` +
         
         `📊 <b>Your Economics:</b>\n` +
-        `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n\n` +
+        `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
+        `└ <i>VIPs pay 0% fees. Invite friends to earn up to 40-70%% of their fees forever.</i>\n\n` +
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
@@ -2699,13 +2702,9 @@ bot.action('action_claim_payout', async (ctx) => {
 // =========================================================
 // ⚙️ SETTINGS MENU CONTROLLER
 // =========================================================
-// 🟢 FIXED: Settings menu now includes a 1-click mode switcher button
 async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean = false) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
-
-    const { isSimulationActive } = await import('./services/simulation.service.js');
-    const isSimMode = await isSimulationActive(telegramId);
 
     const currentSlippage = user.slippagePercent || 20.0;
     const level = user.priorityLevel || "FAST";
@@ -2718,7 +2717,6 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
     const levelText = `⚙️ <b>SENTRY CONFIGURATION</b>\n\n` +
-        `🎮 <b>Trading Mode:</b> <b>${isSimMode ? '🟢 SIMULATION' : '⚡ LIVE MAINNET'}</b>\n` +
         `👛 <b>Current Slippage:</b> ${currentSlippage}%\n` +
         `🚀 <b>Transaction Speed (Jito Bribe):</b> <b>${level}</b> (${currentFeeDisplay})\n\n` +
         `🚕 <b>SLIPPAGE EXPLAINED:</b>\n` +
@@ -2727,9 +2725,6 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
         `<i>Sentry bypasses public network congestion by tipping the validators (using Jito) to process your trade on Block-0.</i>\n`;
 
     const UI = Markup.inlineKeyboard([
-        [
-            Markup.button.callback(isSimMode ? '🎮 Mode: SIMULATION 🟢' : '⚡ Mode: LIVE MAINNET 🟢', 'toggle_sim_mode')
-        ],
         [
             Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
             Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
