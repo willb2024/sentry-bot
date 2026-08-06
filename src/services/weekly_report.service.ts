@@ -82,10 +82,7 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
         });
     });
 
-    const basePoints = Math.floor((user.totalVolumeSol || 0) * 10000);
-    const recruitBonus = user.recruits.length * 2000;
-    const welcomeBonus = user.referredById ? 10000 : 0;
-    const sentryPoints = basePoints + recruitBonus + welcomeBonus;
+    const sentryPoints = 0; // Deprecated
 
     let pointsRank = precomputedRank;
     let totalUsers = totalUsersCount;

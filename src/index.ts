@@ -444,21 +444,16 @@ app.post('/api/affiliate-stats', async (req, res) => {
             });
         });
 
-        // 🟢 Precise dynamic point metrics for the WebApp UI
-        const basePoints = Math.floor((user.totalVolumeSol || 0) * 10000);
-        const welcomeBonus = user.referredById ? 10000 : 0;
-        const recruitBonus = user.recruits.length * 2000;
-        const totalPoints = basePoints + welcomeBonus + recruitBonus;
-
+        const displayVolume = user.totalVolumeSol || 0;
         let currentTier = "Bronze";
         let currentRate = 0.40;
-        if (totalPoints >= 1000000) {
+        if (displayVolume >= 100) {
             currentTier = "Diamond";
             currentRate = 0.70;
-        } else if (totalPoints >= 250000) {
+        } else if (displayVolume >= 25) {
             currentTier = "Gold";
             currentRate = 0.60;
-        } else if (totalPoints >= 50000) {
+        } else if (displayVolume >= 5) {
             currentTier = "Silver";
             currentRate = 0.50;
         }
@@ -468,7 +463,6 @@ app.post('/api/affiliate-stats', async (req, res) => {
             pendingYieldSol: parseFloat((user.pendingRewardsSol || 0).toFixed(4)),
             lifetimeEarnedSol: parseFloat(((user.pendingRewardsSol || 0) + totalHistoricalEarned).toFixed(4)),
             referralLink: `https://t.me/${process.env.BOT_USERNAME}?start=${user.referralCode}`,
-            totalPoints,
             currentTier,
             currentRate,
             recruitList,
@@ -592,10 +586,8 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
 
         `🎯 <b>Caller Credits:</b> <code>${displayCredits}</code> Remaining\n` + 
         `└ <i>Spent only when the AI Caller delivers a real match — never on empty scans.</i>\n\n` +
-        
-        `🪂 <b>$SENTRY Airdrop (Epoch 1):</b>\n` +
-        `${guildDisplay}` + 
-        `• Your Points: <b>${sentryPoints} PTS</b> <i>(1 SOL = 10k PTS)</i>${welcomeText}${recruitText}\n\n` +  
+
+        `${guildDisplay}\n` +
         
         `📊 <b>Your Economics:</b>\n` +
         `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n\n` +
@@ -1821,7 +1813,6 @@ const TRADE_GUIDE_PAGES: string[] = [
     `• <b>Custom Jito Bribe:</b> Set custom validator tips (e.g., <code>0.02 SOL</code>) to out-bid 99% of retail traders on hyped launches.\n\n` +
     `• <b>Hide / Mask Wallets:</b> Privacy toggle to mask public vault addresses when sharing screenshots or recording videos.\n\n` +
     `• <b>Trade Reaction GIFs:</b> Automated animated media reactions sent on position exits and milestone wins.\n\n` +
-    `• <b>Pro Dev Suite Tools:</b> Access institutional Volume Bumpers (wash-trading volume generator) and 5-Wallet Consolidated Nuke exits.`,
 
     // PAGE 6: Enterprise Analytics & Rent Sweeper
     `📖 <b>OPERATIONS MANUAL — ANALYTICS & UTILITIES</b> <i>(6/8)</i>\n\n` +
@@ -1846,9 +1837,6 @@ const TRADE_GUIDE_PAGES: string[] = [
     `Tap <b>Launch Token</b>. Launch tokens on Pump.fun or Raydium safely.\n` +
     `• <i>Vanity CA Mining:</i> Mine custom contract addresses (e.g. <code>CAT...pump</code>).\n` +
     `• <i>Block-0 Stealth Split:</i> Distribute your developer allocation across up to 4 sub-wallets inside a single, un-snipeable Jito bundle.\n\n` +
-    `🛠️ <b>DEVELOPER PRO SUITE</b>\n` +
-    `• <i>Volume Bumper:</i> Automated wash-trading engine to keep your token trending on front pages.\n` +
-    `• <i>Multi-Wallet Nuke:</i> Execute a 100% exit across 5 sub-wallets concurrently in the exact same millisecond.\n\n` +
     `🏰 <b>SENTRY GUILDS</b>\n` +
     `Type <code>/createguild</code>. Create your loyalty ecosystem, run volume leaderboards, and export top wallets for Whitelists or SOL Airdrops.`,
 
@@ -2616,33 +2604,25 @@ bot.action('menu_affiliate', async (ctx) => {
     let displayVolume = user.totalVolumeSol || 0;
     if (isSimMode) displayVolume += await getSimVolume(user.telegramId);
 
-    const basePoints = Math.floor(displayVolume * 10000);
-    const welcomeBonus = user.referredById ? 10000 : 0;
-    const recruitBonus = user._count.recruits * 2000;
-    const totalPoints = basePoints + welcomeBonus + recruitBonus;
 
-    // 🟢 Determine Affiliate Tier & Next Goal (40% to 70% dynamic splits)
-    let currentTier = "🥉 Bronze (40% Rev Share)";
-    let nextTier = "Silver (50k PTS)";
-    if (totalPoints >= 1000000) { 
-        currentTier = "💎 Diamond (70% Rev Share)"; 
-        nextTier = "Max Tier Unlocked!"; 
-    } else if (totalPoints >= 250000) { 
-        currentTier = "🥇 Gold (60% Rev Share)"; 
-        nextTier = "Diamond (1M PTS)"; 
-    } else if (totalPoints >= 50000) { 
-        currentTier = "🥈 Silver (50% Rev Share)"; 
-        nextTier = "Gold (250k PTS)"; 
-    }
+  // 🟢 Determine Affiliate Tier & Next Goal (40% to 70% dynamic splits)
+  let currentTier = "🥉 Bronze (40% Rev Share)";
+  let nextTier = "Silver (5 SOL Vol)";
+  if (displayVolume >= 100) { 
+      currentTier = "💎 Diamond (70% Rev Share)"; 
+      nextTier = "Max Tier Unlocked!"; 
+  } else if (displayVolume >= 25) { 
+      currentTier = "🥇 Gold (60% Rev Share)"; 
+      nextTier = "Diamond (100 SOL Vol)"; 
+  } else if (displayVolume >= 5) { 
+      currentTier = "🥈 Silver (50% Rev Share)"; 
+      nextTier = "Gold (25 SOL Vol)"; 
+  }
 
     const text = 
     `💸 <b>SENTRY PARTNERSHIP & REWARDS</b>\n\n` +
     `Turn your influence into massive passive income. As you accumulate <b>$SENTRY Points</b>, your affiliate revenue share increases automatically!\n\n` +
     
-    `🎯 <b>HOW TO EARN POINTS (CONDITIONS):</b>\n` +
-    `• <b>Trade Volume:</b> 1 SOL Traded = <b>10,000 PTS</b>\n` +
-    `• <b>Recruiting:</b> 1 Active Invite = <b>2,000 PTS</b>\n` +
-    `• <b>Onboarding:</b> Sign up via a partner link = <b>+10,000 PTS</b> head-start\n\n` +
     
     `👑 <b>TRADING FEE TIERS:</b>\n` +
     `• 🥉 <b>Bronze (0 - 49k PTS):</b> 40% of recruit trading fees.\n` +
@@ -2654,7 +2634,6 @@ bot.action('menu_affiliate', async (ctx) => {
     `Anyone who uses your link gets a permanent <b>10% fee discount</b> and a 10,000 PTS airdrop head-start!\n\n` +
     
     `📊 <b>YOUR LIVE STATS:</b>\n` +
-    `• <b>Total Points:</b> ${totalPoints.toLocaleString()} PTS\n` +
     `• <b>Current Tier:</b> ${currentTier}\n` +
     `• <b>Next Tier At:</b> ${nextTier}\n` +
     `• <b>Active Recruits:</b> ${user._count.recruits}\n` +
@@ -2677,153 +2656,6 @@ bot.action('menu_affiliate', async (ctx) => {
 // 🛠️ SENTRY DEV SUITE & 50/50 KOL PAYWALL (1.5 SOL)
 // =========================================================
 
-bot.action('menu_devsuite', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-
-    const user = await prisma.user.findUnique({ 
-        where: { telegramId: tgId }
-    });
-    if (!user) return;
-
-    let text = `🛠️ <b>SENTRY DEVELOPER SUITE (PRO)</b>\n\n`;
-
-    if (user.isDevSuiteUnlocked) {
-        text += `🟢 <b>ACCESS GRANTED — WELCOME DEV</b>\n\n` +
-            `Your institutional developer dashboard is fully active. You have lifetime, unlimited access to Sentry's advanced smart-contract utilities.\n\n` +
-            `<i>Configure your Volume Bumpers or plan your Multi-Wallet Nuke below.</i>`;
-
-        await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
-            [Markup.button.callback('📈 Start Volume Bumper', 'action_dev_volume')],
-            [Markup.button.callback('💥 NUKE (Sell All Wallets)', 'action_dev_nuke')],
-            [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
-        ]));
-    } else {
-        text += `<b>WHY SMART DEVS & KOLS UPGRADE TO PRO:</b>\n\n` +
-            `📈 <b>1. The Volume Bumper (Save $3,000+)</b>\n` +
-            `<i>The Problem:</i> When you launch a coin, the algorithm drops your token from the front page if it lacks constant volume. Shady marketing agencies charge 15-20 SOL to run scripts that get your token flagged by RugCheck.\n` +
-            `<i>The Solution:</i> Sentry's Bumper executes automated wash-trading across ALL of your active sub-wallets concurrently within private Jito MEV bundles. It coordinates massive, un-snipeable volume spikes that keep your token trending safely without paying an agency.\n\n` +
-            `💥 <b>2. The Nuke Button (Maximum Liquidity Exit)</b>\n` +
-            `<i>The Problem:</i> Smart devs split their token supply across multiple wallets. But selling 5 wallets one by one crashes your own chart and loses you thousands to slippage and sandwich bots.\n` +
-            `<i>The Solution:</i> The Nuke button compiles the sell orders from all 5 of your wallets into a single, encrypted Jito block. You exit your entire supply in the exact same millisecond at the absolute peak price.\n\n` +
-            `<i>Unlock lifetime access to both institutional tools for a one-time fee of <b>6.2 SOL</b>.</i>`;
-            
-        await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
-            [Markup.button.callback('🔓 Unlock Dev Suite (6.2 SOL)', 'action_unlock_devsuite')],
-            [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
-        ]));
-    }
-});
-
-
-bot.action('action_unlock_devsuite', async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-    if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return;
-
-    if (user.isDevSuiteUnlocked) {
-        return ctx.replyWithHTML("⚠️ <b>Upgrade Active:</b> You already have lifetime access to the Developer Suite!");
-    }
-
-    const PRICE_SOL = 6.2; 
-    const priceLamports = PRICE_SOL * LAMPORTS_PER_SOL;
-
-    try {
-        try { await ctx.answerCbQuery(); } catch(e){}
-        
-        // 🟢 UX FIX: This transaction is heavy and can take 20 seconds. The user needs to know it's working.
-        await safeEditMessageText(ctx, `<i>⏳ Aggregating wallet balances and compiling Dev Suite upgrade transaction...\n\nPlease wait up to 30 seconds. Do not click away.</i>`);
-
-        const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
-        if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
-        if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
-        if (user.activeWallets >= 4 && user.vault4 && user.pk4) wallets.push({ pub: user.vault4, pk: user.pk4 });
-        if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5 });
-
-        const balances = await Promise.all(wallets.map(w => connection.getBalance(new PublicKey(w.pub))));
-        const totalAvailable = balances.reduce((sum, bal) => sum + bal, 0);
-
-        const totalGasNeeded = wallets.length * 2000000; 
-        if (totalAvailable < priceLamports + totalGasNeeded) {
-            return ctx.replyWithHTML(`🔴 <b>Unlock Failed:</b> Combined balance across your wallets is only <b>${(totalAvailable / LAMPORTS_PER_SOL).toFixed(4)} SOL</b>. You need at least <b>${PRICE_SOL + (totalGasNeeded / LAMPORTS_PER_SOL)} SOL</b> combined.`);
-        }
-
-        const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
-        if (!treasuryWalletStr) return;
-
-        const instructions = [];
-        const signers: Keypair[] = [];
-        let lamportsCollected = 0;
-
-        const payerRawPk = wallets[0].pk ? decryptKey(wallets[0].pk) : null;
-        if (!payerRawPk) return;
-        const payerKeypair = Keypair.fromSecretKey(bs58.decode(payerRawPk));
-        signers.push(payerKeypair); 
-
-        for (let i = 0; i < wallets.length; i++) {
-            if (lamportsCollected >= priceLamports) break;
-            const w = wallets[i];
-            if (!w.pub || !w.pk) continue;
-            
-            const balance = balances[i];
-            const rawPk = decryptKey(w.pk);
-            if (!rawPk) continue;
-            const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
-            const maxSpendable = balance - 2000000; 
-            if (maxSpendable <= 0) continue;
-
-            const pullAmount = Math.min(priceLamports - lamportsCollected, maxSpendable);
-            if (pullAmount > 0) {
-                instructions.push(
-                    SystemProgram.transfer({
-                        fromPubkey: new PublicKey(w.pub), toPubkey: new PublicKey(treasuryWalletStr), lamports: pullAmount
-                    })
-                );
-                if (i !== 0) signers.push(keypair);
-                lamportsCollected += pullAmount;
-            }
-        }
-
-        if (lamportsCollected < priceLamports) {
-            return safeEditMessageText(ctx, `🔴 <b>Unlock Failed:</b> Could not compile enough liquid SOL across your active wallets after leaving gas buffers.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_devsuite')]]));
-        }
-
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const messageV0 = new TransactionMessage({
-            payerKey: new PublicKey(wallets[0].pub), recentBlockhash: blockhash, instructions
-        }).compileToV0Message();
-
-        const vTx = new VersionedTransaction(messageV0);
-        vTx.sign(signers); 
-
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-
-        let paymentConfirmed = false;
-        for (let i = 0; i < 15; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) { paymentConfirmed = true; break; }
-        }
-        
-        if (!paymentConfirmed) {
-            return ctx.replyWithHTML(`🔴 <b>Payment transaction dropped by the network.</b> Your SOL was not deducted. Please try again.`);
-        }
-
-        try {
-            // 🟢 UPDATED: Only unlocks Dev Suite. No more affiliate increment block here.
-            await prisma.user.update({ where: { id: user.id }, data: { isDevSuiteUnlocked: true } });
-            
-            await ctx.replyWithHTML(`✅ <b>DEV SUITE UNLOCKED!</b>\n\n6.2 SOL compiled from your wallets and processed.\n🔗 <a href="https://solscan.io/tx/${sig}">Receipt</a>`, { link_preview_options: { is_disabled: true } });
-            bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_devsuite' } } as any);
-        } catch (e: any) {
-            console.error("CRITICAL DB WRITE ERROR AFTER PAYMENT:", e.message);
-            await ctx.replyWithHTML(`⚠️ <b>Payment Confirmed but Activation Failed!</b>\n\nYour 6.2 SOL payment succeeded, but the database update failed. Please contact support immediately and provide this signature:\n<code>${sig}</code>`);
-        }
-        
-    } catch (e) { await ctx.replyWithHTML(`🔴 <b>Error processing multi-wallet transaction.</b>`); }
-});
 
 
 
@@ -2910,7 +2742,6 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
         [
             Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')
         ],
-        [Markup.button.callback('🛠️ Pro Tools (Volume Bumper / Nuke)', 'menu_devsuite')],
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 
@@ -4565,53 +4396,8 @@ bot.action('action_confirm_token_launch', async (ctx) => {
 });
 
 
-// 🟢 CLAUDE FIX 4.2: Use `isDevSuiteUnlocked` instead of `isAdmin`
-bot.action('action_dev_volume', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId }});
-    if (!user || !user.isDevSuiteUnlocked) return ctx.answerCbQuery("🔴 Access Restricted. Unlock Dev Suite.", { show_alert: true });
 
-    await redis.set(`state:dev_volume:${tgId}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(
-        `📈 <b>AUTOMATED TRADING UTILITY</b>\n\n` +
-        `Reply with your configuration:\n` +
-        `<code>[CA] [TRADE_SIZE_SOL] [MAX_FEE_BUDGET] [DELAY_SECONDS]</code>\n\n` +
-        `<i>Example:</i>\n` +
-        `<code>74SBV4z... 0.02 0.5 4</code>\n\n` +
-        `<i>Type /cancel to abort.</i>`
-    );
-});
 
-bot.action('action_dev_nuke', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId }});
-    if (!user || !user.isDevSuiteUnlocked) return ctx.answerCbQuery("🔴 Access Restricted. Unlock Dev Suite.", { show_alert: true });
-
-    await redis.set(`state:dev_nuke:${tgId}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(`💥 <b>CONSOLIDATED EXIT</b>\n\nReply with the Token CA. Sentry will execute a concurrent exit across all active wallets simultaneously.\n\n<i>Type /cancel to abort.</i>`);
-});
-
-bot.action(/^launch_vol_(.+)$/, async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const ca = ctx.match[1];
-    const tgId = ctx.from?.id.toString()!;
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId }});
-    if (!user || !user.isDevSuiteUnlocked) return ctx.answerCbQuery("🔴 Access Restricted. Unlock Dev Suite.", { show_alert: true });
-
-    await redis.set(`state:dev_volume:${tgId}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(
-        `📈 <b>AUTOMATED TRADING UTILITY</b>\n\n` +
-        `Reply with your configuration for <code>${ca}</code>:\n` +
-        `<code>${ca} [TRADE_SIZE_SOL] [MAX_FEE_BUDGET] [DELAY_SECONDS]</code>\n\n` +
-        `<i>Example (Trades 0.02 SOL, stops after 0.5 SOL fees, waits 4s):</i>\n` +
-        `<code>${ca} 0.02 0.5 4</code>\n\n` +
-        `<i>Type /cancel to abort.</i>`
-    );
-});
 
 
 
@@ -4655,7 +4441,6 @@ bot.action(/^manage_launch_(.+)$/, async (ctx) => {
 
     const buttons = [
         [Markup.button.callback('🔍 Check Holder Distribution', `launch_holders_${tokenAddress}`)],
-        [Markup.button.callback('💥 Multi-Wallet Position Exit', `launch_nuke_${tokenAddress}`)],
         [Markup.button.url('🔗 View on Pump.fun', `https://pump.fun/${tokenAddress}`)],
         [Markup.button.callback('⬅️ Back to Portfolio', 'menu_my_launches')]
     ];
@@ -4692,24 +4477,9 @@ bot.action(/^launch_holders_(.+)$/, async (ctx) => {
     }
 });
 
-bot.action(/^launch_nuke_(.+)$/, async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const ca = ctx.match[1];
-    const tgId = ctx.from?.id.toString()!;
-    
-    await redis.set(`state:dev_nuke:${tgId}`, 'AWAITING', 'EX', 120);
-    await ctx.replyWithHTML(
-        `💥 <b>MULTI-WALLET POSITION EXIT</b>\n\n` +
-        `This will initiate a consolidated sell order of 100% of your holdings for <code>${ca}</code> across all active wallets.\n\n` +
-        `Please confirm your intention by replying with the Token Contract Address (CA) below:\n` +
-        `<code>${ca}</code>\n\n` +
-        `<i>Type /cancel to abort.</i>`
-    );
-});
 
-// =========================================================
-// ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
-// =========================================================
+
+
 
 // =========================================================
 // ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
@@ -6699,54 +6469,7 @@ async function bootEcosystem() {
         } catch (e) {}
     }, 60000);
 
-    setInterval(async () => {
-        try {
-            let cursor = '0';
-            do {
-                const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'scheduled_bump:*', 'COUNT', 100);
-                cursor = nextCursor;
-                for (const key of keys) {
-                    const dataRaw = await redis.get(key);
-                    if (!dataRaw) continue;
-                    const data = JSON.parse(dataRaw);
-                    
-                    if (Date.now() > data.expiresAt || data.spent >= data.budget) {
-                        await redis.del(key);
-                        continue;
-                    }
-                    
-                    const parts = key.split(':');
-                    const tgId = parts[1];
-                    const tokenCA = parts[2];
-                    
-                    const cdKey = `bump_cd:${tokenCA}`;
-                    if (await redis.get(cdKey)) continue;
-                    await redis.set(cdKey, '1', 'EX', 12); 
-                    
-                    try {
-                       const tradeSize = 0.01 + Math.random() * 0.02; 
-                       const { executeSnipe, executeExit } = await import('./services/engine.service.js');
-                       
-                       if (data.isBuyNext) {
-                           const res = await executeSnipe(tgId, tokenCA, tradeSize, 'buy', undefined, true);
-                           if (res.success) data.isBuyNext = false;
-                       } else {
-                           const res = await executeExit(tgId, tokenCA, 100, true);
-                           if (res.success) data.isBuyNext = true;
-                       }
-                       
-                       data.spent += (tradeSize * 0.01) + 0.0005; 
-                       await redis.set(key, JSON.stringify(data));
-                       
-                       await prisma.launchedToken.update({
-                           where: { tokenAddress: tokenCA },
-                           data: { totalVolumeBumped: { increment: tradeSize } }
-                       }).catch(() => {});
-                    } catch(e) {}
-                }
-            } while (cursor !== '0');
-        } catch (e) {}
-    }, 5000);
+  
 
     console.log("⏳ Pinging Telegram Servers...");
     try {
