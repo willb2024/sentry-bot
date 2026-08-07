@@ -2634,8 +2634,6 @@ bot.action('menu_affiliate', async (ctx) => {
     `• 🥇 <b>Gold (250k - 999k PTS):</b> 60% of fees + access to private Alpha.\n` +
     `• 💎 <b>Diamond (1M+ PTS):</b> 70% of fees + Lifetime 0% fee VIP status.\n\n` +
     
-    `🎁 <b>YOUR RECRUIT'S BONUS:</b>\n` +
-    `Anyone who uses your link gets a permanent <b>10% fee discount</b> and a 10,000 PTS airdrop head-start!\n\n` +
     
     `📊 <b>YOUR LIVE STATS:</b>\n` +
     `• <b>Current Tier:</b> ${currentTier}\n` +
