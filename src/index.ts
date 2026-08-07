@@ -4655,7 +4655,7 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
- // =========================================================
+// =========================================================
     // 🟢 CREDIT PAYMENT HANDLER
     // =========================================================
     const pendingCreditsTx = await redis.get(`state:credits_tx:${telegramId}`);
@@ -4676,26 +4676,25 @@ bot.on("text", async (ctx, next) => {
             const treasury = process.env.TREASURY_WALLET_ADDRESS!;
             const user = await prisma.user.findUnique({ where: { telegramId } });
 
-            if (!user || !user.vaultAddress) {
-                throw new Error("No active vault wallet found for user.");
-            }
+            if (!user || !user.vaultAddress) throw new Error("No active vault wallet found for user.");
 
             const verifyRes = await verifyVipPayment(txSig, priceSol * 0.9, treasury, user.vaultAddress);
             if (verifyRes.valid) {
                 const result = await addCredits(telegramId, packKey as any, txSig);
                 await redis.del(`credits:pending:${telegramId}`);
 
-                // 🟢 FIX: Award 40%+ Affiliate Rev-Share for AI Caller Credit Purchases
-                if (user && user.referredById) {
+                // 🟢 FIX: Award Affiliate Rev-Share for AI Caller Credit Purchases
+                if (user.referredById) {
                     const { getDynamicAffiliateRate } = await import('./services/engine.service.js');
                     const dynamicRate = await getDynamicAffiliateRate(user.referredById);
+                    
                     // Ensure affiliates ALWAYS get at least a 40% cut of the SOL price of the Credit pack
                     const affiliateCut = priceSol * Math.max(0.40, dynamicRate); 
                     
                     await prisma.user.update({
                         where: { id: user.referredById },
                         data: { pendingRewardsSol: { increment: affiliateCut } }
-                    }).catch((e) => console.error("Affiliate Credit bonus update failed:", e.message));
+                    }).catch((e) => console.error("Affiliate Credit bonus failed:", e.message));
                 }
 
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
@@ -4703,17 +4702,13 @@ bot.on("text", async (ctx, next) => {
                     `• Pack Purchased: <b>${pack.name}</b>\n` +
                     `• Credits Added: <b>+${pack.credits}</b>\n` +
                     `• New Total Balance: <b>${result.newBalance} credits</b>\n\n` +
-                    `<i>Your credits are ready to use for manual scans and AI Coin Caller alerts!</i>`,
-                    { 
-                        parse_mode: 'HTML', 
-                        reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller', callback_data: 'menu_caller' }]]} 
-                    }
+                    `<i>Your credits are ready to use!</i>`,
+                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller', callback_data: 'menu_caller' }]]} }
                 );
             } else {
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
                     `🔴 <b>Verification Failed:</b> ${verifyRes.reason}\n\n` +
-                    `<i>Please double check your transaction signature or contact support if SOL was deducted.</i>`,
-                    { parse_mode: 'HTML' }
+                    `<i>Please double check your transaction signature.</i>`, { parse_mode: 'HTML' }
                 );
             }
         } catch (e: any) {
@@ -6218,35 +6213,28 @@ app.post('/api/sim-stats', async (req, res) => {
 
         const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume, getSimCounters, getSimFirstTradeAt } = await import('./services/simulation.service.js');
         const isActive = await isSimulationActive(tgId);
-        
         if (!isActive) return res.json({ isActive: false });
 
         const balance = await getSimBalance(tgId);
         const startingBalance = await getSimStartingBalance(tgId);
         const volume = await getSimVolume(tgId);
-        
         const positionsRaw = await redis.get(`sim:positions:${tgId}`);
         const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
         
+        // 🟢 FIX: We read the LIVE trades array directly, no static snapshot.
         const tradesRaw = await redis.get(`sim:trades:${tgId}`);
         const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
 
         const counters = await getSimCounters(tgId);
         const firstTradeAt = await getSimFirstTradeAt(tgId);
 
-        res.json({
-            isActive: true,
-            balance,
-            startingBalance,
-            volume,
-            wins: counters.wins,
-            losses: counters.losses,
+        return res.json({
+            isActive: true, balance, startingBalance, volume,
+            wins: counters.wins, losses: counters.losses,
             totalTrades: counters.totalTrades,
             totalInvestedSol: counters.totalInvestedSol,
             totalPnlSol: counters.totalPnlSol,
-            firstTradeAt,
-            positions,
-            trades: trades.slice(0, 50) 
+            firstTradeAt, positions, trades: trades.slice(0, 50)
         });
     } catch (e) {
         res.status(500).json({ error: 'Server Error' });

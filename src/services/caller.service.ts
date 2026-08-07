@@ -138,40 +138,58 @@ function extractFeatures(token: any): number[] {
     return [score, age, liq, vol, mom, hasSocials, isRug, lockPct, velocity];
 }
 
-function solveOLS(X: number[][], y: number[]): { coefficients: number[], intercept: number } {
+// 🟢 UPGRADE: Analytical Ridge Regression using Normal Equations (Perfect convergence)
+function solveRidgeRegression(X: number[][], y: number[], lambda: number = 0.1): { coefficients: number[], intercept: number } {
     const n = X.length;
     const p = X[0].length;
+    // Build X matrix with intercept column (1, x1, x2, ...)
+    const X_mat = X.map(row => [1, ...row]);
+    // Compute X^T
+    const Xt = X_mat[0].map((_, idx) => X_mat.map(row => row[idx]));
+    // Compute X^T * X
+    const XtX = Xt.map(row => Xt[0].map((_, j) => row.reduce((sum, val, k) => sum + val * X_mat[k][j], 0)));
+    // Compute X^T * y
+    const Xty = Xt.map(row => row.reduce((sum, val, i) => sum + val * y[i], 0));
     
-    try {
-        const X_ext = X.map(row => [1, ...row]);
-        const XtX = Array.from({ length: p + 1 }, () => Array(p + 1).fill(0));
-        const Xty = Array(p + 1).fill(0);
-        for (let i = 0; i < n; i++) {
-            for (let j = 0; j <= p; j++) {
-                for (let k = 0; k <= p; k++) {
-                    XtX[j][k] += X_ext[i][j] * X_ext[i][k];
-                }
-                Xty[j] += X_ext[i][j] * y[i];
-            }
-        }
-
-        let weights = new Array(p + 1).fill(0.01);
-        const lr = 0.0001;
-        for(let iter=0; iter<1000; iter++){
-            let gradients = new Array(p+1).fill(0);
-            for(let i=0; i<n; i++){
-                let pred = 0;
-                for(let j=0; j<=p; j++) pred += weights[j] * X_ext[i][j];
-                const err = pred - y[i];
-                for(let j=0; j<=p; j++) gradients[j] += err * X_ext[i][j];
-            }
-            for(let j=0; j<=p; j++) weights[j] -= lr * (gradients[j] / n);
-        }
-
-        return { intercept: weights[0], coefficients: weights.slice(1) };
-    } catch(e) {
-        return { coefficients: new Array(p).fill(0), intercept: 0 };
+    // Apply Ridge Regularization to the diagonal (excluding intercept)
+    for (let i = 1; i <= p; i++) {
+        XtX[i][i] += lambda * n;
     }
+    
+    // Solve using Gaussian Elimination
+    const size = p + 1;
+    const augmented = XtX.map((row, i) => [...row, Xty[i]]);
+    
+    for (let col = 0; col < size; col++) {
+        // Find Pivot
+        let maxRow = col;
+        for (let row = col + 1; row < size; row++) {
+            if (Math.abs(augmented[row][col]) > Math.abs(augmented[maxRow][col])) maxRow = row;
+        }
+        [augmented[col], augmented[maxRow]] = [augmented[maxRow], augmented[col]];
+        
+        if (Math.abs(augmented[col][col]) < 1e-12) continue;
+        
+        // Eliminate
+        for (let row = col + 1; row < size; row++) {
+            const factor = augmented[row][col] / augmented[col][col];
+            for (let j = col; j <= size; j++) {
+                augmented[row][j] -= factor * augmented[col][j];
+            }
+        }
+    }
+    
+    // Back substitution
+    const weights = new Array(size).fill(0);
+    for (let i = size - 1; i >= 0; i--) {
+        if (Math.abs(augmented[i][i]) < 1e-12) continue;
+        weights[i] = augmented[i][size] / augmented[i][i];
+        for (let j = i - 1; j >= 0; j--) {
+            augmented[j][size] -= augmented[j][i] * weights[i];
+        }
+    }
+    
+    return { intercept: weights[0], coefficients: weights.slice(1) };
 }
 
 interface NormalizationParams { means: number[]; stds: number[]; }
@@ -193,30 +211,6 @@ function computeNormalization(X: number[][]): NormalizationParams {
 
 function normalizeRow(row: number[], norm: NormalizationParams): number[] {
     return row.map((v, j) => (v - norm.means[j]) / norm.stds[j]);
-}
-
-function solveRidgeRegression(X: number[][], y: number[], lambda: number = 0.1): { coefficients: number[], intercept: number } {
-    const n = X.length;
-    const p = X[0].length;
-    let weights = new Array(p).fill(0);
-    let intercept = 0;
-    const lr = 0.05; 
-    const epochs = 2000;
-
-    for (let iter = 0; iter < epochs; iter++) {
-        let interceptGrad = 0;
-        const weightGrads = new Array(p).fill(0);
-        for (let i = 0; i < n; i++) {
-            let pred = intercept;
-            for (let j = 0; j < p; j++) pred += weights[j] * X[i][j];
-            const err = pred - y[i];
-            interceptGrad += err;
-            for (let j = 0; j < p; j++) weightGrads[j] += err * X[i][j] + lambda * weights[j];
-        }
-        intercept -= lr * (interceptGrad / n);
-        for (let j = 0; j < p; j++) weights[j] -= lr * (weightGrads[j] / n);
-    }
-    return { coefficients: weights, intercept };
 }
 
 function predictNormalized(row: number[], weights: number[], intercept: number): number {
@@ -382,7 +376,10 @@ export async function getCalibratedProjection(token: any) {
                     const residualStd = 0.5;
                     const low = Math.max(0, modelPeak - 1.96 * residualStd);
                     const high = modelPeak + 1.96 * residualStd;
-                    const timeframe = humanizeMs((token.ageMins || 10) * 60000 * 2);
+                    
+                    // 🟢 REFINEMENT: Ensure we never output "~0 Minutes"
+                    const projectedTimeMins = Math.max(5, (token.ageMins || 10) * 2); 
+                    const timeframe = humanizeMs(projectedTimeMins * 60000);
                     const sampleCount = (weights.metrics?.trainSampleCount || 0) + (weights.metrics?.valSampleCount || 0);
 
                     return {
@@ -392,7 +389,7 @@ export async function getCalibratedProjection(token: any) {
                         sampleSize: sampleCount,
                         rawLow: low,
                         rawHigh: high, 
-                        rawTimeMins: (token.ageMins || 10) * 2
+                        rawTimeMins: projectedTimeMins
                     };
                 }
             }
@@ -497,7 +494,6 @@ export async function formatCallerAlertMessage(
         `<i>Click below to buy instantly via Jito:</i>`;
 }
 
-// 🟢 NEW: Unified Audit Trail Formatter (Fix 8)
 export function buildAuditTrailMessage(
     mint: string,
     score: number,
@@ -544,7 +540,6 @@ export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { m
 
 let isScoring = false;
 
-// 🟢 FAST DUAL-SPEED CALLER ENGINE
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Live loop (15s) & Sim loop (5s) active.");
 
@@ -563,6 +558,18 @@ export async function startCoinCaller(bot: any) {
 
                 const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
                 if (matchedToken) {
+                    // 🟢 FIX: Inline simulation credit check
+                    const currentCredits = parseInt(await redis.get(`sim:credits:${user.telegramId}`) || '0');
+                    if (currentCredits <= 0) {
+                        const warnKey = `sim_credits_warn:${user.telegramId}`;
+                        if (!(await redis.get(warnKey))) {
+                            await redis.set(warnKey, '1', 'EX', 600);
+                            try { await bot.telegram.sendMessage(user.telegramId, `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour AI Caller has paused. Use <code>/simcredits 500</code> to reload.`, { parse_mode: 'HTML' }); } catch(_) {}
+                        }
+                        continue;
+                    }
+                    await redis.set(`sim:credits:${user.telegramId}`, (currentCredits - 1).toString());
+
                     const projection = await getCalibratedProjection(matchedToken);
                     const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
 
@@ -619,17 +626,9 @@ export async function startCoinCaller(bot: any) {
                 }
 
                 if (matchedToken) {
-                   // 🟢 FIX: Consume simulation credits
-                   const { consumeSimCredit } = await import('./simulation.service.js');
-                   const hasCredit = await consumeSimCredit(user.telegramId);
-                   if (!hasCredit) {
-                       const warnKey = `sim_credits_warn:${user.telegramId}`;
-                       if (!(await redis.get(warnKey))) {
-                           await redis.set(warnKey, '1', 'EX', 600);
-                           try { await bot.telegram.sendMessage(user.telegramId, `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour AI Caller has paused. Use <code>/simcredits 500</code> to reload.`, { parse_mode: 'HTML' }); } catch(_) {}
-                       }
-                       continue;
-                   }
+                    const { consumeCredit } = await import('./credits.service.js');
+                    const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
+                    if (!creditResult.success) continue; 
 
                     const projection = await getCalibratedProjection(matchedToken);
                     const historyData = {
@@ -667,8 +666,6 @@ export async function startCoinCaller(bot: any) {
         }
     }, 15000);
 }
-
-
 
 export interface TokenStats {
     ageMins: number;
@@ -1184,7 +1181,6 @@ export async function scoreTokens() {
                 
                 let finalCalculatedScore = Math.max(0, concentrationAdjustedScore);
 
-                // 🟢 FIX: ML PIPELINE INJECTION (GLOBAL)
                 try {
                     const weightsRaw = await redis.get('caller_model_weights');
                     if (weightsRaw) {

@@ -3,8 +3,14 @@ import dotenv from 'dotenv';
 import axios from 'axios';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+
 
 function drawRoundRect(ctx: any, x: number, y: number, width: number, height: number, radius: number) {
     ctx.beginPath();
@@ -20,23 +26,16 @@ function drawRoundRect(ctx: any, x: number, y: number, width: number, height: nu
     ctx.closePath();
 }
 
-// 🟢 Helper: Safely loads logo.jpg from src/services/assets/ or dist/services/assets/
 async function loadLogoImage() {
     try {
-        const primaryPath = path.join(process.cwd(), 'src', 'services', 'assets', 'logo.jpg');
-        const secondaryPath = path.join(process.cwd(), 'dist', 'services', 'assets', 'logo.jpg');
-        
-        let targetPath = primaryPath;
-        if (!fs.existsSync(primaryPath) && fs.existsSync(secondaryPath)) {
-            targetPath = secondaryPath;
-        }
-        
-        if (fs.existsSync(targetPath)) {
-            return await loadImage(targetPath);
+        const logoPath = path.join(__dirname, 'assets', 'logo.jpg');
+        if (fs.existsSync(logoPath)) {
+            return await loadImage(logoPath);
         }
     } catch (_) {}
     return null;
 }
+
 
 export async function generatePnlCard(tokenMint: string, pnlPercent: number, refCode: string | undefined): Promise<Buffer> {
     const width = 850;

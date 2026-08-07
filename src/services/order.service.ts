@@ -3,6 +3,7 @@ import { redis } from '../lib/redis.js';
 import crypto from 'crypto';
 import { subscribeToMintPrice, unsubscribeFromMintPrice } from './guard-price-feed.service.js';
 import { PrismaClient } from '@prisma/client';
+import { generatePreSignedExitTxMulti } from './engine.service.js';
 
 const prisma = new PrismaClient();
 
@@ -109,10 +110,12 @@ export async function updateEntryPrice(orderId: string, entryPrice: number) {
     await updateGuardSafe(orderId, (order) => { order.entryPrice = entryPrice; });
 }
 
+
+
 export async function addTrailingStopToMemory(
     telegramId: string, tokenAddress: string, trailingPercent: number, 
     amountInSol: number, currentPrice: number, takeProfitPercent?: number,
-    maxHoldMinutes?: number // 🟢 NEW TIME-BASED EXIT TRIGGER
+    maxHoldMinutes?: number 
 ): Promise<string> {
     const orderId = crypto.randomUUID();
     const order: TrailingOrder = { 
@@ -133,22 +136,23 @@ export async function addTrailingStopToMemory(
         if (user) {
             await prisma.activeOrder.create({
                 data: {
-                    id: orderId,
-                    userId: user.id,
-                    tokenAddress,
-                    orderType: ORDER_TYPES.GUARD,
-                    amountSol: amountInSol,
-                    trailingPercent,
-                    takeProfitPercent: takeProfitPercent || null,
-                    targetPriceUsd: currentPrice,
-                    isActive: true,
-                    maxHoldMinutes: maxHoldMinutes || null // 🟢 STORED IN DB IF SUPPORTED
+                    id: orderId, userId: user.id, tokenAddress, orderType: ORDER_TYPES.GUARD,
+                    amountSol: amountInSol, trailingPercent, takeProfitPercent: takeProfitPercent || null,
+                    targetPriceUsd: currentPrice, isActive: true, maxHoldMinutes: maxHoldMinutes || null
                 } as any
             });
         }
-    } catch (e: any) {
-        console.error(`⚠️ [DB] Non-fatal DB write error for guard ${orderId}: ${e.message}`);
-    }
+    } catch (e: any) {}
+
+    // 🟢 FIX 3: Immediate Pre-sign generation for sub-1s Jito execution
+    setTimeout(async () => {
+        try {
+            const payloads = await generatePreSignedExitTxMulti(telegramId, tokenAddress);
+            if (payloads.length > 0) {
+                await redis.set(`presigned_exit_multi:${orderId}`, JSON.stringify(payloads), 'EX', 20);
+            }
+        } catch (e) {}
+    }, 0); 
 
     console.log(`🛡️ [REDIS] Guard Active | CA: ${tokenAddress.substring(0,6)}`);
     return orderId;

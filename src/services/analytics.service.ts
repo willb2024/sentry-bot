@@ -1,5 +1,6 @@
 // src/services/analytics.service.ts
 import { prisma } from '../lib/prisma.js';
+import { redis } from '../lib/redis.js';
 
 export interface AdvancedStats {
     sharpeRatio: number;
@@ -274,12 +275,27 @@ export async function getCombinedAdvancedStats(telegramId: string): Promise<Adva
 }
 
 export async function getCombinedHourlyPerformance(telegramId: string) {
-    const trades = await getCombinedTrades(telegramId);
+    const { isSimulationActive } = await import('./simulation.service.js');
+    const isSim = await isSimulationActive(telegramId);
+    
+    let trades: any[] = [];
+
+    if (isSim) {
+        // 🟢 FIX: Reads the actual live simulation trades array directly
+        const simTradesRaw = await redis.get(`sim:trades:${telegramId}`);
+        trades = simTradesRaw ? JSON.parse(simTradesRaw) : [];
+    } else {
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user) return [];
+        trades = await prisma.trade.findMany({ where: { userId: user.id } });
+    }
+
+    // Aggregate strictly by the last 24 hours (UTC) from live trades
     const hourlyMap: Map<number, { count: number; wins: number; pnl: number }> = new Map();
     for (let h = 0; h < 24; h++) hourlyMap.set(h, { count: 0, wins: 0, pnl: 0 });
 
     for (const t of trades) {
-        if (t.isBuy) continue;
+        if (t.isBuy) continue; // Only sells generate PnL
         const hour = new Date(t.createdAt).getUTCHours();
         const entry = hourlyMap.get(hour)!;
         entry.count += 1;

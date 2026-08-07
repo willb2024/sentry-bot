@@ -1,3 +1,5 @@
+// src/services/guild.service.ts
+
 import { PrismaClient } from '@prisma/client';
 import { PublicKey, Keypair, SystemProgram, TransactionMessage, VersionedTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
@@ -5,7 +7,6 @@ import { decryptKey } from './vault.service.js';
 import { redis } from '../lib/redis.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
-
 
 dotenv.config();
 
@@ -22,6 +23,7 @@ export async function createGuild(
     try {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
+        
         // 🟢 FIX: Removed Dev Suite check and 2.0 SOL price requirement entirely.
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
 
@@ -157,10 +159,6 @@ export async function updateRankCache(guildId: string) {
     } catch (e) {}
 }
 
-// =========================================================
-// 🟢 MISSING GUILD EXPORTS (SWITCH & AIRDROPS)
-// =========================================================
-
 export async function switchActiveGuild(telegramId: string, membershipId: string): Promise<{ success: boolean; message: string; guildName?: string }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -215,28 +213,41 @@ export async function executeGuildAirdrop(
                 lamports: lamportsPer
             }));
 
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const vTx = new VersionedTransaction(new TransactionMessage({
-            payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions
-        }).compileToV0Message());
-        vTx.sign([signer.keypair]);
+        // 🟢 FIX: Executing transfer instructions in chunks of 20 to avoid block limits
+        const CHUNK_SIZE = 20;
+        let confirmedTxs = 0;
+        let lastSig = "";
 
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+        for (let i = 0; i < instructions.length; i += CHUNK_SIZE) {
+            const chunk = instructions.slice(i, i + CHUNK_SIZE);
+            const { blockhash } = await connection.getLatestBlockhash('confirmed');
+            const vTx = new VersionedTransaction(new TransactionMessage({
+                payerKey: signer.vaultPubkey, 
+                recentBlockhash: blockhash, 
+                instructions: chunk
+            }).compileToV0Message());
+            vTx.sign([signer.keypair]);
+            const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+            lastSig = sig;
 
-        let confirmed = false;
-        for (let i = 0; i < 15; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) { confirmed = true; break; }
+            let isConfirmed = false;
+            for (let j = 0; j < 15; j++) {
+                await new Promise(r => setTimeout(r, 1000));
+                const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+                if (status?.value && !status.value.err) { isConfirmed = true; break; }
+            }
+            
+            if (isConfirmed) confirmedTxs++;
         }
-        if (!confirmed) return { success: false, message: "Transaction dropped by network." };
+
+        if (confirmedTxs === 0) return { success: false, message: "All transaction batches dropped by the network." };
 
         await prisma.guildMembership.updateMany({
             where: { guildId, user: { vaultAddress: { in: top50.map(m => m?.walletAddress).filter((w): w is string => !!w && w !== 'Unknown') } } },
             data: { airdropsReceivedSol: { increment: perMember } }
         }).catch(() => {});
 
-        return { success: true, message: `Airdropped ${perMember.toFixed(4)} SOL to ${top50.length} members.`, signature: sig };
+        return { success: true, message: `Airdropped ${perMember.toFixed(4)} SOL to ${top50.length} members.`, signature: lastSig };
     } catch (e: any) {
         return { success: false, message: e.message };
     }
@@ -270,23 +281,36 @@ export async function executeTieredAirdrop(
         }
         if (instructions.length === 0) return { success: false, message: "No eligible recipients." };
 
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const vTx = new VersionedTransaction(new TransactionMessage({
-            payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions
-        }).compileToV0Message());
-        vTx.sign([signer.keypair]);
+        // 🟢 FIX: Executing transfer instructions in chunks of 20 to avoid block limits
+        const CHUNK_SIZE = 20;
+        let confirmedTxs = 0;
+        let lastSig = "";
 
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+        for (let i = 0; i < instructions.length; i += CHUNK_SIZE) {
+            const chunk = instructions.slice(i, i + CHUNK_SIZE);
+            const { blockhash } = await connection.getLatestBlockhash('confirmed');
+            const vTx = new VersionedTransaction(new TransactionMessage({
+                payerKey: signer.vaultPubkey, 
+                recentBlockhash: blockhash, 
+                instructions: chunk
+            }).compileToV0Message());
+            vTx.sign([signer.keypair]);
+            const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+            lastSig = sig;
 
-        let confirmed = false;
-        for (let i = 0; i < 15; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) { confirmed = true; break; }
+            let isConfirmed = false;
+            for (let j = 0; j < 15; j++) {
+                await new Promise(r => setTimeout(r, 1000));
+                const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+                if (status?.value && !status.value.err) { isConfirmed = true; break; }
+            }
+            
+            if (isConfirmed) confirmedTxs++;
         }
-        if (!confirmed) return { success: false, message: "Transaction dropped by network." };
 
-        return { success: true, message: `Distributed ${totalPaid.toFixed(4)} SOL across ${instructions.length} recipients.`, signature: sig };
+        if (confirmedTxs === 0) return { success: false, message: "All transaction batches dropped by the network." };
+
+        return { success: true, message: `Distributed ${totalPaid.toFixed(4)} SOL across ${instructions.length} recipients.`, signature: lastSig };
     } catch (e: any) {
         return { success: false, message: e.message };
     }
@@ -330,45 +354,3 @@ export async function executeIndividualAirdrop(
         return { success: false, message: e.message };
     }
 }
-
-
-async function payFromOwnerWallet(telegramId: string, totalLamports: number, recipients: { pubkey: string; lamports: number }[]) {
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    if (!user || !user.vaultAddress || !user.turnkeySubOrgId) throw new Error("No active vault found.");
-
-    const balance = await connection.getBalance(new PublicKey(user.vaultAddress));
-    if (balance < totalLamports + 500000) throw new Error("Insufficient W1 balance to cover this airdrop.");
-
-    const rawPk = decryptKey(user.turnkeySubOrgId);
-    if (!rawPk) throw new Error("Decryption failure.");
-    const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
-
-    const instructions = recipients
-        .filter(r => r.lamports > 0)
-        .map(r => SystemProgram.transfer({
-            fromPubkey: keypair.publicKey,
-            toPubkey: new PublicKey(r.pubkey),
-            lamports: r.lamports
-        }));
-
-    const { blockhash } = await connection.getLatestBlockhash('confirmed');
-    const vTx = new VersionedTransaction(new TransactionMessage({
-        payerKey: keypair.publicKey, recentBlockhash: blockhash, instructions
-    }).compileToV0Message());
-    vTx.sign([keypair]);
-
-    const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-
-    let confirmed = false;
-    for (let i = 0; i < 15; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-        if (status?.value && !status.value.err) { confirmed = true; break; }
-    }
-    if (!confirmed) throw new Error("Transaction dropped by the network.");
-    return sig;
-}
-
-
-
-

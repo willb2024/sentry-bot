@@ -28,10 +28,18 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     try {
         const cachedPrice = await getCachedTokenPrice(tokenAddress);
         if (cachedPrice > 0) return cachedPrice;
-    } catch (e: any) {
-        console.warn(`⚠️ [COPY-TRADE] Cached price fetch failed for ${tokenAddress}: ${e.message}`);
-    }
+    } catch (_) {}
 
+    // 🟢 FIX 5: Always fallback to DexScreener API instantly if Pump/Redis fails
+    try {
+        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { timeout: 2000 });
+        const pair = res.data?.pairs?.[0];
+        if (pair?.priceUsd) {
+            return parseFloat(pair.priceUsd);
+        }
+    } catch (_) {}
+
+    // If DexScreener times out, attempt on-chain Pump curve
     if (tokenAddress.toLowerCase().endsWith("pump")) {
         try {
             const curvePda = getBondingCurveAddress(tokenAddress);
@@ -41,9 +49,7 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
                 const curvePrice = decodePumpCurvePrice(buf.toString('base64'));
                 if (curvePrice > 0) return curvePrice;
             }
-        } catch (e: any) {
-            console.warn(`⚠️ [COPY-TRADE] Pump curve read failed for ${tokenAddress}: ${e.message}`);
-        }
+        } catch (_) {}
     }
     return 0;
 }
