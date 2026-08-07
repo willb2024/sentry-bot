@@ -2607,43 +2607,43 @@ bot.action('menu_affiliate', async (ctx) => {
     const totalPoints = (volumeSol * 10000) + recruitBonus;
 
     let currentTier = "🥉 Bronze";
-    let nextTier = "Silver (500k PTS)";
-    let rate = "50%";
+    let nextTier = "Silver (250k PTS)";
+    let rate = "25%";
 
-    if (totalPoints >= 10000000) { 
-        currentTier = "💎 Diamond"; nextTier = "MAX TIER"; rate = "80%";
-    } else if (totalPoints >= 2500000) { 
-        currentTier = "🥇 Gold"; nextTier = "Diamond (10M PTS)"; rate = "70%";
-    } else if (totalPoints >= 500000) { 
-        currentTier = "🥈 Silver"; nextTier = "Gold (2.5M PTS)"; rate = "60%";
+    if (totalPoints >= 5000000) { 
+        currentTier = "💎 Diamond"; nextTier = "MAX TIER"; rate = "50%";
+    } else if (totalPoints >= 1000000) { 
+        currentTier = "🥇 Gold"; nextTier = "Diamond (5M PTS)"; rate = "40%";
+    } else if (totalPoints >= 250000) { 
+        currentTier = "🥈 Silver"; nextTier = "Gold (1M PTS)"; rate = "30%";
     }
 
     const text = 
     `💸 <b>SENTRY PARTNER PROGRAM</b>\n\n` +
-    `Earn the highest commissions on Solana. We pay out up to 80% of all generated fees to our partners.\n\n` +
+    `Join our ecosystem and earn industry-standard commissions. Our tiers are designed to scale with your influence.\n\n` +
     
     `👑 <b>TRADING FEE REV-SHARE:</b>\n` +
-    `• 🥉 <b>Bronze:</b> 50% (Base Tier)\n` +
-    `• 🥈 <b>Silver:</b> 60% (at 500k Points)\n` +
-    `• 🥇 <b>Gold:</b> 70% (at 2.5M Points)\n` +
-    `• 💎 <b>Diamond:</b> 80% (at 10M Points)\n\n` +
+    `• 🥉 <b>Bronze:</b> 25% (Base Tier)\n` +
+    `• 🥈 <b>Silver:</b> 30% (at 250k Points)\n` +
+    `• 🥇 <b>Gold:</b> 40% (at 1M Points)\n` +
+    `• 💎 <b>Diamond:</b> 50% (at 5M Points)\n\n` +
 
     `🎯 <b>AI CALLER CREDIT REV-SHARE:</b>\n` +
-    `<b>Flat 50% Commission</b>\n` +
-    `Earn a massive 50% on every AI Credit pack your recruits purchase. This rate is fixed and available to all partners regardless of volume.\n\n` +
+    `<b>Flat 40% Commission</b>\n` +
+    `Regardless of your trading tier, you earn a <b>fixed 40% share</b> of all SOL spent on AI Caller Credits by your recruits. This is a high-margin reward for promoting our intelligence tools.\n\n` +
     
     `📖 <b>UNDERSTANDING POINTS:</b>\n` +
-    `Points represent your network's total volume. <b>1 SOL trade = 10,000 Points.</b>\n` +
-    `• 500k Pts = 50 SOL Volume\n` +
-    `• 10M Pts = 1,000 SOL Volume\n\n` +
+    `Points track the economic activity of your network. <b>1 SOL volume = 10,000 Points.</b>\n` +
+    `• 250k Pts = 25 SOL Volume\n` +
+    `• 5M Pts = 500 SOL Volume\n\n` +
     
     `📊 <b>YOUR LIVE STATS:</b>\n` +
     `• Current Tier: <b>${currentTier} (${rate} Share)</b>\n` +
-    `• Your Points: <b>${totalPoints.toLocaleString()}</b>\n` +
+    `• Total Points: <b>${totalPoints.toLocaleString()}</b>\n` +
     `• Pending Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
     
     `🔗 <b>Your Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=${user.referralCode}</code>\n\n` +
-    `<i>Payouts are processed instantly in SOL. Minimum claim: 0.1 SOL.</i>`;
+    `<i>Minimum claim: 0.1 SOL. Payouts are processed instantly.</i>`;
 
     await safeEditMessageText(ctx, text, { 
         parse_mode: 'HTML',

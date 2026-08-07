@@ -748,22 +748,21 @@ export async function getDynamicAffiliateRate(referrerId: string): Promise<numbe
             where: { id: referrerId },
             include: { _count: { select: { recruits: true } } }
         });
-        if (!referrer) return 0.40; 
+        if (!referrer) return 0.25; // Trojan Base Rate
 
-        // 1 SOL = 10,000 Points logic
         const volumeSol = referrer.totalVolumeSol || 0;
         const recruitBonus = (referrer._count?.recruits || 0) * 2000;
         const totalPoints = (volumeSol * 10000) + recruitBonus;
 
-        if (totalPoints >= 10000000) return 0.70; // Diamond (1,000 SOL Vol)
-        if (totalPoints >= 2500000)  return 0.60; // Gold (250 SOL Vol)
-        if (totalPoints >= 500000)   return 0.50; // Silver (50 SOL Vol)
-        return 0.40;                              // Bronze
+        // TROJAN-MATCHED TIERS
+        if (totalPoints >= 5000000) return 0.50; // Diamond (500 SOL Vol) -> 50%
+        if (totalPoints >= 1000000) return 0.40; // Gold (100 SOL Vol) -> 40%
+        if (totalPoints >= 250000)  return 0.30; // Silver (25 SOL Vol) -> 30%
+        return 0.25;                             // Bronze -> 25%
     } catch { 
-        return 0.40; 
+        return 0.25; 
     }
 }
-
 export interface PreSignedExitPayload {
     walletIndex: number;
     walletAddress: string;
