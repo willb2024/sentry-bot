@@ -2590,6 +2590,7 @@ bot.action('btn_withdraw_prompt', async (ctx) => {
 // =========================================================
 // 💰 AFFILIATE SYSTEM (MASSIVE PAYOUTS)
 // =========================================================
+
 bot.action('menu_affiliate', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -2605,36 +2606,39 @@ bot.action('menu_affiliate', async (ctx) => {
     const recruitBonus = user._count.recruits * 2000;
     const totalPoints = (volumeSol * 10000) + recruitBonus;
 
-    // Determine Tiers
     let currentTier = "🥉 Bronze";
     let nextTier = "Silver (500k PTS)";
-    let rate = "40%";
+    let rate = "50%";
 
     if (totalPoints >= 10000000) { 
-        currentTier = "💎 Diamond"; nextTier = "MAX TIER"; rate = "70%";
+        currentTier = "💎 Diamond"; nextTier = "MAX TIER"; rate = "80%";
     } else if (totalPoints >= 2500000) { 
-        currentTier = "🥇 Gold"; nextTier = "Diamond (10M PTS)"; rate = "60%";
+        currentTier = "🥇 Gold"; nextTier = "Diamond (10M PTS)"; rate = "70%";
     } else if (totalPoints >= 500000) { 
-        currentTier = "🥈 Silver"; nextTier = "Gold (2.5M PTS)"; rate = "50%";
+        currentTier = "🥈 Silver"; nextTier = "Gold (2.5M PTS)"; rate = "60%";
     }
 
     const text = 
-    `💸 <b>SENTRY PARTNERSHIP & REWARDS</b>\n\n` +
-    `Turn your influence into massive passive income. We offer the most competitive affiliate structure on Solana.\n\n` +
+    `💸 <b>SENTRY PARTNER PROGRAM</b>\n\n` +
+    `Earn the highest commissions on Solana. We pay out up to 80% of all generated fees to our partners.\n\n` +
     
     `👑 <b>TRADING FEE REV-SHARE:</b>\n` +
-    `• 🥉 <b>Bronze:</b> 40% (Base Tier)\n` +
-    `• 🥈 <b>Silver:</b> 50% (at 500k Points)\n` +
-    `• 🥇 <b>Gold:</b> 60% (at 2.5M Points)\n` +
-    `• 💎 <b>Diamond:</b> 70% (at 10M Points)\n\n` +
+    `• 🥉 <b>Bronze:</b> 50% (Base Tier)\n` +
+    `• 🥈 <b>Silver:</b> 60% (at 500k Points)\n` +
+    `• 🥇 <b>Gold:</b> 70% (at 2.5M Points)\n` +
+    `• 💎 <b>Diamond:</b> 80% (at 10M Points)\n\n` +
 
     `🎯 <b>AI CALLER CREDIT REV-SHARE:</b>\n` +
-    `<b>Flat 40% Commission</b>\n` +
-    `Unlike trading fees, AI Credit purchases are not tiered. You earn a fixed 40% share of all $SOL spent on AI Caller Credits by your recruits, regardless of your volume.\n\n` +
+    `<b>Flat 50% Commission</b>\n` +
+    `Earn a massive 50% on every AI Credit pack your recruits purchase. This rate is fixed and available to all partners regardless of volume.\n\n` +
+    
+    `📖 <b>UNDERSTANDING POINTS:</b>\n` +
+    `Points represent your network's total volume. <b>1 SOL trade = 10,000 Points.</b>\n` +
+    `• 500k Pts = 50 SOL Volume\n` +
+    `• 10M Pts = 1,000 SOL Volume\n\n` +
     
     `📊 <b>YOUR LIVE STATS:</b>\n` +
-    `• Current Tier: <b>${currentTier} (${rate} Rev-Share)</b>\n` +
-    `• Progress to Next: <b>${nextTier}</b>\n` +
+    `• Current Tier: <b>${currentTier} (${rate} Share)</b>\n` +
     `• Your Points: <b>${totalPoints.toLocaleString()}</b>\n` +
     `• Pending Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
     
@@ -2650,16 +2654,6 @@ bot.action('menu_affiliate', async (ctx) => {
         ]) 
     });
 });
-// =========================================================
-// 🛠️ SENTRY DEV SUITE & 50/50 KOL PAYWALL (1.5 SOL)
-// =========================================================
-
-
-
-
-
-
-
 
 
 bot.action('action_enter_ref_code', async (ctx) => {
