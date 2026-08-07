@@ -1649,7 +1649,7 @@ const CONFIG_GUIDE_PAGES: string[] = [
     `• <b>Anti-Dead Shield:</b> 🟢 <b>MANDATORY: TURN THIS ON.</b> A developer who launches a token and doesn't buy their own supply is a 99% scam probability. Sentry blocks it.\n` +
     `• <b>Max Dev Bag:</b> Set to <b>10%</b>. If the dev buys more than 10% of the supply at mint, Sentry aborts the trade. This prevents you from backing a greedy dev.\n` +
     `• <b>Block Delay:</b> Set to <b>1 Second</b>. Instantly firing at 0ms often fails on Pump.fun bonding curves. 1 second gives the price a moment to stabilize while keeping you faster than 99% of retail traders.\n` +
-    `• <b>Auto-Guard:</b> Always configure <b>-20% Stop Loss</b> and <b>+40% Take Profit</b>. This is the gold standard 1:2 Risk-to-Reward ratio.`,
+    `• <b>Auto-Guard:</b> We recommend <b>-15% Stop Loss</b> and <b>+45% Take Profit</b>. This is the gold standard 1:3 Risk-to-Reward ratio. `,
 
     // PAGE 3: THE AI COIN CALLER
     `🧠 <b>CONFIGURATION GUIDE: THE AI INTELLIGENCE PIPELINE</b> <i>(3/8)</i>\n\n` +

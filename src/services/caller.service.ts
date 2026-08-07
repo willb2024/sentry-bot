@@ -503,7 +503,7 @@ export function buildAuditTrailMessage(
     takeProfit: number | string,
     isSimulated: boolean
 ): string {
-    return `🟢 <b>BUY & GUARD SUCCESSFUL!${isSimulated ? '!' : ''}</b>\n\n` +
+    return `🟢 <b>BUY & GUARD SUCCESSFUL!${isSimulated ? '' : ''}</b>\n\n` +
            `Token: <code>${mint.substring(0, 8)}...</code>\n` +
            `AI Score: ${score}/100 ⭐\n\n` +
            `Audit Trail:\n` +

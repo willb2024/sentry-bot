@@ -8,6 +8,7 @@ import { ensureFirstTradeAnchor } from './engine.service.js';
 
 const activeSimLoops = new Set<string>();
 
+
 export async function getSimCounters(telegramId: string): Promise<{ wins: number; losses: number; totalTrades: number; totalInvestedSol: number; totalPnlSol: number }> {
     const wins = parseInt(await redis.get(`sim:stats:wins:${telegramId}`) || '0');
     const losses = parseInt(await redis.get(`sim:stats:losses:${telegramId}`) || '0');
@@ -500,18 +501,24 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
   return null;
 }
 
-// 🟢 FIX: Enforce ~75% win rate (3:1 W:L) with organic variance
+
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
   const streakKey = `sim:streak:${type}:${telegramId}`;
   const streak = parseInt(await redis.get(streakKey) || '0');
 
-  let baseWinProb = 0.75;
-  const organicVariance = (Math.random() * 0.20) - 0.10; 
+  // 🟢 Changed from 0.75 to 0.50 (50% Win Rate baseline)
+  let baseWinProb = 0.50; 
+  
+  // Allow for natural streak variance (-15% to +15%) to avoid robotic consistency
+  const organicVariance = (Math.random() * 0.30) - 0.15; 
   let adjustedProb = baseWinProb + organicVariance;
-  adjustedProb = Math.min(0.95, Math.max(0.60, adjustedProb));
+  
+  // Clamp the probability between 30% and 70% to prevent unnatural "God Mode" win streaks
+  adjustedProb = Math.min(0.70, Math.max(0.30, adjustedProb));
   
   const isWin = Math.random() < adjustedProb;
 
+  // Track streaks in Redis for internal metrics
   const newStreak = isWin ? (streak > 0 ? streak + 1 : 1) : (streak < 0 ? streak - 1 : -1);
   await redis.set(streakKey, newStreak.toString(), 'EX', 3600);
   await redis.set(`sim:last_outcome:${type}:${telegramId}`, isWin ? 'true' : 'false', 'EX', 3600);
