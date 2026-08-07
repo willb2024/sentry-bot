@@ -579,6 +579,7 @@ guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Yo
   
     const layoutTxt = 
         `⚡ <b>${botName.toUpperCase()}</b> ⚡\n` +
+        `<i>The Quantitative Terminal for Solana Memecoins</i>\n\n` +
         `<i>Routing: Pump.fun | Raydium | Meteora DLMM</i>\n\n` +
         
         
