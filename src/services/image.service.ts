@@ -1,7 +1,8 @@
-// src/services/image.service.ts
-import { createCanvas } from '@napi-rs/canvas';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 import dotenv from 'dotenv';
 import axios from 'axios';
+import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -19,15 +20,35 @@ function drawRoundRect(ctx: any, x: number, y: number, width: number, height: nu
     ctx.closePath();
 }
 
+// 🟢 Helper: Safely loads logo.jpg from src/services/assets/ or dist/services/assets/
+async function loadLogoImage() {
+    try {
+        const primaryPath = path.join(process.cwd(), 'src', 'services', 'assets', 'logo.jpg');
+        const secondaryPath = path.join(process.cwd(), 'dist', 'services', 'assets', 'logo.jpg');
+        
+        let targetPath = primaryPath;
+        if (!fs.existsSync(primaryPath) && fs.existsSync(secondaryPath)) {
+            targetPath = secondaryPath;
+        }
+        
+        if (fs.existsSync(targetPath)) {
+            return await loadImage(targetPath);
+        }
+    } catch (_) {}
+    return null;
+}
+
 export async function generatePnlCard(tokenMint: string, pnlPercent: number, refCode: string | undefined): Promise<Buffer> {
     const width = 850;
     const height = 450;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
+    // Background
     ctx.fillStyle = '#0a0d14';
     ctx.fillRect(0, 0, width, height);
 
+    // Grid lines
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
     ctx.lineWidth = 1;
     for (let x = 0; x < width; x += 24) {
@@ -42,26 +63,27 @@ export async function generatePnlCard(tokenMint: string, pnlPercent: number, ref
     const sign = isProfit ? '+' : '';
     const label = isProfit ? 'PROFIT SECURED' : 'STOP LOSS TRIGGERED';
 
+    // Inner Card Frame
     ctx.fillStyle = '#121826';
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
     drawRoundRect(ctx, 40, 40, width - 80, height - 80, 16);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#10b981';
-    drawRoundRect(ctx, 75, 75, 46, 46, 12);
-    ctx.fill();
-
-    ctx.fillStyle = '#0a0d14'; 
-    ctx.beginPath();
-    ctx.moveTo(103, 85);
-    ctx.lineTo(91, 101);
-    ctx.lineTo(100, 101);
-    ctx.lineTo(95, 113);
-    ctx.lineTo(110, 95);
-    ctx.lineTo(100, 95);
-    ctx.closePath();
-    ctx.fill();
+    // 🟢 DRAW CUSTOM SHIELD LOGO (logo.jpg)
+    const logo = await loadLogoImage();
+    if (logo) {
+        ctx.save();
+        drawRoundRect(ctx, 75, 75, 46, 46, 12);
+        ctx.clip();
+        ctx.drawImage(logo, 75, 75, 46, 46);
+        ctx.restore();
+    } else {
+        // Fallback default box
+        ctx.fillStyle = '#10b981';
+        drawRoundRect(ctx, 75, 75, 46, 46, 12);
+        ctx.fill();
+    }
 
     const botName = process.env.BOT_NAME || 'Sentry Terminal';
     ctx.fillStyle = '#ffffff';
@@ -100,7 +122,6 @@ export async function generatePnlCard(tokenMint: string, pnlPercent: number, ref
     return canvas.toBuffer('image/png');
 }
 
-// 🟢 FIX: Resolved line typo: line y loop now correctly uses lineTo instead of ctx.width
 export async function generateLaunchCard(
     name: string, 
     symbol: string, 
@@ -129,20 +150,20 @@ export async function generateLaunchCard(
     ctx.fill();
     ctx.stroke();
 
-    // Icon (Rocket)
-    ctx.fillStyle = '#3b82f6';
-    drawRoundRect(ctx, 75, 75, 46, 46, 12);
-    ctx.fill();
-
-    ctx.fillStyle = '#0a0d14'; 
-    ctx.beginPath();
-    ctx.moveTo(98, 85);
-    ctx.lineTo(108, 95);
-    ctx.lineTo(108, 105);
-    ctx.lineTo(88, 105);
-    ctx.lineTo(88, 95);
-    ctx.closePath();
-    ctx.fill();
+    // 🟢 DRAW CUSTOM SHIELD LOGO (logo.jpg)
+    const logo = await loadLogoImage();
+    if (logo) {
+        ctx.save();
+        drawRoundRect(ctx, 75, 75, 46, 46, 12);
+        ctx.clip();
+        ctx.drawImage(logo, 75, 75, 46, 46);
+        ctx.restore();
+    } else {
+        // Fallback default box
+        ctx.fillStyle = '#3b82f6';
+        drawRoundRect(ctx, 75, 75, 46, 46, 12);
+        ctx.fill();
+    }
 
     const botName = process.env.BOT_NAME || 'Sentry Terminal';
     ctx.fillStyle = '#ffffff';
