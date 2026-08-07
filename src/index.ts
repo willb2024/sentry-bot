@@ -4499,7 +4499,7 @@ bot.on("text", async (ctx, next) => {
     if (!ctx.message || !('text' in ctx.message)) return next();
     const text = ctx.message.text.trim();
     const telegramId = ctx.from?.id?.toString();
-    if (!telegramId) return next();
+    if (!telegramId) return next(); 
 
     // 1. GLOBAL CANCEL HANDLER
     if (text.toLowerCase() === '/cancel' || text.toLowerCase() === 'cancel') {
