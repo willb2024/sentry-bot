@@ -330,7 +330,7 @@ export async function recordSimTrade(telegramId: string, isBuy: boolean, amountI
     mint: 'simulated'
   });
 
-  // Keep array light for mem footprint, but retain up to 10k for recent ledger
+  // Keep array light for memory footprint, but retain up to 10k for recent ledger
   const trimmed = existing.slice(0, 10000);
   await redis.set(key, JSON.stringify(trimmed));
 
@@ -628,27 +628,40 @@ export async function generateSimCallerAlert(telegramId: string, filters: {
 }
 
 // ------------------------------------------------------------------
-// Next Sim Outcome (Win/Loss with Streak)
+// Next Sim Outcome (Win/Loss with Streak & Organic 3:1 Ratio)
 // ------------------------------------------------------------------
 export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'guard', score?: number): Promise<boolean> {
   const streakKey = `sim:streak:${type}:${telegramId}`;
   const streak = parseInt(await redis.get(streakKey) || '0');
 
-  let baseWinProb = 0.50;
-  if (score) baseWinProb = 0.40 + (score / 100) * 0.35; 
+  // Base 75% win rate (3 wins for every 1 loss)
+  let baseWinProb = 0.75;
+  
+  // Add organic deviation to avoid robotic consistency (-10% to +10%)
+  const organicVariance = (Math.random() * 0.20) - 0.10; 
+  let adjustedProb = baseWinProb + organicVariance;
+  
+  // Clamp strictly between 0.60 and 0.95 to prevent extreme long-shot streaks
+  adjustedProb = Math.min(0.95, Math.max(0.60, adjustedProb));
+  
+  const isWin = Math.random() < adjustedProb;
 
-  let adjustedProb = baseWinProb;
-  if (streak > 1) adjustedProb -= 0.10 * streak;
-  else if (streak < -1) adjustedProb += 0.10 * Math.abs(streak);
-
-  const clampedProb = Math.min(0.80, Math.max(0.30, adjustedProb));
-  const isWin = Math.random() < clampedProb;
-
+  // Track streaks in Redis for analytics
   const newStreak = isWin ? (streak > 0 ? streak + 1 : 1) : (streak < 0 ? streak - 1 : -1);
   await redis.set(streakKey, newStreak.toString(), 'EX', 3600);
   await redis.set(`sim:last_outcome:${type}:${telegramId}`, isWin ? 'true' : 'false', 'EX', 3600);
 
   return isWin;
+}
+
+// ------------------------------------------------------------------
+// Sim Credit Helper
+// ------------------------------------------------------------------
+export async function consumeSimCredit(telegramId: string): Promise<boolean> {
+    const current = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0');
+    if (current <= 0) return false;
+    await redis.set(`sim:credits:${telegramId}`, (current - 1).toString());
+    return true;
 }
 
 // ------------------------------------------------------------------
@@ -708,6 +721,16 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
           tokenCA = alert.mint;
           simScore = alert.score || 50;
           stats = { ageMins: alert.ageMins, volume: alert.volume, liquidity: alert.liquidity, priceChangeM5: alert.priceChangeM5 };
+          
+          // 🟢 FIX 2: Auto-Decrement simulation credits for the AI Caller usage
+          const currentCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0');
+          if (currentCredits <= 0) {
+              await bot.telegram.sendMessage(telegramId, `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour simulated Auto-Sniper has paused. Top up credits with <code>/simcredits</code>.`, { parse_mode: 'HTML' });
+              await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+              break;
+          }
+          await redis.set(`sim:credits:${telegramId}`, (currentCredits - 1).toString());
+
       } else {
           const realTok = await getRealTokenForSimDisplay();
           tokenCA = realTok.mint;
@@ -719,7 +742,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
               hasSocials: true, isRug: false
           };
           
-          // 🟢 BUG 1 FIX: Organically force synthetic scores between user's minScore and 95
+          // Organically force synthetic scores between user's minScore and 95
           const floor = Math.max(50, minScore);
           simScore = Math.floor(Math.random() * (95 - floor + 1)) + floor;
 
@@ -771,7 +794,6 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
 
       const organicDelayMs = [1000, 5000, 8000, 10000][Math.floor(Math.random() * 4)] + Math.random() * 1000;
       await new Promise(r => setTimeout(r, organicDelayMs));
-
   }
 
   await redis.set(`sim:autosnipe:${telegramId}`, 'false');

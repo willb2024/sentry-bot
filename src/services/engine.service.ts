@@ -740,24 +740,24 @@ export async function executeExit(
     } catch (error: any) { return { success: false, message: `🔴 Error: ${error.message}` }; }
 }
 
-async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
+
+// 🟢 FIX: Exported so index.ts can use it, and updated to pure SOL Volume tiers
+export async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
     try {
         const referrer = await prisma.user.findUnique({
-            where: { id: referrerId },
-            include: { _count: { select: { recruits: true } } }
+            where: { id: referrerId }
         });
         if (!referrer) return 0.40; 
 
-        const basePoints = Math.floor((referrer.totalVolumeSol || 0) * 10000);
-        const welcomeBonus = referrer.referredById ? 10000 : 0;
-        const recruitBonus = (referrer._count.recruits || 0) * 2000;
-        const totalPoints = basePoints + welcomeBonus + recruitBonus;
+        const displayVolume = referrer.totalVolumeSol || 0;
 
-        if (totalPoints >= 1000000) return 0.70; 
-        if (totalPoints >= 250000) return 0.60;  
-        if (totalPoints >= 50000) return 0.50;   
-        return 0.40;                             
-    } catch { return 0.40; }
+        if (displayVolume >= 100) return 0.70; // Diamond
+        if (displayVolume >= 25) return 0.60;  // Gold
+        if (displayVolume >= 5) return 0.50;   // Silver
+        return 0.40;                           // Bronze
+    } catch { 
+        return 0.40; 
+    }
 }
 
 export interface PreSignedExitPayload {

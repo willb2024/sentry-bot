@@ -619,9 +619,17 @@ export async function startCoinCaller(bot: any) {
                 }
 
                 if (matchedToken) {
-                    const { consumeCredit } = await import('./credits.service.js');
-                    const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
-                    if (!creditResult.success) continue; 
+                   // 🟢 FIX: Consume simulation credits
+                   const { consumeSimCredit } = await import('./simulation.service.js');
+                   const hasCredit = await consumeSimCredit(user.telegramId);
+                   if (!hasCredit) {
+                       const warnKey = `sim_credits_warn:${user.telegramId}`;
+                       if (!(await redis.get(warnKey))) {
+                           await redis.set(warnKey, '1', 'EX', 600);
+                           try { await bot.telegram.sendMessage(user.telegramId, `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour AI Caller has paused. Use <code>/simcredits 500</code> to reload.`, { parse_mode: 'HTML' }); } catch(_) {}
+                       }
+                       continue;
+                   }
 
                     const projection = await getCalibratedProjection(matchedToken);
                     const historyData = {

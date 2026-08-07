@@ -581,6 +581,7 @@ guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Yo
         `⚡ <b>${botName.toUpperCase()}</b> ⚡\n` +
         `<i>Routing: Pump.fun | Raydium | Meteora DLMM</i>\n\n` +
         
+        
         `👛 <b>Primary Deposit Node:</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n\n` +
         
         `💰 <b>Total Balance:</b> <code>${liveBalance} SOL ($${usdBalanceFormatted})</code>\n` +
@@ -593,7 +594,7 @@ guildDisplay = `🏰 <b>Guild:</b> <b>${primaryGuild.guild.name}</b>\n🏆 <b>Yo
         
         `📊 <b>Your Economics:</b>\n` +
         `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
-        `└ <i>VIPs pay 0% fees. Invite friends to earn up to 40-70%% of their fees forever.</i>\n\n` +
+        `└ <i>VIPs pay 0% fees. Invite friends to earn up to 40%-70% of their fees forever.</i>\n\n` +
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
@@ -4655,15 +4656,17 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
+ // =========================================================
     // 🟢 CREDIT PAYMENT HANDLER
+    // =========================================================
     const pendingCreditsTx = await redis.get(`state:credits_tx:${telegramId}`);
     if (pendingCreditsTx) {
         await redis.del(`state:credits_tx:${telegramId}`);
         const txSig = text.trim();
-        const loader = await ctx.replyWithHTML(`<i>⏳ Verifying payment...</i>`);
+        const loader = await ctx.replyWithHTML(`<i>⏳ Verifying credit payment on-chain...</i>`);
         try {
             const rawPending = await redis.get(`credits:pending:${telegramId}`);
-            if (!rawPending) throw new Error("Session expired. Please restart the purchase.");
+            if (!rawPending) throw new Error("Session expired. Please restart the purchase from the Credits menu.");
             const packKey = rawPending;
 
             const { verifyVipPayment } = await import('./services/vip.service.js');
@@ -4674,19 +4677,48 @@ bot.on("text", async (ctx, next) => {
             const treasury = process.env.TREASURY_WALLET_ADDRESS!;
             const user = await prisma.user.findUnique({ where: { telegramId } });
 
-            const verifyRes = await verifyVipPayment(txSig, priceSol * 0.9, treasury, user!.vaultAddress!);
+            if (!user || !user.vaultAddress) {
+                throw new Error("No active vault wallet found for user.");
+            }
+
+            const verifyRes = await verifyVipPayment(txSig, priceSol * 0.9, treasury, user.vaultAddress);
             if (verifyRes.valid) {
                 const result = await addCredits(telegramId, packKey as any, txSig);
                 await redis.del(`credits:pending:${telegramId}`);
+
+                // 🟢 FIX: Award 40%+ Affiliate Rev-Share for AI Caller Credit Purchases
+                if (user && user.referredById) {
+                    const { getDynamicAffiliateRate } = await import('./services/engine.service.js');
+                    const dynamicRate = await getDynamicAffiliateRate(user.referredById);
+                    // Ensure affiliates ALWAYS get at least a 40% cut of the SOL price of the Credit pack
+                    const affiliateCut = priceSol * Math.max(0.40, dynamicRate); 
+                    
+                    await prisma.user.update({
+                        where: { id: user.referredById },
+                        data: { pendingRewardsSol: { increment: affiliateCut } }
+                    }).catch((e) => console.error("Affiliate Credit bonus update failed:", e.message));
+                }
+
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
-                    `✅ <b>CREDITS ADDED!</b>\n\n+${pack.credits} credits.\nNew Balance: <b>${result.newBalance} credits</b>`,
-                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller', callback_data: 'menu_caller' }]]} });
+                    `✅ <b>CREDITS ADDED SUCCESSFULLY!</b>\n\n` +
+                    `• Pack Purchased: <b>${pack.name}</b>\n` +
+                    `• Credits Added: <b>+${pack.credits}</b>\n` +
+                    `• New Total Balance: <b>${result.newBalance} credits</b>\n\n` +
+                    `<i>Your credits are ready to use for manual scans and AI Coin Caller alerts!</i>`,
+                    { 
+                        parse_mode: 'HTML', 
+                        reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Caller', callback_data: 'menu_caller' }]]} 
+                    }
+                );
             } else {
                 await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
-                    `🔴 <b>Verification Failed:</b> ${verifyRes.reason}`, { parse_mode: 'HTML' });
+                    `🔴 <b>Verification Failed:</b> ${verifyRes.reason}\n\n` +
+                    `<i>Please double check your transaction signature or contact support if SOL was deducted.</i>`,
+                    { parse_mode: 'HTML' }
+                );
             }
         } catch (e: any) {
-            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Error: ${e.message}`, { parse_mode: 'HTML' });
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Error:</b> ${e.message}`, { parse_mode: 'HTML' });
         }
         return;
     }
