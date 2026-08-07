@@ -2601,50 +2601,45 @@ bot.action('menu_affiliate', async (ctx) => {
     });
     if (!user) return;
 
-    const referredByText = user.referredBy ? `✅ Linked to Partner: <b>${user.referredBy.referralCode}</b>` : `❌ No Partner Linked`;
+    const volumeSol = user.totalVolumeSol || 0;
+    const recruitBonus = user._count.recruits * 2000;
+    const totalPoints = (volumeSol * 10000) + recruitBonus;
 
-    // 🟢 Precise dynamic point metrics for the WebApp UI
-    const { isSimulationActive, getSimVolume } = await import('./services/simulation.service.js');
-    const isSimMode = await isSimulationActive(user.telegramId);
-    let displayVolume = user.totalVolumeSol || 0;
-    if (isSimMode) displayVolume += await getSimVolume(user.telegramId);
+    // Determine Tiers
+    let currentTier = "🥉 Bronze";
+    let nextTier = "Silver (500k PTS)";
+    let rate = "40%";
 
-
-  // 🟢 Determine Affiliate Tier & Next Goal (40% to 70% dynamic splits)
-  let currentTier = "🥉 Bronze (40% Rev Share)";
-  let nextTier = "Silver (5 SOL Vol)";
-  if (displayVolume >= 100) { 
-      currentTier = "💎 Diamond (70% Rev Share)"; 
-      nextTier = "Max Tier Unlocked!"; 
-  } else if (displayVolume >= 25) { 
-      currentTier = "🥇 Gold (60% Rev Share)"; 
-      nextTier = "Diamond (100 SOL Vol)"; 
-  } else if (displayVolume >= 5) { 
-      currentTier = "🥈 Silver (50% Rev Share)"; 
-      nextTier = "Gold (25 SOL Vol)"; 
-  }
+    if (totalPoints >= 10000000) { 
+        currentTier = "💎 Diamond"; nextTier = "MAX TIER"; rate = "70%";
+    } else if (totalPoints >= 2500000) { 
+        currentTier = "🥇 Gold"; nextTier = "Diamond (10M PTS)"; rate = "60%";
+    } else if (totalPoints >= 500000) { 
+        currentTier = "🥈 Silver"; nextTier = "Gold (2.5M PTS)"; rate = "50%";
+    }
 
     const text = 
     `💸 <b>SENTRY PARTNERSHIP & REWARDS</b>\n\n` +
-    `Turn your influence into massive passive income. As you accumulate <b>$SENTRY Points</b>, your affiliate revenue share increases automatically!\n\n` +
+    `Turn your influence into massive passive income. We offer the most competitive affiliate structure on Solana.\n\n` +
     
-    
-    `👑 <b>TRADING FEE TIERS:</b>\n` +
-    `• 🥉 <b>Bronze (0 - 49k PTS):</b> 40% of recruit trading fees.\n` +
-    `• 🥈 <b>Silver (50k - 249k PTS):</b> 50% of recruit trading fees.\n` +
-    `• 🥇 <b>Gold (250k - 999k PTS):</b> 60% of fees + access to private Alpha.\n` +
-    `• 💎 <b>Diamond (1M+ PTS):</b> 70% of fees + Lifetime 0% fee VIP status.\n\n` +
-    
+    `👑 <b>TRADING FEE REV-SHARE:</b>\n` +
+    `• 🥉 <b>Bronze:</b> 40% (Base Tier)\n` +
+    `• 🥈 <b>Silver:</b> 50% (at 500k Points)\n` +
+    `• 🥇 <b>Gold:</b> 60% (at 2.5M Points)\n` +
+    `• 💎 <b>Diamond:</b> 70% (at 10M Points)\n\n` +
+
+    `🎯 <b>AI CALLER CREDIT REV-SHARE:</b>\n` +
+    `<b>Flat 40% Commission</b>\n` +
+    `Unlike trading fees, AI Credit purchases are not tiered. You earn a fixed 40% share of all $SOL spent on AI Caller Credits by your recruits, regardless of your volume.\n\n` +
     
     `📊 <b>YOUR LIVE STATS:</b>\n` +
-    `• <b>Current Tier:</b> ${currentTier}\n` +
-    `• <b>Next Tier At:</b> ${nextTier}\n` +
-    `• <b>Active Recruits:</b> ${user._count.recruits}\n` +
-    `• <b>Pending Yield:</b> ${Number(user.pendingRewardsSol||0).toFixed(4)} SOL <i>(Min claim: 0.1 SOL)</i>\n\n` +
+    `• Current Tier: <b>${currentTier} (${rate} Rev-Share)</b>\n` +
+    `• Progress to Next: <b>${nextTier}</b>\n` +
+    `• Your Points: <b>${totalPoints.toLocaleString()}</b>\n` +
+    `• Pending Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
     
     `🔗 <b>Your Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=${user.referralCode}</code>\n\n` +
-    
-    `<b>Link Status:</b>\n${referredByText}`;
+    `<i>Payouts are processed instantly in SOL. Minimum claim: 0.1 SOL.</i>`;
 
     await safeEditMessageText(ctx, text, { 
         parse_mode: 'HTML',

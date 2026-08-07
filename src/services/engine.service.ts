@@ -745,16 +745,20 @@ export async function executeExit(
 export async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
     try {
         const referrer = await prisma.user.findUnique({
-            where: { id: referrerId }
+            where: { id: referrerId },
+            include: { _count: { select: { recruits: true } } }
         });
         if (!referrer) return 0.40; 
 
-        const displayVolume = referrer.totalVolumeSol || 0;
+        // 1 SOL = 10,000 Points logic
+        const volumeSol = referrer.totalVolumeSol || 0;
+        const recruitBonus = (referrer._count?.recruits || 0) * 2000;
+        const totalPoints = (volumeSol * 10000) + recruitBonus;
 
-        if (displayVolume >= 100) return 0.70; // Diamond
-        if (displayVolume >= 25) return 0.60;  // Gold
-        if (displayVolume >= 5) return 0.50;   // Silver
-        return 0.40;                           // Bronze
+        if (totalPoints >= 10000000) return 0.70; // Diamond (1,000 SOL Vol)
+        if (totalPoints >= 2500000)  return 0.60; // Gold (250 SOL Vol)
+        if (totalPoints >= 500000)   return 0.50; // Silver (50 SOL Vol)
+        return 0.40;                              // Bronze
     } catch { 
         return 0.40; 
     }
