@@ -87,7 +87,7 @@ export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, m
     const usdValue = (totalRealizedPnl * cachedSolUsdPrice).toFixed(2);
 
     await bot.telegram.sendMessage(telegramId,
-        `🏁 <b>AUTO-SNIPE BUDGET EXHAUSTED${mode === 'sim' ? ' (SIMULATION)' : ''}</b>\n\n` +
+        `🏁 <b>AUTO-SNIPE BUDGET EXHAUSTED${mode === 'sim' ? '.' : ''}</b>\n\n` +
         `Total Spent: <b>${totalSpent.toFixed(4)} SOL</b>\n` +
         `Trades Executed: <b>${trades.length} (${wins}W / ${losses}L)</b>\n` +
         `Net Result: <b>${totalRealizedPnl >= 0 ? '+' : ''}${totalRealizedPnl.toFixed(4)} SOL (${totalRealizedPnl >= 0 ? '+' : ''}$${usdValue})</b>\n\n` +
