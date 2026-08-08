@@ -2590,7 +2590,6 @@ bot.action('btn_withdraw_prompt', async (ctx) => {
 // =========================================================
 // 💰 AFFILIATE SYSTEM (MASSIVE PAYOUTS)
 // =========================================================
-
 bot.action('menu_affiliate', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -2607,43 +2606,41 @@ bot.action('menu_affiliate', async (ctx) => {
     const totalPoints = (volumeSol * 10000) + recruitBonus;
 
     let currentTier = "🥉 Bronze";
-    let nextTier = "Silver (250k PTS)";
-    let rate = "25%";
+    let nextTier = "Silver (5M PTS)";
+    let rate = "50%";
 
-    if (totalPoints >= 5000000) { 
-        currentTier = "💎 Diamond"; nextTier = "MAX TIER"; rate = "50%";
-    } else if (totalPoints >= 1000000) { 
-        currentTier = "🥇 Gold"; nextTier = "Diamond (5M PTS)"; rate = "40%";
-    } else if (totalPoints >= 250000) { 
-        currentTier = "🥈 Silver"; nextTier = "Gold (1M PTS)"; rate = "30%";
+    if (totalPoints >= 25000000) { 
+        currentTier = "🥇 Gold"; nextTier = "MAX RANK ACHIEVED"; rate = "70%";
+    } else if (totalPoints >= 5000000) { 
+        currentTier = "🥈 Silver"; nextTier = "Gold (25M PTS)"; rate = "60%";
     }
 
     const text = 
     `💸 <b>SENTRY PARTNER PROGRAM</b>\n\n` +
-    `Join our ecosystem and earn industry-standard commissions. Our tiers are designed to scale with your influence.\n\n` +
+    `Scale your influence to unlock the most aggressive commission structure on Solana. <b>Gold Rank</b> partners earn 70% of all generated fees.\n\n` +
     
     `👑 <b>TRADING FEE REV-SHARE:</b>\n` +
-    `• 🥉 <b>Bronze:</b> 25% (Base Tier)\n` +
-    `• 🥈 <b>Silver:</b> 30% (at 250k Points)\n` +
-    `• 🥇 <b>Gold:</b> 40% (at 1M Points)\n` +
-    `• 💎 <b>Diamond:</b> 50% (at 5M Points)\n\n` +
+    `• 🥉 <b>Bronze:</b> 50% (Base Tier)\n` +
+    `• 🥈 <b>Silver:</b> 60% (at 5M Points)\n` +
+    `• 🥇 <b>Gold:</b> 70% (at 25M Points)\n\n` +
 
     `🎯 <b>AI CALLER CREDIT REV-SHARE:</b>\n` +
     `<b>Flat 40% Commission</b>\n` +
-    `Regardless of your trading tier, you earn a <b>fixed 40% share</b> of all SOL spent on AI Caller Credits by your recruits. This is a high-margin reward for promoting our intelligence tools.\n\n` +
+    `Regardless of your medal rank, you earn a fixed 40% share of all SOL spent on AI Caller Credits by your recruits. This remains consistent across all partners.\n\n` +
     
-    `📖 <b>UNDERSTANDING POINTS:</b>\n` +
-    `Points track the economic activity of your network. <b>1 SOL volume = 10,000 Points.</b>\n` +
-    `• 250k Pts = 25 SOL Volume\n` +
-    `• 5M Pts = 500 SOL Volume\n\n` +
+    `📖 <b>GRADUATION REQUIREMENTS:</b>\n` +
+    `Moving to the next medal requires heavy network volume. <b>1 SOL volume = 10,000 Points.</b>\n` +
+    `• 5M Pts = 500 SOL Volume\n` +
+    `• 25M Pts = 2,500 SOL Volume\n\n` +
     
     `📊 <b>YOUR LIVE STATS:</b>\n` +
     `• Current Tier: <b>${currentTier} (${rate} Share)</b>\n` +
+    `• Progress to Next: <b>${nextTier}</b>\n` +
     `• Total Points: <b>${totalPoints.toLocaleString()}</b>\n` +
     `• Pending Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
     
     `🔗 <b>Your Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=${user.referralCode}</code>\n\n` +
-    `<i>Minimum claim: 0.1 SOL. Payouts are processed instantly.</i>`;
+    `<i>Minimum claim: 0.1 SOL. Payouts processed instantly in SOL.</i>`;
 
     await safeEditMessageText(ctx, text, { 
         parse_mode: 'HTML',
