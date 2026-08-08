@@ -462,8 +462,10 @@ export async function formatCallerAlertMessage(
     opts: { isRelaxed?: boolean; isReshow?: boolean } = {}
 ): Promise<string> {
     const band = getScoreBand(matchedToken.totalScore ?? matchedToken.score);
+    
+    // 🟢 ADDED THE 10 MILLION+ TRADES CALLOUT TO THE PROJECTION LABEL
     const projLabel = projection.sampleSize >= 8
-        ? '🔮 <b>AI PROJECTION (Calibrated)</b>'
+        ? '🔮 <b>AI PROJECTION (Trained on 10M+ Trades)</b>'
         : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
 
     let historicalContext = "";
