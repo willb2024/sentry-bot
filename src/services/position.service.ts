@@ -94,12 +94,12 @@ export async function getUserPositions(telegramId: string) {
                 priceUsd: meta.price,
                 valueUsd: p.amount * meta.price
             };
-        })// 🟢 PART 3.9 FIX: Keep tokens even if DexScreener times out (valueUsd = 0)
+        })
           .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 
           .sort((a, b) => b.valueUsd - a.valueUsd);
           
-
-        await redis.set(cacheKey, JSON.stringify(mappedPositions), 'EX', 15);
+        // 🟢 FIX: Increased cache from 15s to 30s to prevent RPC throttling.
+        await redis.set(cacheKey, JSON.stringify(mappedPositions), 'EX', 30);
 
         return mappedPositions;
 
