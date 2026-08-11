@@ -355,25 +355,6 @@ app.post('/api/toggle-sim', async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Server Error' }); }
 });
 
-app.post('/api/positions', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = JSON.parse(new URLSearchParams(req.body.initData).get('user')!).id.toString();
-        const positions = await getUserPositions(telegramId);
-        if (positions && positions.length > 0) {
-            for (const p of positions) {
-                const guards = await redis.smembers(`token_guards:${telegramId}:${p.mint}`);
-                if (guards.length > 0) {
-                    const raw = await redis.get(`order:trail:${guards[0]}`);
-                    if (raw) (p as any).entryPrice = JSON.parse(raw).entryPrice || 0;
-                }
-            }
-        }
-        res.json(positions);
-    } catch (e) { res.status(500).json([]); }
-});
-
-
 
 
 // 🟢 GAP 2 FIX: Serves the raw binary PNG of the PnL card from Redis cache
@@ -5763,4 +5744,9 @@ async function bootEcosystem() {
 process.once('SIGINT', () => { try { if (bot.botInfo) bot.stop('SIGINT'); } catch(e){} prisma.$disconnect(); redis.quit(); });
 process.once('SIGTERM', () => { try { if (bot.botInfo) bot.stop('SIGTERM'); } catch(e){} prisma.$disconnect(); redis.quit(); });
 
-bootEcosystem();
+// Replace bootEcosystem(); at the bottom of src/index.ts
+bootEcosystem().catch((err) => {
+    console.error("🔴 [FATAL] Ecosystem boot failed!");
+    console.error("Check your .env, database, and Redis connection. Error:", err);
+    process.exit(1);
+});

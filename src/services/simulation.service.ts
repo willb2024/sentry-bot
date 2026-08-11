@@ -190,12 +190,20 @@ export async function setSimStartingBalance(telegramId: string, amount: number):
     await saveSimulationState(telegramId);
 }
 
+// src/services/simulation.service.ts
+
 export async function getSimBalance(telegramId: string): Promise<string> {
-    if (!(await isSimulationActive(telegramId))) return '0.0000';
+    try {
+        // 🟢 CRITICAL FIX: Check active flag safely without throwing if Redis is connecting
+        const isActive = await isSimulationActive(telegramId).catch(() => false);
+        if (!isActive) return '0.0000';
+    } catch (e) {
+        return '0.0000';
+    }
 
     let bal = await redis.get(`sim:balance:${telegramId}`);
     if (bal === null) { 
-        await loadSimulationState(telegramId); 
+        await loadSimulationState(telegramId).catch(() => {}); 
         bal = await redis.get(`sim:balance:${telegramId}`); 
     }
     return bal || '0.0000';
