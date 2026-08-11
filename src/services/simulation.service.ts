@@ -753,34 +753,35 @@ setInterval(async () => {
     } catch (e) {}
 }, 3000);
 
+
 export async function setSimulationMode(telegramId: string, active: boolean): Promise<void> {
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    if (!user) return;
+  const user = await prisma.user.findUnique({ where: { telegramId } });
+  if (!user) return;
 
-    if (active) {
-        const startBal = parseFloat(await redis.get(`sim:balance:${telegramId}`) || '1000');
-        await redis.set(`sim:active:${telegramId}`, 'true');
-        await redis.set(`sim:balance:${telegramId}`, startBal.toFixed(4));
-        await redis.set(`sim:starting_balance:${telegramId}`, startBal.toFixed(4));
-        const wallets = generateSimWallets();
-        await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
+  if (active) {
+      const startBal = parseFloat(await redis.get(`sim:balance:${telegramId}`) || '1000');
+      await redis.set(`sim:active:${telegramId}`, 'true');
+      await redis.set(`sim:balance:${telegramId}`, startBal.toFixed(4));
+      await redis.set(`sim:starting_balance:${telegramId}`, startBal.toFixed(4));
+      const wallets = generateSimWallets();
+      await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
 
-        await prisma.simState.upsert({
-            where: { userId: user.id },
-            update: { active: true, balance: startBal, startingBalance: startBal, wallets: JSON.stringify(wallets) },
-            create: { userId: user.id, active: true, balance: startBal, startingBalance: startBal, wallets: JSON.stringify(wallets) }
-        });
-    } else {
-        // Complete purge of Redis Keys and Database state
-        const keys = await redis.keys(`sim:*:${telegramId}`);
-        if (keys.length > 0) await redis.del(...keys);
+      await prisma.simState.upsert({
+          where: { userId: user.id },
+          update: { active: true, balance: startBal, startingBalance: startBal },
+          create: { userId: user.id, active: true, balance: startBal, startingBalance: startBal }
+      });
+  } else {
+      // Complete purge of Redis Keys and Database state
+      const keys = await redis.keys(`sim:*:${telegramId}`);
+      if (keys.length > 0) await redis.del(...keys);
 
-        await prisma.simTrade.deleteMany({ where: { userId: user.id } });
-        await prisma.simState.delete({ where: { userId: user.id } }).catch(() => {});
+      await prisma.simTrade.deleteMany({ where: { userId: user.id } });
+      await prisma.simState.delete({ where: { userId: user.id } }).catch(() => {});
 
-        await redis.set(`sim:active:${telegramId}`, 'false');
-        console.log(`✅ [SIM] Completely purged simulation data for ${telegramId}`);
-    }
+      await redis.set(`sim:active:${telegramId}`, 'false');
+      console.log(`✅ [SIM] Completely purged simulation data for ${telegramId}`);
+  }
 }
 
 export async function consumeSimCredit(telegramId: string): Promise<boolean> {
