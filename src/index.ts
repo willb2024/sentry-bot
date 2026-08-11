@@ -81,6 +81,16 @@ function isAdmin(tgId: string | undefined): boolean {
 // =========================================================
 // 🛡️ TELEGRAM FLOOD CONTROL WRAPPERS
 // =========================================================
+
+
+
+export function maskAddress(address: string | null | undefined, hidden: boolean): string {
+    if (!address) return "None";
+    if (hidden && address.length > 8) return `${address.substring(0, 4)}...${address.slice(-4)}`;
+    return address;
+}
+
+// Replace safeSendMessage and safeEditMessageText in src/index.ts
 export async function safeSendMessage(tgId: string, text: string, options: any = {}) {
     let retries = 3;
     while (retries > 0) {
@@ -90,19 +100,14 @@ export async function safeSendMessage(tgId: string, text: string, options: any =
         } catch (error: any) {
             if (error.code === 429) { 
                 const waitTime = error.parameters?.retry_after || 1;
-                console.warn(`⚠️ Telegram Rate Limit hit. Waiting ${waitTime}s...`);
                 await new Promise(r => setTimeout(r, waitTime * 1000));
                 retries--;
+            } else if (error.code === 403 || error.code === 400) {
+                console.warn(`⚠️ [TG] Message ignored (code ${error.code}): ${error.description}`);
+                return;
             } else { break; }
         }
     }
-}
-
-
-export function maskAddress(address: string | null | undefined, hidden: boolean): string {
-    if (!address) return "None";
-    if (hidden && address.length > 8) return `${address.substring(0, 4)}...${address.slice(-4)}`;
-    return address;
 }
 
 export async function safeEditMessageText(ctx: any, text: string, options: any = {}) {
@@ -115,10 +120,12 @@ export async function safeEditMessageText(ctx: any, text: string, options: any =
                 const waitTime = error.parameters?.retry_after || 1;
                 await new Promise(r => setTimeout(r, waitTime * 1000));
                 retries--;
-            } else if (error.description && error.description.includes('message is not modified')) {
+            } else if (error.code === 400 && error.description?.includes('message is not modified')) {
+                return;
+            } else if (error.code === 400 || error.code === 403) {
+                console.warn(`⚠️ [TG] Edit ignored (code ${error.code}): ${error.description}`);
                 return;
             } else { 
-                // 🟢 EXPLICIT LOGGER: Wakes up the silent catch to show the exact error in your console
                 console.error("🔴 [Telegram Edit Message Error]:", error.message);
                 break; 
             }
@@ -145,11 +152,13 @@ bot.use(async (ctx, next) => {
 
 
 // 🟢 ADD THIS HELPER FUNCTION
+
 function extractTelegramId(initData: string): string | null {
     try {
         const params = new URLSearchParams(initData);
         const userStr = params.get('user');
         if (userStr) {
+            // 🟢 FIX: Prevent raw crash on incomplete JSON
             const user = JSON.parse(userStr);
             return user.id ? user.id.toString() : null;
         }
@@ -175,7 +184,8 @@ function parseSolAmount(input: string, allowZero = false): number | null {
     if (trimmed.startsWith('$')) {
         const usdVal = parseFloat(trimmed.substring(1));
         if (isNaN(usdVal) || (!allowZero && usdVal <= 0)) return null;
-        if (!cachedSolUsdPrice || cachedSolUsdPrice <= 0) return null; // Failsafe
+        // 🟢 FIX: Handle potential 0 or undefined price scenarios
+        if (!cachedSolUsdPrice || cachedSolUsdPrice <= 0) return null;
         return parseFloat((usdVal / cachedSolUsdPrice).toFixed(4));
     }
     
@@ -237,6 +247,7 @@ app.post('/api/sim-trades', async (req, res) => {
 });
 
 // 🟢 NEW: Persistent Simulation Stats Endpoint
+// Replace app.post('/api/sim-stats', ...) in src/index.ts
 app.post('/api/sim-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -245,7 +256,15 @@ app.post('/api/sim-stats', async (req, res) => {
 
         const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume, getSimCounters, getSimFirstTradeAt } = await import('./services/simulation.service.js');
         const isActive = await isSimulationActive(tgId);
-        if (!isActive) return res.json({ isActive: false });
+        
+        // 🟢 CRITICAL FIX: Explicitly return zero metrics if sim is inactive
+        if (!isActive) {
+            return res.json({
+                isActive: false, balance: '0.0000', startingBalance: '0.0000', volume: 0,
+                wins: 0, losses: 0, totalTrades: 0, totalInvestedSol: 0, totalPnlSol: 0,
+                positions: [], trades: [], firstTradeAt: null
+            });
+        }
 
         const balance = await getSimBalance(tgId);
         const startingBalance = await getSimStartingBalance(tgId);
@@ -266,7 +285,62 @@ app.post('/api/sim-stats', async (req, res) => {
             totalPnlSol: counters.totalPnlSol,
             firstTradeAt, positions, trades: trades.slice(0, 50)
         });
-    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
+    } catch (e) {
+        res.status(500).json({ error: 'Server Error' });
+    }
+});
+
+
+// Add these admin commands in src/index.ts
+bot.command('clearsim', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    
+    const loader = await ctx.replyWithHTML("🧹 <i>Purging all simulation states...</i>");
+    
+    try {
+        const { setSimulationMode } = await import('./services/simulation.service.js');
+        await setSimulationMode(tgId!, false);
+        
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `✅ <b>PURGE COMPLETE</b>\n\nSimulation data zeroed and reset.`, 
+            { parse_mode: 'HTML' }
+        );
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Error: ${e.message}`, { parse_mode: 'HTML' });
+    }
+});
+
+bot.command('resetlive', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+
+    const loader = await ctx.replyWithHTML("🧹 <i>Hard-resetting LIVE database tables...</i>");
+
+    try {
+        const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+        if (!user) return ctx.reply("User not found.");
+
+        await prisma.trade.deleteMany({ where: { userId: user.id } });
+
+        await prisma.user.update({
+            where: { id: user.id },
+            data: {
+                totalVolumeSol: 0,
+                firstTradeAt: null,
+                pendingRewardsSol: 0
+            }
+        });
+
+        await redis.del(`balance_cache:${tgId}`, `positions_cache:${tgId}`, `stats_events:live:${tgId}`);
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `✅ <b>LIVE DATABASE PURGED</b>\n\nAll live trades deleted. Dashboard reset to 0.`,
+            { parse_mode: 'HTML' }
+        );
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Error: ${e.message}`, { parse_mode: 'HTML' });
+    }
 });
 
 // 🟢 NEW: Toggle Simulation Mode Endpoint
@@ -321,14 +395,13 @@ app.get('/pnl-img/:imgId', async (req, res) => {
 });
 
 // 🟢 GAP 2 FIX: Serves a dynamic OpenGraph meta-tag index page that automatically
-// unfurls in X/Twitter, then instantly redirects visitors to Sentry Terminal on TG
 app.get('/share/:imgId', async (req, res) => {
     try {
         const imgId = req.params.imgId;
         const botName = process.env.BOT_NAME || 'Sentry Terminal';
+        // 🟢 FIX: Add a reliable fallback username
         const botUsername = process.env.BOT_USERNAME || 'SentryTerminalBot';
         
-        // Appends the referral code to the redirection string to map recruits seamlessly
         const referralCode = req.query.ref ? `?start=${req.query.ref}` : '';
         const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
 
@@ -970,8 +1043,20 @@ bot.action(/^watch_remove_(.+)$/, async (ctx) => {
 bot.action('action_abort_token_launch', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
-    // 🟢 D4 FIX
-    await deleteKeysPattern(`token_launch:${tgId}:*`);
+    
+    // 🟢 FIX: Purge known session keys directly instead of executing slow SCAN patterns
+    await redis.del(
+        `token_launch:${tgId}:step`,
+        `token_launch:${tgId}:name`,
+        `token_launch:${tgId}:symbol`,
+        `token_launch:${tgId}:description`,
+        `token_launch:${tgId}:imageUrl`,
+        `token_launch:${tgId}:vanity`,
+        `token_launch:${tgId}:devbuy`,
+        `token_launch:${tgId}:wallets`,
+        `token_launch:${tgId}:guard`
+    );
+    
     await safeEditMessageText(ctx, `❌ <b>Token launch cancelled.</b>`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'btn_dashboard')]]));
 });
 
@@ -4932,9 +5017,9 @@ bot.action('action_confirm_guild_pay', async (ctx) => {
 
 // Telegram initData verification
 function verifyTelegramAuth(initData: string): boolean {
-    const params = new URLSearchParams(initData);
+    if (!initData) return false; // 🟢 FIX: Instantly reject empty payloads
     
-    // 🟢 MEDIUM BUG 18 FIX: 24h Expiry to prevent replay attacks
+    const params = new URLSearchParams(initData);
     const authDateStr = params.get('auth_date');
     if (authDateStr) {
         const authDate = parseInt(authDateStr, 10);

@@ -1,14 +1,15 @@
 // src/services/burn.service.ts
 import { PublicKey, Keypair, TransactionMessage, VersionedTransaction, SystemProgram } from '@solana/web3.js';
 import { connection } from '../lib/connection.js'; 
-import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, createCloseAccountInstruction } from '@solana/spl-token';
-import { PrismaClient } from '@prisma/client';
+import { TOKEN_PROGRAM_ID, createCloseAccountInstruction } from '@solana/spl-token';
+import { prisma } from '../lib/prisma.js';
 import bs58 from 'bs58';
 import { decryptKey } from './vault.service.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
-const prisma = new PrismaClient();
+
+const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhvkASnYGQYcBmiJXcwghAMPw");
 
 const JITO_TIP_ACCOUNTS = [
     "96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL", "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
@@ -47,7 +48,6 @@ export async function getEmptyTokenAccounts(walletAddress: string): Promise<Arra
     }
 }
 
-// BUG 12 FIX: Added usedPublicFallback tracking and messaging
 export async function executeRentSweep(telegramId: string): Promise<{ success: boolean, reclaimedSol: number, signature?: string, message: string, usedPublicFallback?: boolean }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -73,7 +73,7 @@ export async function executeRentSweep(telegramId: string): Promise<{ success: b
         }
 
         const jitoTipAccount = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
-        const TIP_LAMPORTS = 500000; // 0.0005 SOL Jito Tip
+        const TIP_LAMPORTS = 500000; 
         
         instructions.push(
             SystemProgram.transfer({

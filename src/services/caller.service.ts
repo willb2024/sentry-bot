@@ -1,11 +1,11 @@
 // src/services/caller.service.ts
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
 import axios from 'axios';
 import { getRecentNewMints } from './grpc.service.js';
 import { rpcLimiter } from '../lib/rpc-limiter.js';
+import { PublicKey } from '@solana/web3.js';
 
-const prisma = new PrismaClient();
 const BASE58_MINT_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export interface CallerFilters {
@@ -72,8 +72,6 @@ export function getScoreBand(score: number): { label: string; sizeSol: string; r
     return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
 }
 
-// ------------------ ML Training & Features ------------------
-
 async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
     try {
@@ -138,60 +136,6 @@ function extractFeatures(token: any): number[] {
     return [score, age, liq, vol, mom, hasSocials, isRug, lockPct, velocity];
 }
 
-// 🟢 UPGRADE: Analytical Ridge Regression using Normal Equations (Perfect convergence)
-function solveRidgeRegression(X: number[][], y: number[], lambda: number = 0.1): { coefficients: number[], intercept: number } {
-    const n = X.length;
-    const p = X[0].length;
-    // Build X matrix with intercept column (1, x1, x2, ...)
-    const X_mat = X.map(row => [1, ...row]);
-    // Compute X^T
-    const Xt = X_mat[0].map((_, idx) => X_mat.map(row => row[idx]));
-    // Compute X^T * X
-    const XtX = Xt.map(row => Xt[0].map((_, j) => row.reduce((sum, val, k) => sum + val * X_mat[k][j], 0)));
-    // Compute X^T * y
-    const Xty = Xt.map(row => row.reduce((sum, val, i) => sum + val * y[i], 0));
-    
-    // Apply Ridge Regularization to the diagonal (excluding intercept)
-    for (let i = 1; i <= p; i++) {
-        XtX[i][i] += lambda * n;
-    }
-    
-    // Solve using Gaussian Elimination
-    const size = p + 1;
-    const augmented = XtX.map((row, i) => [...row, Xty[i]]);
-    
-    for (let col = 0; col < size; col++) {
-        // Find Pivot
-        let maxRow = col;
-        for (let row = col + 1; row < size; row++) {
-            if (Math.abs(augmented[row][col]) > Math.abs(augmented[maxRow][col])) maxRow = row;
-        }
-        [augmented[col], augmented[maxRow]] = [augmented[maxRow], augmented[col]];
-        
-        if (Math.abs(augmented[col][col]) < 1e-12) continue;
-        
-        // Eliminate
-        for (let row = col + 1; row < size; row++) {
-            const factor = augmented[row][col] / augmented[col][col];
-            for (let j = col; j <= size; j++) {
-                augmented[row][j] -= factor * augmented[col][j];
-            }
-        }
-    }
-    
-    // Back substitution
-    const weights = new Array(size).fill(0);
-    for (let i = size - 1; i >= 0; i--) {
-        if (Math.abs(augmented[i][i]) < 1e-12) continue;
-        weights[i] = augmented[i][size] / augmented[i][i];
-        for (let j = i - 1; j >= 0; j--) {
-            augmented[j][size] -= augmented[j][i] * weights[i];
-        }
-    }
-    
-    return { intercept: weights[0], coefficients: weights.slice(1) };
-}
-
 interface NormalizationParams { means: number[]; stds: number[]; }
 
 function computeNormalization(X: number[][]): NormalizationParams {
@@ -211,6 +155,50 @@ function computeNormalization(X: number[][]): NormalizationParams {
 
 function normalizeRow(row: number[], norm: NormalizationParams): number[] {
     return row.map((v, j) => (v - norm.means[j]) / norm.stds[j]);
+}
+
+function solveRidgeRegression(X: number[][], y: number[], lambda: number = 0.1): { coefficients: number[], intercept: number } {
+    const n = X.length;
+    const p = X[0].length;
+    const X_mat = X.map(row => [1, ...row]);
+    const Xt = X_mat[0].map((_, idx) => X_mat.map(row => row[idx]));
+    const XtX = Xt.map(row => Xt[0].map((_, j) => row.reduce((sum, val, k) => sum + val * X_mat[k][j], 0)));
+    const Xty = Xt.map(row => row.reduce((sum, val, i) => sum + val * y[i], 0));
+    
+    for (let i = 1; i <= p; i++) {
+        XtX[i][i] += lambda * n;
+    }
+    
+    const size = p + 1;
+    const augmented = XtX.map((row, i) => [...row, Xty[i]]);
+    
+    for (let col = 0; col < size; col++) {
+        let maxRow = col;
+        for (let row = col + 1; row < size; row++) {
+            if (Math.abs(augmented[row][col]) > Math.abs(augmented[maxRow][col])) maxRow = row;
+        }
+        [augmented[col], augmented[maxRow]] = [augmented[maxRow], augmented[col]];
+        
+        if (Math.abs(augmented[col][col]) < 1e-12) continue;
+        
+        for (let row = col + 1; row < size; row++) {
+            const factor = augmented[row][col] / augmented[col][col];
+            for (let j = col; j <= size; j++) {
+                augmented[row][j] -= factor * augmented[col][j];
+            }
+        }
+    }
+    
+    const weights = new Array(size).fill(0);
+    for (let i = size - 1; i >= 0; i--) {
+        if (Math.abs(augmented[i][i]) < 1e-12) continue;
+        weights[i] = augmented[i][size] / augmented[i][i];
+        for (let j = i - 1; j >= 0; j--) {
+            augmented[j][size] -= augmented[j][i] * weights[i];
+        }
+    }
+    
+    return { intercept: weights[0], coefficients: weights.slice(1) };
 }
 
 function predictNormalized(row: number[], weights: number[], intercept: number): number {
@@ -235,8 +223,11 @@ export async function trainCallerModel() {
         const y: number[] = [];
 
         for (const p of predictions) {
+            const rawLiquidity = Math.max(1, p.liquidity);
+            const rawVolume = Math.max(1, p.volume24h);
+
             rawX.push([
-                p.score, p.ageMins, Math.log(p.liquidity + 1), Math.log(p.volume24h + 1),
+                p.score, p.ageMins, Math.log(rawLiquidity), Math.log(rawVolume),
                 p.priceChangeM5, p.hasSocials ? 1 : 0, p.isRug ? 1 : 0, p.lpLockPct ?? 0, p.velocityGrowth ?? 0
             ]);
             y.push(Math.log(Math.max(0, p.peakPct!) + 1));
@@ -360,7 +351,6 @@ export async function storePredictionData(token: any, projection: any, alertKey:
 export async function getCalibratedProjection(token: any) {
     const features = extractFeatures(token);
     
-    // ML Prediction Route
     try {
         const weightsRaw = await redis.get('caller_model_weights');
         if (weightsRaw) {
@@ -376,10 +366,7 @@ export async function getCalibratedProjection(token: any) {
                     const residualStd = 0.5;
                     const low = Math.max(0, modelPeak - 1.96 * residualStd);
                     const high = modelPeak + 1.96 * residualStd;
-                    
-                    // 🟢 REFINEMENT: Ensure we never output "~0 Minutes"
-                    const projectedTimeMins = Math.max(5, (token.ageMins || 10) * 2); 
-                    const timeframe = humanizeMs(projectedTimeMins * 60000);
+                    const timeframe = humanizeMs((token.ageMins || 10) * 60000 * 2);
                     const sampleCount = (weights.metrics?.trainSampleCount || 0) + (weights.metrics?.valSampleCount || 0);
 
                     return {
@@ -389,16 +376,17 @@ export async function getCalibratedProjection(token: any) {
                         sampleSize: sampleCount,
                         rawLow: low,
                         rawHigh: high, 
-                        rawTimeMins: projectedTimeMins
+                        rawTimeMins: (token.ageMins || 10) * 2
                     };
                 }
             }
         }
     } catch (_) {}
 
-    // Standard Heuristic Route Fallback
     const historyMap = await redis.hgetall('caller_history');
-    const calls = Object.values(historyMap).map((v: any) => JSON.parse(v)).filter((c: any) => c.finalized && c.peakPct !== undefined);
+    const calls = Object.values(historyMap)
+        .map((v: any) => JSON.parse(v))
+        .filter((c: any) => c.finalized && c.peakAtMs !== undefined && c.peakPct !== undefined);
 
     const scoreBand = 15;   
     const similar = calls.filter((c: any) =>
@@ -462,10 +450,8 @@ export async function formatCallerAlertMessage(
     opts: { isRelaxed?: boolean; isReshow?: boolean } = {}
 ): Promise<string> {
     const band = getScoreBand(matchedToken.totalScore ?? matchedToken.score);
-    
-    // 🟢 ADDED THE 10 MILLION+ TRADES CALLOUT TO THE PROJECTION LABEL
     const projLabel = projection.sampleSize >= 8
-        ? '🔮 <b>AI PROJECTION (Trained on 10M+ Trades)</b>'
+        ? '🔮 <b>AI PROJECTION (Calibrated)</b>'
         : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
 
     let historicalContext = "";
@@ -505,7 +491,8 @@ export function buildAuditTrailMessage(
     takeProfit: number | string,
     isSimulated: boolean
 ): string {
-    return `🟢 <b>BUY & GUARD SUCCESSFUL!${isSimulated ? '' : ''}</b>\n\n` +
+    return `` +
+           `🟢 <b>BUY & GUARD SUCCESSFUL!${isSimulated ? ' (SIM)' : ''}</b>\n\n` +
            `Token: <code>${mint.substring(0, 8)}...</code>\n` +
            `AI Score: ${score}/100 ⭐\n\n` +
            `Audit Trail:\n` +
@@ -532,157 +519,12 @@ export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { m
             (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= f.minPctChange && t.priceChangeM5 <= f.maxPctChange)) &&
             ((t.sourceQuality !== 'onchain-only' && t.volume >= f.minVolume24h) || (t.sourceQuality === 'onchain-only' && t.liquidity >= f.minLiquidity)) &&
             t.liquidity >= f.minLiquidity &&
-            (!f.blockMev || (t.breakdown && t.breakdown.mevRisk >= 0)) &&
+            (!f.blockMev || (t?.breakdown?.mevRisk !== undefined && t.breakdown.mevRisk >= 0)) &&
             (f.minLiquidityLockPercent === 0 || (t.stats?.lpLock?.lockPct >= f.minLiquidityLockPercent))
         );
         if (matches.length > 0) return { matches, isRelaxed: i > 0 };
     }
     return { matches: [], isRelaxed: false };
-}
-
-let isScoring = false;
-
-export async function startCoinCaller(bot: any) {
-    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (15s) & Sim loop (5s) active.");
-
-    // 1️⃣ FAST 5-SECOND SIMULATION CALLER LOOP
-    setInterval(async () => {
-        try {
-            const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
-            const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
-
-            for (const user of allUsers) {
-                const isSim = await isSimulationActive(user.telegramId);
-                if (!isSim) continue; 
-
-                const filters = await getUserCallerFilters(user.telegramId);
-                if (!filters.isActive) continue; 
-
-                const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
-                if (matchedToken) {
-                    // 🟢 FIX: Inline simulation credit check
-                    const currentCredits = parseInt(await redis.get(`sim:credits:${user.telegramId}`) || '0');
-                    if (currentCredits <= 0) {
-                        const warnKey = `sim_credits_warn:${user.telegramId}`;
-                        if (!(await redis.get(warnKey))) {
-                            await redis.set(warnKey, '1', 'EX', 600);
-                            try { await bot.telegram.sendMessage(user.telegramId, `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour AI Caller has paused. Use <code>/simcredits 500</code> to reload.`, { parse_mode: 'HTML' }); } catch(_) {}
-                        }
-                        continue;
-                    }
-                    await redis.set(`sim:credits:${user.telegramId}`, (currentCredits - 1).toString());
-
-                    const projection = await getCalibratedProjection(matchedToken);
-                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
-
-                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
-                    const defaultSize = userConfig?.amountSol || 0.1;
-
-                    try {
-                        await bot.telegram.sendMessage(user.telegramId, msg, {
-                            parse_mode: 'HTML',
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
-                                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
-                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
-                                ]
-                            }
-                        });
-                    } catch (_) {}
-                }
-            }
-        } catch (_) {}
-    }, 5000); 
-
-    // 2️⃣ STANDARD 15-SECOND LIVE MAINNET CALLER LOOP
-    setInterval(async () => {
-        if (isScoring) return;
-        isScoring = true;
-
-        try {
-            const { isSimulationActive } = await import('./simulation.service.js');
-            const tokens = await scoreTokens();
-            if (tokens.length === 0) return;
-
-            const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
-            
-            for (const user of allUsers) {
-                const isSim = await isSimulationActive(user.telegramId);
-                if (isSim) continue; 
-
-                const filters = await getUserCallerFilters(user.telegramId);
-                if (!filters.isActive) continue;
-
-                const { matches: matchingTokens, isRelaxed } = getMatchesWithLadder(tokens, filters);
-
-                let matchedToken = null;
-                for (const t of matchingTokens) {
-                    const alertKey = `caller_alerted:${user.telegramId}:${t.mint}`;
-                    const alreadyAlerted = await redis.get(alertKey);
-                    if (!alreadyAlerted) {
-                        matchedToken = t;
-                        await redis.set(alertKey, '1', 'EX', 180); 
-                        break; 
-                    }
-                }
-
-                if (matchedToken) {
-                    const { consumeCredit } = await import('./credits.service.js');
-                    const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
-                    if (!creditResult.success) continue; 
-
-                    const projection = await getCalibratedProjection(matchedToken);
-                    const historyData = {
-                        mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
-                        priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
-                        predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
-                    };
-                    const historyKey = `${matchedToken.mint}:${Date.now()}`;
-                    await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
-                    
-                    await storePredictionData(matchedToken, projection, historyKey);
-
-                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed });
-
-                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
-                    const defaultSize = userConfig?.amountSol || 0.1;
-                    
-                    try {
-                        await bot.telegram.sendMessage(user.telegramId, msg, {
-                            parse_mode: 'HTML',
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
-                                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
-                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
-                                ]
-                            }
-                        });
-                    } catch (e: any) {}
-                }
-            }
-        } catch (e) {
-        } finally {
-            isScoring = false;
-        }
-    }, 15000);
-}
-
-export interface TokenStats {
-    ageMins: number;
-    volume24h: number;
-    liquidity: number;
-    priceChangeM5: number;
-    hasSocials: boolean;
-    isRug: boolean;
-    sourceQuality?: string;
-    uncertain?: boolean;
-    devRep?: { launchCount: number; avgRugScore: number; isKnownRugger: boolean };
-    lpLock?: { locked: boolean; burned: boolean; lockPct: number };
-    velocity?: { growthRate: number; uniqueBuyers5m: number };
-    sellability?: { sellable: boolean; estimatedTaxPct: number };
-    observedVol?: number;
 }
 
 export function computeTokenScore(stats: TokenStats & { sentiment?: number }): { score: number; reasons: string[] } {
@@ -765,7 +607,7 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
         }
     }
 
-    return { score: Math.max(55, score), reasons };
+    return { score: Math.max(0, score), reasons };
 }
 
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
@@ -1078,6 +920,150 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
         return { sellable: true, estimatedTaxPct: 0 }; 
     }
 }
+
+export async function startCoinCaller(bot: any) {
+    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (15s) & Sim loop (5s) active.");
+
+    setInterval(async () => {
+        try {
+            const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
+            const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
+
+            for (const user of allUsers) {
+                const isSim = await isSimulationActive(user.telegramId);
+                if (!isSim) continue; 
+
+                const filters = await getUserCallerFilters(user.telegramId);
+                if (!filters.isActive) continue; 
+
+                const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
+                if (matchedToken) {
+                    const currentCredits = parseInt(await redis.get(`sim:credits:${user.telegramId}`) || '0');
+                    if (currentCredits <= 0) {
+                        const warnKey = `sim_credits_warn:${user.telegramId}`;
+                        if (!(await redis.get(warnKey))) {
+                            await redis.set(warnKey, '1', 'EX', 600);
+                            try { await bot.telegram.sendMessage(user.telegramId, `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour AI Caller has paused. Use <code>/simcredits 500</code> to reload.`, { parse_mode: 'HTML' }); } catch(_) {}
+                        }
+                        continue;
+                    }
+                    await redis.set(`sim:credits:${user.telegramId}`, (currentCredits - 1).toString());
+
+                    const projection = await getCalibratedProjection(matchedToken);
+                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
+
+                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
+                    const defaultSize = userConfig?.amountSol || 0.1;
+
+                    try {
+                        await bot.telegram.sendMessage(user.telegramId, msg, {
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
+                                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
+                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
+                                ]
+                            }
+                        });
+                    } catch (_) {}
+                }
+            }
+        } catch (_) {}
+    }, 5000); 
+
+    setInterval(async () => {
+        if (isScoring) return;
+        isScoring = true;
+
+        try {
+            const { isSimulationActive } = await import('./simulation.service.js');
+            const tokens = await scoreTokens();
+            if (tokens.length === 0) return;
+
+            const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
+            
+            for (const user of allUsers) {
+                const isSim = await isSimulationActive(user.telegramId);
+                if (isSim) continue; 
+
+                const filters = await getUserCallerFilters(user.telegramId);
+                if (!filters.isActive) continue;
+
+                const { matches: matchingTokens, isRelaxed } = getMatchesWithLadder(tokens, filters);
+
+                let matchedToken = null;
+                for (const t of matchingTokens) {
+                    const alertKey = `caller_alerted:${user.telegramId}:${t.mint}`;
+                    const alreadyAlerted = await redis.get(alertKey);
+                    if (!alreadyAlerted) {
+                        matchedToken = t;
+                        await redis.set(alertKey, '1', 'EX', 180); 
+                        break; 
+                    }
+                }
+
+                if (matchedToken) {
+                    const { consumeCredit } = await import('./credits.service.js');
+                    const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
+                    if (!creditResult.success) continue; 
+
+                    const projection = await getCalibratedProjection(matchedToken);
+                    const historyData = {
+                        mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
+                        priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
+                        predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
+                    };
+                    const historyKey = `${matchedToken.mint}:${Date.now()}`;
+                    await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
+                    
+                    await storePredictionData(matchedToken, projection, historyKey);
+
+                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed });
+
+                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
+                    const defaultSize = userConfig?.amountSol || 0.1;
+                    
+                    try {
+                        await bot.telegram.sendMessage(user.telegramId, msg, {
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
+                                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
+                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
+                                ]
+                            }
+                        });
+                    } catch (e: any) {}
+                }
+            }
+        } catch (e) {
+        } finally {
+            isScoring = false;
+        }
+    }, 15000);
+}
+
+let isScoring = false;
+
+export interface TokenStats {
+    ageMins: number;
+    volume24h: number;
+    liquidity: number;
+    priceChangeM5: number;
+    hasSocials: boolean;
+    isRug: boolean;
+    sourceQuality?: string;
+    uncertain?: boolean;
+    devRep?: { launchCount: number; avgRugScore: number; isKnownRugger: boolean };
+    lpLock?: { locked: boolean; burned: boolean; lockPct: number };
+    velocity?: { growthRate: number; uniqueBuyers5m: number };
+    sellability?: { sellable: boolean; estimatedTaxPct: number };
+    observedVol?: number;
+}
+
+// Add to the bottom of src/services/caller.service.ts
 
 export async function scoreTokens() {
     try {

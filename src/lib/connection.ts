@@ -49,18 +49,6 @@ function isCircuitOpen(): boolean {
     return true;
 }
 
-function recordPrimarySuccess() { 
-    consecutivePrimaryFailures = 0; 
-    circuitOpenedAt = null; 
-}
-
-function recordPrimaryFailure() {
-    consecutivePrimaryFailures++;
-    if (consecutivePrimaryFailures >= CIRCUIT_BREAKER_THRESHOLD && circuitOpenedAt === null) {
-        circuitOpenedAt = Date.now();
-        console.warn(`🔴 [RPC CIRCUIT BREAKER] Primary RPC failed ${CIRCUIT_BREAKER_THRESHOLD} times. Resting.`);
-    }
-}
 
 const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 10);
 let activeCount = 0;
@@ -153,5 +141,31 @@ export const connection = new Proxy(primaryConnection, {
         };
     }
 }) as unknown as Connection;
+
+
+// In src/lib/connection.ts
+const FAILURE_WINDOW_MS = 10_000;
+const MAX_FAILURES_IN_WINDOW = 8;
+const failureTimestamps: number[] = [];
+
+function recordPrimarySuccess() { 
+    const now = Date.now();
+    while(failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
+        failureTimestamps.shift();
+    }
+    if (failureTimestamps.length === 0) circuitOpenedAt = null; 
+}
+
+function recordPrimaryFailure() {
+    const now = Date.now();
+    failureTimestamps.push(now);
+    while(failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
+        failureTimestamps.shift();
+    }
+    if (failureTimestamps.length >= MAX_FAILURES_IN_WINDOW) {
+        circuitOpenedAt = now;
+        console.warn(`🔴 [RPC BREAKER] ${MAX_FAILURES_IN_WINDOW} failures in 10s. Routing to backup RPC for 30s.`);
+    }
+}
 
 export const coldConnection = backupConnection;

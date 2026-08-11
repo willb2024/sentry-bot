@@ -1,9 +1,7 @@
 // src/services/deposit.service.ts
 import { PublicKey } from '@solana/web3.js';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { connection } from '../lib/connection.js';
-
-const prisma = new PrismaClient();
 
 const activeListeners = new Map<string, { subId: number, lastBalance: number }>();
 
@@ -12,7 +10,7 @@ export async function startDepositWatcher(bot: any) {
 
     setInterval(async () => {
         try {
-            // BUG 11 FIX: Used select to prevent full table scans and memory overload
+            // Optimize Prisma query to prevent memory overhead
             const activeUsers = await prisma.user.findMany({
                 where: {
                     vaultAddress: { not: null }
@@ -63,9 +61,9 @@ export async function startDepositWatcher(bot: any) {
 
                     if (initialBalanceLamports === null) continue;
 
-                    const initialBalanceSol = initialBalanceLamports / 1_000_000_000;
+                    const initialBalanceSol = initialBalanceSolCalculated(initialBalanceLamports);
 
-                    let subId: number;
+                    let subId: number | undefined;
                     try {
                         subId = connection.onAccountChange(pubKey, async (accountInfo) => {
                             const newBalanceSol = accountInfo.lamports / 1_000_000_000;
@@ -77,7 +75,6 @@ export async function startDepositWatcher(bot: any) {
                                 if (newBalanceSol > oldBalanceSol) {
                                     const depositAmount = newBalanceSol - oldBalanceSol;
                                     
-                                    // Ignore micro-deposits from rent refunds (<0.001 SOL)
                                     if (depositAmount < 0.001) {
                                         activeListeners.set(address, { subId: cachedData.subId, lastBalance: newBalanceSol });
                                         return;
@@ -106,7 +103,9 @@ export async function startDepositWatcher(bot: any) {
                         continue; 
                     }
 
-                    activeListeners.set(address, { subId, lastBalance: initialBalanceSol });
+                    if (subId !== undefined && subId !== 0) {
+                        activeListeners.set(address, { subId, lastBalance: initialBalanceSol });
+                    }
                 }
             }
         } catch (error: any) {
@@ -114,7 +113,11 @@ export async function startDepositWatcher(bot: any) {
         }
     }, 30000);
 }
-// 🟢 CLAUDE FIX C.6: Fast synchronous balance cache helper
+
+function initialBalanceSolCalculated(lamports: number): number {
+    return lamports / 1_000_000_000;
+}
+
 export function getLiveWalletBalance(walletAddress: string): number | null {
     const cachedData = activeListeners.get(walletAddress);
     return cachedData ? cachedData.lastBalance : null;

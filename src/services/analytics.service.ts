@@ -212,10 +212,13 @@ export function computeCombinedStats(trades: any[]): AdvancedStats {
     const dailyReturns = Array.from(dailyPnlMap.values());
 
     let sharpeRatio = 0;
+    // 🟢 FIX: Added conditional boundaries to completely mitigate Division by Zero and NaN
     if (dailyReturns.length >= 2) {
         const dailyMean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
         const dailyStd = Math.sqrt(dailyReturns.reduce((sum, r) => sum + (r - dailyMean) ** 2, 0) / dailyReturns.length);
-        if (dailyStd > 0) sharpeRatio = (dailyMean / dailyStd) * Math.sqrt(365);
+        if (dailyStd > 0) {
+            sharpeRatio = (dailyMean / dailyStd) * Math.sqrt(365);
+        }
     }
 
     let peak = 0, drawdown = 0, maxDrawdown = 0, runningSum = 0;

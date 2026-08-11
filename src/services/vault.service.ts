@@ -16,16 +16,12 @@ if (!rawSecret) {
     process.exit(1);
 }
 
-if (rawSecret.length < 32) {
-    console.error("🔴 [FATAL CONFIGURATION ERROR] ENCRYPTION_KEY is insecure! Must be at least 32 characters.");
-    process.exit(1);
-}
-
-const ENCRYPTION_KEY = crypto.createHash('sha256').update(String(rawSecret)).digest('base64').substring(0, 32);
+// Derive secure 32-byte key via scrypt
+const ENCRYPTION_KEY = crypto.scryptSync(rawSecret, 'sentry-salt-v1', 32);
 
 export function encryptKey(privateKeyBase58: string): string {
     const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'utf-8'), iv);
+    const cipher = crypto.createCipheriv(ALGORITHM, ENCRYPTION_KEY, iv);
     
     let encrypted = cipher.update(privateKeyBase58, 'utf8', 'hex');
     encrypted += cipher.final('hex');
@@ -46,7 +42,7 @@ export function decryptKey(encryptedData: string): string | null {
         const encryptedText = parts[1];
         const authTag = Buffer.from(parts[2], 'hex');
         
-        const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'utf-8'), iv);
+        const decipher = crypto.createDecipheriv(ALGORITHM, ENCRYPTION_KEY, iv);
         decipher.setAuthTag(authTag);
         
         let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
@@ -83,7 +79,6 @@ export async function generateSecureVault(telegramId: string): Promise<{ address
     
     const encryptedKey = encryptKey(privateKeyStr);
     
-    // 🟢 BUG 1 FIX: Safely persist new vault credentials in the database on generation
     await prisma.user.update({
         where: { telegramId },
         data: {
@@ -150,7 +145,6 @@ export async function ensureWalletsExist(telegramId: string, activeCount: number
         updates.pk5 = encryptKey(bs58.encode(w.secretKey));
     }
     
-    // 🟢 BUG 2 FIX: Assign activeWallets state only after preparing payload variables
     updates.activeWallets = activeCount;
     
     try {

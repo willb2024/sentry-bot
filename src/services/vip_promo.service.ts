@@ -134,7 +134,7 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
     try {
         const user = await prisma.user.findUnique({
             where: { telegramId },
-            select: { isVip: true, vipExpiresAt: true, vipSource: true }
+            select: { id: true, isVip: true, vipExpiresAt: true, vipSource: true, wasEverPromoGranted: true }
         });
 
         if (!user) return { granted: false, slotsRemaining: 0 };
@@ -142,7 +142,7 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
         const now = new Date();
         if (user.isVip && !user.vipExpiresAt) return { granted: false, slotsRemaining: await getSlotsRemaining(), reason: 'ALREADY_ACTIVE_VIP' };
 
-        const hadPromo = (user as any).wasEverPromoGranted === true; 
+        const hadPromo = user.wasEverPromoGranted === true; 
         const hasActivePromo = user.isVip && user.vipExpiresAt && user.vipExpiresAt > now;
 
         if (hadPromo && !hasActivePromo) return { granted: false, slotsRemaining: await getSlotsRemaining(), reason: 'PREVIOUSLY_HAD_PROMO' };
@@ -153,12 +153,24 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
 
         const today = new Date().toISOString().split('T')[0];
         const { maxSlots } = await getPromoConfig();
-        const currentCount = await redis.incr(`vip_promo:date:${today}`);
 
-        if (currentCount === 1) await redis.expire(`vip_promo:date:${today}`, 90000); 
+        // 🟢 FIX: Atomic slot claiming with Redis Lua scripts to eliminate race conditions
+        const luaScript = `
+            local current = redis.call('incr', KEYS[1])
+            if current == 1 then
+                redis.call('expire', KEYS[1], 90000)
+            end
+            if current > tonumber(ARGV[1]) then
+                redis.call('decr', KEYS[1])
+                return 0
+            else
+                return current
+            end
+        `;
+        
+        const currentCount = await redis.eval(luaScript, 1, `vip_promo:date:${today}`, maxSlots.toString()) as number;
 
-        if (currentCount > maxSlots) {
-            await redis.decr(`vip_promo:date:${today}`);
+        if (currentCount === 0) {
             return { granted: false, slotsRemaining: 0, reason: 'SLOTS_FULL' };
         }
 

@@ -14,6 +14,8 @@ const prisma = new PrismaClient();
 
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
 
+
+// Replace createGuild in src/services/guild.service.ts
 export async function createGuild(
     telegramId: string, 
     name: string, 
@@ -22,9 +24,8 @@ export async function createGuild(
 ): Promise<{ success: boolean; message: string; guildCode?: string }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
-        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
-        
-        // 🟢 FIX: Removed Dev Suite check and 2.0 SOL price requirement entirely.
+        if (!user || !user.vaultAddress) return { success: false, message: "No active vault found." };
+
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
 
         const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
@@ -38,7 +39,7 @@ export async function createGuild(
                 name,
                 description,
                 rewardDescription,
-                feePaidSol: 0 // Free
+                feePaidSol: 0
             }
         });
 
@@ -47,6 +48,7 @@ export async function createGuild(
         return { success: false, message: e.message };
     }
 }
+
 
 export async function joinGuild(telegramId: string, guildCode: string): Promise<{ success: boolean; message: string; guildName?: string; rewardDescription?: string | null }> {
     try {

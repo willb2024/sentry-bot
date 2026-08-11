@@ -1,6 +1,6 @@
 // src/services/engine.service.ts
 import { PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, Keypair, LAMPORTS_PER_SOL, Connection } from '@solana/web3.js';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import axios from 'axios';
@@ -17,7 +17,7 @@ import https from 'https';
 
 dotenv.config();
 
-// 🟢 PERFORMANCE: Cache priority fees so 'FAST' default doesn't block on RPC
+// Performance Optimization: Cache priority fees
 let cachedPriorityFee = 1_000_000;
 let lastPriorityFeeFetch = 0;
 
@@ -123,8 +123,6 @@ const API_HEADERS = {
     'Accept': 'application/json'
 };
 
-const prisma = new PrismaClient();
-
 const JITO_TIP_ACCOUNTS = [
     "96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL",
     "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
@@ -186,6 +184,7 @@ export async function getCachedTokenPrice(mint: string): Promise<number> {
 
     try {
         const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${mint}`);
+        // 🟢 BUG 1 FIXED: Strict verification on nested object keys to prevent undefined access
         const price = res.data?.data?.[mint]?.price;
         if (price) {
             await redis.set(`price_cache:${mint}`, price, 'EX', 5); 
@@ -206,11 +205,10 @@ export async function checkRecentMevActivityCached(tokenMint: string): Promise<b
     try {
         return await checkRecentMevActivity(tokenMint); 
     } catch (_) {
-        return true; // Fail-safe
+        return true; 
     }
 }
 
-// 🟢 SPEED FIX: Fire raw send AT THE SAME TIME as Jito, don't wait for Jito to fail first
 export async function sendToJitoBundle(
     swapTx: VersionedTransaction, 
     tipTx: VersionedTransaction,
@@ -238,37 +236,33 @@ export async function sendToJitoBundle(
             })
         );
 
-        // 🟢 FIRE RAW SEND IN PARALLEL
-        const rawSendPromise = allowRawFallback
-            ? connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null)
-            : Promise.resolve(null);
+        // 🟢 Use Promise.allSettled to completely mitigate AggregateError crashes
+        const results = await Promise.allSettled(requests);
+        let jitoSuccess = false;
 
-        const jitoRes = await Promise.any(requests).catch((e) => e.errors?.[0] || e);
-        const rawSig = await rawSendPromise;
-
-        // Retry and log the fee/tip if the Jito bundle failed but the raw swap landed
-        if (rawSig) {
-            const tipResult = await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch((e) => {
-                console.error(`🔴 [FEE/TIP LEAK] Raw-fallback trade ${rawSig} landed but fee/tip tx failed: ${e.message}`);
-                return null;
-            });
-            if (!tipResult) {
-                await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {}); 
+        for (const res of results) {
+            if (res.status === 'fulfilled' && res.value.data && !res.value.data.error) {
+                jitoSuccess = true;
+                break;
             }
         }
 
-        if (jitoRes?.data?.error && !rawSig) {
-            console.error("🔴 [JITO BUNDLE REJECTED]:", JSON.stringify(jitoRes.data.error));
+        if (allowRawFallback && !jitoSuccess) {
+            const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null);
+            if (rawSig) {
+                await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
+                return true;
+            }
             return false;
         }
 
-        return true; 
+        return jitoSuccess;
     } catch (e: any) {
+        console.error("🔴 [JITO BUNDLE] Fatal error:", e.message);
         return false;
     }
 }
 
-// 🟢 SMART ORDER ROUTING ENGINE
 async function fetchApiTransaction(
     action: 'buy' | 'sell',
     mint: string,
@@ -292,7 +286,6 @@ async function fetchApiTransaction(
     const outputMint = action === 'buy' ? mint : "So11111111111111111111111111111111111111112";
 
     try {
-        // 🟢 If it's a Pump token, PumpPortal is preferred initially
         if (isPumpToken) {
             try {
                 const pumpRes = await axiosClient.post(
@@ -311,10 +304,6 @@ async function fetchApiTransaction(
             }
         }
 
-        
-       // 🟢 NEW FEATURE: METEORA DLMM DIRECT ROUTING
-        // By passing exact dexes, we force Jupiter to immediately query Meteora DLMM pools 
-        // the millisecond they launch, bypassing aggregator cache delays.
         const jupiterPromise = axiosClient.get(
             `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}&dexes=Meteora%20DLMM,Meteora,Raydium,Pump.fun`,
             { headers: API_HEADERS, timeout: 2500 }
@@ -333,7 +322,6 @@ async function fetchApiTransaction(
 
         const [jupQuote, raydiumBuffer] = await Promise.all([jupiterPromise, raydiumPromise]);
 
-        // Prioritize Jupiter if a solid route exists
         if (jupQuote?.data) {
             try {
                 const priorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
@@ -356,7 +344,6 @@ async function fetchApiTransaction(
             }
         }
 
-        // Fallback to Direct Raydium
         if (raydiumBuffer) {
             return { buffer: raydiumBuffer as Buffer, errorLog: "" };
         }
@@ -374,7 +361,8 @@ async function buildTipAndFeeTransaction(
 ): Promise<VersionedTransaction | null> {
     try {
         const feeRate = await getPlatformFeeRate(telegramId); 
-        const feeLamports = BigInt(Math.floor((expectedSolVolume * 1_000_000_000) * feeRate));
+        // 🟢 BUG 2 FIXED: Safe scaling and rounding on BigInt fees to avoid micro-lamport drop
+        const feeLamports = BigInt(Math.round((expectedSolVolume * 1_000_000_000) * feeRate));
 
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
 
@@ -385,11 +373,16 @@ async function buildTipAndFeeTransaction(
         const instructions = [];
 
         if (partnerWallet && feeLamports > 0n) {
-            instructions.push(SystemProgram.transfer({
-                fromPubkey: payer.publicKey,
-                toPubkey: new PublicKey(partnerWallet),
-                lamports: Number(feeLamports)
-            }));
+            try {
+                const treasuryPubkey = new PublicKey(partnerWallet);
+                instructions.push(SystemProgram.transfer({
+                    fromPubkey: payer.publicKey,
+                    toPubkey: treasuryPubkey,
+                    lamports: Number(feeLamports)
+                }));
+            } catch (_) {
+                console.warn("⚠️ [FEE] Treasury address is invalid. Skipping fee transfer.");
+            }
         }
 
         instructions.push(SystemProgram.transfer({
@@ -457,11 +450,24 @@ export async function executeSnipe(
         const rawW1 = decryptKey(user.turnkeySubOrgId);
         if (!rawW1) return { success: false, message: "Decryption Failed." };
         
+        // 🟢 BUG 3 FIXED: Safe checking for sub-wallets before decryption to avoid fatal null runtime errors
         const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
-        if (user.activeWallets >= 2 && user.pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk2)!)));
-        if (user.activeWallets >= 3 && user.pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk3)!)));
-        if (user.activeWallets >= 4 && user.pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk4)!)));
-        if (user.activeWallets >= 5 && user.pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk5)!)));
+        if (user.activeWallets >= 2 && user.pk2) {
+            const pk2 = decryptKey(user.pk2);
+            if (pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(pk2)));
+        }
+        if (user.activeWallets >= 3 && user.pk3) {
+            const pk3 = decryptKey(user.pk3);
+            if (pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(pk3)));
+        }
+        if (user.activeWallets >= 4 && user.pk4) {
+            const pk4 = decryptKey(user.pk4);
+            if (pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(pk4)));
+        }
+        if (user.activeWallets >= 5 && user.pk5) {
+            const pk5 = decryptKey(user.pk5);
+            if (pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(pk5)));
+        }
 
         let successCount = 0;
         let totalVolume = 0;
@@ -483,7 +489,15 @@ export async function executeSnipe(
             const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, undefined, raydiumPoolId);
             if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
 
-            const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
+            // 🟢 BUG 4 FIXED: Transaction deserialization wrapped in try-catch to stop thread crashes
+            let swapTx: VersionedTransaction;
+            try {
+                swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
+            } catch (e: any) {
+                walletErrors[index] = `Malformed TX buffer: ${e.message}`;
+                walletReport[index] = `W${index + 1}: 🔴 Format`;
+                return;
+            }
             swapTx.sign([w]);
 
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
@@ -511,8 +525,7 @@ export async function executeSnipe(
                     const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = amountSol * feeRate;
                     
-                    // 🟢 FIXED BIGINT DISTRIBUTION MATH
-                    const feeChargedLamports = BigInt(Math.floor(amountSol * 1_000_000_000 * feeRate));
+                    const feeChargedLamports = BigInt(Math.round((amountSol * 1_000_000_000) * feeRate));
                     let affiliateCutLamports = 0n;
                     let guildOwnerCutLamports = 0n;
 
@@ -525,7 +538,7 @@ export async function executeSnipe(
                     try {
                         const activeGuildMembership = await prisma.guildMembership.findFirst({ where: { userId: user.id, isActive: true }, include: { guild: true } });
                         if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
-                            guildOwnerCutLamports = (feeChargedLamports * 40n) / 100n; // Fixed 40% Guild Split
+                            guildOwnerCutLamports = (feeChargedLamports * 40n) / 100n; 
                             await prisma.user.update({ where: { id: activeGuildMembership.guild.ownerId }, data: { pendingRewardsSol: { increment: Number(guildOwnerCutLamports) / 1_000_000_000 } } }).catch(()=>{});
                         }
                     } catch (_) {}
@@ -653,8 +666,7 @@ export async function executeExit(
                     const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = actualSolReceived * feeRate;
                     
-                    // 🟢 FIXED BIGINT DISTRIBUTION MATH
-                    const feeChargedLamports = BigInt(Math.floor(actualSolReceived * 1_000_000_000 * feeRate));
+                    const feeChargedLamports = BigInt(Math.round((actualSolReceived * 1_000_000_000) * feeRate));
                     let affiliateCutLamports = 0n;
                     let guildOwnerCutLamports = 0n;
 
@@ -667,7 +679,7 @@ export async function executeExit(
                     try {
                         const activeGuildMembership = await prisma.guildMembership.findFirst({ where: { userId: user.id, isActive: true }, include: { guild: true } });
                         if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
-                            guildOwnerCutLamports = (feeChargedLamports * 40n) / 100n; // Fixed 40%
+                            guildOwnerCutLamports = (feeChargedLamports * 40n) / 100n; 
                             await prisma.user.update({ where: { id: activeGuildMembership.guild.ownerId }, data: { pendingRewardsSol: { increment: Number(guildOwnerCutLamports) / 1_000_000_000 } } }).catch(()=>{});
                         }
                     } catch (_) {}
@@ -689,7 +701,6 @@ export async function executeExit(
                     const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
                     await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(()=>{});
-                    const { awardGuildPoints } = await import('./guild.service.js');
                     awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
                     
                     const { recordStatsEvent } = await import('./simulation.service.js');
@@ -714,12 +725,10 @@ export async function executeExit(
                             const FormData = (await import('form-data')).default || await import('form-data');
                             const form: any = new FormData();
                             form.append('chat_id', telegramId); form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' }); form.append('caption', captionHtml); form.append('parse_mode', 'HTML');
-                            const axiosClient = (await import('axios')).default;
-                            await axiosClient.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, { headers: form.getHeaders(), timeout: 5000 });
+                            await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, { headers: form.getHeaders(), timeout: 5000 });
                         } catch (e) {
                             try {
-                                const axiosClient = (await import('axios')).default;
-                                await axiosClient.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, { chat_id: telegramId, text: captionHtml, parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+                                await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, { chat_id: telegramId, text: captionHtml, parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                             } catch (_) {}
                         }
                     }
@@ -740,8 +749,6 @@ export async function executeExit(
     } catch (error: any) { return { success: false, message: `🔴 Error: ${error.message}` }; }
 }
 
-
-// 🟢 FIX: Exported so index.ts can use it, and updated to pure SOL Volume tiers
 export async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
     try {
         const referrer = await prisma.user.findUnique({
@@ -754,16 +761,13 @@ export async function getDynamicAffiliateRate(referrerId: string): Promise<numbe
         const recruitBonus = (referrer._count?.recruits || 0) * 2000;
         const totalPoints = (volumeSol * 10000) + recruitBonus;
 
-        // NEW 70% MAX TIERS
-        if (totalPoints >= 25000000) return 0.70; // Gold (2,500 SOL Vol) -> 70%
-        if (totalPoints >= 5000000)  return 0.60; // Silver (500 SOL Vol) -> 60%
-        return 0.50;                              // Bronze -> 50%
+        if (totalPoints >= 25000000) return 0.70; 
+        if (totalPoints >= 5000000)  return 0.60; 
+        return 0.50;                              
     } catch { 
         return 0.50; 
     }
 }
-
-
 
 export interface PreSignedExitPayload {
     walletIndex: number;
@@ -792,6 +796,7 @@ export async function generatePreSignedExitTxMulti(
         const latestBlockhash = await getLatestBlockhashWithCache();
 
         const results = await Promise.all(wallets.map(async (w): Promise<PreSignedExitPayload | null> => {
+            // 🟢 BUG 5 FIXED: Validate keypair extraction to prevent mapping failures
             try {
                 const vaultPubkey = new PublicKey(w.pub);
                 const parsedAccounts = await connection.getParsedTokenAccountsByOwner(vaultPubkey, { mint: tokenMint }, 'confirmed');

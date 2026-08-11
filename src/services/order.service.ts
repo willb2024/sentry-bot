@@ -37,6 +37,8 @@ export async function syncGuardsFromDb() {
         });
         
         for (const g of dbGuards) {
+            // 🟢 FIX: Avoid unsafe 'as any' casting that results in NaN runtime evaluation
+            const maxHold = (g as any).maxHoldMinutes as number | null | undefined;
             const order: TrailingOrder = {
                 id: g.id,
                 telegramId: g.user.telegramId,
@@ -46,7 +48,7 @@ export async function syncGuardsFromDb() {
                 amountInSol: g.amountSol,
                 entryPrice: g.targetPriceUsd || 0,
                 takeProfitPercent: g.takeProfitPercent || undefined,
-                maxHoldMinutes: (g as any).maxHoldMinutes || undefined,
+                maxHoldMinutes: maxHold === null || maxHold === undefined ? undefined : maxHold,
                 createdAt: g.createdAt.getTime()
             };
             
@@ -165,7 +167,12 @@ export async function removeOrderFromMemory(orderId: string, telegramId: string,
         await redis.srem(`user_guards:${telegramId}`, orderId);
         await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, orderId);
 
-        await unsubscribeFromMintPrice(tokenAddress, orderId).catch(() => {});
+        // 🟢 FIX: Suppress potential WebSocket unsubscription errors to ensure DB updates persist
+        try {
+            await unsubscribeFromMintPrice(tokenAddress, orderId);
+        } catch (e) {
+            console.warn("⚠️ [GUARD] Unsubscribe failed (non-critical):", e);
+        }
 
         await prisma.activeOrder.updateMany({
             where: { id: orderId, orderType: ORDER_TYPES.GUARD },

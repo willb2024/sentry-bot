@@ -1,13 +1,13 @@
 // src/services/position.service.ts
 import { PublicKey } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import dotenv from 'dotenv';
 import { connection } from '../lib/connection.js'; 
 import { redis } from '../lib/redis.js';
+import { rpcLimiter } from '../lib/rpc-limiter.js';
 
 dotenv.config();
-const prisma = new PrismaClient();
 
 export async function getUserPositions(telegramId: string) {
     try {
@@ -31,9 +31,14 @@ export async function getUserPositions(telegramId: string) {
 
         await Promise.all(activePubkeys.map(async (pubKey) => {
             try {
+                // 🟢 FIX: Wrap all RPC fetches inside our custom rpcLimiter to avoid rate limit bans
                 const [splAccounts, token2022Accounts] = await Promise.all([
-                    connection.getParsedTokenAccountsByOwner(pubKey, { programId: TOKEN_PROGRAM_ID }, 'confirmed'),
-                    connection.getParsedTokenAccountsByOwner(pubKey, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed')
+                    rpcLimiter.run(() => 
+                        connection.getParsedTokenAccountsByOwner(pubKey, { programId: TOKEN_PROGRAM_ID }, 'confirmed')
+                    ),
+                    rpcLimiter.run(() => 
+                        connection.getParsedTokenAccountsByOwner(pubKey, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed')
+                    )
                 ]);
 
                 const allAccounts = [...splAccounts.value, ...token2022Accounts.value];
@@ -60,9 +65,11 @@ export async function getUserPositions(telegramId: string) {
         const uniqueMints = rawPositions.map(p => p.mint);
         let tokenMetadata: Record<string, { price: number, symbol: string, name: string }> = {};
 
-        // 🟢 FIX: Parallel chunk fetching for massive speed boost
+        // DexScreener parallel processing chunks
         const chunks: string[] = [];
-        for (let i = 0; i < uniqueMints.length; i += 30) chunks.push(uniqueMints.slice(i, i + 30).join(','));
+        for (let i = 0; i < uniqueMints.length; i += 30) {
+            chunks.push(uniqueMints.slice(i, i + 30).join(','));
+        }
 
         await Promise.all(chunks.map(async (chunk) => {
             try {
@@ -95,12 +102,10 @@ export async function getUserPositions(telegramId: string) {
                 valueUsd: p.amount * meta.price
             };
         })
-          .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 
-          .sort((a, b) => b.valueUsd - a.valueUsd);
+        .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 
+        .sort((a, b) => b.valueUsd - a.valueUsd);
           
-        // 🟢 FIX: Increased cache from 15s to 30s to prevent RPC throttling.
         await redis.set(cacheKey, JSON.stringify(mappedPositions), 'EX', 30);
-
         return mappedPositions;
 
     } catch (e: any) {

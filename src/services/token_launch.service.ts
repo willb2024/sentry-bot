@@ -2,14 +2,13 @@
 import { Keypair, VersionedTransaction, SystemProgram, TransactionMessage, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
 import FormData from 'form-data';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { connection } from '../lib/connection.js';
 import { decryptKey, ensureWalletsExist } from './vault.service.js';
 import dotenv from 'dotenv';
 import axios from 'axios';
 
 dotenv.config();
-const prisma = new PrismaClient();
 
 export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.04;
 
@@ -70,7 +69,7 @@ export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keyp
                 keypair = Keypair.generate();
             }
             iterations += 5000;
-            // 🟢 PREVENT V8 EVENT LOOP FREEZE: Hard Cap at 50,000 Iterations
+            // 🟢 Performance Limitation: Hard execution boundary prevents CPU starvation
             if (iterations >= 50000) {
                 return resolve({ keypair, matched: false }); 
             }
@@ -89,7 +88,6 @@ export async function launchTokenOnPumpFun(
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
 
-        // 🟢 FIX: hard block instead of silent fallback
         if (dex === 'raydium') {
             return {
                 success: false,
@@ -99,6 +97,13 @@ export async function launchTokenOnPumpFun(
 
         const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
         if (!treasuryWalletStr) return { success: false, message: "Platform treasury not configured." };
+
+        // 🟢 BUG 10 FIXED: Fail early if treasury address public key cannot be validated/instantiated
+        try {
+            new PublicKey(treasuryWalletStr);
+        } catch {
+            return { success: false, message: "Invalid treasury wallet address configured in system parameters." };
+        }
 
         if (walletCount > 1) await ensureWalletsExist(telegramId, walletCount);
         

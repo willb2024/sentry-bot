@@ -900,7 +900,6 @@
         document.getElementById('stat-networth').innerText = '$' + stats.networth.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
         document.getElementById('stat-networth-sub').innerText = stats.networthSol;
         
-        // Parse pnlPercent as float to prevent type coercion bugs
         const pnlNum = parseFloat(stats.pnlPercent) || 0;
         const isGain = pnlNum >= 0;
         const pnlColorClass = isGain ? 'text-jupGreen' : 'text-neonRed';
@@ -919,25 +918,69 @@
         setFilter(currentFilter);
     }
 
-    // 🟢 FIX: Handle the object structure { trades, stats } properly
+    function resetDashboardToZero() {
+        document.getElementById('stat-networth').innerText = '$0.00';
+        document.getElementById('stat-networth-sub').innerText = '0.0000 SOL';
+        document.getElementById('stat-pnl').innerText = '0.00%';
+        document.getElementById('stat-pnl').className = 'text-3xl sm:text-4xl font-bold text-gray-400 mt-1';
+        document.getElementById('stat-pnl-sub').innerText = '+$0.00 net profit';
+        document.getElementById('stat-winrate').innerText = '0.0%';
+        document.getElementById('stat-winrate-sub').innerText = '0 Wins / 0 Losses';
+        document.getElementById('stat-volume').innerText = '0.00 SOL';
+        document.getElementById('stat-trading-days').innerText = '0';
+        document.getElementById('sharpe-ratio').innerText = '--';
+        document.getElementById('max-drawdown').innerText = '--';
+        document.getElementById('profit-factor').innerText = '--';
+        document.getElementById('total-trades').innerText = '0';
+        document.getElementById('risk-score').innerText = '0%';
+        document.getElementById('risk-label').innerText = 'Awaiting Scan...';
+        document.getElementById('strat-name-1').innerText = 'Manual / Direct';
+        document.getElementById('strat-pnl-1').innerText = '+0.000 SOL';
+        document.getElementById('strat-name-2').innerText = 'Sniper Engine';
+        document.getElementById('strat-pnl-2').innerText = '+0.000 SOL';
+        document.getElementById('positions-count').innerText = `0 OPEN`;
+        document.getElementById('stats-live').innerText = `Manual: 0 trades (+0.0000 SOL)`;
+        document.getElementById('stats-sim').innerText = `Auto-Engine: 0 trades (+0.0000 SOL)`;
+        document.getElementById('positions-container').innerHTML = `
+            <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
+                <div class="text-sm font-semibold">No Active Deployments</div>
+                <span class="text-xs font-mono mt-1">Awaiting target.</span>
+            </div>`;
+        
+        userTrades = [];
+        if (pnlChart) pnlChart.destroy();
+        if (allocChart) allocChart.destroy();
+        initCharts([], [], [], [], []);
+    }
+
     async function fetchLiveData() {
         try {
             const simRes = await fetch('/api/sim-stats', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ initData: tg.initData || "" })
             });
 
             if (simRes.ok) {
                 const simStats = await simRes.json();
-                if (simStats.isActive) {
+                
+                if (!simStats.isActive) {
+                    resetDashboardToZero();
+                    isSimModeActive = false;
+                } else {
                     isSimModeActive = true; 
                     const solPriceRes = await fetch('/api/sol-price', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" })
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ initData: tg.initData || "" })
                     }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
                     const liveSolPrice = solPriceRes.price || 160;
 
                     const simPositions = (simStats.positions || []).map(p => ({
-                        mint: p.mint, symbol: p.symbol, amount: p.amount,
+                        mint: p.mint, 
+                        symbol: p.symbol, 
+                        amount: p.amount,
                         priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
                         valueUsd: p.valueUsd || (p.amountInSol * liveSolPrice),
                         entryPrice: p.entryPriceUsd || p.entryPrice
@@ -970,25 +1013,58 @@
                     const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [];
 
                     populateDashboard({
-                        networth: networthUsd, networthSol: networthSol, pnlPercent: pnlPercent, pnlUsd: pnlUsd,
-                        winrate: winRate, winLossText: `${wins} Wins / ${losses} Losses`, volume: totalVolumeSol.toFixed(4) + " SOL"
+                        networth: networthUsd, 
+                        networthSol: networthSol, 
+                        pnlPercent: pnlPercent, 
+                        pnlUsd: pnlUsd,
+                        winrate: winRate, 
+                        winLossText: `${wins} Wins / ${losses} Losses`, 
+                        volume: totalVolumeSol.toFixed(4) + " SOL"
                     }, allocLabels, allocData, simPositions);
 
-                    fetch('/api/my-leaderboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) }).then(r => r.ok ? r.json() : { guild: null, members: [] }).then(data => { liveLeaderboardData = data; if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); }).catch(() => {});
-                    fetch('/api/affiliate-stats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) }).then(r => r.ok ? r.json() : null).then(data => { if (data) liveAffiliateData = data; if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); }).catch(() => {});
+                    fetch('/api/my-leaderboard', { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ initData: tg.initData || "" }) 
+                    }).then(r => r.ok ? r.json() : { guild: null, members: [] }).then(data => { 
+                        liveLeaderboardData = data; 
+                        if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); 
+                    }).catch(() => {});
+
+                    fetch('/api/affiliate-stats', { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ initData: tg.initData || "" }) 
+                    }).then(r => r.ok ? r.json() : null).then(data => { 
+                        if (data) liveAffiliateData = data; 
+                        if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); 
+                    }).catch(() => {});
                     
                     setTimeout(fetchLiveData, 4000);
                     return; 
-                } else { isSimModeActive = false; }
-            } else { isSimModeActive = false; }
-        } catch (_) { isSimModeActive = false; }
+                }
+            } else { 
+                isSimModeActive = false; 
+            }
+        } catch (_) { 
+            isSimModeActive = false; 
+        }
 
         // Live Mainnet Mode
-        fetch('/api/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
+        fetch('/api/positions', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ initData: tg.initData || "" }) 
+        })
         .then(r => r.ok ? r.json() : []).catch(() => [])
         .then(positions => {
-            fetch('/api/analytics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
-            .then(res => res.ok ? res.json() : { trades: [], stats: null }).catch(() => ({ trades: [], stats: null }))
+            return fetch('/api/analytics', { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ initData: tg.initData || "" }) 
+            })
+            .then(res => res.ok ? res.json() : { trades: [], stats: null })
+            .catch(() => ({ trades: [], stats: null }))
             .then(async data => {
                 let liveTrades = [];
                 let liveStats = {};
@@ -1003,11 +1079,19 @@
                 userTrades = liveTrades;
                 const posArray = positions || [];
 
-                const solRes = await fetch('/api/sol-price', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData }) }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
+                const solRes = await fetch('/api/sol-price', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ initData: tg.initData }) 
+                }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
                 const currentSolPrice = solRes.price || 160;
                 
                 let totalValueUsd = 0, allocLabels = [], allocData = [];
-                posArray.forEach(p => { totalValueUsd += p.valueUsd || 0; allocLabels.push(p.symbol); allocData.push(p.valueUsd || 0); });
+                posArray.forEach(p => { 
+                    totalValueUsd += p.valueUsd || 0; 
+                    allocLabels.push(p.symbol); 
+                    allocData.push(p.valueUsd || 0); 
+                });
 
                 const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
 
@@ -1025,25 +1109,54 @@
                 document.getElementById('total-trades').innerText = liveStats.totalTrades || 0;
 
                 populateDashboard({
-                    networth: totalValueUsd, networthSol: networthSol, pnlPercent: finalPnlPercent, pnlUsd: realizedPnlUsd, 
-                    winrate: winRate, winLossText: `${wins} Wins / ${losses} Losses`, volume: `${totalVolumeSol.toFixed(2)} SOL`
+                    networth: totalValueUsd, 
+                    networthSol: networthSol, 
+                    pnlPercent: finalPnlPercent, 
+                    pnlUsd: realizedPnlUsd, 
+                    winrate: winRate, 
+                    winLossText: `${wins} Wins / ${losses} Losses`, 
+                    volume: `${totalVolumeSol.toFixed(2)} SOL`
                 }, allocLabels.length ? allocLabels : ['Vault Liquid SOL'], allocData, posArray);
             });
-        }).catch(() => {
-            populateDashboard({ networth: 0, networthSol: "0.00 SOL", pnlPercent: "0.00", pnlUsd: 0, winrate: "0.0", winLossText: "0 Wins / 0 Losses", volume: "0.00 SOL" }, ['Offline'], [100], []);
+        })
+        .catch(() => {
+            populateDashboard({ 
+                networth: 0, 
+                networthSol: "0.00 SOL", 
+                pnlPercent: "0.00", 
+                pnlUsd: 0, 
+                winrate: "0.0", 
+                winLossText: "0 Wins / 0 Losses", 
+                volume: "0.00 SOL" 
+            }, ['Offline'], [100], []);
         });
 
-        fetch('/api/my-leaderboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
-        .then(r => r.ok ? r.json() : { guild: null, members: [] }).then(data => { liveLeaderboardData = data; if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); }).catch(() => {});
+        fetch('/api/my-leaderboard', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ initData: tg.initData || "" }) 
+        })
+        .then(r => r.ok ? r.json() : { guild: null, members: [] }).then(data => { 
+            liveLeaderboardData = data; 
+            if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); 
+        }).catch(() => {});
 
-        fetch('/api/affiliate-stats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) })
-        .then(r => r.ok ? r.json() : null).then(data => { if (data) liveAffiliateData = data; if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); }).catch(() => {});
+        fetch('/api/affiliate-stats', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ initData: tg.initData || "" }) 
+        })
+        .then(r => r.ok ? r.json() : null).then(data => { 
+            if (data) liveAffiliateData = data; 
+            if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); 
+        }).catch(() => {});
     }
 
     async function exportTrades() {
         try {
             const res = await fetch('/api/trades/export', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ initData: tg.initData })
             });
             if (res.ok) {
@@ -1055,14 +1168,19 @@
                 a.click();
                 window.URL.revokeObjectURL(url);
                 showToast('Ledger Exported!');
-            } else { showToast('No trades found to export'); }
-        } catch (_) { showToast('Export failed'); }
+            } else { 
+                showToast('No trades found to export'); 
+            }
+        } catch (_) { 
+            showToast('Export failed'); 
+        }
     }
 
     async function fetchAdvancedStats() {
         try {
             const res = await fetch('/api/analytics/advanced-stats', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ initData: tg.initData })
             });
             if (res.ok) {
@@ -1078,7 +1196,8 @@
     async function fetchHourlyPerformance() {
         try {
             const res = await fetch('/api/analytics/hourly', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ initData: tg.initData })
             });
             if (res.ok) {
@@ -1090,11 +1209,35 @@
                     data: {
                         labels: data.map(d => d.hour + ':00'),
                         datasets: [
-                            { label: 'PnL (SOL)', data: data.map(d => d.totalPnlSol), backgroundColor: data.map(d => d.totalPnlSol >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'), borderWidth: 0, yAxisID: 'y' },
-                            { label: 'Win Rate %', data: data.map(d => d.winRate), type: 'line', borderColor: '#3b82f6', borderWidth: 2, pointRadius: 1, fill: false, yAxisID: 'y1' }
+                            { 
+                                label: 'PnL (SOL)', 
+                                data: data.map(d => d.totalPnlSol), 
+                                backgroundColor: data.map(d => d.totalPnlSol >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'), 
+                                borderWidth: 0, 
+                                yAxisID: 'y' 
+                            },
+                            { 
+                                label: 'Win Rate %', 
+                                data: data.map(d => d.winRate), 
+                                type: 'line', 
+                                borderColor: '#3b82f6', 
+                                borderWidth: 2, 
+                                pointRadius: 1, 
+                                fill: false, 
+                                yAxisID: 'y1' 
+                            }
                         ]
                     },
-                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#64748b' }, grid: { display: false } }, y: { display: false }, y1: { display: false } } }
+                    options: { 
+                        responsive: true, 
+                        maintainAspectRatio: false, 
+                        plugins: { legend: { display: false } }, 
+                        scales: { 
+                            x: { ticks: { color: '#64748b' }, grid: { display: false } }, 
+                            y: { display: false }, 
+                            y1: { display: false } 
+                        } 
+                    }
                 });
             }
         } catch (_) {}
@@ -1174,7 +1317,7 @@
         } catch (_) {}
     }
 
-    // 🟢 START INITIALIZATION & WIDGET POLLERS
+    // START INITIALIZATION & WIDGET POLLERS
     fetchLiveData();
     fetchAdvancedStats();
     fetchHourlyPerformance();

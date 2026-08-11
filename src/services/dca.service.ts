@@ -1,5 +1,5 @@
 // src/services/dca.service.ts
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { executeSnipe, getCachedTokenPrice } from './engine.service.js';
 import { addTrailingStopToMemory } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
@@ -9,11 +9,11 @@ import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 
 dotenv.config();
-const prisma = new PrismaClient();
 
 let isDcaChecking = false;
 let cachedDcaOrders: any[] = [];
 
+// Keep local cache synced with DB
 setInterval(async () => {
     try {
         cachedDcaOrders = await prisma.activeOrder.findMany({
@@ -21,7 +21,7 @@ setInterval(async () => {
             include: { user: true }
         });
     } catch (e: any) {
-        console.error("🔴 DCA Cache Sync Error:", e.message);
+        console.error("🔴 [DCA CACHE] Sync Error:", e.message);
     }
 }, 10000);
 
@@ -33,37 +33,41 @@ export function startDcaEngine(bot: any) {
         isDcaChecking = true;
 
         try {
-            if (cachedDcaOrders.length === 0) return;
+            // 🟢 FIX: Create a stable copy snapshot of cached orders to avoid shifts
+            const executionSnapshot = [...cachedDcaOrders];
+            if (executionSnapshot.length === 0) {
+                isDcaChecking = false;
+                return;
+            }
+
             const now = new Date();
 
-            for (let i = 0; i < cachedDcaOrders.length; i++) {
-                const order: any = cachedDcaOrders[i];
+            for (let i = 0; i < executionSnapshot.length; i++) {
+                const order = executionSnapshot[i];
 
                 const intervalMs = (order.dcaIntervalMins || 60) * 60 * 1000;
                 const timeSinceLastBuy = now.getTime() - new Date(order.updatedAt).getTime();
 
                 if (timeSinceLastBuy >= intervalMs) {
-
                     const lockTtlSeconds = Math.max(60, Math.floor((intervalMs / 1000) - 5));
                     const lockKey = `lock:dca_exec:${order.id}`;
+                    
                     const isLocked = await redis.set(lockKey, 'LOCKED', 'EX', lockTtlSeconds, 'NX'); 
                     if (!isLocked) continue;
 
                     const liveCheck = await prisma.activeOrder.findUnique({ where: { id: order.id } });
                     if (!liveCheck || !liveCheck.isActive) {
-                        const idx = cachedDcaOrders.findIndex(o => o.id === order.id);
-                        if (idx !== -1) cachedDcaOrders.splice(idx, 1);
+                        cachedDcaOrders = cachedDcaOrders.filter(o => o.id !== order.id);
                         await redis.del(lockKey); 
                         continue;
                     }
 
-                    // 🟢 UPGRADE: Max Buys Tracking (Assuming order.maxBuys exists or falling back to Redis counter logic seamlessly)
+                    // Track maximum allowed buys
                     const buyCountKey = `dca_buy_count:${order.id}`;
                     const currentBuys = parseInt(await redis.get(buyCountKey) || '0');
                     if (order.maxBuys && currentBuys >= order.maxBuys) {
                         await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
-                        const idx = cachedDcaOrders.findIndex(o => o.id === order.id);
-                        if (idx !== -1) cachedDcaOrders.splice(idx, 1);
+                        cachedDcaOrders = cachedDcaOrders.filter(o => o.id !== order.id);
                         try {
                             await bot.telegram.sendMessage(
                                 order.user.telegramId,
@@ -76,19 +80,17 @@ export function startDcaEngine(bot: any) {
                     }
 
                     const intendedSpend = order.amountSol * order.user.activeWallets;
-
                     const allocKey = `dca_allocated:${order.id}`;
                     const rawAllocated = await redis.get(allocKey);
                     const currentAllocated = rawAllocated ? parseFloat(rawAllocated) : 0;
 
                     if (order.maxBudgetSol && (order.totalSpentSol + currentAllocated + intendedSpend) > order.maxBudgetSol) {
                         await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
-                        const idx = cachedDcaOrders.findIndex(o => o.id === order.id);
-                        if (idx !== -1) cachedDcaOrders.splice(idx, 1);
+                        cachedDcaOrders = cachedDcaOrders.filter(o => o.id !== order.id);
                         try {
                             await bot.telegram.sendMessage(
                                 order.user.telegramId,
-                                `✅ <b>DCA COMPLETE: Max Budget Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nTotal Spent: <b>${order.totalSpentSol.toFixed(4)} SOL</b>\n<i>This DCA schedule has successfully finished its allocation and powered down.</i>`,
+                                `✅ <b>DCA COMPLETE: Max Budget Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nTotal Spent: <b>${order.totalSpentSol.toFixed(4)} SOL</b>\n<i>This DCA schedule has completed its budget allocation.</i>`,
                                 { parse_mode: 'HTML' }
                             );
                         } catch (_) {}
@@ -116,7 +118,7 @@ export function startDcaEngine(bot: any) {
                         if (result.success) {
                             const spent = result.volumeSpent || intendedSpend;
 
-                            await redis.incr(buyCountKey); // 🟢 UPGRADE: Increment buy counter
+                            await redis.incr(buyCountKey);
 
                             const activeIdx = cachedDcaOrders.findIndex(o => o.id === capturedOrderId);
                             if (activeIdx !== -1) cachedDcaOrders[activeIdx].totalSpentSol += spent;
@@ -173,12 +175,12 @@ export function startDcaEngine(bot: any) {
                     }).catch(async (e: any) => {
                         const activeAlloc = parseFloat(await redis.get(allocKey) || '0');
                         await redis.set(allocKey, Math.max(0, activeAlloc - intendedSpend).toString(), 'EX', 120);
-                        console.error("🔴 DCA Snipe Exception:", e.message);
+                        console.error("🔴 [DCA] Snipe Exception:", e.message);
                     });
                 }
             }
         } catch (error: any) {
-            console.error("🔴 Fatal DCA Loop Error:", error.message);
+            console.error("🔴 [DCA ENGINE] Fatal Loop Error:", error.message);
         } finally {
             isDcaChecking = false;
         }

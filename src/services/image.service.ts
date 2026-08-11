@@ -1,3 +1,4 @@
+// src/services/image.service.ts
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import dotenv from 'dotenv';
 import axios from 'axios';
@@ -10,8 +11,9 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-
-
+/**
+ * Draws a rounded rectangle path on the canvas context.
+ */
 function drawRoundRect(ctx: any, x: number, y: number, width: number, height: number, radius: number) {
     ctx.beginPath();
     ctx.moveTo(x + radius, y);
@@ -26,6 +28,9 @@ function drawRoundRect(ctx: any, x: number, y: number, width: number, height: nu
     ctx.closePath();
 }
 
+/**
+ * Attempts to load the Sentry logo from local assets.
+ */
 async function loadLogoImage() {
     try {
         const logoPath = path.join(__dirname, 'assets', 'logo.jpg');
@@ -36,169 +41,112 @@ async function loadLogoImage() {
     return null;
 }
 
-
-export async function generatePnlCard(tokenMint: string, pnlPercent: number, refCode: string | undefined): Promise<Buffer> {
-    const width = 850;
-    const height = 450;
-    const canvas = createCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-
-    // Background
-    ctx.fillStyle = '#0a0d14';
-    ctx.fillRect(0, 0, width, height);
-
-    // Grid lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
-    ctx.lineWidth = 1;
-    for (let x = 0; x < width; x += 24) {
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
-    }
-    for (let y = 0; y < height; y += 24) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
-    }
-
-    const isProfit = pnlPercent >= 0;
-    const themeColor = isProfit ? '#10b981' : '#ef4444'; 
-    const sign = isProfit ? '+' : '';
-    const label = isProfit ? 'PROFIT SECURED' : 'STOP LOSS TRIGGERED';
-
-    // Inner Card Frame
-    ctx.fillStyle = '#121826';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-    drawRoundRect(ctx, 40, 40, width - 80, height - 80, 16);
-    ctx.fill();
-    ctx.stroke();
-
-    // 🟢 DRAW CUSTOM SHIELD LOGO (logo.jpg)
-    const logo = await loadLogoImage();
-    if (logo) {
-        ctx.save();
-        drawRoundRect(ctx, 75, 75, 46, 46, 12);
-        ctx.clip();
-        ctx.drawImage(logo, 75, 75, 46, 46);
-        ctx.restore();
-    } else {
-        // Fallback default box
-        ctx.fillStyle = '#10b981';
-        drawRoundRect(ctx, 75, 75, 46, 46, 12);
-        ctx.fill();
-    }
-
-    const botName = process.env.BOT_NAME || 'Sentry Terminal';
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px sans-serif';
-    ctx.fillText(botName, 135, 108);
-
-    ctx.font = '500 20px monospace';
-    ctx.fillStyle = '#64748b'; 
-    ctx.fillText(`Token: ${tokenMint.substring(0, 12)}...pump`, 75, 175);
-    
-    ctx.fillStyle = themeColor;
-    ctx.font = 'bold 20px sans-serif';
-    ctx.fillText(label, 75, 210);
-
-    ctx.font = '900 115px sans-serif';
-    ctx.fillStyle = themeColor; 
-    ctx.fillText(`${sign}${pnlPercent.toFixed(2)}%`, 65, 320);
-
-    ctx.fillStyle = '#475569'; 
-    ctx.font = '500 16px sans-serif';
-    const supportUser = process.env.SUPPORT_USERNAME || 'sentrylead';
-    const linkText = refCode 
-        ? `Mirror my trades via TG with code: ${refCode}` 
-        : `Powered by ${botName} on Solana | @${supportUser}`;
-    ctx.fillText(linkText, 75, 395);
-
-    ctx.fillStyle = '#0a0d14'; 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-    drawRoundRect(ctx, 610, 365, 150, 40, 8);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 15px sans-serif';
-    ctx.fillText('𝕏 Share to X', 638, 391);
-
-    return canvas.toBuffer('image/png');
-}
-
-export async function generateLaunchCard(
-    name: string, 
-    symbol: string, 
-    tokenAddress: string, 
-    devBuySol: number, 
-    walletCount: number
+/**
+ * Generates a high-quality green/red PnL Card for trade confirmations.
+ */
+export async function generatePnlCard(
+    tokenAddress: string,
+    pnlPercent: number,
+    referralCode?: string
 ): Promise<Buffer> {
-    const width = 850;
-    const height = 450;
-    const canvas = createCanvas(width, height);
+    const canvas = createCanvas(800, 400);
     const ctx = canvas.getContext('2d');
 
-    // Background and Grid
-    ctx.fillStyle = '#0a0d14';
-    ctx.fillRect(0, 0, width, height);
+    // Background Gradient
+    const gradient = ctx.createLinearGradient(0, 0, 800, 400);
+    gradient.addColorStop(0, '#0a0d14');
+    gradient.addColorStop(1, '#121826');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 800, 400);
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
-    ctx.lineWidth = 1;
-    for (let x = 0; x < width; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke(); }
-    for (let y = 0; y < height; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
+    // Border
+    const isProfit = pnlPercent >= 0;
+    ctx.strokeStyle = isProfit ? '#10b981' : '#ef4444';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(20, 20, 760, 360);
 
-    // Card Body
-    ctx.fillStyle = '#121826';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-    drawRoundRect(ctx, 40, 40, width - 80, height - 80, 16);
-    ctx.fill();
-    ctx.stroke();
+    // Header Logo
+    ctx.fillStyle = '#10b981';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText('⚡ SENTRY TERMINAL', 40, 70);
 
-    // 🟢 DRAW CUSTOM SHIELD LOGO (logo.jpg)
+    // Optional Logo Drawing if present
     const logo = await loadLogoImage();
     if (logo) {
-        ctx.save();
-        drawRoundRect(ctx, 75, 75, 46, 46, 12);
-        ctx.clip();
-        ctx.drawImage(logo, 75, 75, 46, 46);
-        ctx.restore();
-    } else {
-        // Fallback default box
-        ctx.fillStyle = '#3b82f6';
-        drawRoundRect(ctx, 75, 75, 46, 46, 12);
-        ctx.fill();
+        ctx.drawImage(logo, 700, 40, 40, 40);
     }
 
-    const botName = process.env.BOT_NAME || 'Sentry Terminal';
+    // Token CA
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px sans-serif';
-    ctx.fillText(`${botName} Launchpad`, 135, 108);
+    ctx.font = 'bold 48px sans-serif';
+    ctx.fillText(`$${tokenAddress.substring(0, 8)}...`, 40, 180);
 
-    // Token Details
-    ctx.fillStyle = '#3b82f6';
-    ctx.font = 'bold 20px sans-serif';
-    ctx.fillText('DEPLOYMENT SUCCESSFUL', 75, 175);
+    // PnL Value
+    ctx.fillStyle = isProfit ? '#10b981' : '#ef4444';
+    ctx.font = 'bold 64px sans-serif';
+    ctx.fillText(`${isProfit ? '+' : ''}${pnlPercent.toFixed(1)}%`, 40, 270);
 
-    ctx.font = '900 60px sans-serif';
-    ctx.fillStyle = '#ffffff'; 
-    ctx.fillText(`${name} ($${symbol})`, 75, 245);
+    // MEV Badge
+    ctx.fillStyle = '#334155';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('🛡️ MEV Protected • Jito Bundle Executed', 40, 330);
 
-    ctx.font = '500 20px monospace';
-    ctx.fillStyle = '#94a3b8'; 
-    ctx.fillText(`CA: ${tokenAddress.substring(0, 12)}...pump`, 75, 285);
+    // Referral Footer
+    if (referralCode) {
+        ctx.fillStyle = '#4b5563';
+        ctx.font = '14px sans-serif';
+        const botName = process.env.BOT_USERNAME || 'SentryTerminalBot';
+        ctx.fillText(`Copy my trades: t.me/${botName}?start=${referralCode}`, 40, 370);
+    }
 
-    // Distribution Stats
-    ctx.fillStyle = '#10b981';
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillText(`Initial Buy: ${devBuySol} SOL`, 75, 335);
-
-    ctx.fillStyle = '#f59e0b';
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillText(`Stealth Split: ${walletCount} Wallets`, 320, 335);
-
-    // Footer
-    ctx.fillStyle = '#475569'; 
-    ctx.font = '500 16px sans-serif';
-    ctx.fillText(`Secured by ${botName} Jito Block-0 Routing`, 75, 395);
-
-    return canvas.toBuffer('image/png');
+    return Buffer.from(canvas.toBuffer('image/png'));
 }
 
+/**
+ * Generates a token deployment receipt card with Jito Block-0 details.
+ */
+export async function generateLaunchCard(
+    name: string, symbol: string, tokenAddress: string, devBuySol: number, wallets: number
+): Promise<Buffer> {
+    const canvas = createCanvas(800, 400);
+    const ctx = canvas.getContext('2d');
+
+    const gradient = ctx.createLinearGradient(0, 0, 800, 400);
+    gradient.addColorStop(0, '#0a0d14');
+    gradient.addColorStop(1, '#121826');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 800, 400);
+
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(20, 20, 760, 360);
+
+    ctx.fillStyle = '#3b82f6';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText('🚀 DEPLOYED WITH SENTRY', 40, 70);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 48px sans-serif';
+    ctx.fillText(`${name} ($${symbol})`, 40, 180);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '22px sans-serif';
+    ctx.fillText(`CA: ${tokenAddress.substring(0, 12)}...`, 40, 240);
+
+    ctx.fillStyle = '#4b5563';
+    ctx.font = '18px sans-serif';
+    ctx.fillText(`💳 Dev Buy: ${devBuySol} SOL | 🤖 Wallets: ${wallets}`, 40, 310);
+
+    ctx.fillStyle = '#334155';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('🔗 Jito Block-0 Bundle Routing Active', 40, 360);
+
+    return Buffer.from(canvas.toBuffer('image/png'));
+}
+
+/**
+ * Generates a dynamic line chart to render 1H historical candle trends using QuickChart.
+ */
 export async function generatePriceAlertChart(
     symbol: string,
     candles: Array<{ time: number; open: number; high: number; low: number; close: number }>,

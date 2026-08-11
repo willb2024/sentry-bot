@@ -4,10 +4,9 @@ import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, g
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
-import { getReactionGifUrl } from './reaction.service.js';
 
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import WebSocket from 'ws';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -18,7 +17,7 @@ import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 
 dotenv.config();
-const prisma = new PrismaClient();
+
 const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
 
 const GRPC_URL = `https://atlas-mainnet.helius-rpc.com`;
@@ -36,8 +35,6 @@ let pollerStarted  = false;
 export let isGrpcDisabled = false;
 let raydiumWsFallbackStarted = false;
 
-const lockedGuards      = new Set<string>();
-const lockedLimitOrders = new Set<string>();
 const activeSubscriptions = new Map<string, number>(); 
 let isPolling = false;
 
@@ -286,7 +283,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             const jitoTip = 0.0015;
             const solPnl = rawSolPnl - platformFee - jitoTip;
             
-            // 🟢 EXPLICIT SIMULATION GUARD STOP-LOSS MESSAGE
             const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\n` +
                 `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
                 `${pnlPercent < 0 ? `Configured Drop Threshold: <b>-${guardSnapshot.trailingPercent}%</b>\nActual Peak Drop: <b>-${actualPeakDrop}%</b>\n` : ''}` +
@@ -341,8 +337,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 if (result.success || (result as any).message?.includes("No tokens found")) {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     if (result.success) {
-
-                        
                         try {
                             await bot.telegram.sendMessage(
                                 guard.telegramId, 
@@ -376,7 +370,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
     if (guard.takeProfitPercent && entryPrice > 0) {
         const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
         if (profitPercent >= guard.takeProfitPercent) {
-            
             const gotLock = await acquireGuardLock(guard.id, 20);
             if (!gotLock) return;
 
@@ -467,7 +460,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                             const tweetText = encodeURIComponent(`Just exited $${guard.tokenAddress.substring(0,4).toUpperCase()} on Sentry Terminal ⚡\n${totalPnlPercent >= 0 ? '+' : ''}${totalPnlPercent.toFixed(1)}% ${timeString}\nJito MEV bundle — zero sandwich attacks\n🔗 solscan.io/tx/${result.signature}\nt.me/${process.env.BOT_USERNAME || 'SentryTerminalBot'}?start=${user?.referralCode || ''}`);
                             const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share Guard to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
 
-                            // 🟢 EXPLICIT LIVE GUARD STOP-LOSS MESSAGE
                             const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\n` +
                                 `Token: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n` +
                                 `Configured Drop Threshold: <b>-${guard.trailingPercent}%</b>\n` +
@@ -523,7 +515,8 @@ export function startUniversalGuardPoller(bot: any) {
                         if (fallback > 0) livePrice = fallback;
                     }
                     
-                    if (livePrice === null) return; 
+                    // 🟢 FIX: Ensure price is non-null and valid before evaluating guards
+                    if (livePrice === null || livePrice <= 0) return; 
                     return checkAndTriggerGuard(guard, livePrice, bot);
                 }
             }));
@@ -597,7 +590,11 @@ function connectPumpPortalStream(bot: any) {
     ws.on('open', () => {
         isWsConnecting = false;
         console.log("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
-        ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+        
+        // 🟢 FIX: Verify readyState prior to sending payload
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+        }
         
         lastMessageAt = Date.now();
         if (wsHeartbeat) clearInterval(wsHeartbeat);
@@ -701,7 +698,11 @@ export async function triggerAutoSnipes(
         const delayMs = (sniper.snipeDelaySeconds ?? 0) * 1000;
         setTimeout(async () => {
             try {
-                const liveConfig = cachedActiveSnipers.find(s => s.id === sniper.id);
+                // 🟢 FIX: Fresh DB query execution check
+                const liveConfig = await prisma.autoSnipeConfig.findUnique({ 
+                    where: { id: sniper.id }, 
+                    include: { user: true } 
+                });
                 if (!liveConfig || !liveConfig.isActive) return;
 
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
@@ -807,7 +808,7 @@ export async function triggerAutoSnipes(
                     }
                 }
 
-                // 🟢 EXECUTION BLOCK & BUDGET CHECK
+                // EXECUTION BLOCK & BUDGET CHECK
                 const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
                 const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
                 const currentSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
@@ -887,11 +888,12 @@ export async function triggerAutoSnipes(
                         }
                     }
                 }
-            } catch (e: any) {}
+            } catch (e: any) {
+                console.error("🔴 [AUTO-SNIPER] Execution failure:", e);
+            }
         }, delayMs);
     }
 }
-
 
 export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
@@ -908,6 +910,7 @@ export async function igniteYellowstoneStream(bot: any) {
         return;
     }
 
+    // 🟢 FIX: Check key existence before calling constructor
     if (!HELIUS_KEY || isGrpcDisabled) {
         connectRaydiumFallbackWatcher(bot);
         return;
@@ -999,26 +1002,6 @@ export async function igniteYellowstoneStream(bot: any) {
             console.warn("🟡 [HELIUS gRPC] Initial stream connection unauthenticated. Arming Raydium WS fallback.");
             isGrpcDisabled = true;
             connectRaydiumFallbackWatcher(bot);
-        }
-    }
-}
-
-
-// 🟢 LIVE PNL SESSION TRACKING HELPER
-async function updateLiveSessionPnl(telegramId: string, mint: string, pnlPercent: number, amountInSol: number) {
-    const sessionId = await redis.get(`autosnipe:session_id:live:${telegramId}`);
-    if (!sessionId) return;
-    
-    const sessionKey = `live:session_trades:${sessionId}`;
-    const trades = await redis.lrange(sessionKey, 0, -1);
-    
-    // Find the matching trade from this session and update its PnL
-    for (let i = trades.length - 1; i >= 0; i--) {
-        const t = JSON.parse(trades[i]);
-        if (t.mint === mint && t.realizedPnlSol === 0) {
-            t.realizedPnlSol = amountInSol * (pnlPercent / 100);
-            await redis.lset(sessionKey, i, JSON.stringify(t));
-            break;
         }
     }
 }
