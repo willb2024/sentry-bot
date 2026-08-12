@@ -1,4 +1,4 @@
-// src/services/burn.service.ts
+// Clean up imports at top of src/services/burn.service.ts
 import { PublicKey, Keypair, TransactionMessage, VersionedTransaction, SystemProgram } from '@solana/web3.js';
 import { connection } from '../lib/connection.js'; 
 import { TOKEN_PROGRAM_ID, createCloseAccountInstruction } from '@solana/spl-token';
@@ -10,7 +10,6 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhvkASnYGQYcBmiJXcwghAMPw");
-
 const JITO_TIP_ACCOUNTS = [
     "96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL", "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
     "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvVkY"

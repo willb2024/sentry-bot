@@ -69,7 +69,6 @@ export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keyp
                 keypair = Keypair.generate();
             }
             iterations += 5000;
-            // 🟢 Performance Limitation: Hard execution boundary prevents CPU starvation
             if (iterations >= 50000) {
                 return resolve({ keypair, matched: false }); 
             }
@@ -96,13 +95,16 @@ export async function launchTokenOnPumpFun(
         }
 
         const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
-        if (!treasuryWalletStr) return { success: false, message: "Platform treasury not configured." };
+        if (!treasuryWalletStr) {
+            return { success: false, message: "TREASURY_WALLET_ADDRESS is missing in your .env file!" };
+        }
 
-        // 🟢 BUG 10 FIXED: Fail early if treasury address public key cannot be validated/instantiated
+        let treasuryPubkey: PublicKey;
         try {
-            new PublicKey(treasuryWalletStr);
-        } catch {
-            return { success: false, message: "Invalid treasury wallet address configured in system parameters." };
+            treasuryPubkey = new PublicKey(treasuryWalletStr.trim());
+        } catch (e: any) {
+            console.error("🔴 [LAUNCH] Invalid treasury wallet address configured:", treasuryWalletStr);
+            return { success: false, message: `Invalid treasury address configured: "${treasuryWalletStr}"` };
         }
 
         if (walletCount > 1) await ensureWalletsExist(telegramId, walletCount);
@@ -167,7 +169,7 @@ export async function launchTokenOnPumpFun(
         const jitoTipLamports = 3_000_000; 
 
         const instructions = [];
-        if (!isAdmin) instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: new PublicKey(treasuryWalletStr), lamports: feeLamports }));
+        if (!isAdmin) instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: treasuryPubkey, lamports: feeLamports }));
         instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: new PublicKey(jitoTipAccount), lamports: jitoTipLamports }));
 
         const feeTx = new VersionedTransaction(new TransactionMessage({
