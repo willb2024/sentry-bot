@@ -107,14 +107,32 @@ export async function verifyVipPayment(
 export async function getPlatformFeeRate(telegramId: string): Promise<number> {
     const cached = await redis.get(`vip:${telegramId}`);
     if (cached) {
-        const data = JSON.parse(cached);
-        if (data.isVip && new Date(data.expiresAt) > new Date()) return 0.0; 
-    } else {
-        const user = await prisma.user.findUnique({ where: { telegramId }, select: { isVip: true, vipExpiresAt: true } });
-        if (user?.isVip && (!user.vipExpiresAt || user.vipExpiresAt > new Date())) return 0.0;
+        try {
+            const data = JSON.parse(cached);
+            if (data.isVip && new Date(data.expiresAt) > new Date()) {
+                return 0.0;
+            }
+        } catch (_) { }
     }
+
+    const user = await prisma.user.findUnique({ 
+        where: { telegramId }, 
+        select: { isVip: true, vipExpiresAt: true } 
+    });
+    
+    const now = new Date();
+    if (user?.isVip && user.vipExpiresAt && user.vipExpiresAt > now) {
+        await redis.set(`vip:${telegramId}`, JSON.stringify({
+            isVip: true,
+            expiresAt: user.vipExpiresAt.toISOString()
+        }), 'EX', 3600);
+        return 0.0;
+    }
+
     return 0.01; 
 }
+
+
 
 export function formatVipStatus(status: { isVip: boolean; tier: VipTierKey | null; expiresAt: Date | null; daysRemaining: number; }): string {
     if (!status.isVip || !status.tier) {

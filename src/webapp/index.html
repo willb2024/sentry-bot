@@ -229,10 +229,10 @@
                     <div class="text-xl font-bold text-neonRed font-mono mt-1" id="cvar-value">-- SOL</div>
                 </div>
                 <div>
-                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Top Strategy Yield</span>
-                    <div class="text-xl font-bold text-jupGreen font-mono mt-1 truncate" id="top-strategy">--</div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Total Trades</span>
+                    <div class="text-xl font-bold text-jupGreen font-mono mt-1" id="total-trades-count">0</div>
                 </div>
-                <div>
+
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Sharpe Ratio</span>
                     <div class="text-xl font-bold text-neonBlue font-mono mt-1" id="sharpe-ratio">--</div>
                 </div>
@@ -1333,6 +1333,157 @@
     }
 
     async function fetchInstitutionalStats() {
+    try {
+        const res = await fetch('/api/institutional-stats', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: tg.initData })
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const tcaEl = document.getElementById('tca-slippage');
+        const cvarEl = document.getElementById('cvar-value');
+        if (tcaEl) tcaEl.innerText = data.avgSlippage ? data.avgSlippage.toFixed(2) + '%' : '0.00%';
+        if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '0.0000 SOL';
+        
+        const totalTradesEl = document.getElementById('total-trades-count');
+        if(totalTradesEl) totalTradesEl.innerText = data.totalTradesCount || 0;
+
+        const spend = data.currentSpend || 0;
+        const budget = data.maxBudget || 0;
+        const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 0;
+        const gauge = document.getElementById('risk-budget-bar');
+        const gaugeText = document.getElementById('risk-budget-text');
+        if(gauge) gauge.style.width = pct + '%';
+        if(gaugeText) {
+            if (budget > 0) {
+                gaugeText.innerText = `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)`;
+            } else {
+                gaugeText.innerText = `No Cap (∞)`;
+                if(gauge) gauge.style.width = '0%';
+            }
+        }
+    } catch (e) {
+        console.error("Error fetching institutional stats:", e);
+    }
+}
+
+async function fetchLiveData() {
+    try {
+        const simRes = await fetch('/api/sim-stats', {
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: tg.initData || "" })
+        });
+
+        if (simRes.ok) {
+            const simStats = await simRes.json();
+            
+            if (!simStats.isActive) {
+                resetDashboardToZero();
+                isSimModeActive = false;
+            } else {
+                isSimModeActive = true; 
+                const solPriceRes = await fetch('/api/sol-price', {
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ initData: tg.initData || "" })
+                }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
+                const liveSolPrice = solPriceRes.price || 160;
+
+                const simPositions = (simStats.positions || []).map(p => ({
+                    mint: p.mint, 
+                    symbol: p.symbol, 
+                    amount: p.amount,
+                    priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
+                    valueUsd: p.valueUsd || (p.amountInSol * liveSolPrice),
+                    entryPrice: p.entryPriceUsd || p.entryPrice
+                }));
+
+                userTrades = simStats.trades || [];
+                
+                let wins = 0, losses = 0, totalPnlSol = 0, totalInvestedSol = 0;
+                userTrades.forEach(t => {
+                    if (!t.isBuy) {
+                        const pnl = t.realizedPnlSol || 0;
+                        totalPnlSol += pnl;
+                        totalInvestedSol += t.amountInSol || 0;
+                        if (pnl > 0) wins++;
+                        else if (pnl < 0) losses++;
+                    }
+                });
+
+                const totalVolumeSol = parseFloat(simStats.volume) || 0;
+                const simBalanceSol = parseFloat(simStats.balance) || 0;
+                const networthUsd = simBalanceSol * liveSolPrice; 
+                const networthSol = simBalanceSol.toFixed(4) + " SOL";
+                const pnlPercent = totalInvestedSol > 0 ? ((totalPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
+                const pnlUsd = totalPnlSol * liveSolPrice;
+                const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
+
+                let tradingDays = 1;
+                if (simStats.firstTradeAt) {
+                    const oldest = new Date(simStats.firstTradeAt);
+                    const diffTime = Math.abs(new Date() - oldest);
+                    tradingDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+                }
+
+                document.getElementById('stat-trading-days').innerText = tradingDays;
+                
+                const pnlColorClass = totalPnlSol >= 0 ? 'text-jupGreen' : 'text-neonRed';
+                document.getElementById('stat-networth').innerText = '$' + networthUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('stat-networth-sub').innerText = networthSol;
+                document.getElementById('stat-pnl').innerText = `${totalPnlSol >= 0 ? '+' : ''}${pnlPercent}%`;
+                document.getElementById('stat-pnl').className = `text-3xl sm:text-4xl font-bold mt-1 transition-colors ${pnlColorClass}`;
+                document.getElementById('stat-pnl-sub').innerText = `${totalPnlSol >= 0 ? '+' : '-'}$${Math.abs(pnlUsd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} net profit`;
+                document.getElementById('stat-winrate').innerText = winRate + '%';
+                document.getElementById('stat-winrate-sub').innerText = `${wins} Wins / ${losses} Losses`;
+                document.getElementById('stat-volume').innerText = totalVolumeSol.toFixed(4) + " SOL";
+
+                const totalTradesEl = document.getElementById('total-trades-count');
+                if (totalTradesEl) totalTradesEl.innerText = simStats.totalTrades;
+
+                const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : [];
+                const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [];
+
+                const tickerContainer = document.getElementById('live-trade-ticker');
+                if (tickerContainer && userTrades && userTrades.length > 0) {
+                    let tickerHtml = '';
+                    const recentTrades = userTrades.slice(0, 10);
+                    recentTrades.forEach(t => {
+                        const type = t.isBuy ? 'BUY' : 'SELL';
+                        const color = t.isBuy ? '#10b981' : '#ef4444';
+                        const addr = t.mint || t.tokenAddress || 'Unknown';
+                        const displayAddr = addr.length > 10 ? addr.substring(0, 6) + '...' : addr;
+                        const pnlStr = !t.isBuy ? (t.profitPercent ? (t.profitPercent >= 0 ? `+${t.profitPercent.toFixed(1)}%` : `${t.profitPercent.toFixed(1)}%`) : '--') : '--';
+                        
+                        tickerHtml += `
+                            <div class="flex justify-between items-center py-1.5 border-b border-white/5 last:border-0 hover:bg-white/[0.03] px-2 rounded transition-colors cursor-default">
+                                <span class="text-gray-500 w-16">${new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
+                                <span class="text-white font-bold w-24 truncate">${displayAddr}</span>
+                                <span style="color:${color}" class="font-bold w-12 text-center">${type}</span>
+                                <span class="text-gray-300 w-20 text-right">${t.amountInSol ? t.amountInSol.toFixed(3) : '0.000'} SOL</span>
+                                <span class="font-bold w-16 text-right ${parseFloat(pnlStr) >= 0 ? 'text-jupGreen drop-shadow-[0_0_3px_rgba(16,185,129,0.5)]' : 'text-neonRed'}">${pnlStr}</span>
+                            </div>
+                        `;
+                    });
+                    tickerContainer.innerHTML = tickerHtml;
+                }
+
+                initCharts(aggregatePnlData(currentFilter).labels, aggregatePnlData(currentFilter).profitData, aggregatePnlData(currentFilter).lossData, allocLabels, allocData);
+                renderPositions(simPositions);
+                setFilter(currentFilter);
+                
+                setTimeout(fetchLiveData, 4000);
+                return; 
+            }
+        } else { 
+            isSimModeActive = false; 
+        }
+    } catch (_) { 
+        isSimModeActive = false; 
+    }
+}
         try {
             const res = await fetch('/api/institutional-stats', {
                 method: 'POST',
@@ -1419,7 +1570,7 @@
         } catch (e) {
             console.error("Error fetching institutional stats:", e);
         }
-    }
+    
 
     // START INITIALIZATION & WIDGET POLLERS
     fetchLiveData();
