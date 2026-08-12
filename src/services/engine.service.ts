@@ -372,7 +372,7 @@ export async function sendToJitoBundle(
 }
 
 // ============================================================================
-// 🟢 WALL STREET FEATURE 2: SMART ORDER ROUTING (SOR)
+// 🟢 WALL STREET FEATURE 2: SMART ORDER ROUTING (SOR) + LOW LATENCY TOGGLE
 // ============================================================================
 export interface DexRouteQuote {
     dex: string;
@@ -405,7 +405,8 @@ async function fetchApiTransaction(
     priorityLevel: string = 'FAST',
     customPriorityFee: number = 0.001,
     pkEncrypted?: string,
-    raydiumPoolId?: string
+    raydiumPoolId?: string,
+    useSOR: boolean = true // 🟢 DYNAMIC TOGGLE
 ): Promise<{ buffer: Buffer | null; errorLog: string; estimatedOutput?: number; winningRoute?: string }> {
     let globalErrorLog = "";
     const isPumpToken = mint.toLowerCase().endsWith("pump");
@@ -442,26 +443,42 @@ async function fetchApiTransaction(
             }
         }
 
-        // 🟢 SMART ORDER ROUTING (SOR)
-        const dexPools = ['Raydium', 'Meteora DLMM', 'Meteora', 'Pump.fun'];
-        const quotePromises = dexPools.map(dex => getIsolatedDexQuote(dex, inputMint, outputMint, jupAmount, slippageBps));
+        let bestRoute: DexRouteQuote | undefined;
 
-        const globalJupPromise = axiosClient.get(
-            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
-            { headers: API_HEADERS, timeout: 2500 }
-        ).then(res => res.data ? ({ dex: 'Jupiter_Aggregated', outAmount: Number(res.data.outAmount), quoteResponse: res.data }) : null).catch(() => null);
+        if (useSOR) {
+            // 🟢 SMART ORDER ROUTING (SOR) - Multi-DEX Parallel
+            const dexPools = ['Raydium', 'Meteora DLMM', 'Meteora', 'Pump.fun'];
+            const quotePromises = dexPools.map(dex => getIsolatedDexQuote(dex, inputMint, outputMint, jupAmount, slippageBps));
 
-        const results = await Promise.allSettled([...quotePromises, globalJupPromise]);
+            const globalJupPromise = axiosClient.get(
+                `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
+                { headers: API_HEADERS, timeout: 2500 }
+            ).then(res => res.data ? ({ dex: 'Jupiter_Aggregated', outAmount: Number(res.data.outAmount), quoteResponse: res.data }) : null).catch(() => null);
 
-        const validQuotes: DexRouteQuote[] = [];
-        for (const res of results) {
-            if (res.status === 'fulfilled' && res.value && res.value.outAmount > 0) validQuotes.push(res.value);
+            const results = await Promise.allSettled([...quotePromises, globalJupPromise]);
+
+            const validQuotes: DexRouteQuote[] = [];
+            for (const res of results) {
+                if (res.status === 'fulfilled' && res.value && res.value.outAmount > 0) validQuotes.push(res.value);
+            }
+
+            if (validQuotes.length === 0) return { buffer: null, errorLog: globalErrorLog || "SOR: No DEX liquidity routes available." };
+
+            validQuotes.sort((a, b) => b.outAmount - a.outAmount);
+            bestRoute = validQuotes[0];
+        } else {
+            // 🟢 LOW LATENCY MODE - Jupiter Direct (Skips multi-pool array)
+            const res = await axiosClient.get(
+                `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
+                { headers: API_HEADERS, timeout: 2000 }
+            ).catch(() => null);
+
+            if (res && res.data && res.data.outAmount) {
+                bestRoute = { dex: 'Jupiter_Direct', outAmount: Number(res.data.outAmount), quoteResponse: res.data };
+            } else {
+                return { buffer: null, errorLog: globalErrorLog || "Direct: No liquidity routes available." };
+            }
         }
-
-        if (validQuotes.length === 0) return { buffer: null, errorLog: globalErrorLog || "SOR: No DEX liquidity routes available." };
-
-        validQuotes.sort((a, b) => b.outAmount - a.outAmount);
-        const bestRoute = validQuotes[0];
 
         const priorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
         const swapRes = await axiosClient.post(
@@ -480,7 +497,7 @@ async function fetchApiTransaction(
                 errorLog: "", estimatedOutput: estOut, winningRoute: bestRoute.dex
             };
         }
-        return { buffer: null, errorLog: `SOR Route (${bestRoute.dex}) Swap Generation Failed.` };
+        return { buffer: null, errorLog: `Route (${bestRoute.dex}) Swap Generation Failed.` };
     } catch (e: any) { return { buffer: null, errorLog: `Routing Fault: ${e.message}` }; }
 }
 
@@ -571,9 +588,29 @@ export async function executeSnipe(
 
         if (liveBalanceSol < amountSol + 0.005) return { success: false, message: "Insufficient Funds." };
 
-        // 🟢 VOLATILITY ADAPTIVE SLIPPAGE APPLIED
-        const baseSlip = user.slippagePercent ?? 20.0;
-        const slippage = overrideSlippage ?? (await getVolatilityAdjustedSlippage(targetCA, baseSlip));
+        // 1. Determine Slippage (Adaptive or Static)
+        let selectedSlippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
+        if (user.enableAdaptiveSlippage && overrideSlippage === undefined) {
+            // Only run volatility checks if Adaptive is ON and no explicit override exists
+            const volatileSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
+            if (volatileSlippage > selectedSlippage) {
+                console.log(`🛡️ [ADAPTIVE SLIPPAGE] Raised tolerance from ${selectedSlippage}% to ${volatileSlippage}% due to market volatility.`);
+                selectedSlippage = volatileSlippage;
+            }
+        }
+
+        // 2. Determine Routing (SOR or Direct Jupiter)
+        let raydiumPoolIdToUse: string | undefined = raydiumPoolId;
+        let routeMode = "Standard";
+        if (user.enableSOR && !raydiumPoolId) {
+            // If SOR is ON, we pass NO pool ID to the fetcher, allowing it to execute the 4-way SOR.
+            routeMode = "SOR (4-Pool Routing)";
+            console.log(`⚡ [SOR ENGINE] Routing via Smart Order Routing for ${targetCA.substring(0,6)}...`);
+            // ensure raydiumPoolId is undefined so the fetchApiTransaction uses its SOR logic
+            raydiumPoolIdToUse = undefined; 
+        } else {
+            routeMode = "Fast (Direct Jupiter)";
+        }
         
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
@@ -601,7 +638,12 @@ export async function executeSnipe(
                 return { success: false, index };
             }
 
-            const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, undefined, raydiumPoolId);
+            // 3. Execute the Transaction (Passing all dynamic flags)
+            const apiRes = await fetchApiTransaction(
+                'buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, 
+                selectedSlippage, priorityLevel, customPriorityFee, undefined, raydiumPoolIdToUse, user.enableSOR ?? true
+            );
+
             if (!apiRes.buffer) { 
                 walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; 
                 return { success: false, index }; 
@@ -628,7 +670,7 @@ export async function executeSnipe(
                 } catch(e) {}
             }
 
-            const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
+            const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
             if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
 
             // 🟢 TCA LOGGING
@@ -725,12 +767,18 @@ export async function executeExit(
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No Vault." };
 
-        // 🟢 VOLATILITY ADAPTIVE SLIPPAGE APPLIED
-        const baseSlip = user.slippagePercent || 20.0;
-        const slippage = sellPercentage === 100 ? 100.0 : (await getVolatilityAdjustedSlippage(targetCA, baseSlip));
+        // 🟢 VOLATILITY ADAPTIVE SLIPPAGE APPLIED (Checks DB Toggle)
+        let selectedSlippage = sellPercentage === 100 ? 100.0 : (user.slippagePercent || 20.0);
+        if ((user.enableAdaptiveSlippage ?? true) && sellPercentage !== 100) {
+            const volatileSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
+            if (volatileSlippage > selectedSlippage) {
+                selectedSlippage = volatileSlippage;
+            }
+        }
         
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
+        const useSOR = user.enableSOR ?? true;
 
         const rawW1 = decryptKey(user.turnkeySubOrgId);
         if (!rawW1) return { success: false, message: "Decryption Failed." };
@@ -766,7 +814,11 @@ export async function executeExit(
             const rawPkEncrypted = index === 0 ? user.turnkeySubOrgId : user[`pk${index+1}` as keyof typeof user];
             const pkEncrypted = typeof rawPkEncrypted === 'string' ? rawPkEncrypted : undefined;
 
-            const apiRes = await fetchApiTransaction('sell', targetCA, w.publicKey.toBase58(), 0, uiTokensToSell, tokensToSellRaw.toString(), sellPercentage, slippage, priorityLevel, customPriorityFee, pkEncrypted);
+            const apiRes = await fetchApiTransaction(
+                'sell', targetCA, w.publicKey.toBase58(), 0, uiTokensToSell, tokensToSellRaw.toString(), 
+                sellPercentage, selectedSlippage, priorityLevel, customPriorityFee, pkEncrypted, undefined, useSOR
+            );
+
             if (!apiRes.buffer) { 
                 walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; 
                 return { success: false, index }; 
@@ -787,7 +839,7 @@ export async function executeExit(
 
             let txSig = bs58.encode(swapTx.signatures[0]);
             
-            const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
+            const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
             if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
 
             // 🟢 TCA APPLIED: Execute exit relies on verified on-chain execution output
@@ -942,10 +994,13 @@ export async function generatePreSignedExitTxMulti(telegramId: string, targetCA:
                 if (rawBalance === 0n) return null;
 
                 // 🟢 VOLATILITY ADAPTIVE SLIPPAGE ON PRESIGNED INSTANT EXITS
-                const baseSlip = user.slippagePercent || 20.0;
-                const dynamicSlip = await getVolatilityAdjustedSlippage(targetCA, baseSlip);
+                let selectedSlippage = user.slippagePercent || 20.0;
+                if (user.enableAdaptiveSlippage ?? true) {
+                    selectedSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
+                }
+                const useSOR = user.enableSOR ?? true;
 
-                const apiRes = await fetchApiTransaction('sell', targetCA, w.pub, 0, 0, rawBalance.toString(), 100, dynamicSlip, 'TURBO', 0.005, w.pk);
+                const apiRes = await fetchApiTransaction('sell', targetCA, w.pub, 0, 0, rawBalance.toString(), 100, selectedSlippage, 'TURBO', 0.005, w.pk, undefined, useSOR);
                 if (!apiRes.buffer) return null;
 
                 const keypair = getCachedKeypair(w.pub, w.pk);

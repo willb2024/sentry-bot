@@ -47,6 +47,11 @@ model User {
   isLoyaltyUnlocked   Boolean  @default(false) 
   hasReferralDiscount Boolean  @default(false) 
 
+
+   // 🟢 NEW: Execution Toggles
+  enableSOR             Boolean  @default(true)  // Smart Order Routing (Multi-DEX)
+  enableAdaptiveSlippage Boolean  @default(true)  // Auto-adjust slippage based on volatility
+
   isVip               Boolean   @default(false)
   vipTier             String?
   vipExpiresAt        DateTime?

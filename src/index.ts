@@ -2772,13 +2772,27 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
 
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
+    // 🟢 Execution Status
+    const sorStatus = user.enableSOR ? '🟢 ON (Best Price)' : '🔴 OFF (Fastest Speed)';
+    const adaptiveStatus = user.enableAdaptiveSlippage ? '🟢 ON' : '🔴 OFF';
+
     const levelText = `⚙️ <b>SENTRY CONFIGURATION</b>\n\n` +
-        `👛 <b>Current Slippage:</b> ${currentSlippage}%\n` +
+        `💰 <b>Current Slippage:</b> ${currentSlippage}%\n` +
         `🚀 <b>Transaction Speed (Jito Bribe):</b> <b>${level}</b> (${currentFeeDisplay})\n\n` +
+        `━━━━━━━━━━━━━━━\n` +
+        `⚡ <b>EXECUTION ENGINE</b>\n\n` +
+        `• <b>Smart Order Routing (SOR):</b> ${sorStatus}\n` +
+        `• <b>Adaptive Slippage:</b> ${adaptiveStatus}\n\n` +
+        `💡 <b>WHEN TO USE WHAT?</b>\n` +
+        `• <b>🚀 Block-0 Sniping (SOR OFF):</b> Disables 4-DEX routing to save ~100ms of latency. Use this if you are front-running a hyped Pump.fun launch and need to beat the bots into the absolute first block.\n` +
+        `• <b>💰 Standard Buying (SOR ON):</b> Queries Jupiter, Raydium, Meteora, and Orca simultaneously to give you the absolute best price on your fills. Saves you massive slippage on larger orders.\n\n` +
+        `📈 <b>Adaptive Slippage:</b>\n` +
+        `When ON, Sentry auto-raises your slippage tolerance to 25% during high volatility (pumps) to guarantee your fill never fails, and lowers it to 12% during calm periods to protect your wallet.\n\n` +
+        `━━━━━━━━━━━━━━━\n` +
         `🚕 <b>SLIPPAGE EXPLAINED:</b>\n` +
-        `<i>Slippage acts as your protection limit. We recommend 20% to ensure your buys and panic-sells never fail during high volatility.</i>\n\n` +
-        `🚀 <b>TRANSACTION SPEED EXPLAINED:</b>\n` +
-        `<i>Sentry bypasses public network congestion by tipping the validators (using Jito) to process your trade on Block-0.</i>\n`;
+        `<i>Slippage acts as your protection limit. If set too low, transactions fail on volatile pumps. If set too high, you overpay. Adaptive Slippage fixes this issue automatically.</i>\n\n` +
+        `🚀 <b>JITO PRIORITY EXPLAINED:</b>\n` +
+        `<i>This is your bribe to the validator. Higher priority fees guarantee your transaction lands in the next block.</i>`;
 
     const UI = Markup.inlineKeyboard([
         [
@@ -2793,6 +2807,11 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
         [
             Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')
         ],
+        // 🟢 NEW ROW: Execution Engines Toggle
+        [
+            Markup.button.callback(`⚡ SOR: ${sorStatus}`, 'toggle_sor'),
+            Markup.button.callback(`📈 Adaptive: ${adaptiveStatus}`, 'toggle_adaptive_slippage')
+        ],
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 
@@ -2800,6 +2819,32 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
     else await ctx.replyWithHTML(levelText, UI);
 }
 
+
+// Toggle SOR (Smart Order Routing)
+bot.action('toggle_sor', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e) {}
+    const tgId = ctx.from?.id.toString()!;
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+    if (!user) return;
+    await prisma.user.update({
+        where: { telegramId: tgId },
+        data: { enableSOR: !user.enableSOR }
+    });
+    await sendOrEditSettings(ctx, tgId, true);
+});
+
+// Toggle Adaptive Slippage
+bot.action('toggle_adaptive_slippage', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e) {}
+    const tgId = ctx.from?.id.toString()!;
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+    if (!user) return;
+    await prisma.user.update({
+        where: { telegramId: tgId },
+        data: { enableAdaptiveSlippage: !user.enableAdaptiveSlippage }
+    });
+    await sendOrEditSettings(ctx, tgId, true);
+});
 
 
 
