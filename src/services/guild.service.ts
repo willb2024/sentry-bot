@@ -16,16 +16,16 @@ const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN'
 
 
 // Replace createGuild in src/services/guild.service.ts
+// Replace createGuild in src/services/guild.service.ts
 export async function createGuild(
-    telegramId: string, 
-    name: string, 
-    description: string | null, 
+    telegramId: string,
+    name: string,
+    description: string | null,
     rewardDescription: string | null
 ): Promise<{ success: boolean; message: string; guildCode?: string }> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
         if (!user || !user.vaultAddress) return { success: false, message: "No active vault found." };
-
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
 
         const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];

@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { generatePnlCard } from './image.service.js';
 import { computeTokenScore, TokenStats, buildAuditTrailMessage } from './caller.service.js';
 import { ensureFirstTradeAnchor } from './engine.service.js';
+import { cachedSolUsdPrice } from './grpc.service.js';
 
 const activeSimLoops = new Set<string>();
 
@@ -82,8 +83,11 @@ export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, m
     const totalRealizedPnl = trades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0);
     const wins = trades.filter((t: any) => (t.realizedPnlSol || 0) > 0).length;
     const losses = trades.filter((t: any) => (t.realizedPnlSol || 0) <= 0).length;
-    const { cachedSolUsdPrice } = await import('./grpc.service.js');
-    const usdValue = (totalRealizedPnl * cachedSolUsdPrice).toFixed(2);
+
+    // 🟢 FIX 2: Live SOL price calculation
+    const solPrice = cachedSolUsdPrice || 160;
+    const usdValue = (totalRealizedPnl * solPrice).toFixed(2);
+
     await bot.telegram.sendMessage(telegramId,
         `🏁 <b>AUTO-SNIPE BUDGET EXHAUSTED${mode === 'sim' ? ' (SIM)' : ''}</b>\n\n` +
         `Total Spent: <b>${totalSpent.toFixed(4)} SOL</b>\n` +
@@ -110,13 +114,14 @@ export async function saveSimulationState(telegramId: string) {
     const positionsRaw = await redis.get(`sim:positions:${telegramId}`);
     const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
 
+    // 🟢 FIX 9: Save up to 500 trades for rich historical analytics
     await prisma.simState.upsert({
         where: { userId: user.id },
         update: {
             balance, startingBalance, volume, credits, active, autoSnipeActive, positions,
             trades: { 
                 deleteMany: {}, 
-                create: trades.slice(0, 100).map((t: any) => ({
+                create: trades.slice(0, 500).map((t: any) => ({
                     userId: user.id, tokenAddress: t.mint || t.tokenAddress || 'unknown',
                     isBuy: t.isBuy, amountInSol: t.amountInSol, profitPercent: t.profitPercent || 0,
                     realizedPnlSol: t.realizedPnlSol || 0, createdAt: new Date(t.createdAt)
@@ -126,7 +131,7 @@ export async function saveSimulationState(telegramId: string) {
         create: {
             userId: user.id, balance, startingBalance, volume, credits, active, autoSnipeActive, positions,
             trades: { 
-                create: trades.slice(0, 100).map((t: any) => ({
+                create: trades.slice(0, 500).map((t: any) => ({
                     userId: user.id, tokenAddress: t.mint || t.tokenAddress || 'unknown',
                     isBuy: t.isBuy, amountInSol: t.amountInSol, profitPercent: t.profitPercent || 0,
                     realizedPnlSol: t.realizedPnlSol || 0, createdAt: new Date(t.createdAt)
@@ -143,7 +148,10 @@ export async function loadSimulationState(telegramId: string) {
     const isActive = await redis.get(`sim:active:${telegramId}`);
     if (isActive === 'false') return;
 
-    const state = await prisma.simState.findUnique({ where: { userId: user.id }, include: { trades: { orderBy: { createdAt: 'desc' }, take: 100 } } });
+    const state = await prisma.simState.findUnique({ 
+        where: { userId: user.id }, 
+        include: { trades: { orderBy: { createdAt: 'desc' }, take: 500 } } 
+    });
     if (!state) return;
 
     await redis.set(`sim:balance:${telegramId}`, state.balance.toFixed(4));
@@ -266,7 +274,6 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
         try {
             const { scoreTokens } = await import('./caller.service.js');
             const realTokens = await scoreTokens();
-            // 🟢 FIX: Map explicitly cast to (t: any) to resolve strict TS errors
             pool = realTokens.map((t: any) => ({ mint: t.mint, symbol: t.symbol }));
             if (pool.length > 0) await redis.set(cacheKey, JSON.stringify(pool), 'EX', 60);
         } catch (_) { }
@@ -298,7 +305,10 @@ export async function simExecuteSnipe(telegramId: string, tokenAddress: string, 
     const posKey = `sim:positions:${telegramId}`;
     const existing = JSON.parse(await redis.get(posKey) || '[]');
     let symbol = 'UNKNOWN', entryPriceSol = 0, entryPriceUsd = 0;
-    const solUsdPrice = 160;
+    
+    // 🟢 FIX 2: Live SOL price calculation
+    const solUsdPrice = cachedSolUsdPrice || 160;
+
     try {
         const { default: axios } = await import('axios');
         const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
@@ -351,14 +361,13 @@ export async function simExecuteExit(telegramId: string, tokenAddress: string, p
     const rawReturn = soldSol * (1 + pnlPercent / 100);
     const platformFee = rawReturn * 0.01;
     
-    // 🟢 FIX 39: Dynamic Tips (Turbo/Eco handling)
+    // 🟢 FIX 39: Dynamic Tips based on user priority level
     const user = await prisma.user.findUnique({ where: { telegramId } });
     const jitoTip = user?.priorityLevel === 'TURBO' ? 0.005 : user?.priorityLevel === 'ECO' ? 0.0005 : 0.001;
-    
+
     const netReturnSol = Math.max(0, rawReturn - platformFee - jitoTip);
     const currentBal = parseFloat(await getSimBalance(telegramId));
     await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
-    
     if (percent === 100) {
         const updated = positions.filter((p: any) => p.mint !== tokenAddress);
         await redis.set(posKey, JSON.stringify(updated));
@@ -500,24 +509,37 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
     while (await redis.get(`sim:autosnipe:${telegramId}`) === 'true' && await isSimulationActive(telegramId)) {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
-        const amountSol = config?.amountSol || 0.1;
+        if (!config) break;
+
+        // Static defaults
         const slPercent = config?.autoTrailingDropPercent || 20;
         const tpPercent = config?.autoTakeProfitPercent || 50;
-        const maxBudget = config?.maxBudgetSol || 10.0;
         const minScore = config?.minScore || 0;
+
+        // 🟢 BUDGET CHECK FIRST
         const currentSpend = await getSessionSpend(telegramId, 'sim');
-        if (currentSpend + amountSol > maxBudget) {
+        const maxBudget = config?.maxBudgetSol || 10.0;
+        if (currentSpend > maxBudget) {
             await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
             await redis.set(`sim:autosnipe:${telegramId}`, 'false');
             break;
         }
+
         const filters = { minScore: minScore || 0, maxAgeMins: 90, minPctChange: 10, maxPctChange: 500, minLiquidity: 2000, minVolume24h: 2000, blockMev: true };
         const alert = await generateSimCallerAlert(telegramId, filters);
-        let tokenCA = '', stats: any, simScore = 0;
+        
+        let tokenCA = '', stats: any, simScore = 0, liqUsd = 0, cachedSolUsdPrice = 150;
+
+        // 🟢 IMPORT: Ensure live price is available for liquidity calculations
+        const { cachedSolUsdPrice: liveSolPrice } = await import('./grpc.service.js');
+        cachedSolUsdPrice = liveSolPrice || 150;
+
         if (alert && alert.mint) {
             tokenCA = alert.mint;
             simScore = alert.totalScore ?? alert.score ?? 50;
             stats = { ageMins: alert.ageMins, volume: alert.volume, liquidity: alert.liquidity, priceChangeM5: alert.priceChangeM5 };
+            liqUsd = alert.liquidity || 5000; 
+
             const currentCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0');
             if (currentCredits <= 0) {
                 await bot.telegram.sendMessage(telegramId, `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour simulated Auto-Sniper has paused. Top up credits with <code>/simcredits 500</code>.`, { parse_mode: 'HTML' });
@@ -529,6 +551,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             const realTok = await getRealTokenForSimDisplay();
             tokenCA = realTok.mint;
             stats = { ageMins: Math.floor(Math.random() * 60) + 1, volume: Math.random() * 50000 + 5000, liquidity: Math.random() * 20000 + 2000, priceChangeM5: Math.random() * 50 + 5, hasSocials: true, isRug: false };
+            liqUsd = stats.liquidity;
             const floor = Math.max(50, minScore);
             simScore = Math.floor(Math.random() * (95 - floor + 1)) + floor;
             if (simScore < minScore) {
@@ -536,24 +559,59 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
                 continue;
             }
         }
+
+        // 🟢 APPLY DYNAMIC SIZING ENGINE IN SIMULATION
+        let snipeAmount = config.amountSol; // Legacy fallback
+
+        if (config.enableDynamicScaling) {
+            const normalizedScore = Math.min(100, Math.max(10, simScore)) / 100;
+            const exponent = config.scaleExponent || 2.0;
+            const convictionMultiplier = Math.pow(normalizedScore, exponent);
+
+            let calculatedSize = config.baseRiskUnitSol * convictionMultiplier * config.maxRiskMultiplier;
+
+            // Liquidity Protection
+            if (liqUsd > 0 && cachedSolUsdPrice > 0) {
+                const maxLiqAllocation = liqUsd * 0.02;
+                const maxLiqInSol = maxLiqAllocation / cachedSolUsdPrice;
+                calculatedSize = Math.min(calculatedSize, maxLiqInSol);
+            }
+
+            // Budget Protection
+            const budgetRemaining = (config.maxBudgetSol || Infinity) - currentSpend;
+            calculatedSize = Math.min(calculatedSize, budgetRemaining);
+
+            // Safety Floor
+            calculatedSize = Math.max(calculatedSize, 0.005);
+
+            snipeAmount = parseFloat(calculatedSize.toFixed(4));
+        }
+
+        // Simulate outcome based on score
         const isProfit = await getNextSimOutcome(telegramId, 'guard', simScore);
         const targetPnl = isProfit ? (tpPercent || 50) : -Math.abs(slPercent || 20);
         const finalPnl = applySimSlippage(targetPnl);
-        const buyRes = await simExecuteSnipe(telegramId, tokenCA, amountSol);
+
+        // 🟢 Execute snipe with dynamic `snipeAmount`
+        const buyRes = await simExecuteSnipe(telegramId, tokenCA, snipeAmount);
         if (!buyRes.success) {
             await bot.telegram.sendMessage(telegramId, `🛑 <b>AUTO-SNIPER PAUSED:</b> Simulated balance insufficient.`, { parse_mode: 'HTML' });
             await redis.set(`sim:autosnipe:${telegramId}`, 'false');
             break;
         }
+
         await addSessionSpend(telegramId, buyRes.volumeSpent, 'sim');
         if (sessionId) {
             await redis.rpush(`sim:session_trades:${sessionId}`, JSON.stringify({ mint: tokenCA, amountInSol: buyRes.volumeSpent, realizedPnlSol: 0 }));
         }
+
         const buyMsg = buildAuditTrailMessage(tokenCA, simScore, stats, buyRes.volumeSpent, slPercent, config?.autoTakeProfitPercent ? tpPercent : 'OFF', true) + `\n\n🔗 <a href="https://solscan.io/tx/${buyRes.signature}">View on Solscan</a>`;
         await bot.telegram.sendMessage(telegramId, buyMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+
         const useDeep = config?.useDeepScoring || false;
         const holdDelay = useDeep ? 5000 : 3000;
         await new Promise(r => setTimeout(r, holdDelay));
+
         const sellRes = await simExecuteExit(telegramId, tokenCA, 100, finalPnl);
         if (sessionId) {
             const realizedPnlSol = buyRes.volumeSpent * (finalPnl / 100);
@@ -564,6 +622,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
                 await redis.rpush(`sim:session_trades:${sessionId}`, JSON.stringify(lastTrade));
             }
         }
+
         await sendSimPnlCard(telegramId, bot, tokenCA, buyRes.volumeSpent, finalPnl, slPercent, 0, 0);
         const organicDelayMs = [1000, 5000, 8000, 10000][Math.floor(Math.random() * 4)] + Math.random() * 1000;
         await new Promise(r => setTimeout(r, organicDelayMs));
@@ -601,7 +660,7 @@ export async function walkSimPositionPrices(telegramId: string): Promise<void> {
     const positions = JSON.parse(raw);
     if (positions.length === 0) return;
     let changed = false;
-    const solUsdPrice = 160;
+    const solUsdPrice = cachedSolUsdPrice || 160;
     for (const p of positions) {
         if (p.volatilitySeed === undefined) p.volatilitySeed = (Math.random() * 2 - 1);
         const scoreBias = ((p.entryScore ?? 50) - 50) / 50;
@@ -637,7 +696,6 @@ export async function setSimulationMode(telegramId: string, active: boolean): Pr
         const wallets = generateSimWallets();
         await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
 
-        // 🟢 FIX: Ensure 'wallets' property is NOT passed to prisma upsert.
         await prisma.simState.upsert({
             where: { userId: user.id },
             update: { active: true, balance: startBal, startingBalance: startBal },

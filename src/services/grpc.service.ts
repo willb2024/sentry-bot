@@ -705,7 +705,6 @@ export async function triggerAutoSnipes(
         const delayMs = (sniper.snipeDelaySeconds ?? 0) * 1000;
         setTimeout(async () => {
             try {
-                // 🟢 FIX: Fresh DB query execution check
                 const liveConfig = await prisma.autoSnipeConfig.findUnique({ 
                     where: { id: sniper.id }, 
                     include: { user: true } 
@@ -715,7 +714,6 @@ export async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
-                let scoreType = "Basic Scoring"; 
                 let score = 0;
                 let ageMins = 0;
                 let volUsd = 0;
@@ -731,7 +729,6 @@ export async function triggerAutoSnipes(
                         const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
                         ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
                         const creatorWallet = seen?.creator || '';
-
                         let hasSocials = false;
 
                         if (mode === 'PUMP') {
@@ -787,26 +784,8 @@ export async function triggerAutoSnipes(
                         const useML = creditResult.success && !creditResult.fallback;
 
                         if (useML) {
-                            scoreType = "AI Model";
                             const mlScore = await getModelScore(mintCa, stats);
-                            if (mlScore !== null) {
-                                score = mlScore;
-                            }
-                        } else {
-                            scoreType = "Basic Fallback (No Credits)";
-                            if (creditResult.fallback) {
-                                const warnKey = `sniper_credits_warn:${liveConfig.user.telegramId}`;
-                                if (!(await redis.get(warnKey))) {
-                                    await redis.set(warnKey, '1', 'EX', 1800);
-                                    try {
-                                        await bot.telegram.sendMessage(
-                                            liveConfig.user.telegramId,
-                                            `⚠️ <b>AI CREDITS DEPLETED</b>\n\nYour Auto-Sniper evaluated <code>${mintCa}</code> using <b>Basic Scoring</b>. Sniper will continue running with reduced accuracy. Use /credits to top up!`,
-                                            { parse_mode: 'HTML' }
-                                        );
-                                    } catch (_) {}
-                                }
-                            }
+                            if (mlScore !== null) score = mlScore;
                         }
 
                         if (score < liveConfig.minScore) return; 
@@ -815,13 +794,51 @@ export async function triggerAutoSnipes(
                     }
                 }
 
+                // 🟢 DYNAMIC SIZING ENGINE
+                let snipeAmount = liveConfig.amountSol; // Legacy fallback
+
+                if (liveConfig.enableDynamicScaling) {
+                    // 1. Normalize score (clamp between 10 and 100 to avoid 0-size on terrible tokens)
+                    const normalizedScore = Math.min(100, Math.max(10, score)) / 100;
+
+                    // 2. Apply user-selected exponent curve
+                    const exponent = liveConfig.scaleExponent || 2.0;
+                    const convictionMultiplier = Math.pow(normalizedScore, exponent);
+
+                    // 3. Calculate initial size
+                    let calculatedSize = liveConfig.baseRiskUnitSol * convictionMultiplier * liveConfig.maxRiskMultiplier;
+
+                    // 4. LIQUIDITY PROTECTION (Never take more than 2% of a pool's liquidity)
+                    if (liqUsd > 0 && cachedSolUsdPrice > 0) {
+                        const maxLiqAllocation = liqUsd * 0.02;
+                        const maxLiqInSol = maxLiqAllocation / cachedSolUsdPrice;
+                        calculatedSize = Math.min(calculatedSize, maxLiqInSol);
+                    }
+
+                    // 5. BUDGET PROTECTION (Cannot exceed maxBudgetSol remaining)
+                    // 🟢 FIX: Dynamic import all 3 simulation functions here to avoid circular dependency errors
+                    const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
+                    
+                    const currentSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
+                    const budgetRemaining = (liveConfig.maxBudgetSol || Infinity) - currentSpend;
+                    calculatedSize = Math.min(calculatedSize, budgetRemaining);
+
+                    // 6. SAFETY FLOOR (Minimum snipe to cover Jito gas)
+                    calculatedSize = Math.max(calculatedSize, 0.005);
+
+                    snipeAmount = parseFloat(calculatedSize.toFixed(4));
+                } else {
+                    // 🟢 FIX: If dynamic scaling is off, we still need these imports to not crash later.
+                    const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
+                }
+
                 // EXECUTION BLOCK & BUDGET CHECK
                 const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
                 const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
-                const currentSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
-                const intendedSpend = liveConfig.amountSol * liveConfig.user.activeWallets;
+                const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, 'live');
+                const intendedSpend = snipeAmount * liveConfig.user.activeWallets;
 
-                if (liveConfig.maxBudgetSol && currentSpend + intendedSpend > liveConfig.maxBudgetSol) {
+                if (liveConfig.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
                     await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
                     await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
                     return; 
@@ -834,7 +851,7 @@ export async function triggerAutoSnipes(
                 if (!isSnipeLocked) return;
 
                 const executionSlippage = liveConfig.useDeepScoring ? (liveConfig.user.slippagePercent + 5) : undefined;
-                const result = await executeSnipe(liveConfig.user.telegramId, mintCa, liveConfig.amountSol, 'buy', undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'SNIPER');
+                const result = await executeSnipe(liveConfig.user.telegramId, mintCa, snipeAmount, 'buy', undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'SNIPER');
 
                 if (result.success) {
                     const spent = result.volumeSpent || intendedSpend;
@@ -853,7 +870,7 @@ export async function triggerAutoSnipes(
                     const { addTrailingStopToMemory } = await import('./order.service.js');
                     await addTrailingStopToMemory(
                         liveConfig.user.telegramId, mintCa, liveConfig.autoTrailingDropPercent,
-                        liveConfig.amountSol, entryPrice, liveConfig.autoTakeProfitPercent || undefined
+                        snipeAmount, entryPrice, liveConfig.autoTakeProfitPercent || undefined
                     );
 
                     try {
@@ -864,14 +881,11 @@ export async function triggerAutoSnipes(
                             liquidity: liqUsd,
                             priceChangeM5: priceChangeM5
                         };
-                        
                         const baseMsg = buildAuditTrailMessage(
                             mintCa, score, auditStats, spent, liveConfig.autoTrailingDropPercent,
                             liveConfig.autoTakeProfitPercent || 'OFF', false
                         );
-                        
                         const finalMsg = `${baseMsg}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
-
                         await bot.telegram.sendMessage(liveConfig.user.telegramId, finalMsg, {
                             parse_mode: 'HTML', link_preview_options: { is_disabled: true },
                             reply_markup: { inline_keyboard: [
@@ -1012,3 +1026,14 @@ export async function igniteYellowstoneStream(bot: any) {
         }
     }
 }
+
+// Add at bottom of src/services/grpc.service.ts
+process.on('SIGINT', async () => {
+    console.log('🛑 [gRPC] Cleaning up active guard price subscriptions...');
+    for (const [mint, subId] of activeSubscriptions.entries()) {
+        try {
+            await connection.removeAccountChangeListener(subId);
+        } catch (_) {}
+    }
+    activeSubscriptions.clear();
+});

@@ -62,6 +62,34 @@ if (!process.env.TREASURY_WALLET_ADDRESS) { console.error("🔴 FATAL: TREASURY_
 const bot = new Telegraf(BOT_TOKEN);
 
 
+import cors from 'cors';
+
+dotenv.config();
+
+// 🟢 FIX 3: Environment Variable Validation
+const requiredEnv = [
+    'BOT_TOKEN',
+    'TREASURY_WALLET_ADDRESS',
+    'ENCRYPTION_KEY',
+    'DATABASE_URL',
+    'REDIS_URL',
+    'HELIUS_API_KEY',
+    'PINATA_JWT',
+    'WEBAPP_URL'
+];
+for (const key of requiredEnv) {
+    if (!process.env[key]) {
+        console.error(`❌ Missing required environment variable: ${key}`);
+        process.exit(1);
+    }
+}
+
+// 🟢 FIX 4: Add CORS Middleware
+app.use(cors({
+    origin: process.env.WEBAPP_URL || '*',
+    credentials: true
+}));
+
 process.on('unhandledRejection', (reason, promise) => {
     console.error('🔴 Unhandled Rejection at:', promise, 'reason:', reason);
   });
@@ -1673,110 +1701,145 @@ bot.action('btn_guide', async (ctx) => {
 });
 
 
-// 🟢 NEW: COMPLETE PLATFORM CONFIGURATION GUIDE (PAGINATED)
 // 🟢 NEW: INSTITUTIONAL PLATFORM CONFIGURATION GUIDE
 const CONFIG_GUIDE_PAGES: string[] = [
-    // PAGE 1: FOUNDATION & DISCLAIMER
-    `⚡ <b>CONFIGURATION GUIDE: THE FOUNDATION OF SPEED</b> <i>(1/8)</i>\n\n` +
-    `⚠️ <b>REALITY CHECK & DISCLAIMER:</b>\n` +
-    `<i>This guide does NOT guarantee profits. The memecoin space is highly volatile and inherently risky. However, we are deeply committed to your success. By configuring Sentry exactly as described below, you unlock the <b>mathematical edge</b> needed to maximize your statistical probability of winning over the long term.</i>\n\n` +
-    `🚀 <b>1. OPTIMIZING JITO PRIORITY FEES (The Speed Bribe)</b>\n` +
-    `In <b>/settings</b>, you must pick the correct priority to outbid 99% of traders:\n` +
-    `• <b>Eco 🍃 (0.0005 SOL):</b> Only use for quiet weekends.\n` +
-    `• <b>Fast 🐎 (0.001 SOL):</b> Standard for regular snipe volume.\n` +
-    `• <b>Turbo ⚡ (0.005 SOL):</b> Institutional speed. Use this for hyper-launches.\n` +
-    `• <b>Custom ⚙️:</b> Set 0.02 SOL to guarantee Block-0 on hyped launches. This is your "win now" button.\n\n` +
-    `💧 <b>2. SLIPPAGE (The Volatility Buffer)</b>\n` +
-    `Set slippage to <b>20%</b> in /settings. This guarantees your transaction never fails on volatile bonding curves. Failures cost you millions in missed alpha.\n\n` +
-    `🛡️ <b>3. THE GLOBAL BUDGET CAP (Your Ultimate Shield)</b>\n` +
-    `In <b>/sniper</b>, set a <b>Global Max Budget</b>. Sentry tracks every SOL spent across all your snipes. Once the budget cap is hit (e.g., $42,000 USD), the system <b>automatically shuts down</b> to protect your capital from market blow-ups.`,
+    // PAGE 1: BASICS
+    `⚡ <b>CONFIGURATION GUIDE: THE FOUNDATION</b> <i>(1/8)</i>\n\n` +
+    `⚠️ <b>DISCLAIMER:</b> Memecoins are highly volatile. This guide maximizes your odds but does not guarantee profits.\n\n` +
+    `🚀 <b>1. JITO PRIORITY FEES (Speed Bribe)</b>\n` +
+    `• <b>Eco 🍃 (0.0005 SOL):</b> Quiet days only.\n` +
+    `• <b>Fast 🐎 (0.001 SOL):</b> Standard daily snipe.\n` +
+    `• <b>Turbo ⚡ (0.005 SOL):</b> Hyper-launch mode.\n` +
+    `• <b>Custom ⚙️:</b> Set 0.02 SOL to guarantee Block-0 on hyped launches.\n\n` +
+    `💧 <b>2. SLIPPAGE PROTECTION</b>\n` +
+    `Set to <b>20%</b>. This acts as a buffer to ensure transactions don't fail during launch volatility.`,
 
-    // PAGE 2: THE AUTO-SNIPER
-    `🎯 <b>CONFIGURATION GUIDE: THE SNIPER'S EDGE</b> <i>(2/8)</i>\n\n` +
-    `🤖 <b>HOW TO CALIBRATE THE AUTO-SNIPER FOR STATISTICAL DOMINANCE</b>\n\n` +
-    `Your auto-sniper is a machine that fires 24/7. Here is how to calibrate it to crush the field:\n\n` +
-    `• <b>Target Mode:</b> Set to <b>BOTH</b> to scan Pump.fun and Raydium simultaneously.\n` +
-    `• <b>Scoring Mode:</b> Always use <b>🔍 Deep Scoring</b>. The 3-5 second audit buys you time to check for serial ruggers, hidden taxes, and MEV bots before you buy.\n` +
-    `• <b>AI Min Score:</b> Set to <b>55</b>. This gives you the largest pool of potential gems. Deep Scoring filters out the scam 55s automatically. \n` +
-    `• <b>Anti-Dead Shield:</b> 🟢 <b>MANDATORY: TURN THIS ON.</b> A developer who launches a token and doesn't buy their own supply is a 99% scam probability. Sentry blocks it.\n` +
-    `• <b>Max Dev Bag:</b> Set to <b>10%</b>. If the dev buys more than 10% of the supply at mint, Sentry aborts the trade. This prevents you from backing a greedy dev.\n` +
-    `• <b>Block Delay:</b> Set to <b>1 Second</b>. Instantly firing at 0ms often fails on Pump.fun bonding curves. 1 second gives the price a moment to stabilize while keeping you faster than 99% of retail traders.\n` +
-    `• <b>Auto-Guard:</b> We recommend <b>-15% Stop Loss</b> and <b>+45% Take Profit</b>. This is the gold standard 1:3 Risk-to-Reward ratio. `,
+    // PAGE 2: DYNAMIC SIZING (NEW!)
+    `📊 <b>CONFIGURATION GUIDE: DYNAMIC SIZING</b> <i>(2/8)</i>\n\n` +
+    `Stop using fixed dollar amounts. The Dynamic Sizing Engine auto-scales your snipe based on the AI Score.\n\n` +
+    `🔹 <b>Base Risk Unit:</b>\n` +
+    `This is your "minimum bet" for a low-scoring (50-60) token. Example: 0.02 SOL.\n\n` +
+    `🔹 <b>Max Risk Multiplier:</b>\n` +
+    `This is your "maximum bet" multiplier for a perfect 100-score token. Example: 10x (so 0.02 SOL * 10 = 0.2 SOL max).\n\n` +
+    `🔹 <b>Scaling Curve (Exponent):</b>\n` +
+    `• <b>Linear (1.0):</b> A 70-score token uses 70% of your max. Straight line.\n` +
+    `• <b>Aggressive (2.0):</b> <i>Recommended.</i> Squares the score. A 70 gets 49% of max; a 90 gets 81% of max. Rewards high conviction.\n` +
+    `• <b>Exponential (3.0):</b> Cubes the score. Only the top 10% tokens get huge sizes.\n\n` +
+    `<i>Turn this ON in the Sniper Menu to protect your bag from risky punts.</i>`,
 
-    // PAGE 3: THE AI COIN CALLER
-    `🧠 <b>CONFIGURATION GUIDE: THE AI INTELLIGENCE PIPELINE</b> <i>(3/8)</i>\n\n` +
-    `📡 <b>TUNING THE AI COIN CALLER TO SPOT BREAKOUTS</b>\n\n` +
-    `The AI Coin Caller scans the mempool every 15 seconds. To get the highest quality alerts:\n\n` +
-    `• <b>Min Score (55):</b> This keeps the pool massive. The ML model then assigns a <b>Calibrated Price Projection</b> based on historical breakout patterns. It will tell you "Target Peak: +45% to +65% in 2 hours". This is how you know a trade is institutional-grade.\n` +
-    `• <b>Max Token Age:</b> Set to <b>10 minutes</b>. In the memecoin space, a token older than 10-20 minutes is already heavily farmed. You want to catch it at birth.\n` +
-    `• <b>Momentum % Range:</b> Set between <b>10% and 500%</b>. This captures tokens right as they ignite.\n` +
-    `• <b>Min Liquidity:</b> Set to <b>$3,000</b>. This catches brand new, unindexed Pump.fun coins, while the Anti-Rug Shield ensures safety.\n` +
-    `• <b>MEV Shield:</b> 🟢 <b>TURN THIS ON.</b> Blocks high-frequency sandwich bots before they eat your slippage.\n\n` +
-    `🎯 <b>NOTE ON AI SCORES:</b>\n` +
-    `The AI score is pulled directly from live data. It will naturally fluctuate wildly (54, 63, 82, 73, 59). This is perfectly normal. The Self-Learning ML model is retrained on alert outcomes every hour—the engine gets smarter the more you use it.`,
+    // PAGE 3: AUTO-SNIPER FILTERS
+    `🎯 <b>CONFIGURATION GUIDE: THE SNIPER'S EDGE</b> <i>(3/8)</i>\n\n` +
+    `• <b>Target Mode:</b> BOTH (Pump.fun & Raydium).\n` +
+    `• <b>Scoring Mode:</b> Use 🔍 Deep Scoring. It scans for serial ruggers and hidden taxes.\n` +
+    `• <b>AI Min Score:</b> Set to 55. Dynamic Sizing will protect you on lower scores.\n` +
+    `• <b>Anti-Dead Shield:</b> 🟢 TURN THIS ON. Blocks devs who don't buy their own supply.\n` +
+    `• <b>Dev Bag Limit:</b> Set to 10%. Aborts if the dev owns more than 10% at launch.\n` +
+    `• <b>Auto-Guard:</b> Set Stop Loss to -15% and Take Profit to +45%. This is the golden 1:3 risk-reward ratio.`,
 
-    // PAGE 4: VAULT & WHALE MODE
-    `🔑 <b>CONFIGURATION GUIDE: WHALE MODE & CAPITAL SAFETY</b> <i>(4/8)</i>\n\n` +
-    `🐙 <b>ACTIVATING MULTI-WALLET WHALE EXECUTION</b>\n\n` +
-    `Pump.fun limits how many tokens a single wallet can buy at launch. Sentry bypasses this by firing up to 5 wallets simultaneously in the same millisecond via Jito.\n\n` +
-    `• <b>Step 1:</b> Open <b>Vault & Keys</b> from the dashboard.\n` +
-    `• <b>Step 2:</b> Click the numbers to activate up to 5 wallets (W1 to W5). \n` +
-    `• <b>Step 3:</b> Deposit SOL to <b>each individual address</b>. Sentry aggregates the balances automatically.\n` +
-    `• <b>Step 4:</b> When you execute a Snipe, Sentry fires <b>simultaneous transactions</b> across all active wallets, securing a massive bag at Block-0.\n\n` +
-    `🔒 <b>SECURITY PRACTICES TO PROTECT YOUR CAPITAL:</b>\n` +
-    `• <b>Set a Withdrawal PIN:</b> Protects your funds if your Telegram is compromised.\n` +
-    `• <b>Consolidate:</b> Use the "Sweep All to W1" button to instantly pull SOL from sub-wallets back to your main vault.\n` +
-    `• <b>Export Keys:</b> Always keep an offline backup of your private keys. This message auto-deletes after 60 seconds for security.`,
+    // PAGE 4: AI COIN CALLER
+    `🧠 <b>CONFIGURATION GUIDE: AI CALLER TUNING</b> <i>(4/8)</i>\n\n` +
+    `The AI scans the mempool every 15 seconds.\n` +
+    `• <b>Min Score:</b> Set to 55. Keep the pool large. The ML model will fine-tune projections.\n` +
+    `• <b>Max Token Age:</b> Set to 10 minutes. Catch them at birth, not after it's been farmed.\n` +
+    `• <b>Momentum Range:</b> 10% to 500%. Captures tokens right as they ignite.\n` +
+    `• <b>MEV Shield:</b> 🟢 TURN THIS ON. Prevents sandwich bots from stealing your slippage.\n\n` +
+    `<i>The AI score fluctuates randomly. The ML Model retrains on your past outcomes every hour—the more you use it, the smarter it gets.</i>`,
 
-    // PAGE 5: DCA & LIMIT ORDERS
-    `⏳ <b>CONFIGURATION GUIDE: SILENT ACCUMULATION</b> <i>(5/8)</i>\n\n` +
-    `📉 <b>MASTERING LIMIT ORDERS (BUY THE DIP)</b>\n\n` +
-    `Type <code>/limit</code> to deploy.\n` +
-    `• <b>Example:</b> <code>[CA] [TARGET PRICE] [AMOUNT]</code>\n` +
-    `• <b>Winning Strategy:</b> Set a Limit Order 15-20% below the current market cap. Sentry monitors the price 24/7 and executes instantly via Jito when the target hits.\n\n` +
-    `🔁 <b>CONFIGURING TWAP / DCA SCHEDULES (Stealth Accumulation)</b>\n\n` +
-    `Type <code>/dca</code> to deploy.\n` +
-    `• <b>Example:</b> <code>[CA] [INTERVAL] [AMOUNT] [DROP %] [TP %] [MAX BUDGET]</code>\n` +
-    `• <b>Winning Strategy:</b> Set an interval of 60-120 minutes for a small amount (e.g., $10), and a trailing guard of -15%. This allows your bot to slowly accumulate a massive bag without alerting the market to your buying pattern.\n\n` +
-    `🛡️ <b>AUTO-GUARD SYNCHRONIZATION:</b>\n` +
-    `Every Limit Order and DCA fill automatically arms a Guard (Trailing Stop Loss). You never have to manually manage entry costs.`,
+    // PAGE 5: VAULT & WHALE MODE
+    `🔑 <b>CONFIGURATION GUIDE: WHALE MODE & SECURITY</b> <i>(5/8)</i>\n\n` +
+    `• <b>Activate Whale Mode:</b> In Vault & Keys, activate up to 5 wallets. Sentry fires simultaneous orders from all wallets in the same Jito block, bypassing Pump.fun's single-wallet limits.\n` +
+    `• <b>Deposit SOL:</b> You must send SOL to each individual wallet address.\n` +
+    `• <b>Protect Funds:</b> Set a Withdrawal PIN in the Vault menu to protect your funds if your Telegram is compromised.`,
 
-    // PAGE 6: LAUNCHPAD & DEV SUITE
-    `🚀 <b>CONFIGURATION GUIDE: THE LAUNCHPAD</b> <i>(6/8)</i>\n\n` +
-    `💥 <b>DEPLOYING A TOKEN WITH ZERO-LATENCY BLOCK-0 PROTECTION</b>\n\n` +
-    `Tap <b>Launch Token</b>. Sentry mines a Vanity CA (e.g., CAT...pump) and bundles the entire deployment into an un-snipeable Jito Block-0.\n` +
-    `• <b>Winning Strategy for Devs:</b> Distribute your initial buy across <b>4 wallets</b>. This conceals your true bag size from the community and prevents front-running. Always deploy an <b>Auto-Guard</b> (e.g., -40% stop-loss) to protect your initial capital.\n\n` +
-    `🛠️ <b>THE PRO DEV SUITE (INSTITUTIONAL TOOLS)</b>\n\n` +
-    `• <b>The Volume Bumper:</b> If your token drops off the front page due to a lack of organic volume, use the <b>Volume Bumper</b>. Sentry executes wash-trades across all 5 of your wallets simultaneously via private Jito bundles, pushing you back to the top of DexScreener instantly.\n` +
-    `• <b>The Multi-Wallet Nuke:</b> If you need to exit your entire position instantly, use the <b>Nuke</b> command. Sentry compiles sell orders from all 5 of your wallets into a single encrypted Jito block, exiting your supply in <b>0ms</b> at the absolute peak price.`,
+    // PAGE 6: DCA & LIMIT ORDERS
+    `⏳ <b>CONFIGURATION GUIDE: SILENT ACCUMULATION</b> <i>(6/8)</i>\n\n` +
+    `• <b>Limit Orders:</b> Type /limit [CA] [TARGET_PRICE] [AMOUNT]. Bot monitors 24/7 and buys the dip instantly.\n` +
+    `• <b>DCA (TWAP):</b> Type /dca [CA] [INTERVAL] [AMOUNT] [DROP] [MAX_BUDGET].\n` +
+    `  <i>Example: /dca [CA] 60 $10 10 $200</i> (Buy $10 every 60 mins, stop at $200).\n` +
+    `• <b>Auto-Guard:</b> Every DCA and Limit fill automatically arms a Trailing Stop Loss. You never have to manually manage exits.`,
 
     // PAGE 7: COPY TRADING & GUILDS
     `👥 <b>CONFIGURATION GUIDE: MULTIPLICATIVE WEALTH</b> <i>(7/8)</i>\n\n` +
-    `🐋 <b>MIRRORING WHALE WALLETS WITH ZERO-LATENCY WEBSOCKETS</b>\n\n` +
-    `Tap <b>Copy Trade</b> and paste a whale wallet address.\n` +
-    `• <b>Winning Strategy:</b> Before adding a wallet, Sentry automatically scans their last 20 transactions via Helius. If the wallet has an average hold time of under 30 seconds, Sentry flags it as a <b>High Bot Probability</b>. <i>Avoid copying these wallets to prevent sandwich attacks. Only copy human, high-win-rate wallets.</i>\n\n` +
-    `🏰 <b>BUILDING A PASSIVE INCOME MACHINE (SENTRY GUILDS)</b>\n\n` +
-    `Type <code>/createguild</code> (completely free) to launch your own loyalty engine.\n` +
-    `• <b>Winning Strategy:</b> Set a clear reward description (e.g., "Top 50 traders get whitelisted for our next token launch").\n` +
-    `• <b>Passive Income:</b> You earn <b>50% of the platform fees</b> for every trade your Guild members make. \n` +
-    `• <b>Reward Distribution:</b> Use the guild management panel to execute <b>Tiered Airdrops</b> or <b>Individual Payouts</b> directly to the top 50 members on the leaderboard.`,
+    `• <b>Copy Trade:</b> Paste a whale wallet. Sentry scans their past 20 transactions via Helius to alert you if they are a bot.\n` +
+    `• <b>Guilds:</b> Type /createguild (Free) to launch your own loyalty engine. You earn 50% of the platform fees on every trade your Guild members make, forever.`,
 
-    // PAGE 8: THE WEB DASHBOARD
-    `📊 <b>CONFIGURATION GUIDE: THE REAL-TIME SCOREBOARD</b> <i>(8/8)</i>\n\n` +
-    `📈 <b>READING YOUR WEB DASHBOARD TO EXTRACT CONTINUOUS PROFITS</b>\n\n` +
-    `• <b>Sharpe Ratio (Annualized):</b> Anything above 2.0 is elite. This measures your risk-adjusted return. If it dips below 1.5, you are gambling too much. Tighten your stop-losses.\n` +
-    `• <b>Max Drawdown:</b> Keep this under 2.0 SOL. It tracks the biggest cumulative loss from peak to trough. If it spikes, lower your position sizes instantly to protect the principal.\n` +
-    `• <b>Profit Factor:</b> A 4.0+ profit factor means you make $4 for every $1 lost. If you are under 2.0, you need to raise your Min Score to 70+.\n` +
-    `• <b>Strategy Attribution:</b> This tells you exactly which engine is making you money (Sniper vs Manual). If Manual is winning, focus on your own strategy. If Sniper is winning, increase your Auto-Sniper budget.\n` +
-    `• <b>24-Hour Rolling Activity:</b> This shows how many trades your manual and Auto-Engine are firing in the last day. A healthy bot firing 40+ trades a day is statistically crushing the market.\n\n` +
-    `⌨️ <b>FAST COMMANDS TO EXECUTE INSTANTLY:</b>\n` +
-    `• <code>/watch [CA] [TARGET_PRICE]</code> → Set persistent Redis price alerts.\n` +
-    `• <code>/batch</code> → Snipe multiple CA's at once using new lines.\n` +
-    `• <code>/stats</code> → Pull your Win Rate, PnL, and Volume instantly.\n` +
-    `• <code>/calendar</code> → See the top 10 verified launches under 2 hours old.\n` +
-    `• <code>/exporttrades</code> → Download your full CSV tax ledger.`
+    // PAGE 8: DASHBOARD ANALYTICS
+    `📊 <b>CONFIGURATION GUIDE: THE DASHBOARD</b> <i>(8/8)</i>\n\n` +
+    `• <b>Sharpe Ratio:</b> Above 2.0 is elite. If it dips below 1.5, tighten your stops.\n` +
+    `• <b>Max Drawdown:</b> Keep it under 2 SOL. If it spikes, lower your position sizes.\n` +
+    `• <b>Profit Factor:</b> 4.0+ means you make $4 for every $1 lost. If below 2.0, raise your min Score to 70+.\n\n` +
+    `⌨️ <b>Quick Commands:</b>\n` +
+    `• /watch [CA] [PRICE] → Persistent price alerts.\n` +
+    `• /batch → Snipe multiple tokens at once.\n` +
+    `• /stats → Live Win Rate and PnL.\n` +
+    `• /exporttrades → Download your full CSV tax ledger.`
 ];
 
+// 📖 FULL OPERATIONS MANUAL (Simplified & Action-Oriented)
+const TRADE_GUIDE_PAGES: string[] = [
+    // PAGE 1: BASICS
+    `📖 <b>OPERATIONS MANUAL — BASICS</b> <i>(1/8)</i>\n\n` +
+    `🌐 <b>How it works:</b> 100% of Sentry trades are packaged inside Jito Bundles. This bypasses the public mempool, preventing sandwich bots from stealing your slippage.\n\n` +
+    `👛 <b>1. Funding Your Vault:</b>\n` +
+    `Copy your W1 address and deposit SOL. To activate Whale Mode, go to Vault & Keys and turn on up to 5 wallets.\n\n` +
+    `⚡ <b>2. Instant Buy:</b>\n` +
+    `Paste any contract address (CA). You can send it as a command: <code>[CA] [AMOUNT]</code> (e.g. <code>7xKX... 0.5</code> or <code>7xKX... $50</code>).`,
+
+    // PAGE 2: SNIPER & DYNAMIC SIZING
+    `📖 <b>OPERATIONS MANUAL — SNIPING</b> <i>(2/8)</i>\n\n` +
+    `🎯 <b>The Auto-Sniper Engine:</b>\n` +
+    `Tap <b>Sniper Module</b>. Sentry listens to raw Solana blocks (Pump.fun/Raydium) and executes within milliseconds.\n\n` +
+    `⚙️ <b>Calculated Risks (Dynamic Sizing):</b>\n` +
+    `Enable "Dynamic Sizing". Set your Base Risk (e.g., 0.02 SOL) and Max Multiplier (e.g., 10x). \n` +
+    `The bot automatically uses math to scale the bet. A 55-score token gets 0.02 SOL, while an 85-score gem gets 0.15 SOL.\n\n` +
+    `🛡️ <b>Auto-Guard:</b>\n` +
+    `Set a Stop Loss (-15%) and Take Profit (+45%). The bot sells instantly via Jito when targets are hit.`,
+
+    // PAGE 3: AI CALLER
+    `📖 <b>OPERATIONS MANUAL — AI INTELLIGENCE</b> <i>(3/8)</i>\n\n` +
+    `🤖 <b>AI Coin Caller:</b>\n` +
+    `Type /caller. It scans new tokens every 15 seconds, scoring them 0–100. Higher scores yield Calibrated Price Targets.\n\n` +
+    `👀 <b>Watchlist & Calendar:</b>\n` +
+    `• <code>/watch [CA] [TARGET_PRICE]</code> to set persistent price alerts.\n` +
+    `• <code>/calendar</code> to see a live feed of verified launches under 2 hours old.`,
+
+    // PAGE 4: DCA & ADVANCED ORDERS
+    `📖 <b>OPERATIONS MANUAL — AUTOMATION</b> <i>(4/8)</i>\n\n` +
+    `📉 <b>Limit Orders (Buy the Dip):</b>\n` +
+    `Tap <b>Limit / DCA Engine</b>. Set a target price. Sentry monitors the chart 24/7 and executes the instant it hits.\n\n` +
+    `🔁 <b>DCA / TWAP Accumulation:</b>\n` +
+    `Accumulate large positions without moving the market price. Set an interval (e.g., $10 every 30 mins) and a Max Budget cap.`,
+
+    // PAGE 5: SECURITY & SHIELDS
+    `📖 <b>OPERATIONS MANUAL — DEFENSIVE SHIELD</b> <i>(5/8)</i>\n\n` +
+    `🚨 <b>Anti-Rug Frontrunner:</b>\n` +
+    `Sentry's Yellowstone gRPC stream detects "RemoveLiquidity" instructions in the mempool and fires an aggressive Jito bundle to sell your tokens <i>before</i> the dev's rug pull processes.\n\n` +
+    `🍯 <b>Token-2022 Tax Detector:</b>\n` +
+    `Type <code>/scan [CA]</code>. Sentry decodes raw Token-2022 buffers to detect hidden 99% honeypot taxes before third-party sites index them.`,
+
+    // PAGE 6: LAUNCHPAD & DEV TOOLS
+    `📖 <b>OPERATIONS MANUAL — LAUNCHPAD</b> <i>(6/8)</i>\n\n` +
+    `🚀 <b>Sentry Launchpad:</b>\n` +
+    `Tap <b>Launch Token</b>. Sentry mines a Vanity CA (e.g., CAT...pump) and deploys the entire token in a single Jito Block-0. You can split your initial buy across up to 4 wallets to hide your true bag size.\n\n` +
+    `🛠️ <b>Dev Suite:</b>\n` +
+    `If your token drops off DexScreener, use the Volume Bumper (executes simultaneous wash trades across 5 wallets) to push you back to the top.`,
+
+    // PAGE 7: GUILDS & COPY TRADE
+    `📖 <b>OPERATIONS MANUAL — SOCIAL TRADING</b> <i>(7/8)</i>\n\n` +
+    `🏰 <b>Sentry Guilds:</b>\n` +
+    `Type /createguild. You earn 50% of platform fees from every trade your members make. Use the Guild dashboard to export top wallets for airdrops.\n\n` +
+    `🐋 <b>Copy Trading:</b>\n` +
+    `Mirror any whale wallet via WebSocket. Before adding, Sentry scans their trade history to warn you if they are a high-frequency MEV bot.`,
+
+    // PAGE 8: ANALYTICS & TAX EXPORT
+    `📖 <b>OPERATIONS MANUAL — METRICS & TAXES</b> <i>(8/8)</i>\n\n` +
+    `📈 <b>Web Dashboard Analytics:</b>\n` +
+    `• <b>Strategy Attribution:</b> See exactly which engine (Manual vs Sniper) is making you the most money.\n` +
+    `• <b>Hourly Performance:</b> Shows which UTC hours your strategy is most profitable.\n\n` +
+    `📤 <b>Ledger Export:</b>\n` +
+    `Type <code>/exporttrades</code> or click the Export CSV button on the WebApp to download your complete trading history for tax purposes.\n\n` +
+    `<i>All trades include Jito signatures for full on-chain verification.</i>`
+];
 
 
 // ✅ Navigation Keyboard Builder for CONFIG_GUIDE_PAGES
@@ -1804,114 +1867,8 @@ bot.action(/^config_guide_page_(\d+)$/, async (ctx) => {
     if (page < 0 || page >= CONFIG_GUIDE_PAGES.length) return;
     await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[page], buildConfigGuideKeyboard(page));
 });
-// =========================================================
-// 📖 FULL OPERATIONS MANUAL (PAGINATED WITH PREV/NEXT)
-// =========================================================
-// src/index.ts (Replace TRADE_GUIDE_PAGES)
 
-const TRADE_GUIDE_PAGES: string[] = [
-    // PAGE 1: Basics, Whale Mode & Instant Execution
-    `📖 <b>SENTRY TERMINAL — OPERATIONS MANUAL</b> <i>(1/8)</i>\n\n` +
-    `🌐 <b>GLOBAL ADVANTAGE #1: Block-0 Jito MEV Private Bundling</b>\n` +
-    `<i>Unlike retail Telegram bots that broadcast your transactions through public mempools where sandwich bots steal your slippage, 100% of Sentry trades are packaged inside encrypted Jito bundles sent directly to Block-0 validators.</i>\n\n` +
-    `👛 <b>1. FUNDING YOUR VAULT & WHALE MODE</b>\n` +
-    `Copy your W1 (Main) address from the dashboard and deposit SOL. To activate <b>Whale Mode</b>, open <b>Vault & Keys</b> and turn on up to 5 wallets. Sentry will fire simultaneous buy orders across all 5 wallets in the exact same millisecond via Jito—bypassing Pump.fun's single-wallet buy limits and securing a massive bag at retail entry.\n\n` +
-    `⚡ <b>2. INSTANT BUY & METEORA PRIORITY ROUTING</b>\n` +
-    `Paste any contract address (CA). Sentry evaluates contract safety and displays a 1-click buy interface.\n` +
-    `• <i>Fast Buy Syntax:</i> Send <code>[CA] [AMOUNT]</code> (e.g. <code>7xKX... 0.5</code> or <code>7xKX... $50</code>).\n` +
-    `• <i>Direct DEX Routing:</i> Sentry bypasses Jupiter aggregator cache delays on brand-new launches by executing directly via <b>Meteora DLMM</b> and Raydium CPMM pools.\n\n` +
-    `📦 <b>3. BATCH SNIPING & SECURE WITHDRAWALS</b>\n` +
-    `• <i>Batch Snipe:</i> Buy multiple coins at once by typing <code>/batch</code> followed by CAs and amounts on new lines.\n` +
-    `• <i>Withdrawals:</i> Type <code>/withdraw [ADDRESS] [AMOUNT]</code>. Sentry consolidates capital across sub-wallets automatically.`,
 
-    // PAGE 2: Mempool Auto-Sniper & AI Caller Engine
-    `📖 <b>OPERATIONS MANUAL — INTEL & SNIPING</b> <i>(2/8)</i>\n\n` +
-    `🌐 <b>GLOBAL ADVANTAGE #2: Self-Learning Machine Learning Engine</b>\n` +
-    `<i>Sentry doesn't use static hardcoded rules. Our AI Coin Caller runs an hourly self-training OLS regression model that retrains on historical alert outcomes to continuously refine price breakout projections.</i>\n\n` +
-    `🎯 <b>TRENCH AUTO-SNIPER ENGINE</b>\n` +
-    `Tap <b>Sniper Module</b>. Sentry monitors raw Solana block transitions to front-run listings.\n` +
-    `• <i>Anti-Dead Shield:</i> Filters out lazy mappers where the dev didn't buy their own token.\n` +
-    `• <i>Dev Bag Limit:</i> Aborts the snipe if the developer buys more than your set % threshold at mint.\n` +
-    `• <i>AI Score Filter:</i> Requires tokens to pass Machine Learning criteria before buying.\n\n` +
-    `🤖 <b>AI COIN CALLER ENGINE</b>\n` +
-    `Type <code>/caller</code>. Sentry scans new tokens every 15 seconds, scoring them 0–100 based on organic velocity, LP lock %, holder growth, and socials. Higher scores yield <b>Calibrated Price Target Projections</b> with target peak ranges and estimated timeframes.\n\n` +
-    `👀 <b>WATCHLIST & LAUNCH CALENDAR</b>\n` +
-    `• Type <code>/watch [CA] [TARGET_PRICE]</code> to set persistent Redis price alerts.\n` +
-    `• Type <code>/calendar</code> for a live feed of verified launches under 2 hours old.`,
-
-    // PAGE 3: 0ms Mempool Copytrading & Advanced Orders
-    `📖 <b>OPERATIONS MANUAL — ADVANCED AUTOMATION</b> <i>(3/8)</i>\n\n` +
-    `🌐 <b>GLOBAL ADVANTAGE #3: 0ms Processed Mempool Copytrading</b>\n` +
-    `<i>Retail copytraders wait for transactions to be 'confirmed' on-chain—meaning you buy after the whale's green candle already printed. Sentry listens to raw 'processed' WebSocket events, sliding your Jito bundle into the exact same block alongside the whale.</i>\n\n` +
-    `👥 <b>COPY TRADING WITH HELIUS BEHAVIOR AUDITING</b>\n` +
-    `Tap <b>Copy Trade</b>. Add any whale wallet. Sentry auto-audits their last 20 transactions to warn you if they are an MEV bot. Once set, Sentry mirrors their buys and sells in real-time with dynamic slippage.\n\n` +
-    `⏳ <b>LIMIT ORDERS (BUY THE DIP)</b>\n` +
-    `Tap <b>Limit / DCA Engine</b>. Set target entry valuations (e.g., Buy $100 if WIF drops to $1.50). Sentry monitors live price feeds 24/7 and executes instantly when hit.\n\n` +
-    `🔁 <b>HEADLESS DCA / TWAP ACCUMULATION</b>\n` +
-    `Accumulate position sizes without moving market price. Set an interval, buy amount, and budget cap (e.g. Buy $15 every 30 mins up to $300 max).`,
-
-    // PAGE 4: Anti-Rug Frontrunner & Defensive Shield
-    `📖 <b>OPERATIONS MANUAL — DEFENSIVE SHIELD</b> <i>(4/8)</i>\n\n` +
-    `🌐 <b>GLOBAL ADVANTAGE #4: Anti-Rug Dev Frontrunning Engine</b>\n` +
-    `<i>When a scam developer tries to pull liquidity or rug a token, Sentry's Yellowstone gRPC stream detects the 'RemoveLiquidity' instruction in the mempool and fires an aggressive Jito exit bundle to sell your tokens BEFORE the dev's rug pull processes.</i>\n\n` +
-    `🛡️ <b>TRAILING GUARDS (STOP LOSS & TAKE PROFIT)</b>\n` +
-    `Tap <b>Trailing Stops</b>. Sentry tracks a token's All-Time High in RAM. If the price drops by your set % (e.g., -20%), Sentry auto-sells via pre-signed Jito bundles. You can also configure Take Profit targets (e.g., +100%) and max hold durations.\n\n` +
-    `🍯 <b>NATIVE TOKEN-2022 TAX DETECTOR</b>\n` +
-    `Type <code>/scan [CA]</code>. Sentry decodes raw Token-2022 extension buffers directly on-chain to detect hidden 99% transfer fees and honeypots before third-party websites index them.`,
-
-    // PAGE 5: Configuration, Speed Bribes & Customization
-    `📖 <b>OPERATIONS MANUAL — CONFIGURATION & SETTINGS</b> <i>(5/8)</i>\n\n` +
-    `⚙️ <b>TAILORING YOUR TERMINAL</b>\n\n` +
-    `• <b>Slippage Protection:</b> Default 20%. Acts as your volatility buffer to guarantee transactions land during launch spikes.\n\n` +
-    `• <b>Jito Priority Fees (Validator Bribes):</b>\n` +
-    `  ├ <i>Eco 🍃 (0.0005 SOL):</i> Cost-effective priority for quiet market hours.\n` +
-    `  ├ <i>Fast 🐎 (0.001 SOL):</i> Optimal default. Guarantees top-block validator execution.\n` +
-    `  └ <i>Turbo ⚡ (0.005 SOL):</i> High-priority tip for contested, high-volatility launches.\n\n` +
-    `• <b>Custom Jito Bribe:</b> Set custom validator tips (e.g., <code>0.02 SOL</code>) to out-bid 99% of retail traders on hyped launches.\n\n` +
-    `• <b>Hide / Mask Wallets:</b> Privacy toggle to mask public vault addresses when sharing screenshots or recording videos.\n\n` +
-    `• <b>Trade Reaction GIFs:</b> Automated animated media reactions sent on position exits and milestone wins.\n\n` +
-
-    // PAGE 6: Enterprise Analytics & Rent Sweeper
-    `📖 <b>OPERATIONS MANUAL — ANALYTICS & UTILITIES</b> <i>(6/8)</i>\n\n` +
-    `🌐 <b>GLOBAL ADVANTAGE #5: Institutional Performance Metrics</b>\n` +
-    `<i>Sentry brings Wall Street analytics to Telegram. Track risk-adjusted returns, drawdown, and hourly performance right inside your dashboard.</i>\n\n` +
-    `📊 <b>WEB APP ANALYTICS</b>\n` +
-    `Click <b>Track Trades</b> on your main menu to view:\n` +
-    `• <b>Sharpe Ratio:</b> Measures your risk-adjusted profitability.\n` +
-    `• <b>Maximum Drawdown:</b> Tracks peak-to-trough equity loss to manage capital risk.\n` +
-    `• <b>Hourly Performance Heatmap:</b> Shows which hours of the day (UTC) your trading strategy is most profitable.\n` +
-    `• <b>Strategy Attribution:</b> See whether Manual, Sniper, or Copytrading generates your highest PnL.\n\n` +
-    `🧹 <b>RENT SWEEPER (FREE SOL RECLAIM)</b>\n` +
-    `Inside <b>Positions</b>, click "Sweep Empty Accounts". Sentry closes dead, zero-balance token accounts and reclaims the locked rent (~0.002 SOL per account) straight back to your wallet.\n\n` +
-    `📤 <b>LEDGER EXPORT (TAX & AUDITING)</b>\n` +
-    `Type <code>/exporttrades</code> (or use the WebApp button) to download your full trading history as a CSV file.`,
-
-    // PAGE 7: Launchpad, Dev Suite & Guild Monetization
-    `📖 <b>OPERATIONS MANUAL — LAUNCHPAD & GUILDS</b> <i>(7/8)</i>\n\n` +
-    `🌐 <b>GLOBAL ADVANTAGE #6: Perpetual 50% Revenue-Share Guilds</b>\n` +
-    `<i>Turn your community into a passive income stream. Sentry Guilds automatically track member trading volume on-chain and payout 50% of platform fees directly to the Guild owner forever.</i>\n\n` +
-    `🚀 <b>SENTRY LAUNCHPAD</b>\n` +
-    `Tap <b>Launch Token</b>. Launch tokens on Pump.fun or Raydium safely.\n` +
-    `• <i>Vanity CA Mining:</i> Mine custom contract addresses (e.g. <code>CAT...pump</code>).\n` +
-    `• <i>Block-0 Stealth Split:</i> Distribute your developer allocation across up to 4 sub-wallets inside a single, un-snipeable Jito bundle.\n\n` +
-    `🏰 <b>SENTRY GUILDS</b>\n` +
-    `Type <code>/createguild</code>. Create your loyalty ecosystem, run volume leaderboards, and export top wallets for Whitelists or SOL Airdrops.`,
-
-    // PAGE 8: Institutional Security Architecture
-    `📖 <b>OPERATIONS MANUAL — SECURITY ARCHITECTURE</b> <i>(8/8)</i>\n\n` +
-    `🌐 <b>GLOBAL ADVANTAGE #7: Bank-Grade Vault Cryptography</b>\n` +
-    `<i>Your capital security is paramount. Sentry combines AES-256-GCM encryption with local memory signing and session isolation.</i>\n\n` +
-    `🔒 <b>1. AES-256-GCM Encryption At Rest</b>\n` +
-    `Private keys are encrypted using an industrial-grade AES-256-GCM cipher with random initialization vectors and cryptographic auth tags. Keys are unreadable even in the event of a raw database leak.\n\n` +
-    `🔑 <b>2. Non-Custodial Local RAM Signing</b>\n` +
-    `Keys are never transmitted over network calls. Transaction signing occurs locally inside isolated Node.js volatile memory and keypairs are immediately flushed from memory post-execution.\n\n` +
-    `🔐 <b>3. Hashed Security PINs for Withdrawals</b>\n` +
-    `Withdrawals can be locked behind a 4–6 digit security PIN hashed with CPU-hard Scrypt salting, preventing unauthorized capital drains even if your Telegram account is compromised.\n\n` +
-    `🔒 <b>4. Private DM Lockdown & Group Isolation</b>\n` +
-    `Sentry automatically leaves public group chats if invited, operating strictly in private DMs to prevent social engineering, scraping, and chat eavesdropping.`
-];
-
-// 🟢 FIXED: Adds BOTH Prev and Next arrows dynamically
 function buildGuideKeyboard(page: number) {
     const buttons = [];
     const navRow = [];
@@ -2865,6 +2822,7 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const isSimMode = await isSimulationActive(telegramId);
     const isSimActive = isSimMode && (await redis.get(`sim:autosnipe:${telegramId}`) === 'true');
     
+    // 🟢 Define the missing variables!
     const isCurrentlyActive = isSimMode ? isSimActive : config.isActive;
     const statusObj = isCurrentlyActive ? "🟢 ACTIVE & SCANNING MEMPOOL" : "🔴 OFFLINE (Stopped)";
 
@@ -2878,47 +2836,33 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const antiDeadObj = config.antiDeadCoin ? "🟢 ON (Active)" : "🔴 OFF (Disabled)"; 
     const devBagDisplay = `${config.maxDevBuyPercent}%`; 
     const scoreDisplay = config.minScore > 0 ? `${config.minScore}/100 ⭐` : `OFF`;
-    const deepScoringObj = config.useDeepScoring ? "🔍 Deep Score (High Accuracy)" : "⚡ Fast Score (Low Latency)"; // 🟢 ADDED
+    const deepScoringObj = config.useDeepScoring ? "🔍 Deep Score (High Accuracy)" : "⚡ Fast Score (Low Latency)";
+
+    // 🟢 New variables for Dynamic Sizing
+    const scalingStatus = config.enableDynamicScaling ? '🟢 ACTIVE (Conviction-Weighted)' : '🔴 INACTIVE';
+    const curveDesc = config.scaleExponent === 1.0 ? '📈 Linear' : config.scaleExponent === 2.0 ? '🔥 Aggressive (Square)' : '🚀 Exponential';
 
     const sniperText = 
         `🎯 <b>TRENCH AUTO-SNIPER ENGINE</b> 🎯\n` +
         `<i>Sentry scans raw block transitions to front-run listings. Operational parameters explained:</i>\n\n` +
-        
         `• <b>Status:</b> ${statusObj}\n` +
-        `  ├ <i>Controls active mempool monitoring and execution.</i>\n\n` +
-
         `• <b>Target Mode:</b> <b>${modeDisplay}</b>\n` +
-        `  ├ <i>Specifies listing venues to check (Pump.fun curve, Raydium pool, or both).</i>\n\n` +
-
         `• <b>Scoring Mode:</b> <b>${deepScoringObj}</b>\n` +
-        `  ├ <i>Fast = Minimum latency for block-0 frontrunning. Deep = Full AI & ML checks (slower but safer).</i>\n\n` +
-
-        `• <b>Spend Amount:</b> <b>${config.amountSol} SOL</b> per wallet\n` +
-        `  ├ <i>Capital spent per node. Multi-wallet mode fires this concurrently.</i>\n\n` +
-
+        `• <b>Spend Amount (Static):</b> <b>${config.amountSol} SOL</b> (Used when Dynamic Sizing is OFF)\n` +
         `• <b>Max Budget:</b> <b>${config.maxBudgetSol ? config.maxBudgetSol + ' SOL' : 'Infinite (No Limit)'}</b>\n` +
-        `  ├ <i>Safety cap that automatically turns off the sniper to prevent draining your wallet.</i>\n\n` +
-
         `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n` +
-        `  ├ <i>Total cumulative SOL deployed by Sentry during your current session.</i>\n\n` +
-
         `• <b>AI Score Filter:</b> <b>${scoreDisplay}</b>\n` +
-        `  ├ <i>Evaluates token stats (liq, volume, age, socials) and blocks trigger if score is too low.</i>\n\n` +
-
         `• <b>Market Cap Filter:</b> <b>${mcDisplay}</b>\n` +
-        `  ├ <i>Valuation limits to avoid buying highly inflated launches or ghost pools.</i>\n\n` +
-
         `• <b>Max Dev Bag (Dev Limit):</b> <b>${devBagDisplay}</b>\n` +
-        `  ├ <i>Aborts snipe if developer buys more than this token supply % in the launch block.</i>\n\n` +
-
         `• <b>Anti-Dead Shield:</b> ${antiDeadObj}\n` +
-        `  ├ <i>Filters out lazy launches where the creator did not buy any of their own supply at mint.</i>\n\n` +
-
         `• <b>Block Delay:</b> <b>${config.snipeDelaySeconds} Seconds</b>\n` +
-        `  ├ <i>Time Sentry waits post-mint to allow on-chain distribution checks to settle.</i>\n\n` +
-
-        `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n` +
-        `  ├ <i>Deploys cost-basis tracking stop-loss and take-profit targets instantly via Jito.</i>\n`;
+        `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n\n` +
+        `📊 <b>DYNAMIC SIZING ENGINE</b>\n` +
+        `<i>Replaces fixed amounts with a smooth math curve based on the AI Score.</i>\n` +
+        `• <b>Status:</b> ${scalingStatus}\n` +
+        `• <b>Base Risk Unit:</b> <b>${config.baseRiskUnitSol} SOL</b>\n` +
+        `• <b>Max Risk Multiplier:</b> <b>${config.maxRiskMultiplier}x</b>\n` +
+        `• <b>Scaling Curve:</b> <b>${curveDesc}</b>`;
 
     let modeBtnText = '🟢 Mode: Pump.fun 💊';
     if (config.sniperMode === 'RAYDIUM') modeBtnText = '🟢 Mode: Raydium LPs 🧪';
@@ -2929,7 +2873,19 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
         [Markup.button.callback(modeBtnText, 'toggle_sniper_mode')],
         [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score'), Markup.button.callback(`🧠 Mode: ${config.useDeepScoring ? '🔍 Deep' : '⚡ Fast'}`, 'toggle_snipe_deep_score')],
         [Markup.button.callback(`👻 Anti-Dead Shield: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
-        [Markup.button.callback(`✏️ Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
+        [Markup.button.callback(`✏️ Static Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
+        // 🟢 NEW ROWS: Dynamic Sizing Controls
+        [
+            Markup.button.callback(config.enableDynamicScaling ? '📊 Sizing: ON' : '📊 Sizing: OFF', 'toggle_dynamic_scaling')
+        ],
+        [
+            Markup.button.callback(`💵 Base Risk: ${config.baseRiskUnitSol} SOL`, 'edit_base_risk'),
+            Markup.button.callback(`🔺 Max Multiplier: ${config.maxRiskMultiplier}x`, 'edit_max_multiplier')
+        ],
+        [
+            Markup.button.callback(`📈 Curve: ${curveDesc}`, 'edit_scaling_exponent')
+        ],
+        // Existing rows
         [Markup.button.callback(`📊 MC Filter (${mcDisplay})`, 'edit_snipe_mc')],
         [Markup.button.callback(`✏️ Guard (-${config.autoTrailingDropPercent}%)`, 'edit_snipe_sl'), Markup.button.callback(`🎯 TP (${tpDisplay})`, 'edit_snipe_tp')],
         [Markup.button.callback(`⏱️ Delay (${config.snipeDelaySeconds}s)`, 'edit_snipe_delay')],
@@ -2939,6 +2895,50 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     if (isEdit) await safeEditMessageText(ctx, sniperText, UI);
     else await ctx.replyWithHTML(sniperText, UI);
 }
+
+
+// Toggle Dynamic Sizing
+bot.action('toggle_dynamic_scaling', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e) {}
+    const tgId = ctx.from?.id.toString()!;
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
+    if (!user || !user.autoSnipeConfig) return;
+    await prisma.autoSnipeConfig.update({
+        where: { id: user.autoSnipeConfig.id },
+        data: { enableDynamicScaling: !user.autoSnipeConfig.enableDynamicScaling }
+    });
+    await sendOrEditSniper(ctx, tgId, true);
+});
+
+// Edit Base Risk Unit
+bot.action('edit_base_risk', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e) {}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:autosnipe_base_risk:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(
+        `💵 <b>SET BASE RISK UNIT</b>\n\nReply with the SOL amount (or USD) you want as the foundation for scoring.\n<i>Example: 0.02 (This is what a 50-score token would roughly get).</i>\n\n<i>Type /cancel to abort.</i>`
+    );
+});
+
+// Edit Max Risk Multiplier
+bot.action('edit_max_multiplier', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e) {}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:autosnipe_max_multiplier:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(
+        `🔺 <b>SET MAX RISK MULTIPLIER</b>\n\nReply with the multiplier (e.g., 5.0).\n<i>If Base Risk = 0.02, and Multiplier = 5.0, a perfect 100-score token will snipe 0.1 SOL.</i>\n\n<i>Type /cancel to abort.</i>`
+    );
+});
+
+// Edit Scaling Exponent
+bot.action('edit_scaling_exponent', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e) {}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:autosnipe_exponent:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(
+        `📈 <b>SET SCALING CURVE (EXPONENT)</b>\n\nReply with a number (1.0, 2.0, or 3.0).\n• <b>1.0 (Linear):</b> Straight line. A 70-score token gets 70% of the max.\n• <b>2.0 (Aggressive):</b> Squares the conviction. 70 becomes 49% of max. (Recommended).\n• <b>3.0 (Exponential):</b> Cubes it. Only the top 10% get massive sizes. \n\n<i>Type /cancel to abort.</i>`
+    );
+});
 
 bot.action('toggle_sniper_mode', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -4647,6 +4647,48 @@ bot.on("text", async (ctx, next) => {
         await executeWithdrawalProcess(user, data.targetAddress, data.requestedAmount, data.isMax, telegramId, ctx, `lock:withdraw:${telegramId}`);
         return;
     }
+
+    // 1. Base Risk Unit
+const isBaseRisk = await redis.get(`state:autosnipe_base_risk:${telegramId}`);
+if (isBaseRisk) {
+    await redis.del(`state:autosnipe_base_risk:${telegramId}`);
+    const amount = parseSolAmount(text);
+    if (amount === null || amount <= 0.001) return ctx.reply('🔴 Invalid amount. Must be > 0.001.');
+    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+    if (!user?.autoSnipeConfig) return;
+    await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { baseRiskUnitSol: amount } });
+    await ctx.replyWithHTML(`✅ Base Risk Unit set to <b>${amount.toFixed(4)} SOL</b>.`);
+    await sendOrEditSniper(ctx, telegramId, true);
+    return;
+}
+
+// 2. Max Risk Multiplier
+const isMaxMult = await redis.get(`state:autosnipe_max_multiplier:${telegramId}`);
+if (isMaxMult) {
+    await redis.del(`state:autosnipe_max_multiplier:${telegramId}`);
+    const val = parseFloat(text);
+    if (isNaN(val) || val < 1.0 || val > 100.0) return ctx.reply('🔴 Invalid. Enter a number between 1.0 and 100.0.');
+    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+    if (!user?.autoSnipeConfig) return;
+    await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { maxRiskMultiplier: val } });
+    await ctx.replyWithHTML(`✅ Max Risk Multiplier set to <b>${val}x</b>.`);
+    await sendOrEditSniper(ctx, telegramId, true);
+    return;
+}
+
+// 3. Scaling Exponent
+const isExp = await redis.get(`state:autosnipe_exponent:${telegramId}`);
+if (isExp) {
+    await redis.del(`state:autosnipe_exponent:${telegramId}`);
+    const val = parseFloat(text);
+    if (isNaN(val) || val < 1.0 || val > 4.0) return ctx.reply('🔴 Invalid. Enter 1.0 (Linear), 2.0 (Aggressive), or 3.0 (Exponential).');
+    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+    if (!user?.autoSnipeConfig) return;
+    await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { scaleExponent: val } });
+    await ctx.replyWithHTML(`✅ Scaling Curve exponent set to <b>${val}</b>.`);
+    await sendOrEditSniper(ctx, telegramId, true);
+    return;
+}
 
     // 4. THE SIMULATION EDITOR (DASHBOARD FORGE)
     const isSimEdit = await redis.get(`state:simedit:${telegramId}`);

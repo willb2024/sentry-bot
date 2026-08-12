@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -73,11 +71,9 @@ model User {
   copyTrades          CopyTradeConfig[] 
   launchedTokens      LaunchedToken[] 
 
-  // 🟢 SIMULATION RELATIONS (NO DUPLICATES)
   simState            SimState?
   simTrades           SimTrade[]
 
-  // 🟢 WEBHOOK INTEGRATION RELATION
   webhookConfigs      WebhookConfig[]
 
   createdAt           DateTime @default(now())
@@ -99,7 +95,7 @@ model SimState {
   autoSnipeActive      Boolean    @default(false)
   positions            Json?      
   
-  // 🟢 FORGED STATS OVERRIDES
+  // Forged stats overrides
   forgedSharpe         Float?
   forgedDrawdown       Float?
   forgedProfit         Float?
@@ -183,7 +179,6 @@ model Trade {
   profitPercent    Float?   @default(0)
   realizedPnlSol   Float?   @default(0)
   
-  // 🟢 PERFORMANCE ATTRIBUTION
   strategy         String   @default("MANUAL") 
 
   createdAt        DateTime @default(now())
@@ -206,7 +201,6 @@ model ActiveOrder {
   dcaIntervalMins   Int?     
   maxBudgetSol      Float?   
   
-  // 🟢 TIME-BASED EXITS & MAX BUYS
   maxHoldMinutes    Int?     
   maxBuys           Int?     
 
@@ -238,6 +232,13 @@ model AutoSnipeConfig {
   maxBudgetSol            Float?   
   totalSpentSol           Float    @default(0.0)
   snipeDelaySeconds       Int      @default(0) 
+
+  // 🟢 Conviction-Weighted Dynamic Scaling Fields
+  enableDynamicScaling    Boolean  @default(false)
+  baseRiskUnitSol         Float    @default(0.02)
+  maxRiskMultiplier       Float    @default(5.0)
+  scaleExponent           Float    @default(2.0)
+
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 }
@@ -251,7 +252,6 @@ model CopyTradeConfig {
   autoTrailingDropPercent Float    @default(20.0) 
   autoTakeProfitPercent   Float?                  
   
-  // 🟢 ADVANCED COPYTRADE FILTERS & DYNAMIC SLIPPAGE
   copyBuys                Boolean  @default(true)
   copySells               Boolean  @default(true)
   maxTradeSizeSol         Float?   
@@ -309,7 +309,6 @@ model DailyVipPromo {
   createdAt   DateTime @default(now())
 }
 
-// 🟢 AI CALLER MACHINE LEARNING MODELS
 model CallerPrediction {
   id                String   @id @default(uuid())
   alertKey          String   @unique   
@@ -349,7 +348,6 @@ model CallerModelWeights {
   metrics     Json?    
 }
 
-// 🟢 WEBHOOK CONFIGURATION
 model WebhookConfig {
   id          String   @id @default(uuid())
   userId      String

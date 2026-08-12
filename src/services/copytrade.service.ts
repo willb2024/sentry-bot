@@ -218,3 +218,25 @@ export async function scoreWallet(walletAddress: string): Promise<{ score: numbe
         return { score: 50, isBot: false, message: "Could not fetch deep analytics." };
     }
 }
+
+
+// Add this helper function in src/services/copytrade.service.ts
+async function subscribeWithRetry(pubKey: PublicKey, walletStr: string, bot: any): Promise<number | null> {
+    let subId: number | null = null;
+    const maxRetries = 5;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            subId = connection.onLogs(pubKey, async (logs) => {
+                // (Existing listener callback logic stays inside here)
+            }, 'processed');
+            activeWsListeners.set(walletStr, subId);
+            console.log(`✅ [COPYTRADE] WebSocket listener connected for ${walletStr}`);
+            return subId;
+        } catch (e: any) {
+            console.warn(`⚠️ [COPYTRADE] Retry ${attempt + 1}/${maxRetries} failed to subscribe to ${walletStr}: ${e.message}`);
+            await new Promise(r => setTimeout(r, 5000 * (attempt + 1)));
+        }
+    }
+    console.error(`🔴 [COPYTRADE] Failed to subscribe to ${walletStr} after ${maxRetries} attempts.`);
+    return null;
+}

@@ -939,7 +939,7 @@ export async function scoreTokens() {
             breakdown: { mevRisk: t.isRug ? -100 : 0 }, isRug: t.isRug, stats: t.stats
         }))].sort((a, b) => b.totalScore - a.totalScore);
 
-        await redis.set('caller:hot_scored_tokens', JSON.stringify(finalScored), 'EX', 30);
+        await redis.set('caller:hot_scored_tokens', JSON.stringify(finalScored), 'EX', 60);
         return finalScored;
     } catch (e: any) {
         console.error("🔴 [CALLER] Engine Error:", e.message);

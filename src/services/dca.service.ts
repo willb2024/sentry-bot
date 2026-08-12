@@ -13,7 +13,6 @@ dotenv.config();
 let isDcaChecking = false;
 let cachedDcaOrders: any[] = [];
 
-// Keep local cache synced with DB
 setInterval(async () => {
     try {
         cachedDcaOrders = await prisma.activeOrder.findMany({
@@ -33,7 +32,6 @@ export function startDcaEngine(bot: any) {
         isDcaChecking = true;
 
         try {
-            // 🟢 FIX: Create a stable copy snapshot of cached orders to avoid shifts
             const executionSnapshot = [...cachedDcaOrders];
             if (executionSnapshot.length === 0) {
                 isDcaChecking = false;
@@ -80,25 +78,36 @@ export function startDcaEngine(bot: any) {
                     }
 
                     const intendedSpend = order.amountSol * order.user.activeWallets;
-                    const allocKey = `dca_allocated:${order.id}`;
-                    const rawAllocated = await redis.get(allocKey);
-                    const currentAllocated = rawAllocated ? parseFloat(rawAllocated) : 0;
 
-                    if (order.maxBudgetSol && (order.totalSpentSol + currentAllocated + intendedSpend) > order.maxBudgetSol) {
+                    // 🟢 FIX 7: Atomic Lua Script to increment allocation safely
+                    const allocKey = `dca_allocated:${order.id}`;
+                    const luaAlloc = `
+                        local key = KEYS[1]
+                        local add = tonumber(ARGV[1])
+                        local ttl = tonumber(ARGV[2])
+                        local current = redis.call('get', key) or '0'
+                        local new = tonumber(current) + add
+                        redis.call('set', key, new, 'EX', ttl)
+                        return tostring(new)
+                    `;
+
+                    const newAllocated = parseFloat(
+                        await redis.eval(luaAlloc, 1, allocKey, intendedSpend.toString(), '120') as string
+                    );
+
+                    if (order.maxBudgetSol && (order.totalSpentSol + newAllocated) > order.maxBudgetSol) {
                         await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
                         cachedDcaOrders = cachedDcaOrders.filter(o => o.id !== order.id);
                         try {
                             await bot.telegram.sendMessage(
                                 order.user.telegramId,
-                                `✅ <b>DCA COMPLETE: Max Budget Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nTotal Spent: <b>${order.totalSpentSol.toFixed(4)} SOL</b>\n<i>This DCA schedule has completed its budget allocation.</i>`,
+                                `✅ <b>DCA COMPLETE: Max Budget Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nTotal Spent: <b>${order.totalSpentSol.toFixed(4)} SOL</b>`,
                                 { parse_mode: 'HTML' }
                             );
                         } catch (_) {}
                         await redis.del(lockKey);
                         continue;
                     }
-
-                    await redis.set(allocKey, (currentAllocated + intendedSpend).toString(), 'EX', 120);
 
                     const idx = cachedDcaOrders.findIndex(o => o.id === order.id);
                     if (idx !== -1) cachedDcaOrders[idx].updatedAt = new Date();
