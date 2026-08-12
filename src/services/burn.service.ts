@@ -1,7 +1,8 @@
-// Clean up imports at top of src/services/burn.service.ts
+// src/services/burn.service.ts
 import { PublicKey, Keypair, TransactionMessage, VersionedTransaction, SystemProgram } from '@solana/web3.js';
 import { connection } from '../lib/connection.js'; 
-import { TOKEN_PROGRAM_ID, createCloseAccountInstruction } from '@solana/spl-token';
+// 🟢 FIX: Import TOKEN_2022_PROGRAM_ID directly from the library instead of hardcoding it
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, createCloseAccountInstruction } from '@solana/spl-token';
 import { prisma } from '../lib/prisma.js';
 import bs58 from 'bs58';
 import { decryptKey } from './vault.service.js';
@@ -9,7 +10,6 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhvkASnYGQYcBmiJXcwghAMPw");
 const JITO_TIP_ACCOUNTS = [
     "96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL", "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
     "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvVkY"
