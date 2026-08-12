@@ -91,6 +91,13 @@ app.use(cors({
     credentials: true
 }));
 
+// 🟢 ALLOW TELEGRAM IFRAMES (MUST BE HERE NEAR THE TOP)
+app.use((req, res, next) => {
+    res.setHeader("Content-Security-Policy", "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org;");
+    res.removeHeader("X-Frame-Options");
+    next();
+});
+
 dotenv.config();
 console.log("🟢 [1/5] Booting Sentry Terminal Core...");
 
@@ -474,6 +481,8 @@ app.get('/pnl-img/:imgId', async (req, res) => {
         res.status(500).send("Error serving image");
     }
 });
+
+
 
 // 🟢 GAP 2 FIX: Serves a dynamic OpenGraph meta-tag index page that automatically
 app.get('/share/:imgId', async (req, res) => {
