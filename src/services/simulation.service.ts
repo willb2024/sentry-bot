@@ -397,6 +397,29 @@ export async function simExecuteExit(
     return { success: true, signature: generateSimSignature(), message: `🟢 Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };
 }
 
+
+export async function getSimMaxBudget(telegramId: string): Promise<number> {
+    const val = await redis.get(`sim:max_budget:${telegramId}`);
+    return val ? parseFloat(val) : 0;
+}
+
+export async function setSimMaxBudget(telegramId: string, amount: number): Promise<void> {
+    await redis.set(`sim:max_budget:${telegramId}`, amount.toString(), 'EX', 86400);
+}
+
+export async function getSimSessionSpend(telegramId: string): Promise<number> {
+    const val = await redis.get(`sim:session_spend:${telegramId}`);
+    return val ? parseFloat(val) : 0;
+}
+
+export async function setSimSessionSpend(telegramId: string, amount: number): Promise<void> {
+    await redis.set(`sim:session_spend:${telegramId}`, amount.toString(), 'EX', 86400);
+}
+
+export async function setSimFirstTradeAt(telegramId: string, dateStr: string): Promise<void> {
+    await redis.set(`sim:first_trade_at:${telegramId}`, dateStr);
+}
+
 export async function generateSimCallerAlert(telegramId: string, filters: { minScore: number; maxAgeMins: number; minPctChange: number; maxPctChange: number; minLiquidity: number; minVolume24h: number; blockMev: boolean; }): Promise<any> {
     try {
         const hotRaw = await redis.get('caller:hot_scored_tokens');

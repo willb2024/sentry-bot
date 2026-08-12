@@ -4909,98 +4909,127 @@ if (isExp) {
     return;
 }
 
-    // 4. THE SIMULATION EDITOR (DASHBOARD FORGE)
-    const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
-    if (isSimEdit) {
-        await redis.del(`state:simedit:${telegramId}`);
-        
-        const lines = text.split('\n');
-        const data: Record<string, string> = {};
-        for (const line of lines) {
-            const parts = line.split(':');
-            if (parts.length < 2) continue;
-            data[parts[0].trim().toUpperCase()] = parts.slice(1).join(':').trim();
-        }
+  // 4. THE SIMULATION EDITOR (DASHBOARD FORGE)
+  const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
+  if (isSimEdit) {
+      await redis.del(`state:simedit:${telegramId}`);
+      
+      const lines = text.split('\n');
+      const data: Record<string, string> = {};
+      for (const line of lines) {
+          const parts = line.split(':');
+          if (parts.length < 2) continue;
+          data[parts[0].trim().toUpperCase()] = parts.slice(1).join(':').trim();
+      }
 
-        try {
-            const loader = await ctx.reply("<i>⏳ Forging institutional database records...</i>", { parse_mode: 'HTML' });
+      try {
+          const loader = await ctx.reply("<i>⏳ Forging institutional database records & synthetic trades...</i>", { parse_mode: 'HTML' });
 
-            // Parse numeric values
-            const wins = parseInt(data['WINS']) || 0;
-            const losses = parseInt(data['LOSSES']) || 0;
-            const vol = parseFloat(data['VOL']) || 0;
-            const balance = parseFloat(data['BALANCE_SOL']) || 0;
-            
-            // Handle Rolling Activity (Split "Count | PnL")
-            const manual24 = data['MANUAL_24H']?.split('|') || ["0", "0"];
-            const auto24 = data['AUTO_24H']?.split('|') || ["0", "0"];
-            
-            // Handle Strategy Attribution (Split "Name | PnL")
-            const s1 = data['STRAT1']?.split('|') || ["Manual / Direct", "0"];
-            const s2 = data['STRAT2']?.split('|') || ["Sniper Engine", "0"];
+          // 1. Parse new stats
+          const wins = parseInt(data['WINS']) || 0;
+          const losses = parseInt(data['LOSSES']) || 0;
+          const vol = parseFloat(data['VOL']) || 0;
+          const balance = parseFloat(data['BALANCE_SOL']) || 0;
+          const maxBudget = parseFloat(data['MAX_BUDGET']) || 0;
+          const spend = parseFloat(data['SPEND']) || 0;
+          
+          // Handle Rolling Activity & Strategies
+          const manual24 = data['MANUAL_24H']?.split('|') || ["0", "0"];
+          const auto24 = data['AUTO_24H']?.split('|') || ["0", "0"];
+          const s1 = data['STRAT1']?.split('|') || ["Manual / Direct", "0"];
+          const s2 = data['STRAT2']?.split('|') || ["Sniper Engine", "0"];
 
-            // 🟢 UPDATE REDIS (Immediate WebApp update)
-            await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
-            await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
-            await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
-            await redis.set(`sim:stats:totalTrades:${telegramId}`, (wins + losses).toString());
-            await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, (vol * 0.8).toString());
-            await redis.set(`sim:volume:${telegramId}`, vol.toString());
-            
-            const forgedPayload = {
-                sharpe: parseFloat(data['SHARPE']) || 0,
-                drawdown: parseFloat(data['DRAWDOWN']) || 0,
-                profit: parseFloat(data['PROFIT_FACTOR']) || 0,
-                risk: parseFloat(data['RISK_SCORE']) || 0,
-                manual24hCount: parseInt(manual24[0]),
-                manual24hPnl: parseFloat(manual24[1]),
-                auto24hCount: parseInt(auto24[0]),
-                auto24hPnl: parseFloat(auto24[1]),
-                hourlyChart: data['HOURLY_CHART']?.split(',').map(s => parseFloat(s.trim())) || [],
-                strat1Name: s1[0].trim(),
-                strat1Pnl: parseFloat(s1[1]),
-                strat2Name: s2[0].trim(),
-                strat2Pnl: parseFloat(s2[1])
-            };
-            await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
+          // 2. Update Redis Counters & Baselines
+          await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
+          await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
+          await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
+          await redis.set(`sim:stats:totalTrades:${telegramId}`, (wins + losses).toString());
+          await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, (vol * 0.8).toString());
+          await redis.set(`sim:volume:${telegramId}`, vol.toString());
+          await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
+          await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
+          if (data['FIRST_TRADE_AT']) {
+              await redis.set(`sim:first_trade_at:${telegramId}`, data['FIRST_TRADE_AT']);
+          }
 
-            // 🟢 UPDATE PRISMA (Permanent Persistence)
-            const user = await prisma.user.findUnique({ where: { telegramId } });
-            if (user) {
-                await prisma.simState.upsert({
-                    where: { userId: user.id },
-                    update: {
-                        balance,
-                        volume: vol,
-                        active: true,
-                        forgedSharpe: forgedPayload.sharpe,
-                        forgedDrawdown: forgedPayload.drawdown,
-                        forgedProfit: forgedPayload.profit,
-                        forgedRisk: forgedPayload.risk,
-                        forgedManual24hCount: forgedPayload.manual24hCount,
-                        forgedManual24hPnl: forgedPayload.manual24hPnl,
-                        forgedAuto24hCount: forgedPayload.auto24hCount,
-                        forgedAuto24hPnl: forgedPayload.auto24hPnl,
-                        forgedHourlyChart: forgedPayload.hourlyChart,
-                        forgedStrat1Name: forgedPayload.strat1Name,
-                        forgedStrat1Pnl: forgedPayload.strat1Pnl,
-                        forgedStrat2Name: forgedPayload.strat2Name,
-                        forgedStrat2Pnl: forgedPayload.strat2Pnl
-                    },
-                    create: { userId: user.id, balance, volume: vol, active: true }
-                });
-            }
+          // 3. Forge a NEW trade history array (Synthetic Trades)
+          const now = Date.now();
+          const generatedTrades = [];
+          const totalTrades = wins + losses;
+          const avgVolume = totalTrades > 0 ? vol / totalTrades : 0;
+          
+          for (let i = 0; i < wins; i++) {
+              const pnlPercent = 15 + Math.random() * 80;
+              const amt = avgVolume * (0.8 + Math.random() * 0.4);
+              generatedTrades.push({
+                  createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
+                  isBuy: false, amountInSol: amt, profitPercent: pnlPercent,
+                  realizedPnlSol: amt * (pnlPercent / 100), strategy: 'MANUAL'
+              });
+          }
+          for (let i = 0; i < losses; i++) {
+              const pnlPercent = -(5 + Math.random() * 15);
+              const amt = avgVolume * (0.8 + Math.random() * 0.4);
+              generatedTrades.push({
+                  createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
+                  isBuy: false, amountInSol: amt, profitPercent: pnlPercent,
+                  realizedPnlSol: amt * (pnlPercent / 100), strategy: 'MANUAL'
+              });
+          }
+          generatedTrades.sort(() => Math.random() - 0.5);
+          await redis.set(`sim:trades:${telegramId}`, JSON.stringify(generatedTrades.slice(0, 100)));
 
-            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
-                `✅ <b>INSTITUTIONAL FORGE COMPLETE</b>\n\n` +
-                `The WebApp Dashboard has been synchronized with your custom simulation parameters.`, 
-                { parse_mode: 'HTML' }
-            );
-        } catch (e: any) {
-            await ctx.reply(`🔴 <b>Forge Error:</b> ${e.message}`);
-        }
-        return;
-    }
+          // 4. Parse and save forged stats
+          const forgedPayload = {
+              sharpe: parseFloat(data['SHARPE']) || 0,
+              drawdown: parseFloat(data['DRAWDOWN']) || 0,
+              profit: parseFloat(data['PROFIT_FACTOR']) || 0,
+              risk: parseFloat(data['RISK_SCORE']) || 0,
+              manual24hCount: parseInt(manual24[0]),
+              manual24hPnl: parseFloat(manual24[1]),
+              auto24hCount: parseInt(auto24[0]),
+              auto24hPnl: parseFloat(auto24[1]),
+              hourlyChart: data['HOURLY_CHART']?.split(',').map(s => parseFloat(s.trim())) || [],
+              strat1Name: s1[0].trim(),
+              strat1Pnl: parseFloat(s1[1]),
+              strat2Name: s2[0].trim(),
+              strat2Pnl: parseFloat(s2[1])
+          };
+          await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
+
+          // 5. Update Prisma Permanent Persistence
+          const user = await prisma.user.findUnique({ where: { telegramId } });
+          if (user) {
+              await prisma.simState.upsert({
+                  where: { userId: user.id },
+                  update: {
+                      balance, volume: vol, active: true,
+                      forgedSharpe: forgedPayload.sharpe, forgedDrawdown: forgedPayload.drawdown,
+                      forgedProfit: forgedPayload.profit, forgedRisk: forgedPayload.risk,
+                      forgedManual24hCount: forgedPayload.manual24hCount,
+                      forgedManual24hPnl: forgedPayload.manual24hPnl,
+                      forgedAuto24hCount: forgedPayload.auto24hCount,
+                      forgedAuto24hPnl: forgedPayload.auto24hPnl,
+                      forgedHourlyChart: forgedPayload.hourlyChart,
+                      forgedStrat1Name: forgedPayload.strat1Name,
+                      forgedStrat1Pnl: forgedPayload.strat1Pnl,
+                      forgedStrat2Name: forgedPayload.strat2Name,
+                      forgedStrat2Pnl: forgedPayload.strat2Pnl
+                  },
+                  create: { userId: user.id, balance, volume: vol, active: true }
+              });
+          }
+
+          await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+              `✅ <b>INSTITUTIONAL FORGE COMPLETE</b>\n\n` +
+              `The WebApp Dashboard has been synchronized with your custom simulation parameters.`, 
+              { parse_mode: 'HTML' }
+          );
+      } catch (e: any) {
+          await ctx.reply(`🔴 <b>Forge Error:</b> ${e.message}`);
+      }
+      return;
+  }
 
     // Pass through to CA handler or specific command checks
     if (text.startsWith("/")) return next();
@@ -5516,29 +5545,20 @@ app.get('/g/:guildCode', async (req, res) => {
     } catch (e) { res.status(500).send("Error loading leaderboard."); }
 });
 
-// =========================================================
-// 🌐 SECURE BOOT & EXPRESS WEBAPP
-// =========================================================
 
 
 
 
-
-// 🟢 BUG 2 & 3 FIX: `/simedit` parses the template and updates the Redis Counters & Anchor
 // 🟢 FIXED SIMEDIT COMMAND
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     
-    // Debug log to see if ID matches
-    console.log("Admin Check for ID:", tgId); 
-
     if (!isAdmin(tgId)) {
         return ctx.replyWithHTML(`🚫 <b>Access Denied.</b>\nYour ID <code>${tgId}</code> is not in the ADMIN_TELEGRAM_IDS list in .env`);
     }
     
     await redis.set(`state:simedit:${tgId}`, 'AWAITING', 'EX', 300);
     
-    const currentForged = JSON.parse(await redis.get(`sim:forged:${tgId}`) || '{}');
     const currentBal = await redis.get(`sim:balance:${tgId}`) || '254.1850';
 
     await ctx.replyWithHTML(
@@ -5549,6 +5569,9 @@ bot.command('simedit', async (ctx) => {
         `LOSSES: 6117\n` +
         `VOL: 2142.65\n` +
         `DAYS: 278\n` +
+        `FIRST_TRADE_AT: 2024-01-15T08:30:00Z\n` +
+        `MAX_BUDGET: 10.0\n` +
+        `SPEND: 3.45\n` +
         `SHARPE: 2.84\n` +
         `DRAWDOWN: -0.925\n` +
         `PROFIT_FACTOR: 3.85\n` +
@@ -5709,30 +5732,47 @@ app.post('/api/sim-stats', async (req, res) => {
         const tgId = extractTelegramId(req.body.initData);
         if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
 
-        const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume, getSimCounters, getSimFirstTradeAt } = await import('./services/simulation.service.js');
+        const { 
+            isSimulationActive, getSimBalance, getSimStartingBalance, 
+            getSimVolume, getSimCounters, getSimFirstTradeAt,
+            getSimMaxBudget, getSimSessionSpend
+        } = await import('./services/simulation.service.js');
+        
         const isActive = await isSimulationActive(tgId);
-        if (!isActive) return res.json({ isActive: false });
+        
+        // 🟢 CRITICAL FIX: Explicitly return zero metrics if sim is inactive
+        if (!isActive) {
+            return res.json({
+                isActive: false, balance: '0.0000', startingBalance: '0.0000', volume: 0,
+                wins: 0, losses: 0, totalTrades: 0, totalInvestedSol: 0, totalPnlSol: 0,
+                positions: [], trades: [], firstTradeAt: null,
+                maxBudget: 0, currentSpend: 0
+            });
+        }
 
         const balance = await getSimBalance(tgId);
         const startingBalance = await getSimStartingBalance(tgId);
         const volume = await getSimVolume(tgId);
         const positionsRaw = await redis.get(`sim:positions:${tgId}`);
         const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
-        
-        // 🟢 FIX: We read the LIVE trades array directly, no static snapshot.
         const tradesRaw = await redis.get(`sim:trades:${tgId}`);
         const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
 
         const counters = await getSimCounters(tgId);
         const firstTradeAt = await getSimFirstTradeAt(tgId);
 
-        return res.json({
+        // 🟢 Fetch sim-specific budget limits
+        const maxBudget = await getSimMaxBudget(tgId);
+        const currentSpend = await getSimSessionSpend(tgId);
+
+        res.json({
             isActive: true, balance, startingBalance, volume,
             wins: counters.wins, losses: counters.losses,
             totalTrades: counters.totalTrades,
             totalInvestedSol: counters.totalInvestedSol,
             totalPnlSol: counters.totalPnlSol,
-            firstTradeAt, positions, trades: trades.slice(0, 50)
+            firstTradeAt, positions, trades: trades.slice(0, 50),
+            maxBudget, currentSpend
         });
     } catch (e) {
         res.status(500).json({ error: 'Server Error' });
