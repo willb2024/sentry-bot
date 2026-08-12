@@ -347,60 +347,28 @@ app.post('/api/institutional-stats', async (req, res) => {
     }
 });
 
+
+
+
+// ... (your other code) ...
+
+// 🟢 SINGLE AUTHORITATIVE /api/sim-stats ENDPOINT
 app.post('/api/sim-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const tgId = extractTelegramId(req.body.initData);
         if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
 
-        const { isSimulationActive, getSimBalance, getSimStartingBalance } = await import('./services/simulation.service.js');
+        const { 
+            isSimulationActive, 
+            getSimBalance, 
+            getSimStartingBalance, 
+            getSimVolume, 
+            getSimFirstTradeAt 
+        } = await import('./services/simulation.service.js');
+        
         const isActive = await isSimulationActive(tgId);
         
-        if (!isActive) {
-            return res.json({
-                isActive: false, balance: '0.0000', startingBalance: '0.0000', 
-                trades: [], volume: 0, wins: 0, losses: 0, totalTrades: 0, totalPnlSol: 0, totalInvestedSol: 0, positions: []
-            });
-        }
-
-        const balance = await getSimBalance(tgId);
-        const startingBalance = await getSimStartingBalance(tgId);
-        const tradesRaw = await redis.get(`sim:trades:${tgId}`);
-        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
-
-        const stats = computeUniversalStats(trades);
-        const volume = stats.totalVolumeSol;
-
-        res.json({
-            isActive: true, 
-            balance, 
-            startingBalance, 
-            volume, 
-            wins: stats.wins,
-            losses: stats.losses,
-            totalTrades: stats.totalTrades,
-            totalInvestedSol: stats.totalVolumeSol,
-            totalPnlSol: stats.totalPnLSol,
-            trades: trades.slice(0, 50), 
-            positions: [] 
-        });
-    } catch (e) {
-        res.status(500).json({ error: 'Server Error' });
-    }
-});
-
-// 🟢 NEW: Persistent Simulation Stats Endpoint
-// Replace app.post('/api/sim-stats', ...) in src/index.ts
-app.post('/api/sim-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const tgId = extractTelegramId(req.body.initData);
-        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
-
-        const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume, getSimCounters, getSimFirstTradeAt } = await import('./services/simulation.service.js');
-        const isActive = await isSimulationActive(tgId);
-        
-        // 🟢 CRITICAL FIX: Explicitly return zero metrics if sim is inactive
         if (!isActive) {
             return res.json({
                 isActive: false, balance: '0.0000', startingBalance: '0.0000', volume: 0,
@@ -416,23 +384,31 @@ app.post('/api/sim-stats', async (req, res) => {
         const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
         const tradesRaw = await redis.get(`sim:trades:${tgId}`);
         const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
-
-        const counters = await getSimCounters(tgId);
         const firstTradeAt = await getSimFirstTradeAt(tgId);
 
+        // 🟢 CRITICAL FIX: Calculate Stats using our Universal Math Engine
+        // This ensures "Total Trades", "Total Invested", and "Win Rate" are NEVER 0.
+        const stats = computeUniversalStats(trades);
+
         res.json({
-            isActive: true, balance, startingBalance, volume,
-            wins: counters.wins, losses: counters.losses,
-            totalTrades: counters.totalTrades,
-            totalInvestedSol: counters.totalInvestedSol,
-            totalPnlSol: counters.totalPnlSol,
-            firstTradeAt, positions, trades: trades.slice(0, 50)
+            isActive: true,
+            balance,
+            startingBalance,
+            volume: stats.totalVolumeSol,
+            wins: stats.wins,
+            losses: stats.losses,
+            winRate: stats.winRate,
+            totalTrades: stats.totalTrades,            // <-- Fixes the "Total Trades" card
+            totalInvestedSol: stats.totalVolumeSol,    // <-- Fixes Invested Capital calculation
+            totalPnlSol: stats.totalPnLSol,            // <-- Fixes the "Realized PnL" card
+            firstTradeAt,
+            positions,
+            trades: trades.slice(0, 50) // Only send the 50 most recent for the Ticker
         });
     } catch (e) {
         res.status(500).json({ error: 'Server Error' });
     }
 });
-
 
 // Add these admin commands in src/index.ts
 bot.command('clearsim', async (ctx) => {
@@ -5714,59 +5690,9 @@ app.post('/api/analytics', async (req, res) => {
     }
 });
 
-app.post('/api/sim-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const tgId = extractTelegramId(req.body.initData);
-        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
 
-        const { 
-            isSimulationActive, getSimBalance, getSimStartingBalance, 
-            getSimVolume, getSimCounters, getSimFirstTradeAt,
-            getSimMaxBudget, getSimSessionSpend
-        } = await import('./services/simulation.service.js');
-        
-        const isActive = await isSimulationActive(tgId);
-        
-        // 🟢 CRITICAL FIX: Explicitly return zero metrics if sim is inactive
-        if (!isActive) {
-            return res.json({
-                isActive: false, balance: '0.0000', startingBalance: '0.0000', volume: 0,
-                wins: 0, losses: 0, totalTrades: 0, totalInvestedSol: 0, totalPnlSol: 0,
-                positions: [], trades: [], firstTradeAt: null,
-                maxBudget: 0, currentSpend: 0
-            });
-        }
 
-        const balance = await getSimBalance(tgId);
-        const startingBalance = await getSimStartingBalance(tgId);
-        const volume = await getSimVolume(tgId);
-        const positionsRaw = await redis.get(`sim:positions:${tgId}`);
-        const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
-        const tradesRaw = await redis.get(`sim:trades:${tgId}`);
-        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
 
-        const counters = await getSimCounters(tgId);
-        const firstTradeAt = await getSimFirstTradeAt(tgId);
-
-        // 🟢 Fetch sim-specific budget limits
-        const maxBudget = await getSimMaxBudget(tgId);
-        const currentSpend = await getSimSessionSpend(tgId);
-
-        res.json({
-            isActive: true, balance, startingBalance, volume,
-            wins: counters.wins, losses: counters.losses,
-            totalTrades: counters.totalTrades,
-            totalInvestedSol: counters.totalInvestedSol, // ✅ Ensure this is included
-            totalPnlSol: counters.totalPnlSol,           // ✅ Ensure this is included
-            firstTradeAt, positions, trades: trades.slice(0, 50),
-            maxBudget, currentSpend
-        });
-
-    } catch (e) {
-        res.status(500).json({ error: 'Server Error' });
-    }
-});
 
 app.post('/api/toggle-sim', async (req, res) => {
     try {
@@ -5782,50 +5708,7 @@ app.post('/api/toggle-sim', async (req, res) => {
 });
 
 
-// 🟢 FIX: Connects /simedit top-row stats and the Main Line Chart
-app.post('/api/sim-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const tgId = extractTelegramId(req.body.initData);
-        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
 
-        const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimVolume } = await import('./services/simulation.service.js');
-        const isActive = await isSimulationActive(tgId);
-        
-        if (!isActive) return res.json({ isActive: false });
-
-        const balance = await getSimBalance(tgId);
-        const startingBalance = await getSimStartingBalance(tgId);
-        const volume = await getSimVolume(tgId);
-        
-        const positionsRaw = await redis.get(`sim:positions:${tgId}`);
-        const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
-        
-        const tradesRaw = await redis.get(`sim:trades:${tgId}`);
-        const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
-
-        let wins = 0;
-        let losses = 0;
-
-        trades.filter((t: any) => !t.isBuy).forEach((t: any) => {
-            if (t.profitPercent > 0) wins++;
-            else if (t.profitPercent < 0) losses++;
-        });
-
-        res.json({
-            isActive: true,
-            balance,
-            startingBalance,
-            volume,
-            wins,
-            losses,
-            positions,
-            trades
-        });
-    } catch (e) {
-        res.status(500).json({ error: 'Server Error' });
-    }
-});
 
 // 🟢 FIX: Connects /simedit HOURLY_CHART to the Bar Chart
 app.post('/api/analytics/hourly', async (req, res) => {

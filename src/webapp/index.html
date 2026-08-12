@@ -998,29 +998,25 @@
                     }).then(r => r.ok ? r.json() : { price: 160 }).catch(() => ({ price: 160 }));
                     const liveSolPrice = solPriceRes.price || 160;
 
-                    const simPositions = (simStats.positions || []).map(p => ({
-                        mint: p.mint, 
-                        symbol: p.symbol, 
-                        amount: p.amount,
-                        priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
-                        valueUsd: p.valueUsd || (p.amountInSol * liveSolPrice),
-                        entryPrice: p.entryPriceUsd || p.entryPrice
-                    }));
-
-                    userTrades = simStats.trades || [];
-                    let wins = simStats.wins || 0;
-                    let losses = simStats.losses || 0;
-                    let totalVolumeSol = parseFloat(simStats.volume) || 0;
-                    let totalInvestedSol = simStats.totalInvestedSol || 0;
-                    let totalRealizedPnlSol = simStats.totalPnlSol || 0;
-
+                    // 1. Calculate Net Worth
                     const simBalanceSol = parseFloat(simStats.balance) || 0;
                     const networthUsd = simBalanceSol * liveSolPrice; 
                     const networthSol = simBalanceSol.toFixed(4) + " SOL";
-                    const pnlPercent = totalInvestedSol > 0 ? ((totalRealizedPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
-                    const pnlUsd = totalRealizedPnlSol * liveSolPrice;
+
+                    // 2. Pull stats directly from the fixed API (No manual array loops!)
+                    const wins = simStats.wins || 0;
+                    const losses = simStats.losses || 0;
+                    const totalPnlSol = simStats.totalPnlSol || 0;
+                    const totalInvestedSol = simStats.totalInvestedSol || 0;
+                    const totalVolumeSol = simStats.volume || 0;
+                    const totalTrades = simStats.totalTrades || 0;
+
+                    // 3. Calculate derived metrics
+                    const pnlPercent = totalInvestedSol > 0 ? ((totalPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
+                    const pnlUsd = totalPnlSol * liveSolPrice;
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
 
+                    // 4. Calculate Trading Days
                     let tradingDays = 1;
                     if (simStats.firstTradeAt) {
                         const oldest = new Date(simStats.firstTradeAt);
@@ -1028,37 +1024,64 @@
                         tradingDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
                     }
 
+                    // 5. Update DOM Cards
                     document.getElementById('stat-trading-days').innerText = tradingDays;
+                    document.getElementById('stat-networth').innerText = '$' + networthUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                    document.getElementById('stat-networth-sub').innerText = networthSol;
+                    
+                    // Update PnL
+                    const pnlColorClass = totalPnlSol >= 0 ? 'text-jupGreen' : 'text-neonRed';
+                    document.getElementById('stat-pnl').innerText = `${totalPnlSol >= 0 ? '+' : ''}${pnlPercent}%`;
+                    document.getElementById('stat-pnl').className = `text-3xl sm:text-4xl font-bold mt-1 transition-colors ${pnlColorClass}`;
+                    document.getElementById('stat-pnl-sub').innerText = `${totalPnlSol >= 0 ? '+' : '-'}$${Math.abs(pnlUsd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} net profit`;
+                    
+                    // Update Win Rate & Volume
+                    document.getElementById('stat-winrate').innerText = winRate + '%';
+                    document.getElementById('stat-winrate-sub').innerText = `${wins} Wins / ${losses} Losses`;
+                    document.getElementById('stat-volume').innerText = totalVolumeSol.toFixed(4) + " SOL";
+
+                    // Update Total Trades Count
+                    const totalTradesEl = document.getElementById('total-trades-count');
+                    if (totalTradesEl) totalTradesEl.innerText = totalTrades;
+
+                    // 6. Render positions and charts
+                    const simPositions = (simStats.positions || []).map(p => ({
+                        mint: p.mint, symbol: p.symbol, amount: p.amount,
+                        priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
+                        valueUsd: p.valueUsd || (p.amountInSol * liveSolPrice),
+                        entryPrice: p.entryPriceUsd || p.entryPrice
+                    }));
                     const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : [];
                     const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [];
 
-                    populateDashboard({
-                        networth: networthUsd, 
-                        networthSol: networthSol, 
-                        pnlPercent: pnlPercent, 
-                        pnlUsd: pnlUsd,
-                        winrate: winRate, 
-                        winLossText: `${wins} Wins / ${losses} Losses`, 
-                        volume: totalVolumeSol.toFixed(4) + " SOL"
-                    }, allocLabels, allocData, simPositions);
+                    // 7. Render Ticker
+                    const tickerContainer = document.getElementById('live-trade-ticker');
+                    if (tickerContainer && simStats.trades && simStats.trades.length > 0) {
+                        let tickerHtml = '';
+                        simStats.trades.slice(0, 10).forEach(t => {
+                            const type = t.isBuy ? 'BUY' : 'SELL';
+                            const color = t.isBuy ? '#10b981' : '#ef4444';
+                            const addr = t.mint || t.tokenAddress || 'Unknown';
+                            const displayAddr = addr.length > 10 ? addr.substring(0, 6) + '...' : addr;
+                            const pnlStr = !t.isBuy ? (t.profitPercent ? (t.profitPercent >= 0 ? `+${t.profitPercent.toFixed(1)}%` : `${t.profitPercent.toFixed(1)}%`) : '--') : '--';
+                            tickerHtml += `
+                                <div class="flex justify-between items-center py-1.5 border-b border-white/5 last:border-0 hover:bg-white/[0.03] px-2 rounded transition-colors cursor-default">
+                                    <span class="text-gray-500 w-16">${new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
+                                    <span class="text-white font-bold w-24 truncate">${displayAddr}</span>
+                                    <span style="color:${color}" class="font-bold w-12 text-center">${type}</span>
+                                    <span class="text-gray-300 w-20 text-right">${t.amountInSol ? t.amountInSol.toFixed(3) : '0.000'} SOL</span>
+                                    <span class="font-bold w-16 text-right ${parseFloat(pnlStr) >= 0 ? 'text-jupGreen drop-shadow-[0_0_3px_rgba(16,185,129,0.5)]' : 'text-neonRed'}">${pnlStr}</span>
+                                </div>
+                            `;
+                        });
+                        tickerContainer.innerHTML = tickerHtml;
+                    }
 
-                    fetch('/api/my-leaderboard', { 
-                        method: 'POST', 
-                        headers: { 'Content-Type': 'application/json' }, 
-                        body: JSON.stringify({ initData: tg.initData || "" }) 
-                    }).then(r => r.ok ? r.json() : { guild: null, members: [] }).then(data => { 
-                        liveLeaderboardData = data; 
-                        if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); 
-                    }).catch(() => {});
-
-                    fetch('/api/affiliate-stats', { 
-                        method: 'POST', 
-                        headers: { 'Content-Type': 'application/json' }, 
-                        body: JSON.stringify({ initData: tg.initData || "" }) 
-                    }).then(r => r.ok ? r.json() : null).then(data => { 
-                        if (data) liveAffiliateData = data; 
-                        if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); 
-                    }).catch(() => {});
+                    userTrades = simStats.trades || [];
+                    const chartData = aggregatePnlData(currentFilter);
+                    initCharts(chartData.labels, chartData.profitData, chartData.lossData, allocLabels, allocData);
+                    renderPositions(simPositions);
+                    setFilter(currentFilter);
                     
                     setTimeout(fetchLiveData, 4000);
                     return; 
@@ -1070,7 +1093,7 @@
             isSimModeActive = false; 
         }
 
-        // Live Mainnet Mode
+        // Live Mainnet Mode (Keeping existing logic below to ensure normal operation falls back successfully)
         fetch('/api/positions', { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
@@ -1149,6 +1172,7 @@
             }, ['Offline'], [100], []);
         });
 
+        // Background leaderboard + affiliate fetch logic
         fetch('/api/my-leaderboard', { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
