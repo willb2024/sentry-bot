@@ -345,7 +345,7 @@ export async function simExecuteSnipe(
     });
     await redis.set(posKey, JSON.stringify(existing));
     
-    // 🟢 FIX: Pass `isBuy: true`, `actualSolSpent`, `0` PnL, and the `strategy`!
+    // 🟢 FIXED: Uses 'actualSolSpent' and passes 'tokenAddress'
     await recordSimTrade(telegramId, true, actualSolSpent, 0, strategy, tokenAddress); 
     await recordStatsEvent(telegramId, 'sim', 0);
     await saveSimulationState(telegramId);
