@@ -2,7 +2,7 @@
 import { PrismaClient } from '@prisma/client';
 import { redis } from '../lib/redis.js';
 
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma.js';
 
 export const CREDIT_PACKS = {
     starter: { name: 'Starter', priceSol: null, priceUsd: 30,  credits: 150 },

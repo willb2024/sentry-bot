@@ -1,6 +1,6 @@
 // src/services/simulation.service.ts
 import { redis } from '../lib/redis.js';
-import * as crypto from 'crypto';
+import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { generatePnlCard } from './image.service.js';
 import { computeTokenScore, TokenStats, buildAuditTrailMessage } from './caller.service.js';
@@ -266,6 +266,7 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
         try {
             const { scoreTokens } = await import('./caller.service.js');
             const realTokens = await scoreTokens();
+            // 🟢 FIX: Map explicitly cast to (t: any) to resolve strict TS errors
             pool = realTokens.map((t: any) => ({ mint: t.mint, symbol: t.symbol }));
             if (pool.length > 0) await redis.set(cacheKey, JSON.stringify(pool), 'EX', 60);
         } catch (_) { }
@@ -349,10 +350,15 @@ export async function simExecuteExit(telegramId: string, tokenAddress: string, p
     const soldSol = pos.amountInSol * (percent / 100);
     const rawReturn = soldSol * (1 + pnlPercent / 100);
     const platformFee = rawReturn * 0.01;
-    const jitoTip = 0.0015;
+    
+    // 🟢 FIX 39: Dynamic Tips (Turbo/Eco handling)
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    const jitoTip = user?.priorityLevel === 'TURBO' ? 0.005 : user?.priorityLevel === 'ECO' ? 0.0005 : 0.001;
+    
     const netReturnSol = Math.max(0, rawReturn - platformFee - jitoTip);
     const currentBal = parseFloat(await getSimBalance(telegramId));
     await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
+    
     if (percent === 100) {
         const updated = positions.filter((p: any) => p.mint !== tokenAddress);
         await redis.set(posKey, JSON.stringify(updated));
@@ -631,6 +637,7 @@ export async function setSimulationMode(telegramId: string, active: boolean): Pr
         const wallets = generateSimWallets();
         await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
 
+        // 🟢 FIX: Ensure 'wallets' property is NOT passed to prisma upsert.
         await prisma.simState.upsert({
             where: { userId: user.id },
             update: { active: true, balance: startBal, startingBalance: startBal },

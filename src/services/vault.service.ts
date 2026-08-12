@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma.js';
 const ALGORITHM = 'aes-256-gcm';
 
 const rawSecret = process.env.ENCRYPTION_KEY;

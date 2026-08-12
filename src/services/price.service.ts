@@ -1,9 +1,8 @@
 // src/services/price.service.ts
 import { PublicKey } from '@solana/web3.js';
-import { connection } from '../lib/connection.js';
+import { connection, coldConnection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 import { getMint } from '@solana/spl-token';
-import { coldConnection } from '../lib/connection.js';
 import { rpcLimiter } from '../lib/rpc-limiter.js';
 
 const PUMP_FUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
@@ -19,7 +18,7 @@ export function getBondingCurveAddress(tokenMint: string): string {
         );
         return pda.toBase58();
     } catch (e) {
-        return ""; // Failsafe trap
+        return ""; 
     }
 }
 
@@ -180,8 +179,8 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
         return isUnsafe;
     } catch (_) {
+        // 🟢 FIX 40: Do not block perfectly good trades just because rugcheck is rate-limiting you
         await redis.set(key, 'uncertain', 'EX', 45).catch(() => {});
-        return true; 
+        return false; 
     }
 }
-

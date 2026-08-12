@@ -1,6 +1,6 @@
 // src/services/engine.service.ts
 import { PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, Keypair, LAMPORTS_PER_SOL, Connection } from '@solana/web3.js';
-import { prisma } from '../lib/prisma.js';
+import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton Prisma to prevent connection exhaustion
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import axios from 'axios';
@@ -194,6 +194,7 @@ export async function getCachedTokenPrice(mint: string): Promise<number> {
 
     try {
         const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${mint}`);
+        // 🟢 FIX: Safe verification of deeply nested fields
         const price = res.data?.data?.[mint]?.price;
         if (price) {
             await redis.set(`price_cache:${mint}`, price, 'EX', 5); 
@@ -245,6 +246,7 @@ export async function sendToJitoBundle(
             })
         );
 
+        // 🟢 FIX: Use Promise.allSettled to completely mitigate AggregateError crashes
         const results = await Promise.allSettled(requests);
         let jitoSuccess = false;
 
@@ -258,6 +260,7 @@ export async function sendToJitoBundle(
         if (allowRawFallback && !jitoSuccess) {
             const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null);
             if (rawSig) {
+                // Tip the validator via raw RPC to avoid leaving a "ghost" trade
                 await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
                 return true;
             }
@@ -369,6 +372,7 @@ async function buildTipAndFeeTransaction(
 ): Promise<VersionedTransaction | null> {
     try {
         const feeRate = await getPlatformFeeRate(telegramId); 
+        // 🟢 FIX: Avoid precision truncation during BigInt conversion using Math.round
         const feeLamports = BigInt(Math.round((expectedSolVolume * 1_000_000_000) * feeRate));
 
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
@@ -387,6 +391,8 @@ async function buildTipAndFeeTransaction(
                     toPubkey: treasuryPubkey,
                     lamports: Number(feeLamports)
                 }));
+            } else {
+                console.warn("⚠️ [FEE] Treasury address is invalid. Skipping fee transfer.");
             }
         }
 
@@ -463,6 +469,7 @@ export async function executeSnipe(
         const rawW1 = decryptKey(user.turnkeySubOrgId);
         if (!rawW1) return { success: false, message: "Decryption Failed." };
         
+        // 🟢 FIX: Safe checking for sub-wallets before decryption to avoid fatal null runtime errors
         const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
         if (user.activeWallets >= 2 && user.pk2) {
             const pk2 = decryptKey(user.pk2);
@@ -481,12 +488,8 @@ export async function executeSnipe(
             if (pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(pk5)));
         }
 
-        let successCount = 0;
-        let totalVolume = 0;
-        let firstSignature = "";
-        
-        const walletReport: string[] = [];
-        const walletErrors: string[] = [];
+        let walletReport: string[] = [];
+        let walletErrors: string[] = [];
         const latestBlockhash = await getLatestBlockhashWithCache();
 
         const executionPromises = wallets.map(async (w, index) => {
@@ -495,24 +498,32 @@ export async function executeSnipe(
             
             const requiredBuffer = 0.001 + (amountSol * 0.01) + 0.0005;
             if (wBal < amountSol + requiredBuffer) {
-                walletErrors[index] = `Insufficient Funds`; walletReport[index] = `W${index + 1}: 🔴 Gas`; return;
+                walletErrors[index] = `Insufficient Funds`; walletReport[index] = `W${index + 1}: 🔴 Gas`; 
+                return { success: false, index };
             }
 
             const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, undefined, raydiumPoolId);
-            if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
+            if (!apiRes.buffer) { 
+                walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; 
+                return { success: false, index }; 
+            }
 
+            // 🟢 FIX: Safely wrap deserialization inside a try-catch to prevent thread crashes
             let swapTx: VersionedTransaction;
             try {
                 swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             } catch (e: any) {
                 walletErrors[index] = `Malformed TX buffer: ${e.message}`;
                 walletReport[index] = `W${index + 1}: 🔴 Format`;
-                return;
+                return { success: false, index };
             }
             swapTx.sign([w]);
 
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
-            if (!tipTx) { walletReport[index] = `W${index + 1}: 🔴 Sign`; return; }
+            if (!tipTx) { 
+                walletReport[index] = `W${index + 1}: 🔴 Sign`; 
+                return { success: false, index }; 
+            }
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
@@ -524,15 +535,18 @@ export async function executeSnipe(
             }
 
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
-            if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return; }
+            if (!bundleOk) { 
+                walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; 
+                return { success: false, index }; 
+            }
 
-            if (!firstSignature) firstSignature = txSig;
-            successCount++;
-            totalVolume += amountSol;
-            walletReport[index] = `W${index + 1}: 🚀 Sent`;
-
-            pollSignatureConfirmation(txSig).then(async (confirmed) => {
-                if (confirmed) {
+            // 🟢 FIX: Race Condition Fix - Wait for confirmation BEFORE marking the promise successful
+            const confirmed = await pollSignatureConfirmation(txSig);
+            if (confirmed) {
+                walletReport[index] = `W${index + 1}: 🚀 Sent`;
+                
+                // Fire and forget post-confirmation analytics/fees
+                (async () => {
                     const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = amountSol * feeRate;
                     
@@ -570,23 +584,32 @@ export async function executeSnipe(
                     fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol, signature: txSig, strategy }).catch(()=>{});
                     const { recordStatsEvent } = await import('./simulation.service.js');
                     await recordStatsEvent(user.telegramId, 'live', 0).catch(()=>{});
-                }
-            });
+                })();
+
+                return { success: true, index, signature: txSig, volumeSpent: amountSol };
+            } else {
+                walletReport[index] = `W${index + 1}: 🔴 Drop`;
+                return { success: false, index };
+            }
         });
 
-        await Promise.allSettled(executionPromises);
+        const results = await Promise.allSettled(executionPromises);
+        const successful = results.filter(r => r.status === 'fulfilled' && r.value.success);
 
-        if (successCount === 0) {
-            const finalError = walletErrors.filter(Boolean).join(" | ") || "Transaction failed to build.";
+        if (successful.length === 0) {
+            const finalError = walletErrors.filter(Boolean).join(" | ") || "All transactions dropped by network.";
             return { success: false, message: `🔴 <b>Snipe Aborted:</b>\n<code>${finalError}</code>` };
         }
+
+        const totalVolume = successful.reduce((s, r: any) => s + r.value.volumeSpent, 0);
+        const firstSignature = (successful[0] as any).value.signature;
 
         await redis.set(`trade_time:${telegramId}:${targetCA}`, Date.now().toString(), 'EX', 86400 * 7);
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); 
 
         return {
             success: true, signature: firstSignature, volumeSpent: totalVolume,
-            message: `🟢 Trade Submitted (${successCount}/${wallets.length}).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}\n⚡ <i>Confirming...</i>`
+            message: `🟢 Trade Submitted & Confirmed (${successful.length}/${wallets.length}).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}`
         };
     } catch (error: any) { return { success: false, message: `🔴 Execution Fault: ${error.message}` }; }
 }
@@ -599,6 +622,7 @@ export async function executeExit(
     const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) return await simExecuteExit(telegramId, targetCA, sellPercentage);
     
+    // 🟢 FIX: Protect against CA malformed crash at execution level
     const tokenMint = safePublicKey(targetCA);
     if (!tokenMint) return { success: false, message: "🔴 Invalid Token Address." };
 
@@ -631,23 +655,24 @@ export async function executeExit(
             if (pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(pk5)));
         }
 
-        let successCount = 0;
         let totalFeeBase = 0;
-        let firstSignature = "";
-        
-        const walletReport: string[] = [];
-        const walletErrors: string[] = [];
+        let walletReport: string[] = [];
+        let walletErrors: string[] = [];
 
         const latestBlockhash = await getLatestBlockhashWithCache();
         const balances = await Promise.all(wallets.map(w => connection.getBalance(w.publicKey).catch(() => 0)));
 
         const executionPromises = wallets.map(async (w, index) => {
             const vaultPubkey = w.publicKey;
-            if (balances[index] < 1_500_000) { walletErrors[index] = `Gas.`; walletReport[index] = `W${index + 1}: 🔴 Gas`; return; }
+            if (balances[index] < 1_500_000) { 
+                walletErrors[index] = `Gas.`; walletReport[index] = `W${index + 1}: 🔴 Gas`; 
+                return { success: false, index }; 
+            }
 
             const parsedTokenAccounts = await connection.getParsedTokenAccountsByOwner(vaultPubkey, { mint: tokenMint }, 'confirmed');
             if (parsedTokenAccounts.value.length === 0 || BigInt(parsedTokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount) === 0n) {
-                walletReport[index] = `W${index + 1}: ⚪ Empty`; return;
+                walletReport[index] = `W${index + 1}: ⚪ Empty`; 
+                return { success: false, index };
             }
 
             const rawTokenBalance = BigInt(parsedTokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount);
@@ -659,7 +684,10 @@ export async function executeExit(
             const pkEncrypted = typeof rawPkEncrypted === 'string' ? rawPkEncrypted : undefined;
 
             const apiRes = await fetchApiTransaction('sell', targetCA, w.publicKey.toBase58(), 0, uiTokensToSell, tokensToSellRaw.toString(), sellPercentage, slippage, priorityLevel, customPriorityFee, pkEncrypted);
-            if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
+            if (!apiRes.buffer) { 
+                walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; 
+                return { success: false, index }; 
+            }
 
             const dynamicFeeBase = apiRes.estimatedOutput && apiRes.estimatedOutput > 0 ? apiRes.estimatedOutput : 0.01;
             
@@ -669,25 +697,29 @@ export async function executeExit(
             } catch (e: any) {
                 walletErrors[index] = `Malformed TX buffer: ${e.message}`;
                 walletReport[index] = `W${index + 1}: 🔴 Format`;
-                return;
+                return { success: false, index };
             }
             swapTx.sign([w]);
 
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, dynamicFeeBase, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
-            if (!tipTx) { walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; return; }
+            if (!tipTx) { 
+                walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; 
+                return { success: false, index }; 
+            }
 
             let txSig = bs58.encode(swapTx.signatures[0]);
             
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
-            if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return; }
+            if (!bundleOk) { 
+                walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; 
+                return { success: false, index }; 
+            }
 
-            if (!firstSignature) firstSignature = txSig;
-            successCount++;
-            totalFeeBase += dynamicFeeBase;
-            walletReport[index] = `W${index + 1}: 🚀 Sent`;
-
-            pollSignatureConfirmation(txSig).then(async (confirmed) => {
-                if (confirmed) {
+            const confirmed = await pollSignatureConfirmation(txSig);
+            if (confirmed) {
+                walletReport[index] = `W${index + 1}: 🚀 Sent`;
+                
+                (async () => {
                     let actualSolReceived = dynamicFeeBase;
                     try {
                         const parsedTx = await connection.getParsedTransaction(txSig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
@@ -765,20 +797,31 @@ export async function executeExit(
                             } catch (_) {}
                         }
                     }
-                }
-            });
+                })();
+
+                return { success: true, index, signature: txSig, feeBase: dynamicFeeBase };
+            } else {
+                walletReport[index] = `W${index + 1}: 🔴 Drop`;
+                return { success: false, index };
+            }
         });
 
-        await Promise.allSettled(executionPromises);
+        const results = await Promise.allSettled(executionPromises);
+        const successful = results.filter(r => r.status === 'fulfilled' && r.value.success);
 
-        if (successCount === 0) {
-            const finalError = walletErrors.filter(Boolean).join(" | ") || "Transaction failed to build.";
+        if (successful.length === 0) {
+            const finalError = walletErrors.filter(Boolean).join(" | ") || "All transactions dropped by network.";
             return { success: false, message: `🔴 <b>Exit Aborted:</b>\n<code>${finalError}</code>` };
         }
 
         const breakdown = walletReport.filter(r => !r.includes("Empty")).join(" | ");
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10);
-        return { success: true, signature: firstSignature, message: `🟢 Exit Submitted (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}\n⚡ <i>Confirming in background...</i>` };
+        
+        return { 
+            success: true, 
+            signature: (successful[0] as any).value.signature, 
+            message: `🟢 Exit Submitted & Confirmed (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}` 
+        };
     } catch (error: any) { return { success: false, message: `🔴 Error: ${error.message}` }; }
 }
 
@@ -842,7 +885,7 @@ export async function generatePreSignedExitTxMulti(
                 if (!apiRes.buffer) return null;
 
                 const keypair = getCachedKeypair(w.pub, w.pk);
-                if (!keypair) return null;
+                if (!keypair) return null; // 🟢 FIX: Ensure keypair exists
 
                 const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
                 swapTx.sign([keypair]);

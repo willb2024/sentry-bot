@@ -2,7 +2,7 @@
 import { PrismaClient } from '@prisma/client';
 import { redis } from '../lib/redis.js';
 
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma.js';
 
 export interface WeeklyStats {
     telegramId: string;
@@ -159,6 +159,7 @@ export function formatWeeklyReport(stats: WeeklyStats): string {
     );
 }
 
+// Replace the dispatch loop in sendWeeklyReportsToAll:
 export async function sendWeeklyReportsToAll(bot: any): Promise<void> {
     console.log('📬 [WEEKLY REPORT] Starting weekly report dispatch...');
 
@@ -168,20 +169,26 @@ export async function sendWeeklyReportsToAll(bot: any): Promise<void> {
 
     let sent = 0, failed = 0;
 
-    for (const u of allUsers) {
-        try {
-            await new Promise(r => setTimeout(r, 50));
-            const stats = await computeWeeklyStats(u.telegramId, rankMap.get(u.telegramId) || 0, allUsers.length);
-            if (!stats) continue;
+    // 🟢 FIX 35: Parallel batching (avoids Telegram flood limit while still executing quickly)
+    const BATCH_SIZE = 10;
+    const batches = [];
+    for (let i = 0; i < allUsers.length; i += BATCH_SIZE) {
+        batches.push(allUsers.slice(i, i + BATCH_SIZE));
+    }
 
-            if (stats.totalVolumeSol === 0 && stats.affiliateEarnedSol === 0) continue;
+    for (const batch of batches) {
+        await Promise.allSettled(batch.map(async (u) => {
+            const stats = await computeWeeklyStats(u.telegramId, rankMap.get(u.telegramId) || 0, allUsers.length);
+            if (!stats) return;
+            if (stats.totalVolumeSol === 0 && stats.affiliateEarnedSol === 0) return;
 
             const message = formatWeeklyReport(stats);
             await bot.telegram.sendMessage(u.telegramId, message, { parse_mode: 'HTML' });
             sent++;
-        } catch (e: any) {
-            failed++;
-        }
+        })).catch(() => { failed++; });
+
+        // Cooldown to respect Telegram 30/s limit
+        await new Promise(r => setTimeout(r, 2000));
     }
 
     console.log(`📬 [WEEKLY REPORT] Done. Sent: ${sent}, Failed/Skipped: ${failed}`);
