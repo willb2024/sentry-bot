@@ -3942,6 +3942,13 @@ bot.action(/^buy_credits_(starter|growth|pro|whale)$/, async (ctx) => {
 bot.action('credits_submit_tx', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id?.toString()!;
+    
+    // 🟢 CRITICAL FIX: Ensure the pending key exists for this exact user
+    const pending = await redis.get(`credits:pending:${tgId}`);
+    if (!pending) {
+        return ctx.replyWithHTML("⚠️ <b>No pending purchase found.</b>\nYou must select a credit pack first using the button.");
+    }
+
     await redis.set(`state:credits_tx:${tgId}`, 'AWAITING', 'EX', 600);
     await ctx.replyWithHTML(`✅ <b>Paste your transaction signature below.</b>\n<i>Example: 5KtP9x...abc123</i>`);
 });

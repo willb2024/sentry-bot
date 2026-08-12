@@ -504,11 +504,13 @@ async function fetchApiTransaction(
 async function buildTipAndFeeTransaction(
     payer: Keypair, telegramId: string, expectedSolVolume: number,
     priorityLevel: string = "FAST", customPriorityFee: number = 0.001,
-    isBumper: boolean = false, blockhash: string
+    isBumper: boolean = false, blockhash: string,
+    feeRate?: number // 🟢 NEW OPTIONAL PARAM
 ): Promise<VersionedTransaction | null> {
     try {
-        const feeRate = await getPlatformFeeRate(telegramId); 
-        const feeLamports = BigInt(Math.round((expectedSolVolume * 1_000_000_000) * feeRate));
+        // 🟢 IF FEE RATE IS PROVIDED, USE IT. OTHERWISE FETCH FROM DB.
+        const platformFeeRate = feeRate ?? await getPlatformFeeRate(telegramId); 
+        const feeLamports = BigInt(Math.round((expectedSolVolume * 1_000_000_000) * platformFeeRate));
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
 
         let tipLamports = 100_000;
@@ -606,7 +608,6 @@ export async function executeSnipe(
             // If SOR is ON, we pass NO pool ID to the fetcher, allowing it to execute the 4-way SOR.
             routeMode = "SOR (4-Pool Routing)";
             console.log(`⚡ [SOR ENGINE] Routing via Smart Order Routing for ${targetCA.substring(0,6)}...`);
-            // ensure raydiumPoolId is undefined so the fetchApiTransaction uses its SOR logic
             raydiumPoolIdToUse = undefined; 
         } else {
             routeMode = "Fast (Direct Jupiter)";
@@ -627,6 +628,9 @@ export async function executeSnipe(
         let walletReport: string[] = [];
         let walletErrors: string[] = [];
         const latestBlockhash = await getLatestBlockhashWithCache();
+
+        // 🟢 FETCH FEE RATE ONCE FOR ALL WALLETS TO PREVENT DB DEADLOCK
+        const feeRate = await getPlatformFeeRate(user.telegramId);
 
         const executionPromises = wallets.map(async (w, index) => {
             let wBal = getLiveWalletBalance(w.publicKey.toBase58());
@@ -658,7 +662,8 @@ export async function executeSnipe(
             }
             swapTx.sign([w]);
 
-            const tipTx = await buildTipAndFeeTransaction(w, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
+            // 🟢 PASS THE PRE-FETCHED FEE RATE
+            const tipTx = await buildTipAndFeeTransaction(w, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash, feeRate);
             if (!tipTx) { walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
 
             let txSig = bs58.encode(swapTx.signatures[0]);
@@ -681,7 +686,6 @@ export async function executeSnipe(
                 walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
                 
                 (async () => {
-                    const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = amountSol * feeRate;
                     const feeChargedLamports = BigInt(Math.round((amountSol * 1_000_000_000) * feeRate));
                     let affiliateCutLamports = 0n;
@@ -709,7 +713,6 @@ export async function executeSnipe(
                             userId: user.id, tokenAddress: targetCA, isBuy: true, amountInSol: amountSol,
                             feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
                             txSignature: txSig, status: 'CONFIRMED', strategy: strategy,
-                            // 🟢 TCA Details
                             expectedPriceUsd: tcaReport.expectedPriceSol,
                             executedPriceUsd: tcaReport.executedPriceSol,
                             slippagePercent: tcaReport.slippagePercent
@@ -793,6 +796,7 @@ export async function executeExit(
         let walletErrors: string[] = [];
         const latestBlockhash = await getLatestBlockhashWithCache();
         const balances = await Promise.all(wallets.map(w => connection.getBalance(w.publicKey).catch(() => 0)));
+        const feeRate = await getPlatformFeeRate(user.telegramId); // 🟢 Fetch once!
 
         const executionPromises = wallets.map(async (w, index) => {
             const vaultPubkey = w.publicKey;
@@ -828,15 +832,27 @@ export async function executeExit(
             
             let swapTx: VersionedTransaction;
             try {
+                // 🟢 1. Build the swapTx FIRST to ensure the payload isn't too large
                 swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             } catch (e: any) {
                 walletErrors[index] = `Malformed TX buffer: ${e.message}`; walletReport[index] = `W${index + 1}: 🔴 Format`; return { success: false, index };
             }
             swapTx.sign([w]);
 
-            const tipTx = await buildTipAndFeeTransaction(w, telegramId, dynamicFeeBase, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
-            if (!tipTx) { walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
+            // 🟢 2. Calculate the original invested amount to accurately capture the 1% fee on Sells
+            let volumeToRecord = dynamicFeeBase;
+            try {
+                const allBuys = await prisma.trade.findMany({ where: { userId: user.id, tokenAddress: targetCA, isBuy: true, status: 'CONFIRMED' } });
+                if (allBuys.length > 0) {
+                    const totalInvested = allBuys.reduce((sum, t) => sum + t.amountInSol, 0);
+                    volumeToRecord = totalInvested * (sellPercentage / 100);
+                }
+            } catch (_) {}
 
+            // 🟢 3. Build Tip & Fee Tx AFTER SwapTx is successfully deserialized, using volumeToRecord
+            const tipTx = await buildTipAndFeeTransaction(w, telegramId, volumeToRecord, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash, feeRate);
+            if (!tipTx) { walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
+            
             let txSig = bs58.encode(swapTx.signatures[0]);
             
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
@@ -852,9 +868,8 @@ export async function executeExit(
                 (async () => {
                     let actualSolReceived = tcaReport.executedPriceSol > 0 ? tcaReport.executedPriceSol : dynamicFeeBase;
                     
-                    const feeRate = await getPlatformFeeRate(user.telegramId);
-                    const feeCharged = actualSolReceived * feeRate;
-                    const feeChargedLamports = BigInt(Math.round((actualSolReceived * 1_000_000_000) * feeRate));
+                    const feeCharged = volumeToRecord * feeRate;
+                    const feeChargedLamports = BigInt(Math.round((volumeToRecord * 1_000_000_000) * feeRate));
                     let affiliateCutLamports = 0n;
                     let guildOwnerCutLamports = 0n;
 
@@ -869,15 +884,6 @@ export async function executeExit(
                         if (activeGuildMembership && activeGuildMembership.guild.ownerId) {
                             guildOwnerCutLamports = (feeChargedLamports * 40n) / 100n; 
                             await prisma.user.update({ where: { id: activeGuildMembership.guild.ownerId }, data: { pendingRewardsSol: { increment: Number(guildOwnerCutLamports) / 1_000_000_000 } } }).catch(()=>{});
-                        }
-                    } catch (_) {}
-
-                    let volumeToRecord = actualSolReceived; 
-                    try {
-                        const allBuys = await prisma.trade.findMany({ where: { userId: user.id, tokenAddress: targetCA, isBuy: true, status: 'CONFIRMED' } });
-                        if (allBuys.length > 0) {
-                            const totalInvested = allBuys.reduce((sum, t) => sum + t.amountInSol, 0);
-                            volumeToRecord = totalInvested * (sellPercentage / 100);
                         }
                     } catch (_) {}
 
@@ -896,7 +902,6 @@ export async function executeExit(
                             feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
                             txSignature: txSig, status: 'CONFIRMED', profitPercent: parseFloat(profitPercent.toFixed(2)),
                             realizedPnlSol: realizedPnlSol, strategy: strategy,
-                            // 🟢 TCA LOGGING
                             expectedPriceUsd: tcaReport.expectedPriceSol,
                             executedPriceUsd: tcaReport.executedPriceSol,
                             slippagePercent: tcaReport.slippagePercent
