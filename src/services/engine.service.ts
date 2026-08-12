@@ -17,6 +17,16 @@ import https from 'https';
 
 dotenv.config();
 
+// 🟢 FIX: Safe PublicKey parser to prevent fatal runtime crashes on malformed strings
+function safePublicKey(address: string | undefined | null): PublicKey | null {
+    if (!address) return null;
+    try {
+        return new PublicKey(address);
+    } catch {
+        return null;
+    }
+}
+
 // Performance Optimization: Cache priority fees
 let cachedPriorityFee = 1_000_000;
 let lastPriorityFeeFetch = 0;
@@ -184,7 +194,6 @@ export async function getCachedTokenPrice(mint: string): Promise<number> {
 
     try {
         const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${mint}`);
-        // 🟢 BUG 1 FIXED: Strict verification on nested object keys to prevent undefined access
         const price = res.data?.data?.[mint]?.price;
         if (price) {
             await redis.set(`price_cache:${mint}`, price, 'EX', 5); 
@@ -236,7 +245,6 @@ export async function sendToJitoBundle(
             })
         );
 
-        // 🟢 Use Promise.allSettled to completely mitigate AggregateError crashes
         const results = await Promise.allSettled(requests);
         let jitoSuccess = false;
 
@@ -361,7 +369,6 @@ async function buildTipAndFeeTransaction(
 ): Promise<VersionedTransaction | null> {
     try {
         const feeRate = await getPlatformFeeRate(telegramId); 
-        // 🟢 BUG 2 FIXED: Safe scaling and rounding on BigInt fees to avoid micro-lamport drop
         const feeLamports = BigInt(Math.round((expectedSolVolume * 1_000_000_000) * feeRate));
 
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
@@ -369,25 +376,26 @@ async function buildTipAndFeeTransaction(
         let tipLamports = 100_000;
         if (!isBumper) tipLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
 
-        const jitoTipAccount = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
+        const jitoTipAccountStr = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
         const instructions = [];
 
         if (partnerWallet && feeLamports > 0n) {
-            try {
-                const treasuryPubkey = new PublicKey(partnerWallet);
+            const treasuryPubkey = safePublicKey(partnerWallet);
+            if (treasuryPubkey) {
                 instructions.push(SystemProgram.transfer({
                     fromPubkey: payer.publicKey,
                     toPubkey: treasuryPubkey,
                     lamports: Number(feeLamports)
                 }));
-            } catch (_) {
-                console.warn("⚠️ [FEE] Treasury address is invalid. Skipping fee transfer.");
             }
         }
 
-        instructions.push(SystemProgram.transfer({
-            fromPubkey: payer.publicKey, toPubkey: new PublicKey(jitoTipAccount), lamports: tipLamports
-        }));
+        const jitoPubkey = safePublicKey(jitoTipAccountStr);
+        if (jitoPubkey) {
+            instructions.push(SystemProgram.transfer({
+                fromPubkey: payer.publicKey, toPubkey: jitoPubkey, lamports: tipLamports
+            }));
+        }
 
         const messageV0 = new TransactionMessage({
             payerKey: payer.publicKey, recentBlockhash: blockhash, instructions
@@ -431,13 +439,18 @@ export async function executeSnipe(
         if (mevResult === 'TIMEOUT' || mevResult === 'ERROR') return { success: false, message: "⚠️ MEV check timeout — trade blocked." };
     }
 
+    const tokenPubkey = safePublicKey(targetCA);
+    if (!tokenPubkey) return { success: false, message: "🔴 Invalid Token Address." };
+
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
 
         let liveBalanceSol = getLiveWalletBalance(user.vaultAddress);
         if (liveBalanceSol === null) {
-            const balanceLamports = await connection.getBalance(new PublicKey(user.vaultAddress));
+            const vaultPubkey = safePublicKey(user.vaultAddress);
+            if (!vaultPubkey) return { success: false, message: "Invalid Vault Address." };
+            const balanceLamports = await connection.getBalance(vaultPubkey);
             liveBalanceSol = balanceLamports / LAMPORTS_PER_SOL;
         }
 
@@ -450,7 +463,6 @@ export async function executeSnipe(
         const rawW1 = decryptKey(user.turnkeySubOrgId);
         if (!rawW1) return { success: false, message: "Decryption Failed." };
         
-        // 🟢 BUG 3 FIXED: Safe checking for sub-wallets before decryption to avoid fatal null runtime errors
         const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
         if (user.activeWallets >= 2 && user.pk2) {
             const pk2 = decryptKey(user.pk2);
@@ -489,7 +501,6 @@ export async function executeSnipe(
             const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, slippage, priorityLevel, customPriorityFee, undefined, raydiumPoolId);
             if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
 
-            // 🟢 BUG 4 FIXED: Transaction deserialization wrapped in try-catch to stop thread crashes
             let swapTx: VersionedTransaction;
             try {
                 swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
@@ -588,6 +599,9 @@ export async function executeExit(
     const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) return await simExecuteExit(telegramId, targetCA, sellPercentage);
     
+    const tokenMint = safePublicKey(targetCA);
+    if (!tokenMint) return { success: false, message: "🔴 Invalid Token Address." };
+
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No Vault." };
@@ -600,12 +614,23 @@ export async function executeExit(
         if (!rawW1) return { success: false, message: "Decryption Failed." };
 
         const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
-        if (user.activeWallets >= 2 && user.pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk2)!)));
-        if (user.activeWallets >= 3 && user.pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk3)!)));
-        if (user.activeWallets >= 4 && user.pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk4)!)));
-        if (user.activeWallets >= 5 && user.pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(decryptKey(user.pk5)!)));
+        if (user.activeWallets >= 2 && user.pk2) {
+            const pk2 = decryptKey(user.pk2);
+            if (pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(pk2)));
+        }
+        if (user.activeWallets >= 3 && user.pk3) {
+            const pk3 = decryptKey(user.pk3);
+            if (pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(pk3)));
+        }
+        if (user.activeWallets >= 4 && user.pk4) {
+            const pk4 = decryptKey(user.pk4);
+            if (pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(pk4)));
+        }
+        if (user.activeWallets >= 5 && user.pk5) {
+            const pk5 = decryptKey(user.pk5);
+            if (pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(pk5)));
+        }
 
-        const tokenMint = new PublicKey(targetCA);
         let successCount = 0;
         let totalFeeBase = 0;
         let firstSignature = "";
@@ -637,7 +662,15 @@ export async function executeExit(
             if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return; }
 
             const dynamicFeeBase = apiRes.estimatedOutput && apiRes.estimatedOutput > 0 ? apiRes.estimatedOutput : 0.01;
-            const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
+            
+            let swapTx: VersionedTransaction;
+            try {
+                swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
+            } catch (e: any) {
+                walletErrors[index] = `Malformed TX buffer: ${e.message}`;
+                walletReport[index] = `W${index + 1}: 🔴 Format`;
+                return;
+            }
             swapTx.sign([w]);
 
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, dynamicFeeBase, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
@@ -792,11 +825,11 @@ export async function generatePreSignedExitTxMulti(
         if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5, index: 4 });
 
         const slippage = 100.0;
-        const tokenMint = new PublicKey(targetCA);
+        const tokenMint = safePublicKey(targetCA);
+        if (!tokenMint) return [];
         const latestBlockhash = await getLatestBlockhashWithCache();
 
         const results = await Promise.all(wallets.map(async (w): Promise<PreSignedExitPayload | null> => {
-            // 🟢 BUG 5 FIXED: Validate keypair extraction to prevent mapping failures
             try {
                 const vaultPubkey = new PublicKey(w.pub);
                 const parsedAccounts = await connection.getParsedTokenAccountsByOwner(vaultPubkey, { mint: tokenMint }, 'confirmed');

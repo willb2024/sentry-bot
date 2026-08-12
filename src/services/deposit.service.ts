@@ -3,6 +3,16 @@ import { PublicKey } from '@solana/web3.js';
 import { prisma } from '../lib/prisma.js';
 import { connection } from '../lib/connection.js';
 
+// 🟢 FIX: Safe PublicKey validator
+function safePublicKey(address: string | undefined | null): PublicKey | null {
+    if (!address) return null;
+    try {
+        return new PublicKey(address);
+    } catch {
+        return null;
+    }
+}
+
 const activeListeners = new Map<string, { subId: number, lastBalance: number }>();
 
 export async function startDepositWatcher(bot: any) {
@@ -10,7 +20,6 @@ export async function startDepositWatcher(bot: any) {
 
     setInterval(async () => {
         try {
-            // Optimize Prisma query to prevent memory overhead
             const activeUsers = await prisma.user.findMany({
                 where: {
                     vaultAddress: { not: null }
@@ -52,7 +61,9 @@ export async function startDepositWatcher(bot: any) {
 
             for (const [address, meta] of addressToUserMap.entries()) {
                 if (!activeListeners.has(address)) {
-                    const pubKey = new PublicKey(address);
+                    // 🟢 FIX: Safe Key Generation
+                    const pubKey = safePublicKey(address);
+                    if (!pubKey) continue; 
 
                     const initialBalanceLamports = await connection.getBalance(pubKey).catch((e) => {
                         console.error(`⚠️ [DEPOSIT] Init Fetch Failed for ${address}: ${e.message}`);

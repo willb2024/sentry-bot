@@ -12,19 +12,38 @@ dotenv.config();
 
 export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.04;
 
+// 🟢 FIX: Safe PublicKey validator
+function safePublicKey(address: string | undefined | null): PublicKey | null {
+    if (!address) return null;
+    try {
+        return new PublicKey(address);
+    } catch {
+        return null;
+    }
+}
+
 export async function uploadImageToIpfs(imageBuffer: Buffer, filename: string): Promise<string | null> {
     try {
         const form = new FormData();
         form.append('file', imageBuffer, { filename, contentType: 'image/png' });
         
-        const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}`, ...form.getHeaders() },
-            body: form as any
-        });
+        let response;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}`, ...form.getHeaders() },
+                    body: form as any
+                });
+                if (response.ok) break;
+            } catch (e) {
+                if (attempt === 3) throw e;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
 
-        if (!res.ok) throw new Error(`Pinata upload failed: ${res.statusText}`);
-        const data = await res.json() as any;
+        if (!response || !response.ok) throw new Error(`Pinata upload failed`);
+        const data = await response.json() as any;
         return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
     } catch (e: any) {
         console.error("🔴 [IPFS] Image Upload Error:", e.message);
@@ -36,14 +55,23 @@ export async function uploadMetadataToIpfs(name: string, symbol: string, descrip
     try {
         const metadata = { name, symbol, description, image: imageUrl, createdOn: 'https://t.me/SentryTerminalBot' };
         
-        const res = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pinataContent: metadata })
-        });
+        let response;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pinataContent: metadata })
+                });
+                if (response.ok) break;
+            } catch (e) {
+                if (attempt === 3) throw e;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
 
-        if (!res.ok) throw new Error(`Pinata metadata failed: ${res.statusText}`);
-        const data = await res.json() as any;
+        if (!response || !response.ok) throw new Error(`Pinata metadata failed`);
+        const data = await response.json() as any;
         return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
     } catch (e: any) {
         console.error("🔴 [IPFS] Metadata Upload Error:", e.message);
@@ -95,14 +123,11 @@ export async function launchTokenOnPumpFun(
         }
 
         const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
-        if (!treasuryWalletStr) {
-            return { success: false, message: "TREASURY_WALLET_ADDRESS is missing in your .env file!" };
-        }
+        if (!treasuryWalletStr) return { success: false, message: "TREASURY_WALLET_ADDRESS is missing in your .env file!" };
 
-        let treasuryPubkey: PublicKey;
-        try {
-            treasuryPubkey = new PublicKey(treasuryWalletStr.trim());
-        } catch (e: any) {
+        // 🟢 FIX: Wrap in safe helper
+        const treasuryPubkey = safePublicKey(treasuryWalletStr.trim());
+        if (!treasuryPubkey) {
             console.error("🔴 [LAUNCH] Invalid treasury wallet address configured:", treasuryWalletStr);
             return { success: false, message: `Invalid treasury address configured: "${treasuryWalletStr}"` };
         }
@@ -128,17 +153,26 @@ export async function launchTokenOnPumpFun(
         const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
         const bundledTxs: string[] = [];
 
-        const response = await fetch('https://pumpportal.fun/api/create', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'create', tokenMetadata: { name, symbol, uri: metadataUri },
-                mint: bs58.encode(mintKeypair.secretKey), denominatedInSol: true, 
-                amount: splitBuySol, slippage: 25, priorityFee: 0.001, pool: 'pump'
-            })
-        });
+        let response;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                response = await fetch('https://pumpportal.fun/api/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'create', tokenMetadata: { name, symbol, uri: metadataUri },
+                        mint: bs58.encode(mintKeypair.secretKey), denominatedInSol: true, 
+                        amount: splitBuySol, slippage: 25, priorityFee: 0.001, pool: 'pump'
+                    })
+                });
+                if (response.ok) break;
+            } catch (e) {
+                if (attempt === 3) return { success: false, message: "PumpPortal rejected the launch request after 3 attempts." };
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
 
-        if (!response.ok) return { success: false, message: "PumpPortal rejected the launch request." };
+        if (!response || !response.ok) return { success: false, message: "PumpPortal rejected the launch request." };
         const txData = await response.arrayBuffer();
         const launchTx = VersionedTransaction.deserialize(new Uint8Array(txData));
         launchTx.sign([mintKeypair, wallets[0]]);
@@ -160,7 +194,11 @@ export async function launchTokenOnPumpFun(
 
         const { blockhash } = await connection.getLatestBlockhash('confirmed');
         const JITO_TIP_ACCOUNTS = ["96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL", "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe", "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvVkY"];
-        const jitoTipAccount = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
+        const jitoTipAccountStr = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
+
+        // 🟢 FIX: Wrapping tip accounts safely
+        const jitoTipPubkey = safePublicKey(jitoTipAccountStr);
+        if (!jitoTipPubkey) return { success: false, message: "Invalid Jito Tip Account internal reference." };
 
         const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',');
         const isAdmin = ADMIN_IDS.includes(telegramId);
@@ -170,7 +208,7 @@ export async function launchTokenOnPumpFun(
 
         const instructions = [];
         if (!isAdmin) instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: treasuryPubkey, lamports: feeLamports }));
-        instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: new PublicKey(jitoTipAccount), lamports: jitoTipLamports }));
+        instructions.push(SystemProgram.transfer({ fromPubkey: wallets[0].publicKey, toPubkey: jitoTipPubkey, lamports: jitoTipLamports }));
 
         const feeTx = new VersionedTransaction(new TransactionMessage({
             payerKey: wallets[0].publicKey, recentBlockhash: blockhash, instructions

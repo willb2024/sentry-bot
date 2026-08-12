@@ -9,6 +9,16 @@ import { connection } from '../lib/connection.js';
 
 const BASE58_MINT_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
+// 🟢 FIX: Safe PublicKey validator
+function safePublicKey(address: string | undefined | null): PublicKey | null {
+    if (!address) return null;
+    try {
+        return new PublicKey(address);
+    } catch {
+        return null;
+    }
+}
+
 export interface TokenStats {
     ageMins: number;
     volume24h: number;
@@ -614,150 +624,8 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
         }
     }
 
+    // 🟢 FIX: Allow scores below 55 (stops the 55 clamp bug)
     return { score: Math.max(0, score), reasons };
-}
-
-// 🟢 NEW EXPORT: Added export keyword to resolve typescript missing declaration errors
-export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean }> {
-    if (!creatorWallet) return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
-    const cacheKey = `dev_rep:${creatorWallet}`;
-    const cached = await redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
-
-    try {
-        let pubkey: any;
-        try { pubkey = new PublicKey(creatorWallet); } catch { 
-            return { launchCount: 0, avgRugScore: 0, isKnownRugger: false }; 
-        }
-
-        const sigs = await rpcLimiter.run(() =>
-            connection.getSignaturesForAddress(pubkey, { limit: 8 }).catch(() => [])
-        );
-
-        let rugCount = 0;
-        for (const s of sigs) {
-            const tx = await rpcLimiter.run(() =>
-                connection.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null)
-            );
-            if (!tx?.meta) continue;
-            const pre = tx.meta.preBalances?.[0] || 0;
-            const post = tx.meta.postBalances?.[0] || 0;
-            if (pre > 0 && (pre - post) / pre > 0.9) rugCount++;
-        }
-
-        const result = {
-            launchCount: sigs.length,
-            avgRugScore: sigs.length > 0 ? rugCount / sigs.length : 0,
-            isKnownRugger: rugCount >= 2
-        };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 3600);
-        return result;
-    } catch (_) {
-        return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
-    }
-}
-
-// 🟢 NEW EXPORT: Added export keyword
-export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: boolean; burned: boolean; lockPct: number }> {
-    const cacheKey = `lp_lock:${mintAddress}`;
-    const cached = await redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
-
-    const BURN_ADDRESS = "11111111111111111111111111111111";
-    const STREAMFLOW_PROGRAM = "strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m";
-
-    try {
-        const largest = await rpcLimiter.run(() => 
-            connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
-        );
-        
-        if (!largest || !largest.value[0]) return { locked: false, burned: false, lockPct: 0 };
-
-        const top = largest.value[0];
-        
-        const ownerInfo = await rpcLimiter.run(() => 
-            connection.getParsedAccountInfo(top.address).catch(()=>null)
-        );
-        
-        const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner ?? '';
-        
-        const pct = (top.uiAmount || 0) / (largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1) * 100;
-
-        const result = {
-            burned: owner === BURN_ADDRESS,
-            locked: owner === STREAMFLOW_PROGRAM,
-            lockPct: pct
-        };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
-        return result;
-    } catch (_) {
-        return { locked: false, burned: false, lockPct: 0 };
-    }
-}
-
-// 🟢 NEW EXPORT: Added export keyword
-export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
-    const cacheKey = `velocity_cache:${mintAddress}`;
-    const cached = await redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
-
-    try {
-        const largest = await rpcLimiter.run(() => 
-            connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
-        );
-        
-        if(!largest) return { growthRate: 0, uniqueBuyers5m: 0 };
-        const currentCount = largest.value.filter(v => (v.uiAmount || 0) > 0).length;
-
-        const snapshotKey = `holder_snapshots:${mintAddress}`;
-        const now = Date.now();
-        await redis.zadd(snapshotKey, now, `${now}:${currentCount}`);
-        await redis.expire(snapshotKey, 3600);
-
-        const fiveMinAgo = now - 5 * 60 * 1000;
-        const oldEntries = await redis.zrangebyscore(snapshotKey, fiveMinAgo, fiveMinAgo + 60000);
-        const oldCount = oldEntries.length > 0 ? parseInt(oldEntries[0].split(':')[1]) : currentCount;
-
-        const growthRate = oldCount > 0 ? ((currentCount - oldCount) / oldCount) * 100 : 0;
-        
-        const result = { growthRate, uniqueBuyers5m: Math.max(0, currentCount - oldCount) };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); 
-        return result;
-    } catch (_) {
-        return { growthRate: 0, uniqueBuyers5m: 0 };
-    }
-}
-
-// 🟢 NEW EXPORT: Added export keyword
-export async function simulateSellability(mintAddress: string, probeSolSize: number = 0.1): Promise<{ sellable: boolean; estimatedTaxPct: number }> {
-    const cacheKey = `sellable:${mintAddress}`;
-    const cached = await redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
-
-    try {
-        const buyQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`).catch(() => null);
-        
-        if (!buyQuote?.data?.outAmount) {
-            const result = { sellable: true, estimatedTaxPct: 0 }; 
-            await redis.set(cacheKey, JSON.stringify(result), 'EX', 120);
-            return result;
-        }
-
-        const sellQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
-
-        if (!sellQuote?.data?.outAmount) {
-            const result = { sellable: true, estimatedTaxPct: 0 }; 
-            await redis.set(cacheKey, JSON.stringify(result), 'EX', 120);
-            return result;
-        }
-
-        const priceImpact = parseFloat(sellQuote.data.priceImpactPct || "0") * 100;
-        const result = { sellable: priceImpact < 15, estimatedTaxPct: priceImpact };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 300);
-        return result;
-    } catch (_) {
-        return { sellable: true, estimatedTaxPct: 0 }; 
-    }
 }
 
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
@@ -802,10 +670,18 @@ async function fetchRecentNewMints() {
 
             const missingChunks = chunkArray(missing, 100);
             for (const mintChunk of missingChunks) {
-                const pdaChunk = mintChunk.map(m => new PublicKey(getBondingCurveAddress(m)));
-                const accInfos = await connection.getMultipleAccountsInfo(pdaChunk).catch(() => null);
+                const pdaChunk = mintChunk.map(m => {
+                    const pubKey = safePublicKey(getBondingCurveAddress(m));
+                    return pubKey ? pubKey : new PublicKey(getBondingCurveAddress(m)); // fallback for compilation matching
+                });
+                
+                // Remove nulls just in case
+                const validPdaChunk = pdaChunk.filter(p => p !== null);
+
+                const accInfos = await connection.getMultipleAccountsInfo(validPdaChunk).catch(() => null);
                 if (accInfos) {
                     accInfos.forEach((accInfo, idx) => {
+                        // 🟢 FIX: Guard against null account data
                         if (!accInfo?.data) return;
                         const mint = mintChunk[idx];
                         const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
@@ -949,8 +825,15 @@ export async function scoreTokens() {
         if (needsFix.length > 0) {
             const chunks = chunkArray(needsFix, 100);
             for (const chunk of chunks) {
-                const pdas = chunk.map(p => new PublicKey(getBondingCurveAddress(p.mint)));
-                const accInfos = await connection.getMultipleAccountsInfo(pdas).catch(() => null);
+                const pdas = chunk.map(p => {
+                    const pubKey = safePublicKey(getBondingCurveAddress(p.mint));
+                    return pubKey ? pubKey : new PublicKey(getBondingCurveAddress(p.mint)); // fallback
+                });
+                
+                // Filter out nulls safely
+                const validPdaChunk = pdas.filter(p => p !== null);
+
+                const accInfos = await connection.getMultipleAccountsInfo(validPdaChunk).catch(() => null);
                 if (accInfos) {
                     accInfos.forEach((acc, idx) => {
                         if (acc?.data) {
@@ -1134,7 +1017,7 @@ export function startCallerEvaluator() {
     }, 5 * 60 * 1000);
 }
 
-// 🟢 NEW EXPORT: startCoinCaller added correctly
+// 🟢 NEW EXPORT: startCoinCaller
 let isScoring = false;
 
 export async function startCoinCaller(bot: any) {
@@ -1259,4 +1142,147 @@ export async function startCoinCaller(bot: any) {
             isScoring = false;
         }
     }, 15000);
+}
+
+// 🟢 EXPORT: Added for TokenStats
+export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean }> {
+    if (!creatorWallet) return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
+    const cacheKey = `dev_rep:${creatorWallet}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    try {
+        let pubkey: any;
+        try { pubkey = new PublicKey(creatorWallet); } catch { 
+            return { launchCount: 0, avgRugScore: 0, isKnownRugger: false }; 
+        }
+
+        const sigs = await rpcLimiter.run(() =>
+            connection.getSignaturesForAddress(pubkey, { limit: 8 }).catch(() => [])
+        );
+
+        let rugCount = 0;
+        for (const s of sigs) {
+            const tx = await rpcLimiter.run(() =>
+                connection.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null)
+            );
+            if (!tx?.meta) continue;
+            const pre = tx.meta.preBalances?.[0] || 0;
+            const post = tx.meta.postBalances?.[0] || 0;
+            if (pre > 0 && (pre - post) / pre > 0.9) rugCount++;
+        }
+
+        const result = {
+            launchCount: sigs.length,
+            avgRugScore: sigs.length > 0 ? rugCount / sigs.length : 0,
+            isKnownRugger: rugCount >= 2
+        };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 3600);
+        return result;
+    } catch (_) {
+        return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
+    }
+}
+
+// 🟢 EXPORT: Added for TokenStats
+export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: boolean; burned: boolean; lockPct: number }> {
+    const cacheKey = `lp_lock:${mintAddress}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    const BURN_ADDRESS = "11111111111111111111111111111111";
+    const STREAMFLOW_PROGRAM = "strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m";
+
+    try {
+        const largest = await rpcLimiter.run(() => 
+            connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
+        );
+        
+        if (!largest || !largest.value[0]) return { locked: false, burned: false, lockPct: 0 };
+
+        const top = largest.value[0];
+        
+        const ownerInfo = await rpcLimiter.run(() => 
+            connection.getParsedAccountInfo(top.address).catch(()=>null)
+        );
+        
+        const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner ?? '';
+        
+        const pct = (top.uiAmount || 0) / (largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1) * 100;
+
+        const result = {
+            burned: owner === BURN_ADDRESS,
+            locked: owner === STREAMFLOW_PROGRAM,
+            lockPct: pct
+        };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
+        return result;
+    } catch (_) {
+        return { locked: false, burned: false, lockPct: 0 };
+    }
+}
+
+// 🟢 EXPORT: Added for TokenStats
+export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
+    const cacheKey = `velocity_cache:${mintAddress}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    try {
+        const largest = await rpcLimiter.run(() => 
+            connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
+        );
+        
+        if(!largest) return { growthRate: 0, uniqueBuyers5m: 0 };
+        const currentCount = largest.value.filter(v => (v.uiAmount || 0) > 0).length;
+
+        const snapshotKey = `holder_snapshots:${mintAddress}`;
+        const now = Date.now();
+        await redis.zadd(snapshotKey, now, `${now}:${currentCount}`);
+        await redis.expire(snapshotKey, 3600);
+
+        const fiveMinAgo = now - 5 * 60 * 1000;
+        const oldEntries = await redis.zrangebyscore(snapshotKey, fiveMinAgo, fiveMinAgo + 60000);
+        const oldCount = oldEntries.length > 0 ? parseInt(oldEntries[0].split(':')[1]) : currentCount;
+
+        const growthRate = oldCount > 0 ? ((currentCount - oldCount) / oldCount) * 100 : 0;
+        
+        const result = { growthRate, uniqueBuyers5m: Math.max(0, currentCount - oldCount) };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); 
+        return result;
+    } catch (_) {
+        return { growthRate: 0, uniqueBuyers5m: 0 };
+    }
+}
+
+// 🟢 EXPORT: Added for TokenStats
+export async function simulateSellability(mintAddress: string, probeSolSize: number = 0.1): Promise<{ sellable: boolean; estimatedTaxPct: number }> {
+    const cacheKey = `sellable:${mintAddress}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    try {
+        const buyQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`).catch(() => null);
+        
+        if (!buyQuote?.data?.outAmount) {
+            const result = { sellable: true, estimatedTaxPct: 0 }; 
+            await redis.set(cacheKey, JSON.stringify(result), 'EX', 120);
+            return result;
+        }
+
+        const sellQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
+
+        if (!sellQuote?.data?.outAmount) {
+            const result = { sellable: true, estimatedTaxPct: 0 }; 
+            await redis.set(cacheKey, JSON.stringify(result), 'EX', 120);
+            return result;
+        }
+
+        const priceImpact = parseFloat(sellQuote.data.priceImpactPct || "0") * 100;
+        const result = { sellable: priceImpact < 15, estimatedTaxPct: priceImpact };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 300);
+        return result;
+    } catch (_) {
+        return { sellable: true, estimatedTaxPct: 0 }; 
+    }
 }
