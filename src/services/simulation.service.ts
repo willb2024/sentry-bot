@@ -282,7 +282,12 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
     return pool[Math.floor(Math.random() * pool.length)];
 }
 
-export async function simExecuteSnipe(telegramId: string, tokenAddress: string, amountSol: number): Promise<{ success: boolean; signature: string; message: string; volumeSpent: number }> {
+export async function simExecuteSnipe(
+    telegramId: string, 
+    tokenAddress: string, 
+    amountSol: number, 
+    strategy: string = 'MANUAL'
+): Promise<{ success: boolean; signature: string; message: string; volumeSpent: number }> {
     await ensureFirstTradeAnchor(telegramId);
     const currentBal = parseFloat(await getSimBalance(telegramId));
     let actualSolSpent = amountSol;
@@ -306,7 +311,6 @@ export async function simExecuteSnipe(telegramId: string, tokenAddress: string, 
     const existing = JSON.parse(await redis.get(posKey) || '[]');
     let symbol = 'UNKNOWN', entryPriceSol = 0, entryPriceUsd = 0;
     
-    // 🟢 FIX 2: Live SOL price calculation
     const solUsdPrice = cachedSolUsdPrice || 160;
 
     try {
@@ -337,13 +341,21 @@ export async function simExecuteSnipe(telegramId: string, tokenAddress: string, 
         entryScore: Math.floor(Math.random() * 40) + 50, volatilitySeed: (Math.random() * 2 - 1)
     });
     await redis.set(posKey, JSON.stringify(existing));
-    await recordSimTrade(telegramId, true, actualSolSpent, 0, 'SIMULATED_BUY');
+    
+    // 🟢 Strategy explicitly passed down
+    await recordSimTrade(telegramId, true, actualSolSpent, 0, strategy); 
     await recordStatsEvent(telegramId, 'sim', 0);
     await saveSimulationState(telegramId);
     return { success: true, signature: generateSimSignature(), message: '🟢 Simulated buy executed.', volumeSpent: actualSolSpent };
 }
 
-export async function simExecuteExit(telegramId: string, tokenAddress: string, percent: number, forcedPnlPercent?: number): Promise<{ success: boolean; signature: string; message: string }> {
+export async function simExecuteExit(
+    telegramId: string, 
+    tokenAddress: string, 
+    percent: number, 
+    forcedPnlPercent?: number, 
+    strategy: string = 'MANUAL'
+): Promise<{ success: boolean; signature: string; message: string }> {
     await new Promise(r => setTimeout(r, 1000 + Math.random() * 3000));
     const posKey = `sim:positions:${telegramId}`;
     const positions = JSON.parse(await redis.get(posKey) || '[]');
@@ -361,7 +373,6 @@ export async function simExecuteExit(telegramId: string, tokenAddress: string, p
     const rawReturn = soldSol * (1 + pnlPercent / 100);
     const platformFee = rawReturn * 0.01;
     
-    // 🟢 FIX 39: Dynamic Tips based on user priority level
     const user = await prisma.user.findUnique({ where: { telegramId } });
     const jitoTip = user?.priorityLevel === 'TURBO' ? 0.005 : user?.priorityLevel === 'ECO' ? 0.0005 : 0.001;
 
@@ -378,7 +389,9 @@ export async function simExecuteExit(telegramId: string, tokenAddress: string, p
         await redis.set(posKey, JSON.stringify(positions));
     }
     const realizedPnlSol = netReturnSol - soldSol;
-    await recordSimTrade(telegramId, false, soldSol, pnlPercent, 'SIMULATED_SELL');
+    
+    // 🟢 Strategy explicitly passed down
+    await recordSimTrade(telegramId, false, soldSol, pnlPercent, strategy);
     await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
     await saveSimulationState(telegramId);
     return { success: true, signature: generateSimSignature(), message: `🟢 Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };

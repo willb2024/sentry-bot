@@ -289,6 +289,63 @@ app.post('/api/sim-trades', async (req, res) => {
     } catch (e: any) { res.status(500).json([]); }
 });
 
+
+app.post('/api/institutional-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+
+        let trades = [];
+        let maxBudget = 0;
+        let currentSpend = 0;
+
+        if (isSim) {
+            const rawTrades = await redis.get(`sim:trades:${tgId}`);
+            trades = rawTrades ? JSON.parse(rawTrades) : [];
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
+            maxBudget = user?.autoSnipeConfig?.maxBudgetSol || 0;
+            const { getSessionSpend } = await import('./services/simulation.service.js');
+            currentSpend = await getSessionSpend(tgId, 'sim');
+        } else {
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
+            if (!user) return res.status(404).json({ error: 'User not found' });
+            trades = await prisma.trade.findMany({ where: { userId: user.id, status: 'CONFIRMED' }, orderBy: { createdAt: 'desc' }, take: 100 });
+            maxBudget = user.autoSnipeConfig?.maxBudgetSol || 0;
+            const { getSessionSpend } = await import('./services/simulation.service.js');
+            currentSpend = await getSessionSpend(tgId, 'live');
+        }
+
+        const slippageValues = trades.map((t: any) => t.slippagePercent || 0).filter((v: number) => v > 0);
+        const avgSlippage = slippageValues.length > 0 ? (slippageValues.reduce((a: number, b: number) => a + b, 0) / slippageValues.length) : 0;
+
+        const stratStats: any = {};
+        for (const t of trades) {
+            const strat = t.strategy || 'MANUAL';
+            if (!stratStats[strat]) stratStats[strat] = { count: 0, pnl: 0, volume: 0, wins: 0 };
+            stratStats[strat].count++;
+            stratStats[strat].pnl += t.realizedPnlSol || 0;
+            stratStats[strat].volume += t.amountInSol || 0;
+            if (t.profitPercent && t.profitPercent > 0) stratStats[strat].wins++;
+        }
+
+        const pnlArray = trades.filter((t: any) => !t.isBuy && t.realizedPnlSol !== null && t.realizedPnlSol !== undefined).map((t: any) => t.realizedPnlSol || 0).sort((a: number, b: number) => a - b);
+        let cvar = 0;
+        if (pnlArray.length >= 1) {
+            const count = Math.max(1, Math.floor(pnlArray.length * 0.05));
+            const tail = pnlArray.slice(0, count);
+            cvar = tail.reduce((a: number, b: number) => a + b, 0) / tail.length;
+        }
+
+        res.json({ avgSlippage, stratStats, cvar, maxBudget, currentSpend });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // 🟢 NEW: Persistent Simulation Stats Endpoint
 // Replace app.post('/api/sim-stats', ...) in src/index.ts
 app.post('/api/sim-stats', async (req, res) => {

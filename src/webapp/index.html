@@ -98,6 +98,8 @@
         }
         #toast.show { visibility: visible; opacity: 1; bottom: 40px; }
         .hidden-view { display: none !important; }
+        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
     </style>
 </head>
 <body>
@@ -205,23 +207,46 @@
                 </div>
             </div>
 
-            <!-- ADVANCED STATS CARD -->
-            <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.01] mb-6">
+            <!-- EXPOSURE LIMITS / RISK BUDGET GAUGE -->
+            <div class="card-flat p-4 mb-4 bg-[#0a0d14]">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-gray-500"></i> Exposure Limit (Session Budget)</span>
+                    <span class="text-xs font-mono text-gray-400" id="risk-budget-text">0.00 / 0.00 SOL (0%)</span>
+                </div>
+                <div class="w-full bg-[#1e293b] rounded-full h-2 mt-1 border border-white/5 overflow-hidden">
+                    <div id="risk-budget-bar" class="bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <!-- WALL STREET STATS ROW -->
+            <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.02] border border-white/5 mb-6 shadow-inner">
                 <div>
-                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Sharpe Ratio (Annualized)</span>
-                    <div class="text-xl font-bold text-white font-mono mt-1" id="sharpe-ratio">--</div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Avg Slippage (TCA)</span>
+                    <div class="text-xl font-bold text-white font-mono mt-1" id="tca-slippage">--%</div>
                 </div>
                 <div>
-                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Max Drawdown</span>
-                    <div class="text-xl font-bold text-neonRed font-mono mt-1" id="max-drawdown">--</div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold cursor-help" title="Expected Shortfall of bottom 5% trades">CVaR (5% Tail Risk)</span>
+                    <div class="text-xl font-bold text-neonRed font-mono mt-1" id="cvar-value">-- SOL</div>
                 </div>
                 <div>
-                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Profit Factor</span>
-                    <div class="text-xl font-bold text-jupGreen font-mono mt-1" id="profit-factor">--</div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Top Strategy Yield</span>
+                    <div class="text-xl font-bold text-jupGreen font-mono mt-1 truncate" id="top-strategy">--</div>
                 </div>
                 <div>
-                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Total Trades</span>
-                    <div class="text-xl font-bold text-white font-mono mt-1" id="total-trades">--</div>
+                    <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Sharpe Ratio</span>
+                    <div class="text-xl font-bold text-neonBlue font-mono mt-1" id="sharpe-ratio">--</div>
+                </div>
+            </div>
+
+            <!-- LIVE TRADE TICKER (BLOOMBERG STYLE) -->
+            <div class="card-flat p-3 mb-6 bg-[#0a0d14] border border-white/5 overflow-hidden shadow-lg relative">
+                <div class="absolute top-0 right-0 w-32 h-full bg-gradient-to-l from-[#0a0d14] to-transparent pointer-events-none"></div>
+                <div class="flex items-center gap-3 text-[10px] text-gray-400 uppercase tracking-widest mb-2 border-b border-white/5 pb-2">
+                    <span class="bg-neonBlue/10 text-neonBlue border border-neonBlue/20 px-2 py-0.5 rounded animate-pulse">LIVE EXECUTION FEED</span>
+                    <span>Last 10 Block Confirmations</span>
+                </div>
+                <div id="live-trade-ticker" class="flex flex-col gap-1 text-xs font-mono h-[140px] overflow-y-auto custom-scrollbar pr-2">
+                    <div class="text-gray-500 text-center py-6 italic">Awaiting on-chain execution data...</div>
                 </div>
             </div>
 
@@ -241,7 +266,7 @@
 
                 <!-- Strategy Attribution Card -->
                 <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2 mb-3"><i class="fa-solid fa-chess-knight text-gray-500"></i> Best Strategy</span>
+                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2 mb-3"><i class="fa-solid fa-chess-knight text-gray-500"></i> Active Strategies</span>
                     <div id="best-strategy-container" class="space-y-2">
                         <div class="flex justify-between items-center bg-[#0a0d14] p-2 rounded border border-white/5">
                             <span class="text-xs text-white font-bold" id="strat-name-1">Manual / Direct</span>
@@ -288,7 +313,7 @@
             </div>
 
             <div class="card-flat p-5">
-                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">PORTFOLIO SPLIT</h3>
+                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">STRATEGY ATTRIBUTION YIELD</h3>
                 <div class="h-56 flex items-center justify-center relative">
                     <canvas id="allocationChart"></canvas>
                 </div>
@@ -586,7 +611,7 @@
         const hasData = allocLabels && allocLabels.length > 0 && allocData && allocData.length > 0 && allocData.some(v => v > 0);
         const chartLabels = hasData ? allocLabels : ['Vault Liquid SOL'];
         const chartData = hasData ? allocData : [100];
-        const chartColors = hasData ? ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444'] : ['#10b981'];
+        const chartColors = hasData ? ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#ec4899'] : ['#10b981'];
 
         allocChart = new Chart(allocCtx, {
             type: 'doughnut',
@@ -594,7 +619,7 @@
                 labels: chartLabels,
                 datasets: [{
                     data: chartData,
-                    backgroundColor: chartColors,
+                    backgroundColor: chartColors.slice(0, chartLabels.length),
                     borderWidth: 0,
                     hoverOffset: 5
                 }]
@@ -752,22 +777,18 @@
         let tier = data.currentTier || "Bronze";
         let tierRate = ((data.currentRate || 0.40) * 100).toFixed(0) + "%";
         let tierColor = "text-amber-500";
-        let nextTier = "Silver (50k PTS)";
 
         const pts = data.totalPoints || 0;
         if (pts >= 1000000) {
             tierColor = "text-cyan-400";
-            nextTier = "Max Tier Unlocked!";
             tier = "Diamond";
             tierRate = "70%";
         } else if (pts >= 250000) {
             tierColor = "text-yellow-400";
-            nextTier = "Diamond (1M PTS)";
             tier = "Gold";
             tierRate = "60%";
         } else if (pts >= 50000) {
             tierColor = "text-gray-300";
-            nextTier = "Gold (250k PTS)";
             tier = "Silver";
             tierRate = "50%";
         } else {
@@ -929,9 +950,9 @@
         document.getElementById('stat-volume').innerText = '0.00 SOL';
         document.getElementById('stat-trading-days').innerText = '0';
         document.getElementById('sharpe-ratio').innerText = '--';
-        document.getElementById('max-drawdown').innerText = '--';
-        document.getElementById('profit-factor').innerText = '--';
-        document.getElementById('total-trades').innerText = '0';
+        document.getElementById('tca-slippage').innerText = '--%';
+        document.getElementById('cvar-value').innerText = '-- SOL';
+        document.getElementById('top-strategy').innerText = '--';
         document.getElementById('risk-score').innerText = '0%';
         document.getElementById('risk-label').innerText = 'Awaiting Scan...';
         document.getElementById('strat-name-1').innerText = 'Manual / Direct';
@@ -1008,7 +1029,6 @@
                     }
 
                     document.getElementById('stat-trading-days').innerText = tradingDays;
-                    document.getElementById('total-trades').innerText = simStats.totalTrades || 0;
                     const allocLabels = simPositions.length ? simPositions.map(p => p.symbol) : [];
                     const allocData = simPositions.length ? simPositions.map(p => p.valueUsd || 1) : [];
 
@@ -1106,8 +1126,6 @@
                 const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
                 const finalPnlPercent = totalInvestedSol > 0 ? ((totalRealizedPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
 
-                document.getElementById('total-trades').innerText = liveStats.totalTrades || 0;
-
                 populateDashboard({
                     networth: totalValueUsd, 
                     networthSol: networthSol, 
@@ -1186,9 +1204,6 @@
             if (res.ok) {
                 const stats = await res.json();
                 document.getElementById('sharpe-ratio').innerText = (stats.sharpeRatio || 0).toFixed(2);
-                document.getElementById('max-drawdown').innerText = (stats.maxDrawdown || 0).toFixed(3) + ' SOL';
-                document.getElementById('profit-factor').innerText = (stats.profitFactor || 0).toFixed(2);
-                document.getElementById('total-trades').innerText = (stats.totalTrades || 0);
             }
         } catch (_) {}
     }
@@ -1317,17 +1332,108 @@
         } catch (_) {}
     }
 
+    async function fetchInstitutionalStats() {
+        try {
+            const res = await fetch('/api/institutional-stats', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData })
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+
+            // 1. TCA & CVaR Updates
+            const tcaEl = document.getElementById('tca-slippage');
+            const cvarEl = document.getElementById('cvar-value');
+            if (tcaEl) tcaEl.innerText = data.avgSlippage ? data.avgSlippage.toFixed(2) + '%' : '0.00%';
+            if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '0.0000 SOL';
+
+            // 2. Risk Budget Gauge (Exposure Limits)
+            const spend = data.currentSpend || 0;
+            const budget = data.maxBudget || 0;
+            const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 0;
+            const gauge = document.getElementById('risk-budget-bar');
+            const gaugeText = document.getElementById('risk-budget-text');
+            if(gauge) gauge.style.width = pct + '%';
+            if(gaugeText) {
+                if (budget > 0) {
+                    gaugeText.innerText = `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)`;
+                } else {
+                    gaugeText.innerText = `No Cap (∞)`;
+                    if(gauge) gauge.style.width = '0%';
+                }
+            }
+
+            // 3. Strategy Attribution Pie Chart Override
+            let topStrat = '--';
+            let topPnl = -999;
+            const stratLabels = [];
+            const stratData = [];
+            const stratColors = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#ec4899'];
+
+            for (const [strat, vals] of Object.entries(data.stratStats)) {
+                if (vals.pnl > 0 || vals.volume > 0) {
+                    stratLabels.push(strat);
+                    stratData.push(Math.max(0, vals.pnl)); 
+                }
+                if (vals.pnl > topPnl) {
+                    topPnl = vals.pnl;
+                    topStrat = strat;
+                }
+            }
+            
+            const tsEl = document.getElementById('top-strategy');
+            if (tsEl) tsEl.innerText = topPnl !== -999 ? topStrat : '--';
+
+            // Override the Allocation chart with the Strategy Attribution chart
+            if (allocChart && stratLabels.length > 0) {
+                allocChart.data.labels = stratLabels;
+                allocChart.data.datasets[0].data = stratData;
+                allocChart.data.datasets[0].backgroundColor = stratColors.slice(0, stratLabels.length);
+                allocChart.update();
+            }
+
+            // 4. Live Trade Ticker population
+            const tickerContainer = document.getElementById('live-trade-ticker');
+            if (tickerContainer && userTrades && userTrades.length > 0) {
+                let tickerHtml = '';
+                const recentTrades = userTrades.slice(0, 10); // Show last 10
+                recentTrades.forEach(t => {
+                    const type = t.isBuy ? 'BUY' : 'SELL';
+                    const color = t.isBuy ? '#10b981' : '#ef4444';
+                    const pnlStr = !t.isBuy ? (t.profitPercent ? (t.profitPercent >= 0 ? `+${t.profitPercent.toFixed(1)}%` : `${t.profitPercent.toFixed(1)}%`) : '--') : '--';
+                    
+                    tickerHtml += `
+                        <div class="flex justify-between items-center py-1.5 border-b border-white/5 last:border-0 hover:bg-white/[0.03] px-2 rounded transition-colors cursor-default">
+                            <span class="text-gray-500 w-16">${new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
+                            <span class="text-white font-bold w-24 truncate">${t.tokenAddress ? t.tokenAddress.substring(0, 6) + '...' : 'Unknown'}</span>
+                            <span style="color:${color}" class="font-bold w-12 text-center">${type}</span>
+                            <span class="text-gray-300 w-20 text-right">${t.amountInSol ? t.amountInSol.toFixed(3) : '0.000'} SOL</span>
+                            <span class="font-bold w-16 text-right ${parseFloat(pnlStr) >= 0 ? 'text-jupGreen drop-shadow-[0_0_3px_rgba(16,185,129,0.5)]' : 'text-neonRed'}">${pnlStr}</span>
+                        </div>
+                    `;
+                });
+                tickerContainer.innerHTML = tickerHtml;
+            }
+
+        } catch (e) {
+            console.error("Error fetching institutional stats:", e);
+        }
+    }
+
     // START INITIALIZATION & WIDGET POLLERS
     fetchLiveData();
     fetchAdvancedStats();
     fetchHourlyPerformance();
     fetchStatsWindow();
     fetchEnterpriseMetrics();
+    fetchInstitutionalStats(); 
 
     setInterval(fetchStatsWindow, 3000);
     setInterval(fetchEnterpriseMetrics, 15000);
     setInterval(fetchAdvancedStats, 15000);
     setInterval(fetchHourlyPerformance, 15000);
+    setInterval(fetchInstitutionalStats, 5000);
 </script>
 </body>
 </html>

@@ -318,3 +318,45 @@ export async function getCombinedHourlyPerformance(telegramId: string) {
     }
     return result;
 }
+
+
+export interface CVaRMetric {
+    cvarSol: number;
+    cvarPercent: number;
+    tailTradeCount: number;
+    worstSingleLossSol: number;
+    riskAssessment: 'SAFE_TAIL' | 'MODERATE_TAIL' | 'CRITICAL_TAIL_RISK';
+}
+
+export function computeCVaR(
+    trades: Array<{ realizedPnlSol?: number | null; amountInSol: number; isBuy: boolean }>,
+    percentile: number = 0.05
+): CVaRMetric {
+    const defaultResult: CVaRMetric = { cvarSol: 0, cvarPercent: 0, tailTradeCount: 0, worstSingleLossSol: 0, riskAssessment: 'SAFE_TAIL' };
+
+    const losingSells = trades.filter(t => !t.isBuy && (t.realizedPnlSol || 0) < 0);
+    if (losingSells.length === 0) return defaultResult;
+
+    const sortedLosses = losingSells.sort((a, b) => (a.realizedPnlSol || 0) - (b.realizedPnlSol || 0));
+    const tailCount = Math.max(1, Math.floor(sortedLosses.length * percentile));
+    const tailTrades = sortedLosses.slice(0, tailCount);
+
+    const totalTailLossSol = tailTrades.reduce((sum, t) => sum + Math.abs(t.realizedPnlSol || 0), 0);
+    const totalTailInvestedSol = tailTrades.reduce((sum, t) => sum + (t.amountInSol || 0), 0);
+
+    const cvarSol = totalTailLossSol / tailCount;
+    const cvarPercent = totalTailInvestedSol > 0 ? (totalTailLossSol / totalTailInvestedSol) * 100 : 0;
+    const worstSingleLossSol = Math.abs(sortedLosses[0]?.realizedPnlSol || 0);
+
+    let riskAssessment: 'SAFE_TAIL' | 'MODERATE_TAIL' | 'CRITICAL_TAIL_RISK' = 'SAFE_TAIL';
+    if (cvarPercent >= 65.0 || cvarSol >= 3.0) riskAssessment = 'CRITICAL_TAIL_RISK';
+    else if (cvarPercent >= 35.0 || cvarSol >= 1.0) riskAssessment = 'MODERATE_TAIL';
+
+    return {
+        cvarSol: parseFloat(cvarSol.toFixed(4)),
+        cvarPercent: parseFloat(cvarPercent.toFixed(1)),
+        tailTradeCount: tailCount,
+        worstSingleLossSol: parseFloat(worstSingleLossSol.toFixed(4)),
+        riskAssessment
+    };
+}

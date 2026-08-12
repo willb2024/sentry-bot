@@ -1,6 +1,6 @@
 // src/services/engine.service.ts
 import { PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, Keypair, LAMPORTS_PER_SOL, Connection } from '@solana/web3.js';
-import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton Prisma to prevent connection exhaustion
+import { prisma } from '../lib/prisma.js'; 
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import axios from 'axios';
@@ -174,27 +174,12 @@ async function getLatestBlockhashWithCache(): Promise<{ blockhash: string; lastV
     return await connection.getLatestBlockhash('confirmed');
 }
 
-async function pollSignatureConfirmation(signature: string, maxRetries = 8): Promise<boolean> {
-    for (let i = 0; i < maxRetries; i++) {
-        await new Promise(r => setTimeout(r, 1500));
-        const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
-        if (status?.value) {
-            if (status.value.err) return false;
-            if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 export async function getCachedTokenPrice(mint: string): Promise<number> {
     const cached = await redis.get(`price_cache:${mint}`);
     if (cached) return parseFloat(cached);
 
     try {
         const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${mint}`);
-        // 🟢 FIX: Safe verification of deeply nested fields
         const price = res.data?.data?.[mint]?.price;
         if (price) {
             await redis.set(`price_cache:${mint}`, price, 'EX', 5); 
@@ -219,6 +204,121 @@ export async function checkRecentMevActivityCached(tokenMint: string): Promise<b
     }
 }
 
+// ============================================================================
+// 🟢 WALL STREET FEATURE 3: DYNAMIC VOLATILITY-ADAPTIVE SLIPPAGE
+// ============================================================================
+export async function getVolatilityAdjustedSlippage(tokenMint: string, userBaseSlippage: number): Promise<number> {
+    try {
+        const cacheKey = `volatility_slip:${tokenMint}`;
+        const cachedSlip = await redis.get(cacheKey);
+        if (cachedSlip) return parseFloat(cachedSlip);
+
+        const res = await axiosClient.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`, {
+            timeout: 2500
+        });
+
+        const pair = res.data?.pairs?.[0];
+        if (!pair) return userBaseSlippage;
+
+        const m5Change = Math.abs(pair.priceChange?.m5 || 0);
+        const h1Change = Math.abs(pair.priceChange?.h1 || 0);
+        const liquidityUsd = pair.liquidity?.usd || 0;
+
+        let dynamicSlippage = userBaseSlippage;
+
+        if (liquidityUsd > 0 && liquidityUsd < 15000) {
+            dynamicSlippage = Math.max(dynamicSlippage, 25.0);
+        }
+        if (m5Change >= 25.0) {
+            dynamicSlippage = Math.min(35.0, Math.max(dynamicSlippage, 28.0));
+        } else if (m5Change >= 10.0) {
+            dynamicSlippage = Math.min(25.0, Math.max(dynamicSlippage, 20.0));
+        } else if (m5Change < 3.0 && h1Change < 10.0 && liquidityUsd > 50000) {
+            dynamicSlippage = Math.min(dynamicSlippage, 12.0);
+        }
+
+        const finalSlippage = parseFloat(dynamicSlippage.toFixed(1));
+        await redis.set(cacheKey, finalSlippage.toString(), 'EX', 30);
+        return finalSlippage;
+    } catch (_) {
+        return userBaseSlippage;
+    }
+}
+
+// ============================================================================
+// 🟢 WALL STREET FEATURE 1: TRANSACTION COST ANALYSIS (TCA)
+// ============================================================================
+export interface TcaExecutionReport {
+    confirmed: boolean;
+    expectedPriceSol: number;
+    executedPriceSol: number;
+    slippagePercent: number;
+    slippageBps: number;
+    executionQuality: 'EXCELLENT' | 'ACCEPTABLE' | 'POOR' | 'MEV_SANDWICHED';
+}
+
+export async function verifyExecutionQuality(
+    signature: string,
+    expectedOutAmount: number,
+    tokenDecimals: number,
+    isBuy: boolean,
+    maxRetries = 8
+): Promise<TcaExecutionReport> {
+    const fallbackReport: TcaExecutionReport = {
+        confirmed: false, expectedPriceSol: 0, executedPriceSol: 0, slippagePercent: 0, slippageBps: 0, executionQuality: 'ACCEPTABLE'
+    };
+
+    for (let i = 0; i < maxRetries; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+        
+        if (status?.value) {
+            if (status.value.err) return { ...fallbackReport, confirmed: false };
+            
+            if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
+                try {
+                    const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+                    if (!tx?.meta) return { ...fallbackReport, confirmed: true };
+
+                    const preBalances = tx.meta.preTokenBalances || [];
+                    const postBalances = tx.meta.postTokenBalances || [];
+                    const WSOL_MINT = "So11111111111111111111111111111111111111112";
+
+                    let actualOutAmount = 0;
+                    if (isBuy) {
+                        const postToken = postBalances.find(b => b.mint !== WSOL_MINT);
+                        const preToken = preBalances.find(b => b.accountIndex === postToken?.accountIndex);
+                        const postAmt = postToken ? Number(postToken.uiTokenAmount.amount) : 0;
+                        const preAmt = preToken ? Number(preToken.uiTokenAmount.amount) : 0;
+                        actualOutAmount = (postAmt - preAmt) / Math.pow(10, tokenDecimals || 6);
+                    } else {
+                        const preSol = Number(tx.meta.preBalances[0] || 0);
+                        const postSol = Number(tx.meta.postBalances[0] || 0);
+                        actualOutAmount = Math.max(0, (postSol - preSol) / LAMPORTS_PER_SOL);
+                    }
+
+                    if (expectedOutAmount <= 0 || actualOutAmount <= 0) return { ...fallbackReport, confirmed: true };
+
+                    const slippagePercent = ((expectedOutAmount - actualOutAmount) / expectedOutAmount) * 100;
+                    const slippageBps = Math.round(slippagePercent * 100);
+
+                    let quality: 'EXCELLENT' | 'ACCEPTABLE' | 'POOR' | 'MEV_SANDWICHED' = 'ACCEPTABLE';
+                    if (slippagePercent <= 0.5) quality = 'EXCELLENT';
+                    else if (slippagePercent <= 3.0) quality = 'ACCEPTABLE';
+                    else if (slippagePercent <= 10.0) quality = 'POOR';
+                    else quality = 'MEV_SANDWICHED';
+
+                    return {
+                        confirmed: true, expectedPriceSol: expectedOutAmount, executedPriceSol: actualOutAmount,
+                        slippagePercent: parseFloat(slippagePercent.toFixed(2)), slippageBps, executionQuality: quality
+                    };
+                } catch (e) { return { ...fallbackReport, confirmed: true }; }
+            }
+        }
+    }
+    return fallbackReport;
+}
+
 export async function sendToJitoBundle(
     swapTx: VersionedTransaction, 
     tipTx: VersionedTransaction,
@@ -241,12 +341,10 @@ export async function sendToJitoBundle(
             axiosClient.post(url, {
                 jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] 
             }, { 
-                headers: { 'Content-Type': 'application/json', ...API_HEADERS },
-                timeout: 3000
+                headers: { 'Content-Type': 'application/json', ...API_HEADERS }, timeout: 3000
             })
         );
 
-        // 🟢 FIX: Use Promise.allSettled to completely mitigate AggregateError crashes
         const results = await Promise.allSettled(requests);
         let jitoSuccess = false;
 
@@ -260,7 +358,6 @@ export async function sendToJitoBundle(
         if (allowRawFallback && !jitoSuccess) {
             const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null);
             if (rawSig) {
-                // Tip the validator via raw RPC to avoid leaving a "ghost" trade
                 await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
                 return true;
             }
@@ -272,6 +369,28 @@ export async function sendToJitoBundle(
         console.error("🔴 [JITO BUNDLE] Fatal error:", e.message);
         return false;
     }
+}
+
+// ============================================================================
+// 🟢 WALL STREET FEATURE 2: SMART ORDER ROUTING (SOR)
+// ============================================================================
+export interface DexRouteQuote {
+    dex: string;
+    outAmount: number;
+    quoteResponse: any;
+}
+
+async function getIsolatedDexQuote(dexName: string, inputMint: string, outputMint: string, amountRaw: string, slippageBps: number): Promise<DexRouteQuote | null> {
+    try {
+        const res = await axiosClient.get(
+            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountRaw}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}&dexes=${encodeURIComponent(dexName)}`,
+            { headers: API_HEADERS, timeout: 2000 }
+        );
+        if (res.data && res.data.outAmount) {
+            return { dex: dexName, outAmount: Number(res.data.outAmount), quoteResponse: res.data };
+        }
+    } catch (_) {}
+    return null;
 }
 
 async function fetchApiTransaction(
@@ -287,7 +406,7 @@ async function fetchApiTransaction(
     customPriorityFee: number = 0.001,
     pkEncrypted?: string,
     raydiumPoolId?: string
-): Promise<{ buffer: Buffer | null, errorLog: string, estimatedOutput?: number }> {
+): Promise<{ buffer: Buffer | null; errorLog: string; estimatedOutput?: number; winningRoute?: string }> {
     let globalErrorLog = "";
     const isPumpToken = mint.toLowerCase().endsWith("pump");
     const pumpAmount: string | number = action === 'buy' ? amountSolForBuy : (sellPercentage === 100 ? "100%" : rawTokenAmountForSell);
@@ -308,61 +427,61 @@ async function fetchApiTransaction(
                     { headers: API_HEADERS, responseType: 'arraybuffer', timeout: 3000 }
                 );
                 if (pumpRes && pumpRes.data) {
-                    return { buffer: Buffer.from(pumpRes.data), errorLog: "" };
+                    return { buffer: Buffer.from(pumpRes.data), errorLog: "", winningRoute: 'PumpPortal_Curve' };
                 }
-            } catch (e: any) {
-                globalErrorLog += `[PumpPortal: API Reject] `;
-            }
+            } catch (e: any) { globalErrorLog += `[PumpPortal: API Reject] `; }
         }
 
-        const jupiterPromise = axiosClient.get(
-            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}&dexes=Meteora%20DLMM,Meteora,Raydium,Pump.fun`,
-            { headers: API_HEADERS, timeout: 2500 }
-        ).catch(() => null);
-        
-        let raydiumPromise = Promise.resolve(null);
+        // Direct Raydium Bypass
         if (raydiumPoolId && pkEncrypted) {
             const { buildDirectRaydiumSwap } = await import('./raydium.service.js');
             const keypair = getCachedKeypair(vault, pkEncrypted);
             if (keypair) {
-                raydiumPromise = buildDirectRaydiumSwap(
-                    keypair, raydiumPoolId, inputMint, parseInt(jupAmount), slippageBps
-                ).catch(() => null) as any;
+                const raydiumBuffer = await buildDirectRaydiumSwap(keypair, raydiumPoolId, inputMint, parseInt(jupAmount), slippageBps).catch(() => null);
+                if (raydiumBuffer) return { buffer: raydiumBuffer, errorLog: "", winningRoute: 'Raydium_Direct' };
             }
         }
 
-        const [jupQuote, raydiumBuffer] = await Promise.all([jupiterPromise, raydiumPromise]);
+        // 🟢 SMART ORDER ROUTING (SOR)
+        const dexPools = ['Raydium', 'Meteora DLMM', 'Meteora', 'Pump.fun'];
+        const quotePromises = dexPools.map(dex => getIsolatedDexQuote(dex, inputMint, outputMint, jupAmount, slippageBps));
 
-        if (jupQuote?.data) {
-            try {
-                const priorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
-                const swapRes = await axiosClient.post(
-                    'https://lite-api.jup.ag/swap/v1/swap',
-                    {
-                        quoteResponse: jupQuote.data, userPublicKey: vault, wrapAndUnwrapSol: true,
-                        dynamicComputeUnitLimit: true, prioritizationFeeLamports: priorityLamports
-                    },
-                    { headers: API_HEADERS, timeout: 3000 }
-                );
+        const globalJupPromise = axiosClient.get(
+            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
+            { headers: API_HEADERS, timeout: 2500 }
+        ).then(res => res.data ? ({ dex: 'Jupiter_Aggregated', outAmount: Number(res.data.outAmount), quoteResponse: res.data }) : null).catch(() => null);
 
-                if (swapRes?.data?.swapTransaction) {
-                    const estOut = action === 'sell' && jupQuote.data.outAmount ? Number(jupQuote.data.outAmount) / 1_000_000_000 : 0;
-                    return { buffer: Buffer.from(swapRes.data.swapTransaction, 'base64'), errorLog: "", estimatedOutput: estOut };
-                }
-                globalErrorLog += `[Jupiter: Swap Reject] `;
-            } catch (e: any) {
-                globalErrorLog += `[Jupiter: Swap Route Timeout] `;
-            }
+        const results = await Promise.allSettled([...quotePromises, globalJupPromise]);
+
+        const validQuotes: DexRouteQuote[] = [];
+        for (const res of results) {
+            if (res.status === 'fulfilled' && res.value && res.value.outAmount > 0) validQuotes.push(res.value);
         }
 
-        if (raydiumBuffer) {
-            return { buffer: raydiumBuffer as Buffer, errorLog: "" };
-        }
+        if (validQuotes.length === 0) return { buffer: null, errorLog: globalErrorLog || "SOR: No DEX liquidity routes available." };
 
-        return { buffer: null, errorLog: globalErrorLog || "No DEX liquidity routes available." };
-    } catch (e: any) {
-        return { buffer: null, errorLog: `Routing Fault: ${e.message}` };
-    }
+        validQuotes.sort((a, b) => b.outAmount - a.outAmount);
+        const bestRoute = validQuotes[0];
+
+        const priorityLamports = await getDynamicPriorityFee(priorityLevel, customPriorityFee);
+        const swapRes = await axiosClient.post(
+            'https://lite-api.jup.ag/swap/v1/swap',
+            {
+                quoteResponse: bestRoute.quoteResponse, userPublicKey: vault, wrapAndUnwrapSol: true,
+                dynamicComputeUnitLimit: true, prioritizationFeeLamports: priorityLamports
+            },
+            { headers: API_HEADERS, timeout: 3000 }
+        );
+
+        if (swapRes?.data?.swapTransaction) {
+            const estOut = action === 'sell' && bestRoute.outAmount ? bestRoute.outAmount / 1_000_000_000 : bestRoute.outAmount;
+            return {
+                buffer: Buffer.from(swapRes.data.swapTransaction, 'base64'),
+                errorLog: "", estimatedOutput: estOut, winningRoute: bestRoute.dex
+            };
+        }
+        return { buffer: null, errorLog: `SOR Route (${bestRoute.dex}) Swap Generation Failed.` };
+    } catch (e: any) { return { buffer: null, errorLog: `Routing Fault: ${e.message}` }; }
 }
 
 async function buildTipAndFeeTransaction(
@@ -372,9 +491,7 @@ async function buildTipAndFeeTransaction(
 ): Promise<VersionedTransaction | null> {
     try {
         const feeRate = await getPlatformFeeRate(telegramId); 
-        // 🟢 FIX: Avoid precision truncation during BigInt conversion using Math.round
         const feeLamports = BigInt(Math.round((expectedSolVolume * 1_000_000_000) * feeRate));
-
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
 
         let tipLamports = 100_000;
@@ -387,12 +504,8 @@ async function buildTipAndFeeTransaction(
             const treasuryPubkey = safePublicKey(partnerWallet);
             if (treasuryPubkey) {
                 instructions.push(SystemProgram.transfer({
-                    fromPubkey: payer.publicKey,
-                    toPubkey: treasuryPubkey,
-                    lamports: Number(feeLamports)
+                    fromPubkey: payer.publicKey, toPubkey: treasuryPubkey, lamports: Number(feeLamports)
                 }));
-            } else {
-                console.warn("⚠️ [FEE] Treasury address is invalid. Skipping fee transfer.");
             }
         }
 
@@ -403,10 +516,7 @@ async function buildTipAndFeeTransaction(
             }));
         }
 
-        const messageV0 = new TransactionMessage({
-            payerKey: payer.publicKey, recentBlockhash: blockhash, instructions
-        }).compileToV0Message();
-
+        const messageV0 = new TransactionMessage({ payerKey: payer.publicKey, recentBlockhash: blockhash, instructions }).compileToV0Message();
         const tx = new VersionedTransaction(messageV0);
         tx.sign([payer]);
         return tx;
@@ -423,14 +533,13 @@ export async function executeSnipe(
     strategy: string = 'MANUAL'
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
+    // 🟢 SIMULATION INTERCEPT: Pass strategy parameter to simExecuteSnipe correctly
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
-        return await simExecuteSnipe(telegramId, targetCA, amountSol);
+        return await simExecuteSnipe(telegramId, targetCA, amountSol, strategy);
     }
     
-    if (antiMevDelayMs > 0) {
-        await new Promise(r => setTimeout(r, antiMevDelayMs));
-    }
+    if (antiMevDelayMs > 0) await new Promise(r => setTimeout(r, antiMevDelayMs));
 
     const mevPromise = (side === 'buy' && !isBumper)
         ? checkRecentMevActivityCached(targetCA).catch(() => 'ERROR')
@@ -462,31 +571,21 @@ export async function executeSnipe(
 
         if (liveBalanceSol < amountSol + 0.005) return { success: false, message: "Insufficient Funds." };
 
-        const slippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
+        // 🟢 VOLATILITY ADAPTIVE SLIPPAGE APPLIED
+        const baseSlip = user.slippagePercent ?? 20.0;
+        const slippage = overrideSlippage ?? (await getVolatilityAdjustedSlippage(targetCA, baseSlip));
+        
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
 
         const rawW1 = decryptKey(user.turnkeySubOrgId);
         if (!rawW1) return { success: false, message: "Decryption Failed." };
         
-        // 🟢 FIX: Safe checking for sub-wallets before decryption to avoid fatal null runtime errors
         const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
-        if (user.activeWallets >= 2 && user.pk2) {
-            const pk2 = decryptKey(user.pk2);
-            if (pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(pk2)));
-        }
-        if (user.activeWallets >= 3 && user.pk3) {
-            const pk3 = decryptKey(user.pk3);
-            if (pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(pk3)));
-        }
-        if (user.activeWallets >= 4 && user.pk4) {
-            const pk4 = decryptKey(user.pk4);
-            if (pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(pk4)));
-        }
-        if (user.activeWallets >= 5 && user.pk5) {
-            const pk5 = decryptKey(user.pk5);
-            if (pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(pk5)));
-        }
+        if (user.activeWallets >= 2 && user.pk2) { const pk = decryptKey(user.pk2); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (user.activeWallets >= 3 && user.pk3) { const pk = decryptKey(user.pk3); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (user.activeWallets >= 4 && user.pk4) { const pk = decryptKey(user.pk4); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (user.activeWallets >= 5 && user.pk5) { const pk = decryptKey(user.pk5); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
 
         let walletReport: string[] = [];
         let walletErrors: string[] = [];
@@ -508,22 +607,17 @@ export async function executeSnipe(
                 return { success: false, index }; 
             }
 
-            // 🟢 FIX: Safely wrap deserialization inside a try-catch to prevent thread crashes
             let swapTx: VersionedTransaction;
             try {
                 swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             } catch (e: any) {
-                walletErrors[index] = `Malformed TX buffer: ${e.message}`;
-                walletReport[index] = `W${index + 1}: 🔴 Format`;
+                walletErrors[index] = `Malformed TX buffer: ${e.message}`; walletReport[index] = `W${index + 1}: 🔴 Format`;
                 return { success: false, index };
             }
             swapTx.sign([w]);
 
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
-            if (!tipTx) { 
-                walletReport[index] = `W${index + 1}: 🔴 Sign`; 
-                return { success: false, index }; 
-            }
+            if (!tipTx) { walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
@@ -535,21 +629,18 @@ export async function executeSnipe(
             }
 
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
-            if (!bundleOk) { 
-                walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; 
-                return { success: false, index }; 
-            }
+            if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
 
-            // 🟢 FIX: Race Condition Fix - Wait for confirmation BEFORE marking the promise successful
-            const confirmed = await pollSignatureConfirmation(txSig);
-            if (confirmed) {
-                walletReport[index] = `W${index + 1}: 🚀 Sent`;
+            // 🟢 TCA LOGGING
+            const expectedOutput = apiRes.estimatedOutput || 0;
+            const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true);
+            
+            if (tcaReport.confirmed) {
+                walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
                 
-                // Fire and forget post-confirmation analytics/fees
                 (async () => {
                     const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = amountSol * feeRate;
-                    
                     const feeChargedLamports = BigInt(Math.round((amountSol * 1_000_000_000) * feeRate));
                     let affiliateCutLamports = 0n;
                     let guildOwnerCutLamports = 0n;
@@ -568,17 +659,19 @@ export async function executeSnipe(
                         }
                     } catch (_) {}
 
-                    const affiliateCut = Number(affiliateCutLamports) / 1_000_000_000;
-
                     await prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: amountSol } } }).catch(()=>{});
                     awardGuildPoints(user.telegramId, amountSol).catch(() => {});
                     
                     await prisma.trade.create({
                         data: {
                             userId: user.id, tokenAddress: targetCA, isBuy: true, amountInSol: amountSol,
-                            feeChargedSol: feeCharged, affiliateCutSol: affiliateCut, loyaltyRebateSol: 0,
-                            txSignature: txSig, status: 'CONFIRMED', strategy: strategy
-                        }
+                            feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
+                            txSignature: txSig, status: 'CONFIRMED', strategy: strategy,
+                            // 🟢 TCA Details
+                            expectedPriceUsd: tcaReport.expectedPriceSol,
+                            executedPriceUsd: tcaReport.executedPriceSol,
+                            slippagePercent: tcaReport.slippagePercent
+                        } as any
                     }).catch(() => {});
 
                     fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol, signature: txSig, strategy }).catch(()=>{});
@@ -619,10 +712,12 @@ export async function executeExit(
     strategy: string = 'MANUAL'
 ): Promise<{ success: boolean; signature?: string; message: string }> {
 
+    // 🟢 SIMULATION INTERCEPT: Pass strategy parameter to simExecuteExit correctly
     const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
-    if (await isSimulationActive(telegramId)) return await simExecuteExit(telegramId, targetCA, sellPercentage);
+    if (await isSimulationActive(telegramId)) {
+        return await simExecuteExit(telegramId, targetCA, sellPercentage, undefined, strategy);
+    }
     
-    // 🟢 FIX: Protect against CA malformed crash at execution level
     const tokenMint = safePublicKey(targetCA);
     if (!tokenMint) return { success: false, message: "🔴 Invalid Token Address." };
 
@@ -630,7 +725,10 @@ export async function executeExit(
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No Vault." };
 
-        const slippage = sellPercentage === 100 ? 100.0 : (user.slippagePercent || 20.0);
+        // 🟢 VOLATILITY ADAPTIVE SLIPPAGE APPLIED
+        const baseSlip = user.slippagePercent || 20.0;
+        const slippage = sellPercentage === 100 ? 100.0 : (await getVolatilityAdjustedSlippage(targetCA, baseSlip));
+        
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
 
@@ -638,27 +736,13 @@ export async function executeExit(
         if (!rawW1) return { success: false, message: "Decryption Failed." };
 
         const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
-        if (user.activeWallets >= 2 && user.pk2) {
-            const pk2 = decryptKey(user.pk2);
-            if (pk2) wallets.push(Keypair.fromSecretKey(bs58.decode(pk2)));
-        }
-        if (user.activeWallets >= 3 && user.pk3) {
-            const pk3 = decryptKey(user.pk3);
-            if (pk3) wallets.push(Keypair.fromSecretKey(bs58.decode(pk3)));
-        }
-        if (user.activeWallets >= 4 && user.pk4) {
-            const pk4 = decryptKey(user.pk4);
-            if (pk4) wallets.push(Keypair.fromSecretKey(bs58.decode(pk4)));
-        }
-        if (user.activeWallets >= 5 && user.pk5) {
-            const pk5 = decryptKey(user.pk5);
-            if (pk5) wallets.push(Keypair.fromSecretKey(bs58.decode(pk5)));
-        }
+        if (user.activeWallets >= 2 && user.pk2) { const pk = decryptKey(user.pk2); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (user.activeWallets >= 3 && user.pk3) { const pk = decryptKey(user.pk3); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (user.activeWallets >= 4 && user.pk4) { const pk = decryptKey(user.pk4); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (user.activeWallets >= 5 && user.pk5) { const pk = decryptKey(user.pk5); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
 
-        let totalFeeBase = 0;
         let walletReport: string[] = [];
         let walletErrors: string[] = [];
-
         const latestBlockhash = await getLatestBlockhashWithCache();
         const balances = await Promise.all(wallets.map(w => connection.getBalance(w.publicKey).catch(() => 0)));
 
@@ -671,8 +755,7 @@ export async function executeExit(
 
             const parsedTokenAccounts = await connection.getParsedTokenAccountsByOwner(vaultPubkey, { mint: tokenMint }, 'confirmed');
             if (parsedTokenAccounts.value.length === 0 || BigInt(parsedTokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount) === 0n) {
-                walletReport[index] = `W${index + 1}: ⚪ Empty`; 
-                return { success: false, index };
+                walletReport[index] = `W${index + 1}: ⚪ Empty`; return { success: false, index };
             }
 
             const rawTokenBalance = BigInt(parsedTokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount);
@@ -695,42 +778,30 @@ export async function executeExit(
             try {
                 swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             } catch (e: any) {
-                walletErrors[index] = `Malformed TX buffer: ${e.message}`;
-                walletReport[index] = `W${index + 1}: 🔴 Format`;
-                return { success: false, index };
+                walletErrors[index] = `Malformed TX buffer: ${e.message}`; walletReport[index] = `W${index + 1}: 🔴 Format`; return { success: false, index };
             }
             swapTx.sign([w]);
 
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, dynamicFeeBase, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash);
-            if (!tipTx) { 
-                walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; 
-                return { success: false, index }; 
-            }
+            if (!tipTx) { walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
 
             let txSig = bs58.encode(swapTx.signatures[0]);
             
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, slippage <= 25.0);
-            if (!bundleOk) { 
-                walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; 
-                return { success: false, index }; 
-            }
+            if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
 
-            const confirmed = await pollSignatureConfirmation(txSig);
-            if (confirmed) {
-                walletReport[index] = `W${index + 1}: 🚀 Sent`;
+            // 🟢 TCA APPLIED: Execute exit relies on verified on-chain execution output
+            const expectedOutput = apiRes.estimatedOutput || 0;
+            const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, decimals, false);
+            
+            if (tcaReport.confirmed) {
+                walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
                 
                 (async () => {
-                    let actualSolReceived = dynamicFeeBase;
-                    try {
-                        const parsedTx = await connection.getParsedTransaction(txSig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
-                        if (parsedTx?.meta && parsedTx.meta.preBalances[0] !== undefined && parsedTx.meta.postBalances[0] !== undefined) {
-                            actualSolReceived = (Number(parsedTx.meta.postBalances[0]) - Number(parsedTx.meta.preBalances[0])) / LAMPORTS_PER_SOL;
-                        }
-                    } catch (e) {}
-
+                    let actualSolReceived = tcaReport.executedPriceSol > 0 ? tcaReport.executedPriceSol : dynamicFeeBase;
+                    
                     const feeRate = await getPlatformFeeRate(user.telegramId);
                     const feeCharged = actualSolReceived * feeRate;
-                    
                     const feeChargedLamports = BigInt(Math.round((actualSolReceived * 1_000_000_000) * feeRate));
                     let affiliateCutLamports = 0n;
                     let guildOwnerCutLamports = 0n;
@@ -749,13 +820,9 @@ export async function executeExit(
                         }
                     } catch (_) {}
 
-                    const affiliateCut = Number(affiliateCutLamports) / 1_000_000_000;
-
                     let volumeToRecord = actualSolReceived; 
                     try {
-                        const allBuys = await prisma.trade.findMany({ 
-                            where: { userId: user.id, tokenAddress: targetCA, isBuy: true, status: 'CONFIRMED' } 
-                        });
+                        const allBuys = await prisma.trade.findMany({ where: { userId: user.id, tokenAddress: targetCA, isBuy: true, status: 'CONFIRMED' } });
                         if (allBuys.length > 0) {
                             const totalInvested = allBuys.reduce((sum, t) => sum + t.amountInSol, 0);
                             volumeToRecord = totalInvested * (sellPercentage / 100);
@@ -774,10 +841,14 @@ export async function executeExit(
                     await prisma.trade.create({
                         data: {
                             userId: user.id, tokenAddress: targetCA, isBuy: false, amountInSol: volumeToRecord,
-                            feeChargedSol: feeCharged, affiliateCutSol: affiliateCut, loyaltyRebateSol: 0,
+                            feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
                             txSignature: txSig, status: 'CONFIRMED', profitPercent: parseFloat(profitPercent.toFixed(2)),
-                            realizedPnlSol: realizedPnlSol, strategy: strategy
-                        }
+                            realizedPnlSol: realizedPnlSol, strategy: strategy,
+                            // 🟢 TCA LOGGING
+                            expectedPriceUsd: tcaReport.expectedPriceSol,
+                            executedPriceUsd: tcaReport.executedPriceSol,
+                            slippagePercent: tcaReport.slippagePercent
+                        } as any
                     }).catch(() => {});
 
                     fireWebhook(user.telegramId, 'trade_sell', { tokenAddress: targetCA, percentage: sellPercentage, realizedPnlSol, profitPercent, signature: txSig, strategy }).catch(()=>{});
@@ -792,9 +863,7 @@ export async function executeExit(
                             form.append('chat_id', telegramId); form.append('photo', imageBuffer, { filename: 'pnl.png', contentType: 'image/png' }); form.append('caption', captionHtml); form.append('parse_mode', 'HTML');
                             await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, { headers: form.getHeaders(), timeout: 5000 });
                         } catch (e) {
-                            try {
-                                await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, { chat_id: telegramId, text: captionHtml, parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-                            } catch (_) {}
+                            try { await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, { chat_id: telegramId, text: captionHtml, parse_mode: 'HTML', link_preview_options: { is_disabled: true } }); } catch (_) {}
                         }
                     }
                 })();
@@ -817,11 +886,7 @@ export async function executeExit(
         const breakdown = walletReport.filter(r => !r.includes("Empty")).join(" | ");
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10);
         
-        return { 
-            success: true, 
-            signature: (successful[0] as any).value.signature, 
-            message: `🟢 Exit Submitted & Confirmed (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}` 
-        };
+        return { success: true, signature: (successful[0] as any).value.signature, message: `🟢 Exit Submitted & Confirmed (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}` };
     } catch (error: any) { return { success: false, message: `🔴 Error: ${error.message}` }; }
 }
 
@@ -852,22 +917,17 @@ export interface PreSignedExitPayload {
     tipBase64: string;
 }
 
-export async function generatePreSignedExitTxMulti(
-    telegramId: string, targetCA: string
-): Promise<PreSignedExitPayload[]> {
+export async function generatePreSignedExitTxMulti(telegramId: string, targetCA: string): Promise<PreSignedExitPayload[]> {
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return [];
 
-        const wallets: Array<{ pub: string; pk: string; index: number }> = [
-            { pub: user.vaultAddress, pk: user.turnkeySubOrgId, index: 0 }
-        ];
+        const wallets: Array<{ pub: string; pk: string; index: number }> = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId, index: 0 }];
         if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2, index: 1 });
         if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3, index: 2 });
         if (user.activeWallets >= 4 && user.vault4 && user.pk4) wallets.push({ pub: user.vault4, pk: user.pk4, index: 3 });
         if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5, index: 4 });
 
-        const slippage = 100.0;
         const tokenMint = safePublicKey(targetCA);
         if (!tokenMint) return [];
         const latestBlockhash = await getLatestBlockhashWithCache();
@@ -881,11 +941,15 @@ export async function generatePreSignedExitTxMulti(
                 const rawBalance = BigInt(parsedAccounts.value[0].account.data.parsed.info.tokenAmount.amount);
                 if (rawBalance === 0n) return null;
 
-                const apiRes = await fetchApiTransaction('sell', targetCA, w.pub, 0, 0, rawBalance.toString(), 100, slippage, 'TURBO', 0.005, w.pk);
+                // 🟢 VOLATILITY ADAPTIVE SLIPPAGE ON PRESIGNED INSTANT EXITS
+                const baseSlip = user.slippagePercent || 20.0;
+                const dynamicSlip = await getVolatilityAdjustedSlippage(targetCA, baseSlip);
+
+                const apiRes = await fetchApiTransaction('sell', targetCA, w.pub, 0, 0, rawBalance.toString(), 100, dynamicSlip, 'TURBO', 0.005, w.pk);
                 if (!apiRes.buffer) return null;
 
                 const keypair = getCachedKeypair(w.pub, w.pk);
-                if (!keypair) return null; // 🟢 FIX: Ensure keypair exists
+                if (!keypair) return null; 
 
                 const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
                 swapTx.sign([keypair]);
@@ -899,15 +963,11 @@ export async function generatePreSignedExitTxMulti(
                     swapBase64: Buffer.from(swapTx.serialize()).toString('base64'),
                     tipBase64: Buffer.from(tipTx.serialize()).toString('base64')
                 };
-            } catch (_) {
-                return null;
-            }
+            } catch (_) { return null; }
         }));
 
         return results.filter((r): r is PreSignedExitPayload => r !== null);
-    } catch (e) {
-        return [];
-    }
+    } catch (e) { return []; }
 }
 
 export async function generatePreSignedExitTx(telegramId: string, targetCA: string): Promise<{ swapBase64: string, tipBase64: string } | null> {
