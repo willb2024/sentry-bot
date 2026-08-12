@@ -4571,35 +4571,35 @@ async function deleteKeysPattern(pattern: string) {
 
 
 // =========================================================
-// ⚡ TEXT INTERCEPTOR & GLOBAL CANCEL
+// ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
 // =========================================================
 bot.on("text", async (ctx, next) => {
     if (!ctx.message || !('text' in ctx.message)) return next();
     const text = ctx.message.text.trim();
     const telegramId = ctx.from?.id?.toString();
-    if (!telegramId) return next();
+    if (!telegramId) return next(); 
 
-    // 1. GLOBAL CANCEL HANDLER & CHUNKED DELETE (Fix 38)
+    // 1. GLOBAL CANCEL HANDLER & CHUNKED DELETE
     if (text.toLowerCase() === '/cancel' || text.toLowerCase() === 'cancel') {
         const keysToClear = [
-            `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`,
+            `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`, 
             `state:limit:${telegramId}`, `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`,
-            `state:enter_ref:${telegramId}`, `state:edit_slippage:${telegramId}`, `state:edit_custom_speed:${telegramId}`,
+            `state:enter_ref:${telegramId}`, `state:edit_slippage:${telegramId}`, `state:edit_custom_speed:${telegramId}`, 
             `state:set_pin:${telegramId}`, `state:autosnipe_amt:${telegramId}`, `state:autosnipe_sl:${telegramId}`,
-            `state:autosnipe_tp:${telegramId}`, `state:autosnipe_mc:${telegramId}`, `state:autosnipe_budget:${telegramId}`,
+            `state:autosnipe_tp:${telegramId}`, `state:autosnipe_mc:${telegramId}`, `state:autosnipe_budget:${telegramId}`, 
             `state:autosnipe_dev:${telegramId}`, `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
-            `state:edit_caller_score:${telegramId}`, `state:edit_caller_liq:${telegramId}`, `state:edit_caller_vol:${telegramId}`,
-            `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`, `state:guild_tiered_drop:${telegramId}`,
+            `state:edit_caller_score:${telegramId}`, `state:edit_caller_liq:${telegramId}`, `state:edit_caller_vol:${telegramId}`, 
+            `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`, `state:guild_tiered_drop:${telegramId}`, 
             `state:guild_indiv_drop:${telegramId}`, `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`,
-            `vip:awaiting_tx:${telegramId}`, `state:withdraw_pin:${telegramId}`, `state:credits_tx:${telegramId}`,
+            `vip:awaiting_tx:${telegramId}`, `state:withdraw_pin:${telegramId}`, `state:credits_tx:${telegramId}`, 
             `credits:pending:${telegramId}`, `sim:autosnipe:${telegramId}`, `state:guard_ca:${telegramId}`,
             `active_bumper:${telegramId}`, `state:dev_volume:${telegramId}`, `state:dev_nuke:${telegramId}`,
             `token_launch:${telegramId}:step`, `token_launch:${telegramId}:name`, `token_launch:${telegramId}:symbol`,
             `token_launch:${telegramId}:description`, `token_launch:${telegramId}:imageUrl`, `token_launch:${telegramId}:vanity`,
             `token_launch:${telegramId}:devbuy`, `token_launch:${telegramId}:wallets`, `token_launch:${telegramId}:guard`
         ];
-
-        // 🟢 FIX: Chunk array to avoid Redis max-arguments exception
+        
+        // 🟢 FIX 38: Chunk array to avoid Redis max-arguments exception on highly active accounts
         for (let i = 0; i < keysToClear.length; i += 100) {
             await redis.del(...keysToClear.slice(i, i + 100));
         }
@@ -4609,23 +4609,23 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
-    // 2. SET PIN HANDLER (Fix 11: Hash PIN)
+    // 2. SET PIN HANDLER
     const isSettingPin = await redis.get(`state:set_pin:${telegramId}`);
     if (isSettingPin) {
         await redis.del(`state:set_pin:${telegramId}`);
         if (!/^\d{4,6}$/.test(text)) {
             return ctx.replyWithHTML(`🔴 <b>Invalid format.</b> PIN must be 4 to 6 numbers. Setup aborted.`);
         }
-
-        // 🟢 FIX: Hash the PIN before saving to database
+        
+        // 🟢 FIX 11: Hash the PIN before saving to database to prevent plaintext exposure
         const hashed = hashPin(text);
         await prisma.user.update({ where: { telegramId }, data: { withdrawalPin: hashed } });
-
+        
         await ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour vault is now secured. You will need to enter this PIN for any future withdrawals.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
         return;
     }
 
-    // 3. WITHDRAWAL PIN VERIFICATION (Fix 11: Verify Hashed PIN)
+    // 3. WITHDRAWAL PIN VERIFICATION
     const withdrawState = await redis.get(`state:withdraw_pin:${telegramId}`);
     if (withdrawState) {
         const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -4634,7 +4634,7 @@ bot.on("text", async (ctx, next) => {
             return ctx.reply("🔴 PIN not set up correctly.");
         }
 
-        // 🟢 FIX: Verify Hashed PIN
+        // 🟢 FIX 11: Safely verify the hashed PIN against the database
         if (!verifyPin(text, user.withdrawalPin)) {
             await redis.del(`state:withdraw_pin:${telegramId}`);
             return ctx.replyWithHTML(`🔴 <b>INVALID PIN</b>\n\nWithdrawal aborted for security.`);
@@ -4642,8 +4642,7 @@ bot.on("text", async (ctx, next) => {
 
         await redis.del(`state:withdraw_pin:${telegramId}`);
         const data = JSON.parse(withdrawState);
-
-        // Execute withdrawal (Ensure executeWithdrawalProcess exists in index.ts scope)
+        
         // @ts-ignore
         await executeWithdrawalProcess(user, data.targetAddress, data.requestedAmount, data.isMax, telegramId, ctx, `lock:withdraw:${telegramId}`);
         return;
@@ -4653,7 +4652,7 @@ bot.on("text", async (ctx, next) => {
     const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
     if (isSimEdit) {
         await redis.del(`state:simedit:${telegramId}`);
-
+        
         const lines = text.split('\n');
         const data: Record<string, string> = {};
         for (const line of lines) {
@@ -4665,24 +4664,28 @@ bot.on("text", async (ctx, next) => {
         try {
             const loader = await ctx.reply("<i>⏳ Forging institutional database records...</i>", { parse_mode: 'HTML' });
 
+            // Parse numeric values
             const wins = parseInt(data['WINS']) || 0;
             const losses = parseInt(data['LOSSES']) || 0;
             const vol = parseFloat(data['VOL']) || 0;
             const balance = parseFloat(data['BALANCE_SOL']) || 0;
-
+            
+            // Handle Rolling Activity (Split "Count | PnL")
             const manual24 = data['MANUAL_24H']?.split('|') || ["0", "0"];
             const auto24 = data['AUTO_24H']?.split('|') || ["0", "0"];
-
+            
+            // Handle Strategy Attribution (Split "Name | PnL")
             const s1 = data['STRAT1']?.split('|') || ["Manual / Direct", "0"];
             const s2 = data['STRAT2']?.split('|') || ["Sniper Engine", "0"];
 
+            // 🟢 UPDATE REDIS (Immediate WebApp update)
             await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
             await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
             await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
             await redis.set(`sim:stats:totalTrades:${telegramId}`, (wins + losses).toString());
             await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, (vol * 0.8).toString());
             await redis.set(`sim:volume:${telegramId}`, vol.toString());
-
+            
             const forgedPayload = {
                 sharpe: parseFloat(data['SHARPE']) || 0,
                 drawdown: parseFloat(data['DRAWDOWN']) || 0,
@@ -4700,27 +4703,36 @@ bot.on("text", async (ctx, next) => {
             };
             await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
 
+            // 🟢 UPDATE PRISMA (Permanent Persistence)
             const user = await prisma.user.findUnique({ where: { telegramId } });
             if (user) {
                 await prisma.simState.upsert({
                     where: { userId: user.id },
                     update: {
-                        balance, volume: vol, active: true,
-                        forgedSharpe: forgedPayload.sharpe, forgedDrawdown: forgedPayload.drawdown,
-                        forgedProfit: forgedPayload.profit, forgedRisk: forgedPayload.risk,
-                        forgedManual24hCount: forgedPayload.manual24hCount, forgedManual24hPnl: forgedPayload.manual24hPnl,
-                        forgedAuto24hCount: forgedPayload.auto24hCount, forgedAuto24hPnl: forgedPayload.auto24hPnl,
-                        forgedHourlyChart: forgedPayload.hourlyChart, forgedStrat1Name: forgedPayload.strat1Name,
-                        forgedStrat1Pnl: forgedPayload.strat1Pnl, forgedStrat2Name: forgedPayload.strat2Name,
+                        balance,
+                        volume: vol,
+                        active: true,
+                        forgedSharpe: forgedPayload.sharpe,
+                        forgedDrawdown: forgedPayload.drawdown,
+                        forgedProfit: forgedPayload.profit,
+                        forgedRisk: forgedPayload.risk,
+                        forgedManual24hCount: forgedPayload.manual24hCount,
+                        forgedManual24hPnl: forgedPayload.manual24hPnl,
+                        forgedAuto24hCount: forgedPayload.auto24hCount,
+                        forgedAuto24hPnl: forgedPayload.auto24hPnl,
+                        forgedHourlyChart: forgedPayload.hourlyChart,
+                        forgedStrat1Name: forgedPayload.strat1Name,
+                        forgedStrat1Pnl: forgedPayload.strat1Pnl,
+                        forgedStrat2Name: forgedPayload.strat2Name,
                         forgedStrat2Pnl: forgedPayload.strat2Pnl
                     },
                     create: { userId: user.id, balance, volume: vol, active: true }
                 });
             }
 
-            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
                 `✅ <b>INSTITUTIONAL FORGE COMPLETE</b>\n\n` +
-                `The WebApp Dashboard has been synchronized with your custom simulation parameters.`,
+                `The WebApp Dashboard has been synchronized with your custom simulation parameters.`, 
                 { parse_mode: 'HTML' }
             );
         } catch (e: any) {
@@ -4729,7 +4741,10 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
+    // Pass through to CA handler or specific command checks
     if (text.startsWith("/")) return next();
+    
+    // ... (Your CA detection logic here)
     return next();
 });
 
