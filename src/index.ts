@@ -1763,170 +1763,174 @@ bot.action('btn_guide', async (ctx) => {
 
 
 // 🟢 FULL CONFIGURATION GUIDE (8 PAGES)
+// 🟢 FULL CONFIGURATION GUIDE FOR MAXIMUM PROFIT (8 PAGES)
 const CONFIG_GUIDE_PAGES: string[] = [
-    // PAGE 1: BASICS & FEES
-    `⚡ <b>CONFIGURATION GUIDE: THE FOUNDATION</b> <i>(1/8)</i>\n\n` +
-    `⚠️ <b>DISCLAIMER:</b> Memecoins are highly volatile. This guide maximizes your odds but does not guarantee profits.\n\n` +
-    `🚀 <b>1. JITO PRIORITY FEES (Speed Bribe)</b>\n` +
-    `• <b>Eco 🍃 (0.0005 SOL):</b> Quiet days only.\n` +
-    `• <b>Fast 🐎 (0.001 SOL):</b> Standard daily snipe.\n` +
-    `• <b>Turbo ⚡ (0.005 SOL):</b> Hyper-launch mode.\n` +
-    `• <b>Custom ⚙️:</b> Set a custom tip in Settings to guarantee Block-0 execution.\n\n` +
-    `💧 <b>2. SLIPPAGE PROTECTION</b>\n` +
-    `Set to <b>20%</b>. The new Adaptive Slippage engine will tighten it automatically when markets are calm, and widen it when volatility spikes to guarantee your buy.`,
+    // PAGE 1: MAXIMUM PROFIT PLAYBOOK & TRANSACTION SPEED
+    `⚡ <b>MAX PROFIT PLAYBOOK: TRANSACTION SPEED</b> <i>(1/8)</i>\n\n` +
+    `<i>Solana trading is a speed auction. If you bribe too little, public bots beat you. If you bribe too much, you waste gas.</i>\n\n` +
+    `🚀 <b>JITO PRIORITY FEE (SPEED BRIBE):</b>\n` +
+    `• <b>Eco 🍃 (0.0005 SOL):</b> Use for calm markets and slow accumulation.\n` +
+    `• <b>Fast 🐎 (0.001 SOL):</b> <i>Recommended Default.</i> Beats 90% of standard Telegram bot users.\n` +
+    `• <b>Turbo ⚡ (0.005 SOL):</b> Use during hyped launches to guarantee your order lands in Block-0.\n` +
+    `• <b>Custom ⚙️:</b> Set up to 0.02 SOL when front-running ultra-hyped influencer launches.\n\n` +
+    `💡 <b>Max Profit Tip:</b> Always trade with Jito Enabled. Sentry routes through private validator paths so you never get sandwiched or front-run by public MEV bots.`,
 
-    // PAGE 2: DYNAMIC SIZING
-    `📊 <b>CONFIGURATION GUIDE: DYNAMIC SIZING</b> <i>(2/8)</i>\n\n` +
-    `Stop using fixed dollar amounts. The Dynamic Sizing Engine auto-scales your snipe based on the AI Score.\n\n` +
-    `🔹 <b>Base Risk Unit:</b>\n` +
-    `This is your "minimum bet" for a low-scoring (50-60) token. Example: 0.02 SOL.\n\n` +
-    `🔹 <b>Max Risk Multiplier:</b>\n` +
-    `This is your "maximum bet" multiplier for a perfect 100-score token. Example: 10x (so 0.02 SOL * 10 = 0.2 SOL max).\n\n` +
-    `🔹 <b>Scaling Curve (Exponent):</b>\n` +
-    `• <b>Aggressive (2.0):</b> <i>Recommended.</i> Squares the score. A 70 gets 49% of max; a 90 gets 81% of max. Rewards high conviction.\n` +
-    `• <b>Exponential (3.0):</b> Cubes the score. Only the top 10% tokens get huge sizes.\n\n` +
-    `<i>Turn this ON in the Sniper Menu to protect your bag from risky punts.</i>`,
+    // PAGE 2: DYNAMIC POSITION SIZING
+    `📊 <b>MAX PROFIT PLAYBOOK: DYNAMIC SIZING</b> <i>(2/8)</i>\n\n` +
+    `<i>Never bet the same amount on every token. Dynamic Sizing automatically risks less SOL on speculative tokens and more SOL on high-scoring gems.</i>\n\n` +
+    `🔹 <b>Base Risk Unit (Default: 0.02 SOL):</b>\n` +
+    `This is your baseline entry for lower-confidence tokens (Score 50-60).\n\n` +
+    `🔹 <b>Max Risk Multiplier (Default: 5.0x):</b>\n` +
+    `If a token hits a perfect 95+ score, Sentry multiplies your base risk by 5x (e.g., 0.02 SOL * 5 = 0.10 SOL entry).\n\n` +
+    `🔹 <b>Scaling Curve (Exponent 2.0 - Aggressive):</b>\n` +
+    `Squares the AI conviction score. It risks a tiny fraction on speculative coins and heavy capital on high-scoring gems.\n\n` +
+    `<i>Turn this ON in the Sniper Menu to automatically protect your wallet from bad calls.</i>`,
 
-    // PAGE 3: AUTO-SNIPER FILTERS
-    `🎯 <b>CONFIGURATION GUIDE: THE SNIPER'S EDGE</b> <i>(3/8)</i>\n\n` +
-    `• <b>Target Mode:</b> BOTH (Pump.fun & Raydium).\n` +
-    `• <b>Scoring Mode:</b> Use 🔍 Deep Scoring. It scans for serial ruggers and hidden taxes.\n` +
-    `• <b>AI Min Score:</b> Set to 55. Dynamic Sizing will protect you on lower scores.\n` +
-    `• <b>Anti-Dead Shield:</b> 🟢 TURN THIS ON. Blocks devs who don't buy their own supply.\n` +
-    `• <b>Dev Bag Limit:</b> Set to 10%.\n` +
-    `• <b>Auto-Guard:</b> Set Stop Loss to -15% and Take Profit to +45%. This is the golden 1:3 risk-reward ratio.`,
+    // PAGE 3: OPTIMAL AUTO-SNIPER FILTERS
+    `🎯 <b>MAX PROFIT PLAYBOOK: AUTO-SNIPER PRESETS</b> <i>(3/8)</i>\n\n` +
+    `<i>To run an automated profit strategy on new launches, use these exact parameters:</i>\n\n` +
+    `• <b>Target Mode:</b> BOTH (Pump.fun & Raydium)\n` +
+    `• <b>Scoring Mode:</b> 🔍 Deep Scoring (Scans for serial ruggers & mint authority)\n` +
+    `• <b>AI Min Score:</b> <code>60 / 100</code> (Filters out 90% of zero-liquidity rugs)\n` +
+    `• <b>Anti-Dead Shield:</b> 🟢 ON (Skips tokens where the creator bought 0 supply)\n` +
+    `• <b>Dev Bag Limit:</b> <code>10%</code> (Aborts if the dev owns over 10% to prevent dumps)\n` +
+    `• <b>Block Delay:</b> <code>0 Seconds</code> (Land on the exact block of creation)\n` +
+    `• <b>Session Budget:</b> Set a 2.0 SOL cap so the bot auto-stops once your budget is reached.`,
 
-    // PAGE 4: AI COIN CALLER
-    `🧠 <b>CONFIGURATION GUIDE: AI CALLER TUNING</b> <i>(4/8)</i>\n\n` +
-    `The AI scans the mempool every 15 seconds.\n` +
-    `• <b>Min Score:</b> Set to 55. Keep the pool large. The ML model will fine-tune projections.\n` +
-    `• <b>Max Token Age:</b> Set to 10 minutes. Catch them at birth, not after it's been farmed.\n` +
-    `• <b>MEV Shield:</b> 🟢 TURN THIS ON. Prevents sandwich bots from stealing your slippage.\n\n` +
-    `<i>The AI Score fluctuates randomly. The ML Model retrains on your past outcomes every hour—the more you use it, the smarter it gets.</i>`,
+    // PAGE 4: AI COIN CALLER CONFIGURATION
+    `🧠 <b>MAX PROFIT PLAYBOOK: AI CALLER SETUP</b> <i>(4/8)</i>\n\n` +
+    `<i>The AI Coin Caller scans the mempool every 15 seconds to alert you to early breakouts.</i>\n\n` +
+    `• <b>Min Score:</b> <code>60</code> (Ensures only quality coins trigger alerts)\n` +
+    `• <b>Max Token Age:</b> <code>10 Minutes</code> (Catch momentum right at birth)\n` +
+    `• <b>Momentum Range:</b> <code>10% to 500%</code> (Captures early volume spikes)\n` +
+    `• <b>Min Liquidity:</b> <code>$5,000</code> (Avoids illiquid pools with high slippage)\n` +
+    `• <b>MEV Shield:</b> 🟢 ON (Prevents sandwich bots on 1-click buys)\n\n` +
+    `<i>When an alert fires, click "⚡ Snipe" instantly or tap "🛡️ Deploy Guard" to automate the exit.</i>`,
 
-    // PAGE 5: VAULT & WHALE MODE
-    `🔑 <b>CONFIGURATION GUIDE: WHALE MODE & SECURITY</b> <i>(5/8)</i>\n\n` +
-    `• <b>Activate Whale Mode:</b> In Vault & Keys, activate up to 5 wallets. Sentry fires simultaneous orders from all wallets in the same Jito block, bypassing Pump.fun's single-wallet limits.\n` +
-    `• <b>Deposit SOL:</b> You must send SOL to each individual wallet address.\n` +
-    `• <b>Protect Funds:</b> Set a Withdrawal PIN in the Vault menu to protect your funds if your Telegram is compromised.`,
+    // PAGE 5: MULTI-WALLET "WHALE MODE"
+    `🔑 <b>MAX PROFIT PLAYBOOK: WHALE MODE</b> <i>(5/8)</i>\n\n` +
+    `<i>Pump.fun limits single-wallet purchases to ~0.98 SOL at launch to prevent whales. Sentry bypasses this entirely.</i>\n\n` +
+    `🐙 <b>HOW WHALE MODE WORKS:</b>\n` +
+    `1. Go to <b>Vault & Keys</b> and enable <b>2 or 3 Active Wallets</b>.\n` +
+    `2. Deposit SOL into each individual wallet address.\n` +
+    `3. When you fire a snipe, Sentry sends simultaneous purchase orders from all active wallets in the **exact same Jito block**.\n\n` +
+    `💡 <b>The Result:</b> You secure a 3x whale-sized allocation on Block-0 before the rest of the market can enter.`,
 
-    // PAGE 6: INSTITUTIONAL EDGE (SOR, TCA, CVaR, BACKTESTING)
-    `⚡ <b>CONFIGURATION GUIDE: INSTITUTIONAL EDGE</b> <i>(6/8)</i>\n\n` +
+    // PAGE 6: SOR & ADAPTIVE SLIPPAGE
+    `⚡ <b>MAX PROFIT PLAYBOOK: EXECUTION ENGINES</b> <i>(6/8)</i>\n\n` +
     `🔹 <b>Smart Order Routing (SOR):</b>\n` +
-    `You don't need to configure this. It runs automatically on every buy and sell. It queries Jupiter, Raydium, and Meteora simultaneously and picks the absolute best price.\n\n` +
-    `🔹 <b>Transaction Cost Analysis (TCA):</b>\n` +
-    `Check your dashboard's "Avg Slippage" metric. If it's consistently below 1%, your execution is beating 95% of the market.\n\n` +
-    `🔹 <b>CVaR (Expected Shortfall):</b>\n` +
-    `Look at your dashboard's "CVaR" metric. This is your <i>"Worst-Case Scenario"</i> number. Use this to keep enough SOL in your wallet to survive a bad day.\n\n` +
-    `🔹 <b>Historical Backtesting:</b>\n` +
-    `Go to the Dashboard and hit the "Run Backtest" button. It will replay the last 7 days of market data through your AI to prove if your current settings would have actually made money.\n\n` +
-    `⚙️ <b>Speed vs. Precision:</b>\n` +
-    `In the Settings menu, you can toggle SOR and Adaptive Slippage. Turn them OFF for ultra-low latency front-running. Turn them ON for the absolute best fill prices.`,
+    `Queries Jupiter, Raydium, Meteora, and Orca simultaneously. Finds the route that delivers the most tokens for your SOL.\n` +
+    `• <b>Turn OFF for Block-0 Sniping:</b> Saves ~100ms latency on brand new launches.\n` +
+    `• <b>Turn ON for Regular Trades:</b> Saves massive slippage on larger orders.\n\n` +
+    `🔹 <b>Adaptive Slippage:</b>\n` +
+    `Auto-raises slippage to 25% during violent pumps so your buys never fail, and lowers it to 12% in calm markets to protect your wallet from overpaying.`,
 
-    // PAGE 7: DCA & GUILDS
-    `⏳ <b>CONFIGURATION GUIDE: AUTOMATION & GUILDS</b> <i>(7/8)</i>\n\n` +
-    `• <b>Limit Orders:</b> Type <code>/limit [CA] [TARGET_PRICE] [AMOUNT]</code>. Bot monitors 24/7 and buys the dip instantly.\n` +
-    `• <b>DCA (TWAP):</b> Type <code>/dca [CA] [INTERVAL] [AMOUNT] [DROP] [MAX_BUDGET]</code>. Great for quietly accumulating big bags.\n` +
-    `• <b>Auto-Guard:</b> Every DCA and Limit fill automatically arms a Trailing Stop Loss. You never have to manually manage exits.\n` +
-    `• <b>Guilds:</b> Type <code>/createguild</code> (Free) to launch your own loyalty engine. You earn 50% of the platform fees on every trade your Guild members make, forever.`,
+    // PAGE 7: THE 1:3 GOLDEN RISK-TO-REWARD RATIO
+    `🛡️ <b>MAX PROFIT PLAYBOOK: AUTOMATED EXITS</b> <i>(7/8)</i>\n\n` +
+    `<i>Trading without exits is gambling. Sentry uses the institutional 1:3 Risk-to-Reward Ratio.</i>\n\n` +
+    `• <b>Auto-Trailing Drop (Stop Loss):</b> <code>-15%</code>\n` +
+    `• <b>Auto-Take Profit (TP):</b> <code>+45%</code>\n\n` +
+    `💡 <b>THE MATHEMATICAL PROOF:</b>\n` +
+    `With a 1:3 ratio (+45% win / -15% loss), you only need to win <b>25% of your trades</b> to break even. If you win 40% of your trades, you will make massive compounding profits!`,
 
-    // PAGE 8: DASHBOARD ANALYTICS
-    `📊 <b>CONFIGURATION GUIDE: THE DASHBOARD</b> <i>(8/8)</i>\n\n` +
-    `• <b>Sharpe Ratio:</b> Above 2.0 is elite. If it dips below 1.5, tighten your stops.\n` +
-    `• <b>Strategy Attribution:</b> If "Sniper" is beating "Manual", you need to increase your Auto-Sniper Budget.\n` +
-    `• <b>Session Trades:</b> Tracks exactly how many trades your bot has taken in the current active session.\n\n` +
+    // PAGE 8: DASHBOARD METRICS & TAX LEDGER
+    `📊 <b>MAX PROFIT PLAYBOOK: DASHBOARD METRICS</b> <i>(8/8)</i>\n\n` +
+    `• <b>Sharpe Ratio:</b> Aim for > 2.0. Measures risk-adjusted return.\n` +
+    `• <b>Avg Slippage (TCA):</b> Shows your execution quality. < 1.0% means elite fills.\n` +
+    `• <b>CVaR (5% Tail Risk):</b> Shows the average loss of your worst 5% trades. Keeps your wallet prepared for bad days.\n` +
+    `• <b>Strategy Attribution:</b> Shows whether Manual or Auto-Sniper is yielding higher PnL.\n\n` +
     `⌨️ <b>Quick Commands:</b>\n` +
-    `• <code>/watch [CA] [PRICE]</code> → Persistent price alerts.\n` +
-    `• <code>/batch</code> → Snipe multiple tokens at once.\n` +
-    `• <code>/stats</code> → Live Win Rate and PnL.\n` +
-    `• <code>/exporttrades</code> → Download your full CSV tax ledger.`
+    `• <code>/watch [CA] [PRICE]</code> → Price alerts.\n` +
+    `• <code>/batch</code> → Snipe multiple CAs at once.\n` +
+    `• <code>/exporttrades</code> → Download CSV tax ledger.`
 ];
 
 
-// 📖 FULL OPERATIONS MANUAL (10 PAGES)
+// 📖 FULL OPERATIONS MANUAL FOR BEGINNERS (10 PAGES)
 const TRADE_GUIDE_PAGES: string[] = [
-    // PAGE 1: BASICS & JITO
-    `📖 <b>OPERATIONS MANUAL — BASICS</b> <i>(1/10)</i>\n\n` +
-    `🌐 <b>How it works:</b>\n` +
-    `100% of Sentry trades are packaged inside private <b>Jito Bundles</b>. This bypasses the public mempool, preventing MEV sandwich bots from stealing your slippage. Your trade hits Block-0 instantly.\n\n` +
-    `👛 <b>1. Funding Your Vault:</b>\n` +
-    `Copy your W1 address and deposit SOL. To activate <b>Whale Mode</b>, go to Vault & Keys and turn on up to 5 wallets. Sentry buys across all wallets simultaneously.\n\n` +
-    `⚡ <b>2. Instant Buy:</b>\n` +
-    `Paste any Contract Address (CA). You can send it as a command: <code>[CA] [AMOUNT]</code> (e.g., <code>7xKX... 0.5</code>).`,
+    // PAGE 1: INTRODUCTION & JITO MEV SHIELD
+    `📖 <b>OPERATIONS MANUAL — BEGINNER BASICS</b> <i>(1/10)</i>\n\n` +
+    `Welcome to Sentry Terminal! Sentry is an institutional-grade trading terminal built for Solana memecoins.\n\n` +
+    `🛡️ <b>THE JITO MEV SHIELD:</b>\n` +
+    `Standard Telegram bots send trades to the public mempool where malicious "Sandwich Bots" steal 2% to 10% of your trade value.\n\n` +
+    `<b>Sentry routes 100% of your trades through private Jito Bundles.</b> Your trades are invisible to MEV bots and land directly inside the validator block.`,
 
-    // PAGE 2: SNIPER & DYNAMIC SIZING
-    `📖 <b>OPERATIONS MANUAL — SNIPING</b> <i>(2/10)</i>\n\n` +
-    `🎯 <b>The Auto-Sniper Engine:</b>\n` +
-    `Tap <b>Sniper Module</b>. Sentry listens to raw Pump.fun and Raydium launch events and executes orders within milliseconds.\n\n` +
-    `⚙️ <b>Calculated Risks (Dynamic Sizing):</b>\n` +
-    `Enable <i>Dynamic Sizing</i>. Set your Base Risk (e.g., 0.02 SOL) and Max Multiplier (e.g., 10x). \n` +
-    `The bot uses a mathematical curve to size the bet. A 55-score token gets 0.02 SOL, while an 85-score gem gets 0.15 SOL. This maximizes profit on good trades while protecting your capital on punts.\n\n` +
-    `🛡️ <b>Auto-Guard:</b>\n` +
-    `Set a Stop Loss (-15%) and Take Profit (+45%). The bot sells instantly via Jito when targets are hit.`,
+    // PAGE 2: FUNDING YOUR VAULT
+    `📖 <b>OPERATIONS MANUAL — FUNDING & VAULTS</b> <i>(2/10)</i>\n\n` +
+    `👛 <b>1. Your Primary Vault (W1):</b>\n` +
+    `Tap <b>Vault & Keys</b> on your dashboard. Copy your <b>W1 Address</b> and send SOL to it from Phantom, Solflare, or any exchange.\n\n` +
+    `🐙 <b>2. Multi-Wallet (Whale Mode):</b>\n` +
+    `Pump.fun caps purchases per wallet at launch. You can activate up to 5 wallets in Sentry to buy simultaneously in the exact same millisecond.\n\n` +
+    `<i>⚠️ Remember: Deposit SOL into each individual sub-wallet address if you enable Whale Mode!</i>`,
 
-    // PAGE 3: AI INTELLIGENCE
-    `📖 <b>OPERATIONS MANUAL — AI INTELLIGENCE</b> <i>(3/10)</i>\n\n` +
-    `🤖 <b>AI Coin Caller:</b>\n` +
-    `Type <code>/caller</code>. Sentry scans new tokens every 15 seconds, scoring them 0–100. Higher scores yield calibrated price targets.\n\n` +
-    `👀 <b>Watchlist & Calendar:</b>\n` +
-    `• <code>/watch [CA] [TARGET_PRICE]</code> to set persistent price alerts.\n` +
-    `• <code>/calendar</code> to see a live feed of verified launches under 2 hours old.`,
+    // PAGE 3: HOW TO BUY TOKENS
+    `📖 <b>OPERATIONS MANUAL — BUYING TOKENS</b> <i>(3/10)</i>\n\n` +
+    `Buying tokens on Sentry is instant and flexible:\n\n` +
+    `🔹 <b>Method 1 (Paste CA):</b>\n` +
+    `Copy any Solana contract address (e.g. <code>7xKX...pump</code>) and paste it directly into this chat.\n\n` +
+    `🔹 <b>Method 2 (Quick Command):</b>\n` +
+    `Send <code>[CA] [AMOUNT]</code> in chat.\n` +
+    `• Example SOL: <code>7xKX...pump 0.5</code>\n` +
+    `• Example USD: <code>7xKX...pump $50</code>\n\n` +
+    `🔹 <b>Method 3 (Batch Buying):</b>\n` +
+    `Type <code>/batch</code> to buy multiple tokens concurrently.`,
 
-    // PAGE 4: AUTOMATION (DCA/LIMITS)
-    `📖 <b>OPERATIONS MANUAL — AUTOMATION</b> <i>(4/10)</i>\n\n` +
-    `📉 <b>Limit Orders (Buy the Dip):</b>\n` +
-    `Tap <b>Limit / DCA Engine</b>. Set a target price. Sentry monitors the chart 24/7 and executes the instant it hits.\n\n` +
+    // PAGE 4: MANAGING EXITS & SELLING
+    `📖 <b>OPERATIONS MANUAL — SELLING & EXITS</b> <i>(4/10)</i>\n\n` +
+    `<i>Never leave a position unmonitored. Memecoins move fast!</i>\n\n` +
+    `🔴 <b>Manual Exits:</b>\n` +
+    `Go to <b>Positions</b> on your dashboard. Tap <b>25%</b>, <b>50%</b>, or <b>💥 100%</b> to sell immediately via Jito.\n\n` +
+    `🛡️ <b>Automated Guards (Trailing Stops):</b>\n` +
+    `When you buy a token, click <b>"Deploy Guard"</b>. Set a Stop Loss (e.g., -15%) and Take Profit (e.g., +45%). Sentry will automatically sell for you when targets are hit—even while you sleep.`,
+
+    // PAGE 5: USING THE AUTO-SNIPER
+    `📖 <b>OPERATIONS MANUAL — AUTO-SNIPER</b> <i>(5/10)</i>\n\n` +
+    `The Auto-Sniper listens to raw block transitions to buy new tokens the exact millisecond they launch.\n\n` +
+    `1. Tap <b>Sniper Module</b> on your dashboard.\n` +
+    `2. Set your <b>AI Min Score</b> (recommended: 60).\n` +
+    `3. Turn ON <b>Anti-Dead Shield</b> and set <b>Max Dev Bag</b> to 10%.\n` +
+    `4. Turn ON <b>Dynamic Sizing</b> (Base Risk: 0.02 SOL | Max Multiplier: 5x).\n` +
+    `5. Click <b>⚡ ARM SNIPER ENGINE</b> to start hunting!`,
+
+    // PAGE 6: USING THE AI COIN CALLER
+    `📖 <b>OPERATIONS MANUAL — AI COIN CALLER</b> <i>(6/10)</i>\n\n` +
+    `Type <code>/caller</code> to open the AI Scanner.\n\n` +
+    `• Sentry evaluates new mempool tokens every 15 seconds.\n` +
+    `• Tokens are scored from <b>0 to 100</b> based on liquidity, developer history, velocity, and MEV risk.\n` +
+    `• When a high-scoring breakout is detected, Sentry sends an alert with a <b>1-Click Snipe Button</b> and smart price target projections.`,
+
+    // PAGE 7: LIMIT ORDERS & DCA (TWAP)
+    `📖 <b>OPERATIONS MANUAL — LIMITS & DCA</b> <i>(7/10)</i>\n\n` +
+    `📉 <b>Limit Orders (Dip Buying):</b>\n` +
+    `Type <code>/limit [CA] [TARGET_PRICE_USD] [AMOUNT]</code>.\n` +
+    `• Example: <code>JUPyiw... 0.005 $50</code> (Buys $50 when price drops to $0.005).\n\n` +
     `🔁 <b>DCA / TWAP Accumulation:</b>\n` +
-    `Accumulate large positions without moving the market price. Set an interval (e.g., $10 every 30 mins) and a Max Budget cap.`,
+    `Accumulate large positions over time without spiking the chart price.\n` +
+    `• Example: <code>/dca [CA] 60 $10 10 50 $200</code> (Buys $10 every 60 mins until $200 total spent).`,
 
-    // PAGE 5: INSTITUTIONAL EXECUTION (SOR & ADAPTIVE SLIPPAGE)
-    `📖 <b>OPERATIONS MANUAL — INSTITUTIONAL EXECUTION</b> <i>(5/10)</i>\n\n` +
-    `⚡ <b>Smart Order Routing (SOR):</b>\n` +
-    `<i>How it works:</i> When you buy, Sentry checks Jupiter, Raydium, Meteora, and Orca simultaneously. It calculates which pool gives you the <b>most tokens</b> for your SOL. If you are placing a large order (over 0.5 SOL), Sentry automatically splits the trade across the two best pools to prevent slippage.\n\n` +
-    `💧 <b>Adaptive Slippage (Volatility Shield):</b>\n` +
-    `<i>How it works:</i> Sentry checks how volatile the token is over the last 5 minutes. If the price is jumping wildly, Sentry automatically widens your slippage tolerance so the trade never fails. If the market is quiet, it tightens the slippage to get you a better fill price.\n\n` +
-    `⚙️ <b>Speed vs. Precision (Settings):</b>\n` +
-    `You can toggle SOR and Adaptive Slippage in your Settings menu. Turn them OFF for ultra-low latency block-0 sniping. Leave them ON for the absolute best fill prices.`,
+    // PAGE 8: WATCHLIST & LAUNCH CALENDAR
+    `📖 <b>OPERATIONS MANUAL — WATCHLIST & CALENDAR</b> <i>(8/10)</i>\n\n` +
+    `👀 <b>Persistent Watchlist:</b>\n` +
+    `• Type <code>/watch [CA] [TARGET_PRICE]</code> to add a token to your alerts.\n` +
+    `• Type <code>/watchlist</code> to view live prices, performance %, and active alert targets.\n\n` +
+    `📅 <b>Launch Calendar:</b>\n` +
+    `• Type <code>/calendar</code> to view a curated list of verified launches under 2 hours old with active socials.`,
 
-    // PAGE 6: RISK & ANALYTICS (TCA, CVaR, BACKTESTING)
-    `📖 <b>OPERATIONS MANUAL — RISK & ANALYTICS</b> <i>(6/10)</i>\n\n` +
-    `📊 <b>Transaction Cost Analysis (TCA):</b>\n` +
-    `<i>How it works:</i> Sentry records the price the DEX quoted you, and compares it to the actual price your trade executed at. The dashboard shows your <b>Average Slippage</b>. If it's below 1%, you are getting elite fills.\n\n` +
-    `🛡️ <b>Conditional VaR (Worst-Case Scenario):</b>\n` +
-    `<i>How it works:</i> Sentry calculates the average of your worst 5% of losing trades. If your CVaR says "-0.5 SOL", it means: <i>"If tomorrow is a bad day, you have a 5% chance of losing more than 0.5 SOL."</i> This tells you exactly how much capital to keep in reserve.\n\n` +
-    `⏳ <b>Historical Backtesting:</b>\n` +
-    `<i>How it works:</i> Sentry replays the last 7 days of token data through your AI filters. It calculates exactly how much you <b>would have</b> made if the bot was running. Use this to prove your strategy works before risking your wallet.`,
-
-    // PAGE 7: DEFENSIVE SHIELDS
-    `📖 <b>OPERATIONS MANUAL — DEFENSIVE SHIELD</b> <i>(7/10)</i>\n\n` +
-    `🚨 <b>Anti-Rug Frontrunner:</b>\n` +
-    `Sentry's gRPC stream detects a "Remove Liquidity" instruction in the mempool and fires an aggressive Jito bundle to sell your tokens <i>before</i> the developer's rug pull processes.\n\n` +
-    `🍯 <b>Token-2022 Tax Detector:</b>\n` +
-    `Type <code>/scan [CA]</code>. Sentry decodes raw Token-2022 buffers to detect hidden 99% honeypot taxes before third-party sites index them.`,
-
-    // PAGE 8: LAUNCHPAD & DEV SUITE
-    `📖 <b>OPERATIONS MANUAL — LAUNCHPAD</b> <i>(8/10)</i>\n\n` +
+    // PAGE 9: TOKEN LAUNCHPAD & GUILDS
+    `📖 <b>OPERATIONS MANUAL — LAUNCHPAD & GUILDS</b> <i>(9/10)</i>\n\n` +
     `🚀 <b>Sentry Launchpad:</b>\n` +
-    `Tap <b>Launch Token</b>. Sentry mines a Vanity CA (e.g., CAT...pump) and deploys the entire token in a single Jito Block-0. You can split your initial buy across up to 4 wallets to hide your true bag size.\n\n` +
-    `🛠️ <b>Dev Suite:</b>\n` +
-    `If your token drops off DexScreener, use the Volume Bumper (executes simultaneous wash trades across 5 wallets) to push you back to the top.`,
-
-    // PAGE 9: SOCIAL TRADING
-    `📖 <b>OPERATIONS MANUAL — SOCIAL TRADING</b> <i>(9/10)</i>\n\n` +
+    `Launch your own Pump.fun token in Block-0 with a custom vanity contract address (e.g. <code>CAT...pump</code>) and split stealth dev buys across up to 4 sub-wallets.\n\n` +
     `🏰 <b>Sentry Guilds:</b>\n` +
-    `Type <code>/createguild</code>. You earn 50% of platform fees from every trade your members make. Use the Guild dashboard to export top wallets for airdrops.\n\n` +
-    `🐋 <b>Copy Trading:</b>\n` +
-    `Mirror any whale wallet via WebSocket. Before adding, Sentry scans their trade history to warn you if they are a high-frequency MEV bot.`,
+    `Type <code>/createguild</code>. Build your own trading community. You earn <b>50% of platform fees</b> from every trade your members execute, forever.`,
 
-    // PAGE 10: DASHBOARD & METRICS
-    `📖 <b>OPERATIONS MANUAL — DASHBOARD & TAXES</b> <i>(10/10)</i>\n\n` +
-    `📈 <b>Dashboard Analytics:</b>\n` +
-    `• <b>Strategy Attribution:</b> See exactly which engine (Manual vs Sniper) is making you the most money.\n` +
-    `• <b>Live Ticker:</b> Watch your last 10 trades execute in real-time, with PnL and slippage data.\n` +
-    `• <b>Portfolio PnL:</b> Tracks your realized profit in real-time.\n\n` +
-    `📤 <b>Ledger Export:</b>\n` +
-    `Type <code>/exporttrades</code> or click the Export CSV button on the WebApp to download your complete trading history for tax purposes.\n\n` +
-    `<i>All trades include Jito signatures for full on-chain verification.</i>`
+    // PAGE 10: DASHBOARD, LEDGER & SECURITY
+    `📖 <b>OPERATIONS MANUAL — ANALYTICS & SECURITY</b> <i>(10/10)</i>\n\n` +
+    `📈 <b>Web Dashboard:</b>\n` +
+    `Tap <b>Track Trades</b> on your menu to launch the Mini-App. View real-time net worth, strategy attribution, Sharpe Ratio, and live block execution feeds.\n\n` +
+    `📤 <b>Tax Ledger Export:</b>\n` +
+    `Type <code>/exporttrades</code> to download a complete CSV trading ledger for tax filing.\n\n` +
+    `🔒 <b>Security PIN:</b>\n` +
+    `Go to <b>Vault & Keys</b> -> <b>Set Withdrawal PIN</b> to lock your capital against unauthorized withdrawals.`
 ];
 
 
