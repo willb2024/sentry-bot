@@ -5769,11 +5769,12 @@ app.post('/api/sim-stats', async (req, res) => {
             isActive: true, balance, startingBalance, volume,
             wins: counters.wins, losses: counters.losses,
             totalTrades: counters.totalTrades,
-            totalInvestedSol: counters.totalInvestedSol,
-            totalPnlSol: counters.totalPnlSol,
+            totalInvestedSol: counters.totalInvestedSol, // ✅ Ensure this is included
+            totalPnlSol: counters.totalPnlSol,           // ✅ Ensure this is included
             firstTradeAt, positions, trades: trades.slice(0, 50),
             maxBudget, currentSpend
         });
+        
     } catch (e) {
         res.status(500).json({ error: 'Server Error' });
     }

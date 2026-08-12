@@ -7,7 +7,10 @@ import { computeTokenScore, TokenStats, buildAuditTrailMessage } from './caller.
 import { ensureFirstTradeAnchor } from './engine.service.js';
 import { cachedSolUsdPrice } from './grpc.service.js';
 
+
+
 const activeSimLoops = new Set<string>();
+
 
 export async function getSimCounters(telegramId: string) {
     const wins = parseInt(await redis.get(`sim:stats:wins:${telegramId}`) || '0');
@@ -242,11 +245,11 @@ export async function getStatsForWindow(telegramId: string, mode: 'live' | 'sim'
     return { totalPnl, wins, losses, tradeCount: events.length };
 }
 
-export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number, profitPercent: number = 0, strategy: string = 'SIMULATED') {
+export async function recordSimTrade(telegramId: string, isBuy: boolean, amountInSol: number, profitPercent: number = 0, strategy: string = 'SIMULATED', mint: string = 'simulated') {
     const key = `sim:trades:${telegramId}`;
     const existing = JSON.parse(await redis.get(key) || '[]');
     const realizedPnlSol = isBuy ? 0 : amountInSol * (profitPercent / 100);
-    existing.unshift({ createdAt: new Date().toISOString(), isBuy, amountInSol, profitPercent, realizedPnlSol, strategy, mint: 'simulated' });
+    existing.unshift({ createdAt: new Date().toISOString(), isBuy, amountInSol, profitPercent, realizedPnlSol, strategy, mint: mint });
     const trimmed = existing.slice(0, 10000);
     await redis.set(key, JSON.stringify(trimmed));
 
@@ -342,8 +345,8 @@ export async function simExecuteSnipe(
     });
     await redis.set(posKey, JSON.stringify(existing));
     
-    // 🟢 Strategy explicitly passed down
-    await recordSimTrade(telegramId, true, actualSolSpent, 0, strategy); 
+    // 🟢 FIX: Pass `isBuy: true`, `actualSolSpent`, `0` PnL, and the `strategy`!
+    await recordSimTrade(telegramId, true, actualSolSpent, 0, strategy, tokenAddress); 
     await recordStatsEvent(telegramId, 'sim', 0);
     await saveSimulationState(telegramId);
     return { success: true, signature: generateSimSignature(), message: '🟢 Simulated buy executed.', volumeSpent: actualSolSpent };
@@ -391,7 +394,7 @@ export async function simExecuteExit(
     const realizedPnlSol = netReturnSol - soldSol;
     
     // 🟢 Strategy explicitly passed down
-    await recordSimTrade(telegramId, false, soldSol, pnlPercent, strategy);
+    await recordSimTrade(telegramId, false, soldSol, pnlPercent, strategy, tokenAddress);
     await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
     await saveSimulationState(telegramId);
     return { success: true, signature: generateSimSignature(), message: `🟢 Sold ${percent}% | PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` };
