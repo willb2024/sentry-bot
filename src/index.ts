@@ -6,6 +6,7 @@ import { startDcaEngine } from './services/dca.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice, checkTokenRugRisk } from './services/price.service.js';
 import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
+import cors from 'cors';
 import { prisma } from './lib/prisma.js'; // 🟢 FIX: Use Singleton
 import dotenv from 'dotenv';
 import { redis } from './lib/redis.js';
@@ -62,7 +63,7 @@ if (!process.env.TREASURY_WALLET_ADDRESS) { console.error("🔴 FATAL: TREASURY_
 const bot = new Telegraf(BOT_TOKEN);
 
 
-import cors from 'cors';
+
 
 dotenv.config();
 
@@ -89,6 +90,9 @@ app.use(cors({
     origin: process.env.WEBAPP_URL || '*',
     credentials: true
 }));
+
+dotenv.config();
+console.log("🟢 [1/5] Booting Sentry Terminal Core...");
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('🔴 Unhandled Rejection at:', promise, 'reason:', reason);
