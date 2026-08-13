@@ -5311,89 +5311,166 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
-    // --- 12. SIMULATION FORGE EDITOR ---
-    const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
-    if (isSimEdit) {
-        await redis.del(`state:simedit:${telegramId}`);
-        const lines = text.split('\n').filter(l => l.trim() !== '');
-        const parsedData: Record<string, string> = {};
-        for (const line of lines) {
-            const parts = line.split(':');
-            if (parts.length < 2) continue;
-            const key = parts[0].trim().toUpperCase();
-            const value = parts.slice(1).join(':').trim();
-            parsedData[key] = value;
-        }
+ // 🟢 ENHANCED SIMULATION FORGE EDITOR
+ const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
+ if (isSimEdit) {
+     await redis.del(`state:simedit:${telegramId}`);
+     const lines = text.split('\n').filter(l => l.trim() !== '');
+     const parsedData: Record<string, string> = {};
+     for (const line of lines) {
+         const parts = line.split(':');
+         if (parts.length < 2) continue;
+         const key = parts[0].trim().toUpperCase();
+         const value = parts.slice(1).join(':').trim();
+         parsedData[key] = value;
+     }
 
-        if (!parsedData['BALANCE_SOL'] || !parsedData['WINS'] || !parsedData['LOSSES']) {
-            return ctx.reply("❌ Missing required fields. Must include: BALANCE_SOL, WINS, LOSSES.");
-        }
+     if (!parsedData['BALANCE_SOL'] || !parsedData['WINS'] || !parsedData['LOSSES']) {
+         return ctx.reply("❌ Missing required fields. Must include: BALANCE_SOL, WINS, LOSSES.");
+     }
 
-        const loader = await ctx.reply("<i>⏳ Re-initializing simulation engine...</i>", { parse_mode: 'HTML' });
+     const loader = await ctx.reply("<i>⏳ Generating synthetic trade history...</i>", { parse_mode: 'HTML' });
 
-        try {
-            const wins = parseInt(parsedData['WINS']) || 0;
-            const losses = parseInt(parsedData['LOSSES']) || 0;
-            const balance = parseFloat(parsedData['BALANCE_SOL']) || 0;
-            const volume = parseFloat(parsedData['VOL'] || '0');
-            const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '0');
-            const spend = parseFloat(parsedData['SPEND'] || '0');
+     try {
+         const wins = parseInt(parsedData['WINS']) || 0;
+         const losses = parseInt(parsedData['LOSSES']) || 0;
+         const balanceSol = parseFloat(parsedData['BALANCE_SOL']) || 0;
+         const targetTotalPnlSol = parseFloat(parsedData['TOTAL_PNL_SOL'] || '0');
+         const days = parseInt(parsedData['DAYS']) || 1;
+         const volume = parseFloat(parsedData['VOL'] || '0');
+         const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '0');
+         const spend = parseFloat(parsedData['SPEND'] || '0');
+         const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
-            await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
-            await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
-            await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
-            await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
+         const totalTrades = wins + losses;
+         const avgTradeSize = totalTrades > 0 ? (volume > 0 ? volume / totalTrades : 0.5) : 0.5;
+         const now = Date.now();
+         const oldest = new Date(firstTradeAt).getTime();
 
-            const totalTrades = wins + losses;
-            const avgVolume = totalTrades > 0 ? volume / totalTrades : 0;
-            const now = Date.now();
-            const syntheticTrades = [];
+         // Calculate win/loss PnL targets so net sum matches targetTotalPnlSol
+         let grossWinSol = 0;
+         let grossLossSol = 0;
 
-            // Distribute randomized PnL
-            for (let i = 0; i < wins; i++) {
-                const pnlPercent = 15 + Math.random() * 80;
-                const amt = avgVolume * (0.8 + Math.random() * 0.4);
-                syntheticTrades.push({
-                    createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
-                    isBuy: false, amountInSol: amt, profitPercent: pnlPercent, realizedPnlSol: amt * (pnlPercent / 100), strategy: 'SIMULATED'
-                });
-            }
+         if (targetTotalPnlSol > 0) {
+             grossWinSol = targetTotalPnlSol * 1.5;
+             grossLossSol = grossWinSol - targetTotalPnlSol;
+         } else if (targetTotalPnlSol < 0) {
+             grossLossSol = Math.abs(targetTotalPnlSol) * 1.5;
+             grossWinSol = grossLossSol + targetTotalPnlSol;
+         } else {
+             grossWinSol = 100;
+             grossLossSol = 100;
+         }
 
-            for (let i = 0; i < losses; i++) {
-                const pnlPercent = -(5 + Math.random() * 15);
-                const amt = avgVolume * (0.8 + Math.random() * 0.4);
-                syntheticTrades.push({
-                    createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
-                    isBuy: false, amountInSol: amt, profitPercent: pnlPercent, realizedPnlSol: amt * (pnlPercent / 100), strategy: 'SIMULATED'
-                });
-            }
+         const avgWinPnL = wins > 0 ? grossWinSol / wins : 0;
+         const avgLossPnL = losses > 0 ? grossLossSol / losses : 0;
 
-            syntheticTrades.sort(() => Math.random() - 0.5);
-            await redis.set(`sim:trades:${telegramId}`, JSON.stringify(syntheticTrades.slice(0, 500)));
-            await redis.set(`sim:volume:${telegramId}`, volume.toString());
+         const trades = [];
+         let totalVolumeCalculated = 0;
+         let totalRealizedPnlCalculated = 0;
 
-            await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
-            await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
-            await redis.set(`sim:stats:totalTrades:${telegramId}`, totalTrades.toString());
-            await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toString());
+         // Winning trades
+         for (let i = 0; i < wins; i++) {
+             const tradeSize = avgTradeSize * (0.8 + Math.random() * 0.4);
+             const realizedPnl = avgWinPnL * (0.7 + Math.random() * 0.6);
+             const profitPercent = tradeSize > 0 ? (realizedPnl / tradeSize) * 100 : 50;
 
-            const user = await prisma.user.findUnique({ where: { telegramId } });
-            if (user) {
-                await prisma.simState.upsert({
-                    where: { userId: user.id },
-                    update: { balance, startingBalance: balance, volume, active: true },
-                    create: { userId: user.id, balance, startingBalance: balance, volume, active: true }
-                });
-            }
+             totalVolumeCalculated += tradeSize;
+             totalRealizedPnlCalculated += realizedPnl;
 
-            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
-                `✅ <b>SIMULATION FORGE COMPLETE</b>\n\nBalance: ${balance.toFixed(4)} SOL\nTotal Trades Set: <b>${totalTrades}</b> (${wins} Wins / ${losses} Losses)`, 
-                { parse_mode: 'HTML' }
-            );
-        } catch (e: any) {
-            return ctx.reply(`🔴 Forge Error: ${e.message}`);
-        }
-    }
+             trades.push({
+                 createdAt: new Date(oldest + Math.random() * (now - oldest)).toISOString(),
+                 isBuy: false,
+                 amountInSol: tradeSize,
+                 profitPercent: parseFloat(profitPercent.toFixed(2)),
+                 realizedPnlSol: parseFloat(realizedPnl.toFixed(4)),
+                 strategy: parsedData['STRAT1']?.split('|')[0]?.trim() || 'Manual / Direct',
+                 mint: 'simulated_' + Math.random().toString(36).substring(2, 8)
+             });
+         }
+
+         // Losing trades
+         for (let i = 0; i < losses; i++) {
+             const tradeSize = avgTradeSize * (0.8 + Math.random() * 0.4);
+             const realizedLoss = avgLossPnL * (0.7 + Math.random() * 0.6);
+             const profitPercent = tradeSize > 0 ? -(realizedLoss / tradeSize) * 100 : -15;
+
+             totalVolumeCalculated += tradeSize;
+             totalRealizedPnlCalculated -= realizedLoss;
+
+             trades.push({
+                 createdAt: new Date(oldest + Math.random() * (now - oldest)).toISOString(),
+                 isBuy: false,
+                 amountInSol: tradeSize,
+                 profitPercent: parseFloat(profitPercent.toFixed(2)),
+                 realizedPnlSol: parseFloat((-realizedLoss).toFixed(4)),
+                 strategy: parsedData['STRAT2']?.split('|')[0]?.trim() || 'Sniper Engine',
+                 mint: 'simulated_' + Math.random().toString(36).substring(2, 8)
+             });
+         }
+
+         // Sort and save in Redis
+         trades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+         const trimmed = trades.slice(0, 500);
+         await redis.set(`sim:trades:${telegramId}`, JSON.stringify(trimmed));
+
+         const finalVol = volume > 0 ? volume : totalVolumeCalculated;
+         await redis.set(`sim:volume:${telegramId}`, finalVol.toString());
+         await redis.set(`sim:balance:${telegramId}`, balanceSol.toFixed(4));
+         await redis.set(`sim:starting_balance:${telegramId}`, balanceSol.toFixed(4));
+
+         // Set Redis counters
+         await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
+         await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
+         await redis.set(`sim:stats:totalTrades:${telegramId}`, totalTrades.toString());
+         await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, finalVol.toString());
+         await redis.set(`sim:stats:totalPnlSol:${telegramId}`, totalRealizedPnlCalculated.toString());
+         await redis.set(`sim:first_trade_at:${telegramId}`, firstTradeAt);
+
+         if (maxBudget > 0) await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
+         if (spend > 0) await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
+
+         // Persist state in PostgreSQL
+         const user = await prisma.user.findUnique({ where: { telegramId } });
+         if (user) {
+             await prisma.simState.upsert({
+                 where: { userId: user.id },
+                 update: {
+                     balance: balanceSol,
+                     startingBalance: balanceSol,
+                     volume: finalVol,
+                     active: true
+                 },
+                 create: {
+                     userId: user.id,
+                     balance: balanceSol,
+                     startingBalance: balanceSol,
+                     volume: finalVol,
+                     active: true
+                 }
+             });
+         }
+
+         const solPrice = cachedSolUsdPrice || 160;
+         const netWorthUsd = balanceSol * solPrice;
+         const pnlUsd = totalRealizedPnlCalculated * solPrice;
+         const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : "0.0";
+
+         await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+             `✅ <b>SIMULATION FORGE COMPLETE</b>\n\n` +
+             `• Balance: <b>${balanceSol.toFixed(4)} SOL</b> (~$${netWorthUsd.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})})\n` +
+             `• Realized PnL: <b>${totalRealizedPnlCalculated >= 0 ? '+' : ''}${totalRealizedPnlCalculated.toFixed(4)} SOL</b> (~$${pnlUsd.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})})\n` +
+             `• Win Rate: <b>${winRate}%</b> (${wins}W / ${losses}L)\n` +
+             `• Total Trades: <b>${totalTrades}</b>\n` +
+             `• Trading Days: <b>${days}</b>\n\n` +
+             `<i>Open your WebApp dashboard to see the updated metrics.</i>`,
+             { parse_mode: 'HTML' }
+         );
+     } catch (e: any) {
+         await ctx.reply(`🔴 Forge Error: ${e.message}`);
+     }
+     return;
+ }
 
     // --- 15. CA DETECTION / MANUAL SNIPE FALLBACK ---
     if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
@@ -5929,28 +6006,25 @@ app.get('/g/:guildCode', async (req, res) => {
 
 
 
-
-// 🟢 FIXED SIMEDIT COMMAND
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
-    
     if (!isAdmin(tgId)) {
-        return ctx.replyWithHTML(`🚫 <b>Access Denied.</b>\nYour ID <code>${tgId}</code> is not in the ADMIN_TELEGRAM_IDS list in .env`);
+        return ctx.replyWithHTML(`🚫 <b>Access Denied.</b>\nYour ID <code>${tgId}</code> is not in the ADMIN_TELEGRAM_IDS list.`);
     }
-    
-    await redis.set(`state:simedit:${tgId}`, 'AWAITING', 'EX', 300);
-    
-    const currentBal = await redis.get(`sim:balance:${tgId}`) || '254.1850';
 
+    await redis.set(`state:simedit:${tgId}`, 'AWAITING', 'EX', 300);
+
+    const currentBal = await redis.get(`sim:balance:${tgId}`) || '238.87';
     await ctx.replyWithHTML(
         `🛠️ <b>SIMULATION EDITOR ACTIVE</b>\n\n` +
         `I am now listening. Paste the stats block exactly as formatted below:\n\n` +
         `<code>BALANCE_SOL: ${currentBal}\n` +
-        `WINS: 7182\n` +
-        `LOSSES: 6117\n` +
-        `VOL: 2142.65\n` +
-        `DAYS: 278\n` +
-        `FIRST_TRADE_AT: 2024-01-15T08:30:00Z\n` +
+        `TOTAL_PNL_SOL: 514.56\n` +
+        `WINS: 300\n` +
+        `LOSSES: 100\n` +
+        `VOL: 5000\n` +
+        `DAYS: 78\n` +
+        `FIRST_TRADE_AT: 2026-05-27T08:30:00Z\n` +
         `MAX_BUDGET: 10.0\n` +
         `SPEND: 3.45\n` +
         `SHARPE: 2.84\n` +
@@ -5964,10 +6038,6 @@ bot.command('simedit', async (ctx) => {
         `STRAT2: Sniper Engine | 231.23</code>`
     );
 });
-
-
-// 🟢 FIX 4: Send the isolated Counters and Anchor back to the WebApp
-
 
 
 
