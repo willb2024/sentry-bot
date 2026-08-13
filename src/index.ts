@@ -1993,25 +1993,25 @@ const CONFIG_GUIDE_PAGES: string[] = [
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
     `If you are sniping Block-0 on Pump.fun, turn <b>SOR OFF</b>. This cuts ~120ms of routing delay, getting you the fastest possible fill. If you are buying $500+ of an established token like $BONK on Raydium, turn <b>SOR ON</b> so Sentry splits your order across multiple liquidity pools to save you $15-$30 in price impact.`,
 
-    // PAGE 4: ADAPTIVE SLIPPAGE VS. STATIC SLIPPAGE
+    // PAGE 4: ADAPTIVE SLIPPAGE VS. STATIC SLIPPAGE (FIXED HTML TAGS)
     `⚙️ <b>CONFIG GUIDE: ADAPTIVE SLIPPAGE</b> <i>(4/12)</i>\n\n` +
     `<i>Static slippage leads to failed trades during pumps or overpaying during calm periods.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `📈 <b>HOW ADAPTIVE SLIPPAGE WORKS:</b>\n` +
     `When enabled, Sentry evaluates 5-minute price momentum and pool liquidity before broadcasting:\n` +
-    `• <b>Volatile Pumps (M5 > 25%):</b> Auto-raises slippage tolerance to <b>28% - 35%</b> so your buy or sell never fails.\n` +
-    `• <b>Thin Liquidity (< $15k):</b> Sets minimum slippage to <b>25%</b> to overcome price impact.\n` +
-    `• <b>Calm Markets (M5 < 3%):</b> Auto-lowers slippage to <b>12%</b> to protect your cost basis.\n\n` +
+    `• <b>Volatile Pumps (M5 over 25%):</b> Auto-raises slippage tolerance to <b>28% - 35%</b> so your buy or sell never fails.\n` +
+    `• <b>Thin Liquidity (under $15k):</b> Sets minimum slippage to <b>25%</b> to overcome price impact.\n` +
+    `• <b>Calm Markets (M5 under 3%):</b> Auto-lowers slippage to <b>12%</b> to protect your cost basis.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
     `Keep <b>Adaptive Slippage ON</b>. If a token suddenly pumps +50% in 1 minute, standard 10% slippage will cause your trade to fail. Sentry automatically detects the volatility spike and raises your slippage to 28% so your trade fills instantly, then lowers it back to 12% when the market calms down.`,
 
-    // PAGE 5: AUTO-SNIPER - SCORING & FILTERS
+    // PAGE 5: AUTO-SNIPER - SCORING & FILTERS (FIXED HTML TAGS)
     `⚙️ <b>CONFIG GUIDE: AUTO-SNIPER SCORING</b> <i>(5/12)</i>\n\n` +
     `<i>Configure AI scoring to filter out scam launches automatically.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `🔍 <b>DEEP SCORING VS. FAST SCORING:</b>\n` +
-    `• <b>⚡ Fast Scoring:</b> Evaluates basic token age, volume, and liquidity in < 50ms. High speed, minimal safety check.\n` +
+    `• <b>⚡ Fast Scoring:</b> Evaluates basic token age, volume, and liquidity in under 50ms. High speed, minimal safety check.\n` +
     `• <b>🔍 Deep Scoring (Recommended):</b> Runs full heuristic checks: Rugcheck API summary, top 10 holder concentration, developer launch history, LP lock/burn verification, and simulated tax sellability.\n` +
     `• <b>⭐ Min Score Filter:</b> Set <code>60 - 75</code> for optimal balance between safety and frequency.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
@@ -2059,13 +2059,13 @@ const CONFIG_GUIDE_PAGES: string[] = [
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
     `If you want the most profitable balance between safety and frequency, apply <b>Profile B (High-Conviction Gem Hunter)</b>. It ensures you catch verified high-score tokens across Pump.fun and Raydium while enforcing strict anti-rug protections.`,
 
-    // PAGE 9: AI COIN CALLER - SCANNER TUNING
+    // PAGE 9: AI COIN CALLER - SCANNER TUNING (FIXED HTML TAGS)
     `⚙️ <b>CONFIG GUIDE: AI CALLER SETUP</b> <i>(9/12)</i>\n\n` +
     `<i>The AI Coin Caller scans mempool telemetry every 15 seconds to alert you to early breakout momentum.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `• <b>Min Score (60 - 75):</b> Filters out low-volume duds before sending alerts.\n` +
     `• <b>Max Token Age (10 - 30m):</b> Catches momentum early in the launch lifecycle.\n` +
-    `• <b>Momentum Range (15% to 300%):</b> Captures active breakout volume while avoiding parabolic top-buyers (> 500%).\n` +
+    `• <b>Momentum Range (15% to 300%):</b> Captures active breakout volume while avoiding parabolic top-buyers (over 500%).\n` +
     `• <b>Min Liquidity ($5,000):</b> Ensures adequate pool depth so 1-tap buys fill cleanly.\n` +
     `• <b>MEV Shield (ON):</b> Enforces private Jito bundle execution on all 1-tap snipes.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
@@ -2112,6 +2112,7 @@ const CONFIG_GUIDE_PAGES: string[] = [
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
     `You hold a token with a Trailing Guard active. Suddenly, the developer submits a <code>RemoveLiquidity</code> transaction to pull the pool. Sentry's gRPC stream detects the pull in the mempool and fires a pre-signed Jito bundle that sells 100% of your position *before* the developer's pull lands!`
 ];
+
 
 // =========================================================
 // ⌨️ KEYBOARD BUILDERS & ACTION HANDLERS
