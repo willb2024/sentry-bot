@@ -2039,17 +2039,27 @@ const CONFIG_GUIDE_PAGES: string[] = [
 
     // PAGE 7: AUTO-SNIPER - DYNAMIC SIZING ENGINE
     `⚙️ <b>CONFIG GUIDE: DYNAMIC SIZING MATH</b> <i>(7/12)</i>\n\n` +
-    `<i>Instead of betting the exact same amount on every coin, Dynamic Sizing scales your bet based on how safe the token is.</i>\n\n` +
+    `<i>Dynamic Sizing protects your wallet by betting small on risky coins and scaling up heavily on safe gems.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `• <b>Base Risk Unit (0.02 SOL):</b> Your minimum bet size on decent tokens.\n` +
-    `• <b>Max Risk Multiplier (5.0x):</b> Maximum scaling factor for top-tier gems.\n` +
-    `• <b>Exponent Curves:</b> 1.0 (Linear), 2.0 (Aggressive Square), 3.0 (Exponential Cube).\n\n` +
+    `📐 <b>THE EXACT SYSTEM FORMULA:</b>\n` +
+    `<code>Trade Size = BaseRisk × (Score ÷ 100)^Exponent × MaxMultiplier</code>\n\n` +
+    `Here is exactly how the engine calculates your trade size:\n\n` +
+    `• <b>Base Risk Unit:</b> Your starting bet size. \n` +
+    `  <i>Example: You set it to 0.02 SOL.</i>\n\n` +
+    `• <b>AI Score:</b> The bot rates the coin's safety 0 to 100. \n` +
+    `  <i>Example: A very safe coin scores 90 (which is 0.90).</i>\n\n` +
+    `• <b>Exponent Curve:</b> How aggressively you punish bad scores. An exponent of 2.0 (Square) multiplies the score by itself.\n` +
+    `  <i>Example: 0.90 × 0.90 = 0.81 conviction.</i>\n\n` +
+    `• <b>Max Multiplier:</b> The maximum boost allowed for a perfect coin. \n` +
+    `  <i>Example: You set it to 5.0x.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `Set <b>Base Risk: 0.02 SOL</b>, <b>Max Multiplier: 5.0x</b>, and <b>Exponent: 2.0</b>. \n` +
-    `On an okay token (Score 55), Sentry bets a tiny <code>0.02 SOL</code> ($3). \n` +
-    `On an incredibly safe, high-volume gem (Score 95), Sentry scales up and bets <code>0.09 SOL</code> ($14). This protects you on risky plays while maximizing your wins on great ones.`,
-
+    `Using the exact numbers above on a <b>safe coin (Score 90)</b>: \n` +
+    `<code>0.02 SOL × 0.81 × 5.0 = 0.081 SOL</code>\n\n` +
+    `If the coin was <b>risky (Score 50)</b>, the math drops exponentially: \n` +
+    `<code>0.02 SOL × 0.25 × 5.0 = 0.025 SOL</code>\n\n` +
+    `<b>Result:</b> The system automatically bet ~$14 on the safe gem, but only ~$4 on the risky gamble. You never have to manually adjust sizes again.`,
+    
     // PAGE 8: AUTO-SNIPER - PROFITABILITY PRESETS (UPDATED TO 55)
     `⚙️ <b>CONFIG GUIDE: SNIPER PRESETS</b> <i>(8/12)</i>\n\n` +
     `<i>Recommended configuration profiles for different trading styles:</i>\n\n` +
