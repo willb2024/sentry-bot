@@ -1955,162 +1955,167 @@ const TRADE_GUIDE_PAGES: string[] = [
 // ⚙️ THE PROFITABILITY CONFIGURATION GUIDE (STRATEGY & MATH)
 // =========================================================
 const CONFIG_GUIDE_PAGES: string[] = [
-    // PAGE 1: CONFIGURATION PHILOSOPHY & EV (NO REAL-LIFE EXAMPLE)
-    `⚙️ <b>CONFIG GUIDE: PHILOSOPHY & EV</b> <i>(1/12)</i>\n\n` +
-    `<i>Quantitative trading is about maximizing Expected Value (+EV) over thousands of executions.</i>\n\n` +
+    // PAGE 1: CONFIGURATION PHILOSOPHY & EV (Simplified Math, No Real-Life Example)
+    `⚙️ <b>CONFIG GUIDE: PHILOSOPHY & MATH</b> <i>(1/12)</i>\n\n` +
+    `<i>Quantitative trading is simply about letting math do the heavy lifting for you.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `📐 <b>THE EXPECTED VALUE FORMULA:</b>\n` +
-    `<code>EV = (Win Rate % * Avg Win Size) - (Loss Rate % * Avg Loss Size)</code>\n\n` +
-    `To build a profitable automated setup, you must optimize three variables:\n` +
-    `1. <b>Execution Speed:</b> Land trades ahead of retail crowd spikes.\n` +
-    `2. <b>Filter Rigor:</b> Eliminate 95% of zero-liquidity honeypots before spending gas.\n` +
-    `3. <b>Asymmetric Risk Sizing:</b> Risk small amounts on speculative picks and scale size on high-conviction setups.\n\n` +
-    `<i>This guide details how to configure Sentry's engines to achieve maximum profitability.</i>`,
+    `📐 <b>THE PROFIT FORMULA:</b>\n` +
+    `<code>Profit = (Win Rate x Average Win) - (Loss Rate x Average Loss)</code>\n\n` +
+    `You do <b>not</b> need to win every trade. You just need to ensure your winning trades make more money than your losing trades lose.\n\n` +
+    `To build a profitable automated setup, you must optimize three things:\n` +
+    `1. <b>Execution Speed:</b> Land trades ahead of the retail crowd.\n` +
+    `2. <b>Filter Rigor:</b> Eliminate obvious scams before you spend money on them.\n` +
+    `3. <b>Smart Risk Sizing:</b> Bet small amounts on risky plays, and larger amounts on safe, high-score setups.\n\n` +
+    `<i>This guide shows you exactly how to set up Sentry's engines to achieve this.</i>`,
 
     // PAGE 2: JITO PRIORITY FEES & BRIBE OPTIMIZATION
     `⚙️ <b>CONFIG GUIDE: PRIORITY FEES & BRIBES</b> <i>(2/12)</i>\n\n` +
-    `<i>Solana block space is competitive. Priority fees bribe Jito validators to include your transaction in the current block.</i>\n\n` +
+    `<i>Solana block space is competitive. Priority fees bribe validators to process your transaction first.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `🚀 <b>PRIORITY LEVEL BREAKDOWN:</b>\n` +
     `• <b>Eco 🍃 (0.0005 SOL):</b> Low priority. Best for quiet market days or slow accumulation.\n` +
     `• <b>Fast 🐎 (0.001 SOL):</b> <i>Recommended Default.</i> Outpaces 90% of standard Telegram bot trades.\n` +
     `• <b>Turbo ⚡ (0.005 SOL):</b> High priority. Use during volatile pumps or hyped token launches.\n` +
-    `• <b>Custom ⚙️ (0.01 - 0.02 SOL):</b> Maximum priority bribe. Guarantees Block-0 inclusion during hyper-competitive launches.\n\n` +
+    `• <b>Custom ⚙️ (0.01 - 0.02 SOL):</b> Maximum priority bribe. Guarantees Block-0 inclusion during crazy launches.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `When trading a standard trending coin, select <b>Fast (0.001 SOL)</b>. If you are sniping a hyped influencer token launch on Pump.fun where thousands are buying at once, set <b>Custom Priority Fee to 0.015 SOL</b>. This guarantees your transaction lands in the absolute first validator block ahead of retail traders using standard fees.`,
+    `When trading a normal trending coin, select <b>Fast (0.001 SOL)</b>. If you are sniping a massive influencer token launch on Pump.fun where thousands of people are buying at the exact same time, set <b>Custom Priority Fee to 0.015 SOL</b>. This guarantees you beat the retail crowd.`,
 
     // PAGE 3: EXECUTION ENGINES - SOR VS. LOW LATENCY
     `⚙️ <b>CONFIG GUIDE: SOR VS. LOW LATENCY</b> <i>(3/12)</i>\n\n` +
-    `<i>In your Settings menu, you can toggle Smart Order Routing (SOR) on or off. Here is the mathematical trade-off:</i>\n\n` +
+    `<i>In your Settings menu, you can toggle Smart Order Routing (SOR) on or off.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `⚡ <b>LOW LATENCY MODE (SOR OFF):</b>\n` +
-    `• Bypasses multi-pool quote queries and routes directly via Jupiter/PumpPortal.\n` +
-    `• <b>Saves ~100ms - 150ms of execution latency.</b>\n\n` +
+    `• Routes your trade directly to Jupiter/PumpPortal without checking other places.\n` +
+    `• <b>Saves ~100ms to 150ms of execution time.</b>\n\n` +
     `💰 <b>SMART ORDER ROUTING (SOR ON):</b>\n` +
-    `• Queries Jupiter, Raydium, Meteora DLMM, and Orca in parallel to find the cheapest fill price across pools.\n\n` +
+    `• Checks multiple pools (Raydium, Meteora, Orca) at the same time to find you the absolute cheapest price.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `If you are sniping Block-0 on Pump.fun, turn <b>SOR OFF</b>. This cuts ~120ms of routing delay, getting you the fastest possible fill. If you are buying $500+ of an established token like $BONK on Raydium, turn <b>SOR ON</b> so Sentry splits your order across multiple liquidity pools to save you $15-$30 in price impact.`,
+    `If you are sniping a brand new launch on Pump.fun, turn <b>SOR OFF</b>. You want raw speed to get in first. If you are buying $500+ of an already established token like $WIF, turn <b>SOR ON</b> so Sentry splits your order across different pools to save you $15-$30 in hidden price impacts.`,
 
-    // PAGE 4: ADAPTIVE SLIPPAGE VS. STATIC SLIPPAGE (FIXED HTML TAGS)
+    // PAGE 4: ADAPTIVE SLIPPAGE VS. STATIC SLIPPAGE (SPEED VS SAFETY)
     `⚙️ <b>CONFIG GUIDE: ADAPTIVE SLIPPAGE</b> <i>(4/12)</i>\n\n` +
-    `<i>Static slippage leads to failed trades during pumps or overpaying during calm periods.</i>\n\n` +
+    `<i>Slippage is how much the price is allowed to change while your trade is processing.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `📈 <b>HOW ADAPTIVE SLIPPAGE WORKS:</b>\n` +
-    `When enabled, Sentry evaluates 5-minute price momentum and pool liquidity before broadcasting:\n` +
-    `• <b>Volatile Pumps (M5 over 25%):</b> Auto-raises slippage tolerance to <b>28% - 35%</b> so your buy or sell never fails.\n` +
-    `• <b>Thin Liquidity (under $15k):</b> Sets minimum slippage to <b>25%</b> to overcome price impact.\n` +
-    `• <b>Calm Markets (M5 under 3%):</b> Auto-lowers slippage to <b>12%</b> to protect your cost basis.\n\n` +
+    `⚖️ <b>SPEED VS. SAFETY:</b>\n` +
+    `When Adaptive Slippage is ON, Sentry checks how volatile the market is and auto-adjusts your limits:\n` +
+    `• <b>Crazy Pumps:</b> Auto-raises slippage to 28%-35% so your buy/sell doesn't fail.\n` +
+    `• <b>Calm Markets:</b> Auto-lowers slippage to 12% to protect your money.\n\n` +
+    `However, calculating this takes a tiny bit of processing time.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `Keep <b>Adaptive Slippage ON</b>. If a token suddenly pumps +50% in 1 minute, standard 10% slippage will cause your trade to fail. Sentry automatically detects the volatility spike and raises your slippage to 28% so your trade fills instantly, then lowers it back to 12% when the market calms down.`,
+    `<b>Choose Speed or Safety.</b> \n` +
+    `Turn it <b>OFF</b> if you are sniping a Block-0 launch and need raw, uncompromising speed where every millisecond counts.\n` +
+    `Turn it <b>ON</b> for everyday trading so Sentry protects your trades from randomly failing during sudden price spikes.`,
 
-    // PAGE 5: AUTO-SNIPER - SCORING & FILTERS (FIXED HTML TAGS)
+    // PAGE 5: AUTO-SNIPER - SCORING & FILTERS (UPDATED TO 55)
     `⚙️ <b>CONFIG GUIDE: AUTO-SNIPER SCORING</b> <i>(5/12)</i>\n\n` +
-    `<i>Configure AI scoring to filter out scam launches automatically.</i>\n\n` +
+    `<i>Configure Sentry's AI to automatically filter out scam launches.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `🔍 <b>DEEP SCORING VS. FAST SCORING:</b>\n` +
-    `• <b>⚡ Fast Scoring:</b> Evaluates basic token age, volume, and liquidity in under 50ms. High speed, minimal safety check.\n` +
-    `• <b>🔍 Deep Scoring (Recommended):</b> Runs full heuristic checks: Rugcheck API summary, top 10 holder concentration, developer launch history, LP lock/burn verification, and simulated tax sellability.\n` +
-    `• <b>⭐ Min Score Filter:</b> Set <code>60 - 75</code> for optimal balance between safety and frequency.\n\n` +
+    `• <b>⚡ Fast Scoring:</b> Just checks token age, volume, and liquidity instantly. \n` +
+    `• <b>🔍 Deep Scoring:</b> Does a full background check: top 10 holder concentration, developer launch history, and fake tax traps.\n\n` +
+    `⭐ <b>MINIMUM AI SCORE THRESHOLD:</b>\n` +
+    `• Score under 50: Usually garbage or scams.\n` +
+    `• <b>Score 55+: The Sweet Spot.</b> Catches early momentum without filtering out too many good plays.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `For automated hands-free sniping while you sleep, set <b>Score Mode: Deep Scoring</b> and <b>Min Score: 65</b>. Sentry will run full rug audits (top holder concentration, mint authority, honeypot tax check, developer history) and filter out 95% of scam coins, only sniping clean setups.`,
+    `For hands-free sniping, set <b>Score Mode: Deep Scoring</b> and <b>Min Score: 55</b>. Sentry will run full audits and filter out the obvious scams, letting you snipe clean setups with massive upside potential.`,
 
     // PAGE 6: AUTO-SNIPER - ANTI-RUG & SUPPLY SAFEGUARDS
     `⚙️ <b>CONFIG GUIDE: SUPPLY SAFEGUARDS</b> <i>(6/12)</i>\n\n` +
     `<i>Protect your sniper against developer dumps and fake volume launches.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `👻 <b>Anti-Dead Coin Shield (Pump.fun):</b>\n` +
-    `When ON, Sentry automatically skips tokens where the creator bought 0 supply on creation. Developers who risk 0 SOL almost always abandon the token.\n\n` +
+    `When ON, Sentry skips tokens where the creator bought 0 supply on creation. Developers who risk $0 almost always abandon the token.\n\n` +
     `🐋 <b>Max Dev Bag Limit (%):</b>\n` +
-    `Aborts the snipe if the developer wallet holds more than your set percentage of total supply at launch.\n\n` +
+    `Aborts the snipe if the developer holds more than your set percentage of the total supply at launch.\n\n` +
     `⏱️ <b>Block Delay (Seconds):</b>\n` +
-    `Set to <code>0 Seconds</code> for instant Block-0 execution, or <code>1 - 2 Seconds</code> to let anti-bot tax traps trigger first.\n\n` +
+    `Set to <code>0 Seconds</code> for instant execution, or <code>1 - 2 Seconds</code> to let anti-bot tax traps trigger first.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `Set <b>Anti-Dead Coin Shield: ON</b>, <b>Max Dev Bag: 10%</b>, and <b>Block Delay: 1 Second</b>. If a developer launches a token and buys 30% of the supply for themselves, Sentry rejects the snipe—saving you from getting dumped on 5 seconds later.`,
+    `Set <b>Anti-Dead Coin Shield: ON</b>, <b>Max Dev Bag: 10%</b>, and <b>Block Delay: 1 Second</b>. If a developer launches a token and hoards 30% of the supply to dump on people, Sentry rejects the trade—saving your money.`,
 
     // PAGE 7: AUTO-SNIPER - DYNAMIC SIZING ENGINE
     `⚙️ <b>CONFIG GUIDE: DYNAMIC SIZING MATH</b> <i>(7/12)</i>\n\n` +
-    `<i>Dynamic Sizing replaces fixed buy amounts with a conviction-weighted math curve.</i>\n\n` +
+    `<i>Instead of betting the exact same amount on every coin, Dynamic Sizing scales your bet based on how safe the token is.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `📐 <b>THE SIZING FORMULA:</b>\n` +
-    `<code>Size = BaseRiskUnit * (Score / 100)^Exponent * MaxMultiplier</code>\n\n` +
-    `• <b>Base Risk Unit (0.02 SOL):</b> Your minimum bet size on baseline tokens.\n` +
+    `• <b>Base Risk Unit (0.02 SOL):</b> Your minimum bet size on decent tokens.\n` +
     `• <b>Max Risk Multiplier (5.0x):</b> Maximum scaling factor for top-tier gems.\n` +
-    `• <b>Exponent Curves:</b> 1.0 (Linear), 2.0 (Aggressive Square - Recommended), 3.0 (Exponential Cube).\n\n` +
+    `• <b>Exponent Curves:</b> 1.0 (Linear), 2.0 (Aggressive Square), 3.0 (Exponential Cube).\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `Set <b>Base Risk Unit: 0.02 SOL</b>, <b>Max Multiplier: 5.0x</b>, <b>Exponent: 2.0 (Aggressive)</b>, and <b>Max Session Budget: 1.0 SOL</b>. On a risky 50-score token, Sentry snipes a tiny <code>0.02 SOL</code> ($3). On a high-conviction 95-score gem, Sentry snipes <code>0.09 SOL</code> ($14). Once your total spending hits 1.0 SOL, Sentry pauses automatically to protect your wallet.`,
+    `Set <b>Base Risk: 0.02 SOL</b>, <b>Max Multiplier: 5.0x</b>, and <b>Exponent: 2.0</b>. \n` +
+    `On an okay token (Score 55), Sentry bets a tiny <code>0.02 SOL</code> ($3). \n` +
+    `On an incredibly safe, high-volume gem (Score 95), Sentry scales up and bets <code>0.09 SOL</code> ($14). This protects you on risky plays while maximizing your wins on great ones.`,
 
-    // PAGE 8: AUTO-SNIPER - PROFITABILITY PRESETS
+    // PAGE 8: AUTO-SNIPER - PROFITABILITY PRESETS (UPDATED TO 55)
     `⚙️ <b>CONFIG GUIDE: SNIPER PRESETS</b> <i>(8/12)</i>\n\n` +
-    `<i>Recommended configuration profiles for different risk appetites:</i>\n\n` +
+    `<i>Recommended configuration profiles for different trading styles:</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `🔥 <b>PROFILE A: Aggressive Trench Runner</b>\n` +
     `• Mode: Pump.fun | Score Mode: Fast | Min Score: 50 | Base Risk: 0.05 SOL | Max Multiplier: 3x | Exp: 1.0 | Anti-Dead: OFF | Dev Limit: 20% | Delay: 0s\n\n` +
     `🎯 <b>PROFILE B: High-Conviction Gem Hunter (Recommended)</b>\n` +
-    `• Mode: BOTH | Score Mode: Deep | Min Score: 65 | Base Risk: 0.02 SOL | Max Multiplier: 5x | Exp: 2.0 | Anti-Dead: ON | Dev Limit: 10% | Delay: 1s\n\n` +
+    `• Mode: BOTH | Score Mode: Deep | Min Score: 55 | Base Risk: 0.02 SOL | Max Multiplier: 5x | Exp: 2.0 | Anti-Dead: ON | Dev Limit: 10% | Delay: 1s\n\n` +
     `🛡️ <b>PROFILE C: Capital Preservation</b>\n` +
     `• Mode: Raydium LPs | Score Mode: Deep | Min Score: 80 | Base Risk: 0.01 SOL | Max Multiplier: 4x | Exp: 3.0 | Anti-Dead: ON | Dev Limit: 5% | Delay: 3s\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `If you want the most profitable balance between safety and frequency, apply <b>Profile B (High-Conviction Gem Hunter)</b>. It ensures you catch verified high-score tokens across Pump.fun and Raydium while enforcing strict anti-rug protections.`,
+    `If you want the most profitable balance between safety and catching early runners, apply <b>Profile B</b>. It ensures you catch verified tokens across Pump.fun and Raydium while enforcing strict anti-rug protections.`,
 
-    // PAGE 9: AI COIN CALLER - SCANNER TUNING (FIXED HTML TAGS)
+    // PAGE 9: AI COIN CALLER - SCANNER TUNING (UPDATED TO 55)
     `⚙️ <b>CONFIG GUIDE: AI CALLER SETUP</b> <i>(9/12)</i>\n\n` +
-    `<i>The AI Coin Caller scans mempool telemetry every 15 seconds to alert you to early breakout momentum.</i>\n\n` +
+    `<i>The AI Coin Caller scans the network every 15 seconds to alert you to early breakout momentum.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `• <b>Min Score (60 - 75):</b> Filters out low-volume duds before sending alerts.\n` +
-    `• <b>Max Token Age (10 - 30m):</b> Catches momentum early in the launch lifecycle.\n` +
-    `• <b>Momentum Range (15% to 300%):</b> Captures active breakout volume while avoiding parabolic top-buyers (over 500%).\n` +
-    `• <b>Min Liquidity ($5,000):</b> Ensures adequate pool depth so 1-tap buys fill cleanly.\n` +
-    `• <b>MEV Shield (ON):</b> Enforces private Jito bundle execution on all 1-tap snipes.\n\n` +
+    `• <b>Min Score (55 - 75):</b> Filters out dead volume before sending alerts.\n` +
+    `• <b>Max Token Age (10 - 30m):</b> Catches momentum early in the launch.\n` +
+    `• <b>Momentum Range (15% to 300%):</b> Captures active volume while avoiding coins that have already pumped too high (over 500%).\n` +
+    `• <b>Min Liquidity ($5,000):</b> Ensures there is enough money in the pool so your buy goes through smoothly.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `In the Caller Menu, set <b>Min Score: 60</b>, <b>Max Age: 15 Mins</b>, <b>Momentum Range: 15% - 300%</b>, and <b>Min Liquidity: $5,000</b>. Sentry will alert you only when fresh coins have real trading activity and safe liquidity, providing 1-click buy buttons routed through Jito MEV protection.`,
+    `In the Caller Menu, set <b>Min Score: 55</b>, <b>Max Age: 15 Mins</b>, and <b>Min Liquidity: $5,000</b>. Sentry will only ping your Telegram when fresh coins have real, safe trading activity. Just tap the 1-click buy button to get in.`,
 
-    // PAGE 10: AUTOMATED EXITS - THE 1:3 GOLDEN RATIO
+    // PAGE 10: AUTOMATED EXITS - THE 1:3 GOLDEN RATIO (SIMPLIFIED MATH)
     `⚙️ <b>CONFIG GUIDE: AUTOMATED EXIT RATIOS</b> <i>(10/12)</i>\n\n` +
-    `<i>Trading without predefined exits guarantees long-term portfolio drawdown.</i>\n\n` +
+    `<i>Trading without predefined exits guarantees you will eventually lose money. Use the 1:3 Ratio.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `📐 <b>THE 1:3 GOLDEN RISK-TO-REWARD RATIO:</b>\n` +
+    `📐 <b>THE 1:3 GOLDEN RATIO:</b>\n` +
     `• <b>Auto-Trailing Drop (Stop Loss):</b> <code>-15%</code>\n` +
     `• <b>Auto-Take Profit (TP):</b> <code>+45%</code>\n\n` +
-    `📊 <b>MATHEMATICAL PROOF:</b>\n` +
-    `Over 10 executed trades at 0.1 SOL size ($100 total allocation):\n` +
-    `• <b>4 Wins (+45%):</b> <code>4 * +0.045 SOL = +0.18 SOL</code>\n` +
-    `• <b>6 Losses (-15%):</b> <code>6 * -0.015 SOL = -0.09 SOL</code>\n` +
-    `• <b>Net Result:</b> <code>+0.09 SOL profit</code> (a <b>+9% net return</b> despite a 60% loss rate!).\n\n` +
+    `📊 <b>THE MATH MADE EASY:</b>\n` +
+    `Imagine making 10 trades of $100 each.\n` +
+    `• You are wrong and <b>lose 6 trades</b> (-$15 each) = <b>-$90</b>.\n` +
+    `• You are right and <b>win 4 trades</b> (+$45 each) = <b>+$180</b>.\n` +
+    `• <b>Net Profit: +$90.</b>\n` +
+    `You were wrong the majority of the time, but the math still made you highly profitable!\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `Set <b>Auto-Trailing Drop: -15%</b> and <b>Auto-Take Profit: +45%</b> in your sniper settings. Every buy automatically arms this exit ratio in memory. When a token pumps +45%, Sentry auto-sells to secure profit without you needing to watch the chart.`,
+    `Set <b>Auto-Trailing Drop: -15%</b> and <b>Auto-Take Profit: +45%</b> in your sniper settings. Whenever you buy a token, Sentry automatically watches the chart. You can go to sleep, and it will auto-sell at exactly the right time to keep your math profitable.`,
 
     // PAGE 11: LIMIT ORDERS & DCA (TWAP) STRATEGY
     `⚙️ <b>CONFIG GUIDE: LIMITS & DCA (TWAP)</b> <i>(11/12)</i>\n\n` +
-    `<i>Automate accumulation without moving chart prices or staring at screens.</i>\n\n` +
+    `<i>Automate your accumulation so you don't have to stare at charts all day.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `📉 <b>LIMIT ORDERS (BUY THE DIP):</b>\n` +
-    `Set target USD buy prices (e.g., <code>JUPyiw... 0.005 $50</code>). Sentry monitors live price feeds and executes via Jito the moment the target is hit.\n\n` +
+    `Tell Sentry to buy a coin only if it drops to a specific price. \n\n` +
     `🔁 <b>DCA / TWAP ACCUMULATION:</b>\n` +
-    `Splits large positions into smaller time-weighted tranches (e.g., Buy $10 every 30 minutes up to $200 total budget).\n\n` +
+    `Split a large purchase into smaller chunks over time (e.g., Buy $10 every 30 minutes up to $200 total). This hides your buys from whales and gets you a better average price.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `When $SOL is pulling back, set a Limit Order: <code>/limit 7xKX... 0.005 $50</code>. When the price drops to $0.005, Sentry buys $50 via Jito and immediately deploys a <code>-15%</code> Trailing Stop Loss in memory without you lifting a finger.`,
+    `You see $SOL is dropping and you want to buy the dip. Send: <code>/limit 7xKX... 0.005 $50</code>. You can now close Telegram. When the price hits $0.005, Sentry will buy $50 for you automatically.`,
 
     // PAGE 12: ANTI-RUG SHIELD & FRONT-RUNNING EXITS
     `⚙️ <b>CONFIG GUIDE: ANTI-RUG SHIELD</b> <i>(12/12)</i>\n\n` +
-    `<i>Sentry protects open positions against developer liquidity pulls using Yellowstone gRPC streams.</i>\n\n` +
+    `<i>Sentry protects your open trades against malicious developers trying to steal the liquidity.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `🚨 <b>HOW THE ANTI-RUG SHIELD WORKS:</b>\n` +
-    `1. Sentry monitors low-level instruction logs on active token liquidity pools.\n` +
-    `2. If a developer broadcasts a <code>RemoveLiquidity</code> or <code>Withdraw</code> instruction, Sentry detects the raw transaction in the mempool.\n` +
-    `3. Sentry instantly constructs a high-priority, pre-signed Jito exit bundle for all exposed users, <b>front-running the developer's pull to exit your position before the liquidity disappears</b>.\n\n` +
+    `1. Sentry monitors the blockchain's core code on the coins you hold.\n` +
+    `2. If a developer tries to broadcast a "RemoveLiquidity" transaction, Sentry detects it instantly in the mempool.\n` +
+    `3. Sentry fires a high-speed Jito bundle to <b>sell your position *before* the developer's transaction goes through</b>.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO USE IN REAL LIFE:</b>\n` +
-    `You hold a token with a Trailing Guard active. Suddenly, the developer submits a <code>RemoveLiquidity</code> transaction to pull the pool. Sentry's gRPC stream detects the pull in the mempool and fires a pre-signed Jito bundle that sells 100% of your position *before* the developer's pull lands!`
+    `You don't have to do anything. As long as you have an active Trailing Guard deployed on your token, the Anti-Rug Shield operates completely automatically in the background to protect your money.`
 ];
 
 
