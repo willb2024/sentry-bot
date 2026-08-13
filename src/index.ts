@@ -1955,19 +1955,18 @@ const TRADE_GUIDE_PAGES: string[] = [
 // ⚙️ THE PROFITABILITY CONFIGURATION GUIDE (STRATEGY & MATH)
 // =========================================================
 const CONFIG_GUIDE_PAGES: string[] = [
-    // PAGE 1: CONFIGURATION PHILOSOPHY & EV (Simplified Math, No Real-Life Example)
-    `⚙️ <b>CONFIG GUIDE: PHILOSOPHY & MATH</b> <i>(1/12)</i>\n\n` +
-    `<i>Quantitative trading is simply about letting math do the heavy lifting for you.</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `📐 <b>THE PROFIT FORMULA:</b>\n` +
-    `<code>Profit = (Win Rate x Average Win) - (Loss Rate x Average Loss)</code>\n\n` +
-    `You do <b>not</b> need to win every trade. You just need to ensure your winning trades make more money than your losing trades lose.\n\n` +
-    `To build a profitable automated setup, you must optimize three things:\n` +
-    `1. <b>Execution Speed:</b> Land trades ahead of the retail crowd.\n` +
-    `2. <b>Filter Rigor:</b> Eliminate obvious scams before you spend money on them.\n` +
-    `3. <b>Smart Risk Sizing:</b> Bet small amounts on risky plays, and larger amounts on safe, high-score setups.\n\n` +
-    `<i>This guide shows you exactly how to set up Sentry's engines to achieve this.</i>`,
-
+// PAGE 1: CONFIGURATION PHILOSOPHY & EV (Detailed Facts, No Real-Life Example)
+`⚙️ <b>CONFIG GUIDE: PHILOSOPHY & MATH</b> <i>(1/12)</i>\n\n` +
+`<i>Quantitative trading isn't about predicting the future. It’s about using statistical algorithms to remove human emotion (FOMO and panic) and strictly trading based on mathematical probability.</i>\n\n` +
+`━━━━━━━━━━━━━━━\n\n` +
+`📐 <b>THE PROFIT FORMULA (EXPECTED VALUE):</b>\n` +
+`<code>Profit = (Win Rate x Average Win) - (Loss Rate x Average Loss)</code>\n\n` +
+`<b>Real Fact:</b> Many elite Wall Street funds operate on a 40% win rate. Because their average win is mathematically programmed to be 3x larger than their average loss, they are massively profitable even when they are wrong 60% of the time.\n\n` +
+`To build a profitable automated setup on Solana, Sentry optimizes three factual realities of the blockchain:\n\n` +
+`1. <b>Execution Speed:</b> Solana generates a new block every ~400 milliseconds. If you trade on public networks, MEV (Maximal Extractable Value) bots will analyze and front-run your trade in milliseconds. Sentry uses private routing to mathematically protect your entry price.\n\n` +
+`2. <b>Filter Rigor:</b> Over 95% of newly minted memecoins drop to zero or are malicious honeypots. Mathematically, avoiding these traps through automated code auditing saves more money than trying to guess the 1% of winners.\n\n` +
+`3. <b>Smart Risk Sizing:</b> The <i>Kelly Criterion</i> is a famous probability formula proving that betting the exact same amount on risky setups eventually leads to bankruptcy. You must mathematically bet less on unproven coins, and scale up only when data confirms safety.\n\n` +
+`<i>This guide shows you exactly how to set up Sentry's engines to achieve this.</i>`,
     // PAGE 2: JITO PRIORITY FEES & BRIBE OPTIMIZATION
     `⚙️ <b>CONFIG GUIDE: PRIORITY FEES & BRIBES</b> <i>(2/12)</i>\n\n` +
     `<i>Solana block space is competitive. Priority fees bribe validators to process your transaction first.</i>\n\n` +
@@ -2059,7 +2058,7 @@ const CONFIG_GUIDE_PAGES: string[] = [
     `If the coin was <b>risky (Score 50)</b>, the math drops exponentially: \n` +
     `<code>0.02 SOL × 0.25 × 5.0 = 0.025 SOL</code>\n\n` +
     `<b>Result:</b> The system automatically bet ~$14 on the safe gem, but only ~$4 on the risky gamble. You never have to manually adjust sizes again.`,
-    
+
     // PAGE 8: AUTO-SNIPER - PROFITABILITY PRESETS (UPDATED TO 55)
     `⚙️ <b>CONFIG GUIDE: SNIPER PRESETS</b> <i>(8/12)</i>\n\n` +
     `<i>Recommended configuration profiles for different trading styles:</i>\n\n` +
