@@ -273,8 +273,13 @@ app.post('/api/analytics', async (req, res) => {
         });
 
         const mappedTrades = trades.map((t: any) => ({
-            createdAt: t.createdAt, isBuy: t.isBuy, amountInSol: t.amountInSol,
-            profitPercent: t.profitPercent || 0, realizedPnlSol: t.realizedPnlSol || 0
+            createdAt: t.createdAt, 
+            isBuy: t.isBuy, 
+            amountInSol: t.amountInSol,
+            tokenAddress: t.tokenAddress,     // 🟢 FIX: Pass the CA to the Ticker
+            strategy: t.strategy,             // 🟢 FIX: Pass the Strategy to 24h Stats
+            profitPercent: t.profitPercent || 0, 
+            realizedPnlSol: t.realizedPnlSol || 0
         }));
 
         const { getAdvancedStats } = await import('./services/analytics.service.js');
@@ -1742,318 +1747,344 @@ bot.command('clearwatch', async (ctx) => {
 });
 
 
+
+
 // =========================================================
-// 🏆 WHY WE ARE THE BEST (GUIDE)
+// 📖 THE COMPLETE SENTRY OPERATIONS MANUAL (HOW TO TRADE)
 // =========================================================
-bot.action('btn_guide', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){} 
-    
-    const guideText = 
-        `🏆 <b>SENTRY TERMINAL — INSTITUTIONAL SUPERIORITY</b>\n\n` +
-        `<i>Retail bots are built for convenience, but they leave your capital vulnerable. Sentry Terminal is engineered to protect your trades, optimize speed, and automate your lifecycle. Here is the technical breakdown of why Sentry wins:</i>\n\n` +
-
-        `🚀 <b>1. ELITE TOKEN LAUNCHPAD</b>\n` +
-        `We feature a native Pump.fun launcher. We mine a custom **Vanity Contract Address** (e.g. <code>CAT...pump</code>) and split your dev buy across up to 4 sub-wallets simultaneously. The launch, the stealth buys, and the Jito tip are packaged in a single, un-snipeable **Block-0 Jito Bundle**.\n\n` +
-
-        `🛡️ <b>2. JITO MEV PRIVATE BUNDLE ROUTING</b>\n` +
-        `Every trade on Sentry—buy, sell, DCA, copy trade, auto-sniper—bypasses the public mempool. We wrap your transaction inside a private Jito Bundle. Your transaction is invisible to MEV sandwich bots until it is securely executed.\n\n` +
-
-        `⚡ <b>3. MULTI-WALLET WHALE EXECUTION</b>\n` +
-        `Pump.fun limits how much a single wallet can buy. Sentry fires up to 5 wallets simultaneously inside the same Jito block — same millisecond, same price, no slippage stacking. You get a whale-sized position at retail entry.\n\n` +
-
-        `📅 <b>4. SOLANA TOKEN LAUNCH CALENDAR</b>\n` +
-        `Type <code>/calendar</code> to access a live feed of the newest verified token launches. Sentry pulls DexScreener, filters for tokens under 2 hours old with active socials, and lets you target and snipe them in one tap.\n\n` +
-
-        `🤖 <b>5. AI COIN CALLER ENGINE</b>\n` +
-        `Type <code>/caller</code> to arm Sentry's scanner. Every 15 seconds it scores tokens 0-100 based on momentum, volume, age, and MEV risk, and DMs you only the ones that pass your thresholds with a one-click buy button.\n\n` +
-
-        `👥 <b>6. COPY TRADING WITH HELIUS AUDITING</b>\n` +
-        `Mirror any whale wallet via WebSockets. Before you confirm a target, Sentry scans their last 20 transactions via Helius, scoring their trading frequency to warn you if they are an MEV bot.\n\n` +
-
-        `👀 <b>7. PERSISTENT WATCHLISTS & ALERTS</b>\n` +
-        `Type <code>/watch [CA] [TARGET_PRICE]</code> to save tokens to a persistent Redis watchlist. Type <code>/watchlist</code> to check their performance, live prices, and alert status.\n\n` +
-
-        `⏳ <b>8. NATIVE DCA & LIMIT ORDERS</b>\n` +
-        `Set a token to accumulate on a TWAP schedule or set a limit order to buy a dip. Both fire via Jito and automatically arm a trailing guard on every fill.\n\n` +
-
-        `🧹 <b>9. RENT SWEEPER & CONSOLIDATOR</b>\n` +
-        `Sentry's sweeper closes up to 18 empty token accounts at once via Jito and returns the locked SOL to your wallet instantly. The consolidator sweeps SOL from all sub-wallets back to W1 in one transaction.`;
-
-    await safeEditMessageText(ctx, guideText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
-});
-
-
-// 🟢 FULL CONFIGURATION GUIDE FOR MAXIMUM PROFIT (8 PAGES)
-const CONFIG_GUIDE_PAGES: string[] = [
-    // PAGE 1: TRANSACTION SPEED & JITO BRIBES
-    `⚡ <b>CONFIG GUIDE: TRANSACTION SPEED</b> <i>(1/8)</i>\n\n` +
-    `<i>Trading Solana memecoins is an execution race. Sentry uses private Jito validator paths to bypass public network congestion.</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `🚀 <b>JITO PRIORITY LEVELS (SPEED BRIBES):</b>\n\n` +
-    `• <b>Eco 🍃 (0.0005 SOL):</b> Low priority. Best for quiet market days or slow accumulation.\n\n` +
-    `• <b>Fast 🐎 (0.001 SOL):</b> <i>Recommended Default.</i> Beats 90% of standard Telegram bot trades.\n\n` +
-    `• <b>Turbo ⚡ (0.005 SOL):</b> High priority. Use during volatile pumps or hyped token launches.\n\n` +
-    `• <b>Custom ⚙️:</b> Set up to 0.02 SOL in Settings to guarantee Block-0 execution.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `When a popular token launches, 10,000 bots rush to buy at once. Bribing <code>0.001 SOL</code> puts your transaction in the front row of the block, letting you enter before the price shoots up.`,
-
-    // PAGE 2: DYNAMIC POSITION SIZING
-    `📊 <b>CONFIG GUIDE: DYNAMIC SIZING</b> <i>(2/8)</i>\n\n` +
-    `<i>Smart traders never risk the exact same amount on every token. Dynamic Sizing auto-adjusts your buy size based on the AI's confidence score.</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `🔹 <b>Base Risk Unit (Default: 0.02 SOL):</b>\n` +
-    `Your minimum bet size on speculative, lower-confidence tokens (Score 50–60).\n\n` +
-    `🔹 <b>Max Risk Multiplier (Default: 5.0x):</b>\n` +
-    `The maximum multiplier for high-scoring tokens. A 95+ score gem gets up to 5x your Base Risk (<code>0.02 * 5 = 0.10 SOL</code>).\n\n` +
-    `🔹 <b>Scaling Curve (Exponent 2.0 - Aggressive):</b>\n` +
-    `Squares the AI score. It risks a tiny amount on uncertain coins and larger capital on verified gems.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `• <b>Score 55 Token (Risky):</b> Bot spends <code>0.02 SOL</code> ($3).\n` +
-    `• <b>Score 90 Token (High Gem):</b> Bot spends <code>0.09 SOL</code> ($14).\n` +
-    `This protects your capital on risky punts while maximizing gains on top picks.`,
-
-    // PAGE 3: OPTIMAL AUTO-SNIPER PRESETS
-    `🎯 <b>CONFIG GUIDE: AUTO-SNIPER PRESETS</b> <i>(3/8)</i>\n\n` +
-    `<i>Configure these parameters in the Sniper Menu for a fully automated, high-probability sniping strategy:</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `• <b>Target Mode:</b> BOTH (Pump.fun & Raydium)\n\n` +
-    `• <b>Scoring Mode:</b> 🔍 Deep Scoring (Scans developer history & tax bugs)\n\n` +
-    `• <b>AI Min Score:</b> <code>60 / 100</code> (Filters out 90% of zero-liquidity rugs)\n\n` +
-    `• <b>Anti-Dead Shield:</b> 🟢 ON (Skips tokens where the creator bought 0 supply)\n\n` +
-    `• <b>Dev Bag Limit:</b> <code>10%</code> (Aborts if the creator owns >10% of total supply)\n\n` +
-    `• <b>Block Delay:</b> <code>0 Seconds</code> (Executes on the exact block of creation)\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `If a developer creates a token and holds 30% of the supply, setting <b>Dev Bag Limit to 10%</b> forces Sentry to reject the buy—saving you from getting dumped on.`,
-
-    // PAGE 4: AI COIN CALLER CONFIGURATION
-    `🧠 <b>CONFIG GUIDE: AI CALLER SETUP</b> <i>(4/8)</i>\n\n` +
-    `<i>The AI Coin Caller scans mempool telemetry every 15 seconds to alert you to early breakout momentum.</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `• <b>Min Score:</b> <code>60</code> (Ensures only quality coins trigger alerts)\n\n` +
-    `• <b>Max Token Age:</b> <code>10 Minutes</code> (Catches momentum right at launch)\n\n` +
-    `• <b>Momentum Range:</b> <code>10% to 500%</code> (Captures early volume spikes)\n\n` +
-    `• <b>Min Liquidity:</b> <code>$5,000</code> (Avoids thin pools with high slippage)\n\n` +
-    `• <b>MEV Shield:</b> 🟢 ON (Prevents sandwich bot exploitation on 1-click buys)\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `When an alert fires in chat, tap <b>"⚡ Snipe"</b> for an instant buy, or tap <b>"🛡️ Deploy Guard"</b> to set up an automated exit before walking away.`,
-
-    // PAGE 5: MULTI-WALLET "WHALE MODE"
-    `🔑 <b>CONFIG GUIDE: WHALE MODE</b> <i>(5/8)</i>\n\n` +
-    `<i>Pump.fun restricts single-wallet purchases to ~0.98 SOL at launch to limit whales. Sentry bypasses this limit using multi-wallet execution.</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `🐙 <b>HOW TO ENABLE WHALE MODE:</b>\n\n` +
-    `1. Go to <b>Vault & Keys</b> on your dashboard.\n` +
-    `2. Select <b>2, 3, 4, or 5 Active Wallets</b>.\n` +
-    `3. Deposit SOL into each individual wallet address.\n` +
-    `4. Fire a snipe—Sentry executes simultaneous purchases across all wallets in the <b>exact same Jito block</b>.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `Instead of buying <code>0.8 SOL</code> on 1 wallet, Whale Mode with 3 wallets buys <code>0.8 SOL x 3 = 2.4 SOL</code> in a single millisecond, securing a dominant entry position.`,
-
-    // PAGE 6: SOR & ADAPTIVE SLIPPAGE
-    `⚡ <b>CONFIG GUIDE: EXECUTION ENGINES</b> <i>(6/8)</i>\n\n` +
-    `<i>In your Settings menu, you can toggle Smart Order Routing (SOR) and Adaptive Slippage based on your trading style:</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `🔹 <b>Smart Order Routing (SOR):</b>\n` +
-    `Queries Jupiter, Raydium, Meteora, and Orca simultaneously to find the cheapest fill price.\n` +
-    `• <b>Turn OFF for Block-0 Sniping:</b> Saves ~100ms for hyper-fast launch entries.\n` +
-    `• <b>Turn ON for Standard Trades:</b> Saves massive slippage on larger buys.\n\n` +
-    `🔹 <b>Adaptive Slippage:</b>\n` +
-    `Automatically increases slippage to 25% during violent pumps so your buys never fail, and lowers it to 12% in calm markets to protect your wallet.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>SPEED VS. PRECISION:</b>\n` +
-    `Turn both <b>OFF</b> if you want ultra-low latency front-running. Leave both <b>ON</b> for standard trading and optimal fill prices.`,
-
-    // PAGE 7: THE 1:3 GOLDEN RISK-TO-REWARD RATIO
-    `🛡️ <b>CONFIG GUIDE: AUTOMATED EXITS</b> <i>(7/8)</i>\n\n` +
-    `<i>Trading without exits leads to losses. Sentry automates exits using a proven 1:3 Risk-to-Reward Ratio.</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `• <b>Auto-Trailing Drop (Stop Loss):</b> <code>-15%</code>\n\n` +
-    `• <b>Auto-Take Profit (TP):</b> <code>+45%</code>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>THE MATHEMATICAL PROOF:</b>\n` +
-    `Suppose you take 10 trades at $10 each ($100 total):\n` +
-    `• <b>4 Wins (+45%):</b> <code>4 x $4.50 = +$18.00</code>\n` +
-    `• <b>6 Losses (-15%):</b> <code>6 x $1.50 = -$9.00</code>\n` +
-    `• <b>Net Profit:</b> <code>+$9.00</code> (a <b>+9% net return</b> despite losing 60% of your trades!).`,
-
-    // PAGE 8: DASHBOARD METRICS & QUICK COMMANDS
-    `📊 <b>CONFIG GUIDE: METRICS & COMMANDS</b> <i>(8/8)</i>\n\n` +
-    `<i>Use these institutional analytics on your WebApp dashboard to fine-tune your performance:</i>\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `• <b>Sharpe Ratio:</b> Measures risk-adjusted returns. A score > 2.0 is institutional quality.\n\n` +
-    `• <b>Avg Slippage (TCA):</b> Tracks execution quality. A score < 1.0% means elite fills.\n\n` +
-    `• <b>CVaR (5% Tail Risk):</b> Shows the average loss of your worst 5% trades so you can size your wallet safely.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `⌨️ <b>ESSENTIAL COMMANDS:</b>\n` +
-    `• <code>/watch [CA] [PRICE]</code> → Set persistent price alerts\n` +
-    `• <code>/batch</code> → Snipe multiple tokens concurrently\n` +
-    `• <code>/stats</code> → View live Win Rate & Volume\n` +
-    `• <code>/exporttrades</code> → Download CSV tax ledger`
-];
-
-
-// 📖 FULL OPERATIONS MANUAL FOR BEGINNERS (10 PAGES)
 const TRADE_GUIDE_PAGES: string[] = [
-    // PAGE 1: INTRODUCTION & JITO MEV SHIELD
-    `📖 <b>HOW TO TRADE: BEGINNER BASICS</b> <i>(1/10)</i>\n\n` +
-    `<i>Welcome to Sentry Terminal! Sentry is an institutional-grade trading terminal engineered for Solana memecoins.</i>\n\n` +
+    // PAGE 1: SYSTEM ARCHITECTURE & JITO MEV SHIELD
+    `📖 <b>HOW TO TRADE: SYSTEM ARCHITECTURE</b> <i>(1/16)</i>\n\n` +
+    `<i>Sentry Terminal is an institutional-grade, non-custodial trading terminal built for Solana decentralized markets.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `🛡️ <b>THE JITO MEV SHIELD:</b>\n` +
-    `Standard Telegram bots send trades to the public mempool where malicious "Sandwich Bots" front-run you, stealing 2% to 10% of your money on every trade.\n\n` +
-    `<b>Sentry routes 100% of your trades through private Jito Bundles.</b> Your transactions are invisible to MEV bots and land directly inside validator blocks.\n\n` +
+    `Standard Telegram bots send trades to the public mempool where malicious <b>MEV Sandwich Bots</b> front-run you, stealing 2% to 10% of your capital on every transaction.\n\n` +
+    `• <b>100% Private Bundling:</b> Sentry packages your buy, sell, limit, and DCA orders into private Jito Bundles.\n` +
+    `• <b>Zero Mempool Exposure:</b> Your trades bypass public RPC nodes and land directly inside validator blocks, eliminating sandwich attacks.\n` +
+    `• <b>Non-Custodial Architecture:</b> Your private keys are encrypted locally using AES-256-GCM. You retain full control over your funds at all times.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `If you buy $100 of a pumping coin on a basic bot, a sandwich bot buys ahead of you and sells to you higher—costing you $5–$10 instantly. Sentry blocks this attack entirely.`,
+    `💡 <b>WHY THIS MATTERS:</b>\n` +
+    `If you buy $500 of a volatile token on a standard bot, sandwich bots buy ahead of you and dump on you. Sentry blocks this exploitation entirely.`,
 
-    // PAGE 2: FUNDING YOUR VAULT
-    `📖 <b>HOW TO TRADE: FUNDING YOUR VAULT</b> <i>(2/10)</i>\n\n` +
-    `<i>Your vault is a non-custodial address encrypted directly on the Solana blockchain.</i>\n\n` +
+    // PAGE 2: TERMINAL DASHBOARD - PRIMARY METRICS
+    `📖 <b>HOW TO TRADE: DASHBOARD METRICS</b> <i>(2/16)</i>\n\n` +
+    `<i>Your primary dashboard provides real-time portfolio telemetry. Here is how each card operates:</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `👛 <b>1. Funding Your Main Vault (W1):</b>\n` +
-    `Tap <b>Vault & Keys</b> on your dashboard. Copy your <b>W1 Address</b> and send SOL to it from Phantom, Solflare, or an exchange.\n\n` +
-    `🐙 <b>2. Multi-Wallet (Whale Mode):</b>\n` +
-    `To buy larger amounts on Pump.fun launches without hitting single-wallet caps, activate up to 5 wallets in Vault & Keys.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `Send <code>0.5 SOL</code> to W1, <code>0.2 SOL</code> to W2, and <code>0.2 SOL</code> to W3. When you snipe, Sentry buys across all 3 wallets simultaneously in the same millisecond.`,
+    `• <b>💰 Net Worth:</b> Total live value of your wallet across liquid SOL and open token positions, displayed in $USD and SOL.\n\n` +
+    `• <b>📈 Realized PnL:</b> Percentage gain/loss and net $USD/SOL profit calculated strictly from closed sell positions. Formula: <code>(Total Realized Returns / Total Invested Capital) * 100</code>.\n\n` +
+    `• <b>🎯 Win Rate:</b> The exact percentage of profitable closed trades vs. unprofitable ones (e.g., <code>150 Wins / 50 Losses = 75.0%</code>).\n\n` +
+    `• <b>⚡ Trade Volume:</b> Cumulative SOL volume executed across all buys and sells.\n\n` +
+    `• <b>📅 Total Trading Days:</b> Consecutive days active since your first recorded trade anchor.\n\n` +
+    `• <b>📊 Total Trades:</b> Total closed trade count recorded on your ledger.`,
 
-    // PAGE 3: HOW TO BUY TOKENS
-    `📖 <b>HOW TO TRADE: BUYING TOKENS</b> <i>(3/10)</i>\n\n` +
-    `<i>Sentry makes buying tokens effortless with multiple input options:</i>\n\n` +
+    // PAGE 3: TERMINAL DASHBOARD - INSTITUTIONAL ANALYTICS
+    `📖 <b>HOW TO TRADE: INSTITUTIONAL ANALYTICS</b> <i>(3/16)</i>\n\n` +
+    `<i>Wall Street grade metrics located in the analytics row of your WebApp:</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `🔹 <b>Method 1 (Paste Contract Address):</b>\n` +
-    `Copy any token address (e.g., <code>7xKX...pump</code>) and paste it directly into this chat.\n\n` +
-    `🔹 <b>Method 2 (Quick Command):</b>\n` +
-    `Send <code>[CA] [AMOUNT]</code> in chat:\n` +
-    `• <b>In SOL:</b> <code>7xKX...pump 0.5</code>\n` +
-    `• <b>In USD:</b> <code>7xKX...pump $50</code>\n\n` +
-    `🔹 <b>Method 3 (Batch Buying):</b>\n` +
-    `Type <code>/batch</code> to buy up to 5 different tokens concurrently on separate lines.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `Typing <code>7xKX...pump $25</code> instantly converts $25 USD into SOL based on live market rates and fires the buy bundle.`,
+    `• <b>Avg Slippage (TCA):</b> Transaction Cost Analysis measuring your average fill slippage. Scores below 1.0% indicate elite execution.\n\n` +
+    `• <b>CVaR (5% Tail Risk):</b> Conditional Value at Risk. Measures the average loss expected during your worst 5% trading scenarios to help you size positions safely.\n\n` +
+    `• <b>Sharpe Ratio:</b> Risk-adjusted return metric. A score above 2.0 indicates institutional-quality returns relative to volatility.\n\n` +
+    `• <b>Portfolio Risk Score & Bar:</b> Evaluates position concentration and honeypot/rug risks in open holdings (0-100% scale).\n\n` +
+    `• <b>Exposure Limit (Session Budget):</b> Live progress bar tracking current spend against your maximum active session budget.`,
 
-    // PAGE 4: MANAGING EXITS & SELLING
-    `📖 <b>HOW TO TRADE: SELLING & EXITS</b> <i>(4/10)</i>\n\n` +
-    `<i>Never leave an open position unmonitored. Memecoins move fast!</i>\n\n` +
+    // PAGE 4: TERMINAL DASHBOARD - EXECUTION FEED & FLOW
+    `📖 <b>HOW TO TRADE: EXECUTION FEED & FLOW</b> <i>(4/16)</i>\n\n` +
+    `<i>Real-time execution telemetry widgets inside the Mini-App:</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `🔴 <b>Manual Exits:</b>\n` +
-    `Go to <b>Positions</b> on your dashboard. Tap <b>25%</b>, <b>50%</b>, or <b>💥 100%</b> to sell immediately via Jito.\n\n` +
-    `🛡️ <b>Automated Guards (Trailing Stops):</b>\n` +
-    `When you buy a token, tap <b>"Deploy Guard"</b>. Set a Stop Loss (e.g., -15%) and Take Profit (e.g., +45%). Sentry will automatically sell for you when targets are hit.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `If a token pumps +100%, tap <b>50%</b> to take back your initial investment. The remaining 50% becomes a "moonbag" running on house money!`,
+    `• <b>Live Execution Feed (Bloomberg Ticker):</b> Real-time ticker displaying the last 10 block confirmations, including token mint, trade type (BUY/SELL), volume in SOL, and realized PnL %.\n\n` +
+    `• <b>24-Hour Rolling Activity:</b> Live aggregate breakdown comparing Manual/Direct trades vs. Automated Auto-Sniper Engine trades.\n\n` +
+    `• <b>Flow Analytics Chart:</b> Interactive multi-timeframe chart (1H, 1D, 7D, 30D, 1Y) rendering cumulative profit vs. loss lines.\n\n` +
+    `• <b>Hourly Performance Heatmap:</b> 24-hour UTC bar chart mapping trade performance and win rate by time of day.\n\n` +
+    `• <b>Verified Holdings Drawer:</b> Expandable open position cards showing live entry price, market cap, 24h volume, and 1-tap fast exit buttons.`,
 
-    // PAGE 5: USING THE AUTO-SNIPER
-    `📖 <b>HOW TO TRADE: AUTO-SNIPER</b> <i>(5/10)</i>\n\n` +
-    `<i>The Auto-Sniper listens to raw block transitions to buy new tokens the exact millisecond they launch.</i>\n\n` +
+    // PAGE 5: VAULT & PRIVATE KEY SECURITY
+    `📖 <b>HOW TO TRADE: SECURITY VAULT & KEYS</b> <i>(5/16)</i>\n\n` +
+    `<i>Your vault is created automatically when you start Sentry. Here is how key security works:</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `1. Tap <b>Sniper Module</b> on your dashboard.\n` +
-    `2. Set your <b>AI Min Score</b> (recommended: <code>60</code>).\n` +
-    `3. Turn ON <b>Anti-Dead Shield</b> and set <b>Max Dev Bag</b> to <code>10%</code>.\n` +
-    `4. Turn ON <b>Dynamic Sizing</b> (Base Risk: <code>0.02 SOL</code> | Max Multiplier: <code>5x</code>).\n` +
-    `5. Click <b>⚡ ARM SNIPER ENGINE</b> to start hunting!\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `Set a <code>1.0 SOL</code> Session Budget. Sentry will snipe promising launches automatically and pause the moment total spending hits 1.0 SOL.`,
+    `🔐 <b>AES-256-GCM Encryption:</b>\n` +
+    `Your Base58 private keys are encrypted locally using scrypt key derivation. Sentry operators never store unencrypted keys.\n\n` +
+    `📤 <b>Exporting Private Keys:</b>\n` +
+    `Tap <b>Vault & Keys</b> $\\rightarrow$ <b>Export Keys</b>. Sentry displays your keys in chat. For security, the message <b>automatically self-destructs after 60 seconds</b>.\n\n` +
+    `📥 <b>Importing External Keys:</b>\n` +
+    `Tap <b>Import Key</b> and paste a Base58 private key from Phantom or Solflare to use an existing wallet inside Sentry.`,
 
-    // PAGE 6: USING THE AI COIN CALLER
-    `📖 <b>HOW TO TRADE: AI COIN CALLER</b> <i>(6/10)</i>\n\n` +
-    `<i>The AI Coin Caller scans the mempool 24/7 to detect high-conviction breakout tokens.</i>\n\n` +
+    // PAGE 6: MULTI-WALLET "WHALE MODE"
+    `📖 <b>HOW TO TRADE: WHALE MODE (MULTI-WALLET)</b> <i>(6/16)</i>\n\n` +
+    `<i>Pump.fun limits single-wallet buys to ~0.98 SOL at launch. Sentry bypasses this limit using Multi-Wallet execution.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `• Type <code>/caller</code> to open the AI Scanner.\n` +
-    `• Tokens are evaluated every 15 seconds and scored from <b>0 to 100</b> based on volume, developer rep, and liquidity.\n` +
-    `• When a breakout is detected, Sentry sends an alert with a <b>1-Click Snipe Button</b> and calibrated price projections.\n\n` +
+    `🐙 <b>HOW WHALE MODE WORKS:</b>\n\n` +
+    `1. Go to <b>Vault & Keys</b> on your dashboard.\n` +
+    `2. Select <b>2, 3, 4, or 5 Active Wallets</b>. Sentry generates independent addresses (W1 through W5).\n` +
+    `3. Deposit SOL into each active wallet address.\n` +
+    `4. When you fire a snipe, Sentry executes simultaneous purchases across all active wallets in the <b>exact same Jito block millisecond</b>.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `An alert arrives for $BONK2 with an <b>82/100 score</b>. Tap <b>"⚡ Snipe 0.1 SOL"</b> to buy immediately, or tap <b>"🛡️ Deploy Guard"</b> to lock in an automatic exit strategy.`,
+    `🧹 <b>Wallet Consolidation:</b>\n` +
+    `Tap <b>Sweep All Sub-Wallets to W1</b> to transfer all SOL from W2-W5 back into your primary main wallet in a single transaction.`,
 
-    // PAGE 7: LIMIT ORDERS & DCA (TWAP)
-    `📖 <b>HOW TO TRADE: LIMITS & DCA</b> <i>(7/10)</i>\n\n` +
-    `<i>Automate your buying without staring at price charts all day.</i>\n\n` +
+    // PAGE 7: WITHDRAWAL PIN & ASSET PROTECTION
+    `📖 <b>HOW TO TRADE: WITHDRAWAL PIN & PROTECTION</b> <i>(7/16)</i>\n\n` +
+    `<i>Protect your vault against unauthorized withdrawals in case your Telegram session is compromised.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `📉 <b>Limit Orders (Buy the Dip):</b>\n` +
-    `Type <code>/limit [CA] [TARGET_PRICE_USD] [AMOUNT]</code>.\n` +
-    `• <i>Example:</i> <code>JUPyiw... 0.005 $50</code> (Buys $50 when price drops to $0.005).\n\n` +
-    `🔁 <b>DCA / TWAP Accumulation:</b>\n` +
-    `Accumulate large positions smoothly over time without moving the chart price.\n` +
-    `• <i>Example:</i> <code>/dca [CA] 60 $10 10 50 $200</code> (Buys $10 every 60 mins until $200 total is spent).\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `Every Limit Order or DCA fill automatically arms a Trailing Stop Loss so your risk is managed hands-free.`,
+    `🔒 <b>SETTING A SECURITY PIN:</b>\n\n` +
+    `1. Go to <b>Vault & Keys</b> $\\rightarrow$ <b>Set Withdrawal PIN</b>.\n` +
+    `2. Reply with a 4 to 6 digit secret PIN.\n` +
+    `3. Sentry hashes your PIN using scrypt with a unique salt. The plaintext PIN is never stored.\n\n` +
+    `🛡️ <b>BRUTE-FORCE LOCKOUT:</b>\n` +
+    `If 3 incorrect PIN attempts are made during a withdrawal, Sentry activates an automatic <b>60-minute security lockout</b>, freezing all withdrawal commands.`,
 
-    // PAGE 8: WATCHLIST & LAUNCH CALENDAR
-    `📖 <b>HOW TO TRADE: WATCHLIST & CALENDAR</b> <i>(8/10)</i>\n\n` +
-    `<i>Stay ahead of the market with real-time tracking tools:</i>\n\n` +
+    // PAGE 8: COPY TRADING & HELIUS AUDITING
+    `📖 <b>HOW TO TRADE: COPY TRADING & HELIUS</b> <i>(8/16)</i>\n\n` +
+    `<i>Automatically mirror the trades of profitable whale wallets via zero-latency WebSockets.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `👀 <b>Persistent Watchlist:</b>\n` +
-    `• Type <code>/watch [CA] [TARGET_PRICE]</code> to add a token to your alerts.\n` +
-    `• Type <code>/watchlist</code> to view live prices, performance %, and alert targets.\n\n` +
-    `📅 <b>Launch Calendar:</b>\n` +
-    `• Type <code>/calendar</code> to view a live feed of verified launches under 2 hours old with active socials.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `Type <code>/watch 7xKX... 0.05</code>. Sentry sends you a Telegram notification the moment the price crosses $0.05.`,
+    `👥 <b>SETTING UP COPY TRADES:</b>\n` +
+    `1. Tap <b>Copy Trade</b> on your dashboard $\\rightarrow$ <b>Add Custom Wallet</b>.\n` +
+    `2. Enter: <code>[TARGET_WALLET] [AMOUNT_SOL] [STOP_LOSS_%] [TAKE_PROFIT_%]</code>.\n` +
+    `3. Sentry opens a WebSocket listener on the target address. When the whale buys or sells, your vault mirrors the trade instantly via Jito.\n\n` +
+    `👑 <b>SENTRY ALPHA DIRECTORY:</b>\n` +
+    `Tap <b>View Alpha Directory</b> to access curated, high-win-rate whale wallets analyzed by Sentry.\n\n` +
+    `🕵️ <b>HELIUS BOT AUDITING:</b>\n` +
+    `Before copying, Sentry queries Helius API data across the wallet's last 20 trades. If trade gap pacing indicates an MEV sandwich bot, Sentry warns you before deploying.`,
 
-    // PAGE 9: TOKEN LAUNCHPAD & GUILDS
-    `📖 <b>HOW TO TRADE: LAUNCHPAD & GUILDS</b> <i>(9/10)</i>\n\n` +
-    `<i>Sentry isn't just for trading—it's built to help you launch tokens and build communities.</i>\n\n` +
+    // PAGE 9: PAY-PER-RESULT CREDIT SYSTEM
+    `📖 <b>HOW TO TRADE: PAY-PER-RESULT CREDITS</b> <i>(9/16)</i>\n\n` +
+    `<i>Sentry operates on an ethical, pay-per-result model for AI scans and alerts.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `🚀 <b>Sentry Launchpad:</b>\n` +
-    `Deploy your own Pump.fun token in Block-0 with a custom vanity address (e.g., <code>CAT...pump</code>) and split stealth dev buys across up to 4 sub-wallets.\n\n` +
-    `🏰 <b>Sentry Guilds:</b>\n` +
-    `Type <code>/createguild</code>. Build a loyalty leaderboard for your community. You earn <b>50% of platform fees</b> from every trade your members make—forever.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>REAL-WORLD EXAMPLE:</b>\n` +
-    `Share your Guild link on Twitter. As your followers trade on Sentry, you earn passive SOL yields directly into your wallet.`,
+    `🎯 <b>PAY-PER-RESULT MODEL:</b>\n` +
+    `• Credits are <b>ONLY spent when a real, verified token match is delivered</b> to your chat or sniped.\n` +
+    `• Scans that return zero results or duds cost <b>0 credits</b>.\n\n` +
+    `💳 <b>CREDIT PACKS:</b>\n` +
+    `• <b>Starter ($30):</b> 150 Credits (~$0.20/match)\n` +
+    `• <b>Growth ($50):</b> 280 Credits (~$0.17/match)\n` +
+    `• <b>Pro ($75):</b> 450 Credits (~$0.16/match)\n` +
+    `• <b>Whale ($100):</b> 2,000 Credits (~$0.05/match)\n\n` +
+    `Tap <b>Buy Credits</b> on your dashboard to top up via an instant SOL transfer to treasury.`,
 
-    // PAGE 10: DASHBOARD, LEDGER & SECURITY
-    `📖 <b>HOW TO TRADE: ANALYTICS & SECURITY</b> <i>(10/10)</i>\n\n` +
-    `<i>Track performance and secure your assets with built-in tools:</i>\n\n` +
+    // PAGE 10: AFFILIATE HUB & REVENUE SHARE
+    `📖 <b>HOW TO TRADE: AFFILIATE HUB & TIERS</b> <i>(10/16)</i>\n\n` +
+    `<i>Earn passive SOL yield by inviting traders and community members to Sentry.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `📈 <b>Web Dashboard:</b>\n` +
-    `Tap <b>Track Trades</b> on your menu to launch the Mini-App. View real-time net worth, strategy attribution, Sharpe Ratio, and live execution feeds.\n\n` +
-    `📤 <b>Tax Ledger Export:</b>\n` +
-    `Type <code>/exporttrades</code> or click Export CSV on the WebApp to download your full trading history for tax filing.\n\n` +
-    `🔒 <b>Security PIN:</b>\n` +
-    `Go to <b>Vault & Keys</b> $\rightarrow$ <b>Set Withdrawal PIN</b> to lock your capital against unauthorized withdrawals.\n\n` +
+    `💸 <b>TRADING FEE COMMISSIONS:</b>\n` +
+    `• 🥉 <b>Bronze Tier (Base):</b> 50% Share of all platform fees generated by recruits.\n` +
+    `• 🥈 <b>Silver Tier (5M Pts / 500 SOL Vol):</b> 60% Rev-Share.\n` +
+    `• 🥇 <b>Gold Tier (25M Pts / 2,500 SOL Vol):</b> 70% Rev-Share.\n\n` +
+    `🎯 <b>AI CALLER CREDIT COMMISSIONS:</b>\n` +
+    `Earn a flat <b>40% commission in SOL</b> on every credit pack purchased by your referred users across all tiers.\n\n` +
+    `🔗 <b>YOUR INVITE LINK:</b>\n` +
+    `Tap <b>Affiliates</b> on your dashboard to copy your referral link. Recruits receive an automatic <b>10% discount on trading fees</b>.`,
+
+    // PAGE 11: CLAIMING AFFILIATE YIELD & TREASURY
+    `📖 <b>HOW TO TRADE: CLAIMING AFFILIATE YIELD</b> <i>(11/16)</i>\n\n` +
+    `<i>Claim your accumulated affiliate earnings directly into your vault in SOL.</i>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `<i>You are fully trained! Send a CA or tap a module on your dashboard to start trading.</i>`
+    `📥 <b>CLAIMING PAYOUTS:</b>\n` +
+    `1. Go to <b>Affiliates</b> $\\rightarrow$ <b>Claim Payout</b>.\n` +
+    `2. Minimum payout threshold: <b>0.1 SOL</b>.\n` +
+    `3. Sentry's automated treasury signs and broadcasts a SOL transfer directly to your Main Wallet (W1).\n\n` +
+    `🛡️ <b>TREASURY SECURITY CONTROLS:</b>\n` +
+    `• <b>Daily Payout Cap:</b> Enforces a platform-wide 50 SOL daily payout cap to prevent draining.\n` +
+    `• <b>Anomaly Alerts:</b> Single payouts above 5 SOL trigger automated developer alerts before execution.`,
+
+    // PAGE 12: WITHDRAWALS & GAS MANAGEMENT
+    `📖 <b>HOW TO TRADE: WITHDRAWALS & GAS</b> <i>(12/16)</i>\n\n` +
+    `<i>Withdraw your liquid SOL to external wallets at any time.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `📤 <b>WITHDRAWAL COMMANDS:</b>\n` +
+    `• Send: <code>/withdraw [ADDRESS] [AMOUNT]</code> (e.g., <code>/withdraw 7xKX... 1.5</code>)\n` +
+    `• Send: <code>/withdraw [ADDRESS] ALL</code> (Sweeps maximum available balance minus gas buffer)\n\n` +
+    `⚓ <b>GAS SAFETY BUFFER:</b>\n` +
+    `Sentry automatically retains a <b>0.00005 SOL buffer</b> on full withdrawals to ensure transaction fees are covered and the account remains rent-exempt.\n\n` +
+    `🐙 <b>CONSOLIDATED MULTI-WALLET WITHDRAWAL:</b>\n` +
+    `If you have active sub-wallets (W2-W5), <code>/withdraw ALL</code> gathers remaining balances across all active sub-wallets into a single consolidated transaction.`,
+
+    // PAGE 13: RENT SWEEPER & ACCOUNT RECLAIMING
+    `📖 <b>HOW TO TRADE: RENT SWEEPER ENGINE</b> <i>(13/16)</i>\n\n` +
+    `<i>Reclaim SOL locked in empty token accounts left behind by closed positions.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `🧹 <b>HOW RENT RECLAIMING WORKS:</b>\n` +
+    `Every time you buy a token, Solana locks <b>~0.002039 SOL</b> to open a Token Account (ATA). When you sell 100% of your tokens, that empty account remains open, trapping your SOL.\n\n` +
+    `1. Go to <b>Positions</b> on your dashboard.\n` +
+    `2. If empty accounts are detected, Sentry displays: <code>🧹 Sweep Empty Accounts (+X.XXXX SOL)</code>.\n` +
+    `3. Click the button—Sentry generates <code>CloseAccount</code> instructions for up to 18 empty SPL and Token-2022 accounts in a single Jito bundle, returning the reclaimed SOL directly to your balance.`,
+
+    // PAGE 14: SENTRY GUILDS & COMMUNITY LOYALTY
+    `📖 <b>HOW TO TRADE: SENTRY GUILDS</b> <i>(14/16)</i>\n\n` +
+    `<i>Sentry Guilds are private on-chain loyalty engines for KOLs, project leads, and trading communities.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `🏰 <b>COMMUNITY LEADERBOARDS:</b>\n` +
+    `• Members earn <b>10 Guild Loyalty Points (GLP) for every 0.1 SOL traded</b>.\n` +
+    `• Guild leaders access a live-updating volume leaderboard to run trading contests.\n` +
+    `• Export community holder ledgers to CSV for verified whitelist access or distribution.\n\n` +
+    `💸 <b>GUILD AIRDROPS & REVENUE:</b>\n` +
+    `• Guild owners earn <b>50% of all platform trading fees</b> generated by their members.\n` +
+    `• Execute bulk SOL airdrops directly from the management panel: <b>Flat Split</b>, <b>Tiered (Top 3 / Next 7 / Ranks 11-50)</b>, or <b>Individual Rank Payouts</b>.`,
+
+    // PAGE 15: SENTRY LAUNCHPAD & TOKEN LAUNCHER
+    `📖 <b>HOW TO TRADE: LAUNCHPAD & LAUNCHER</b> <i>(15/16)</i>\n\n` +
+    `<i>Deploy Pump.fun tokens in Block-0 with stealth dev buys and vanity contract addresses.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `🚀 <b>THE LAUNCH WIZARD:</b>\n` +
+    `1. Tap <b>Launch Token</b> $\\rightarrow$ <b>Start Token Wizard</b>.\n` +
+    `2. Enter Token Name, Ticker Symbol, Description, and upload an Image.\n` +
+    `3. <b>Vanity Address Mining:</b> Enter a custom 1-4 character prefix (e.g., <code>CAT...pump</code>).\n` +
+    `4. <b>Stealth Dev Buys:</b> Configure initial buy size and split the allocation across up to 4 sub-wallets concurrently.\n` +
+    `5. <b>Block-0 Jito Bundle:</b> Token creation, IPFS metadata pinning, stealth buys, and validator tips are packaged into a single un-snipeable Block-0 bundle.`,
+
+    // PAGE 16: WATCHLIST, CALENDAR & MINI-APP
+    `📖 <b>HOW TO TRADE: WATCHLIST & TOOLS</b> <i>(16/16)</i>\n\n` +
+    `<i>Additional utilities built into Sentry Terminal:</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `👀 <b>PERSISTENT WATCHLIST:</b>\n` +
+    `• Send: <code>/watch [CA] [TARGET_PRICE_USD]</code> to track tokens in Redis.\n` +
+    `• Send: <code>/watchlist</code> to view live prices, gain %, and alert targets.\n\n` +
+    `📅 <b>LAUNCH CALENDAR:</b>\n` +
+    `• Send: <code>/calendar</code> to view verified launches under 2 hours old with active volume and socials.\n\n` +
+    `📊 <b>CSV TAX LEDGER EXPORT:</b>\n` +
+    `• Send: <code>/exporttrades</code> or tap Export CSV in the WebApp to download full transaction records with Jito signatures for tax compliance.`
 ];
 
+// =========================================================
+// ⚙️ THE PROFITABILITY CONFIGURATION GUIDE (STRATEGY & MATH)
+// =========================================================
+const CONFIG_GUIDE_PAGES: string[] = [
+    // PAGE 1: CONFIGURATION PHILOSOPHY
+    `⚙️ <b>CONFIG GUIDE: PHILOSOPHY & EV</b> <i>(1/12)</i>\n\n` +
+    `<i>Quantitative trading is about maximizing Expected Value (+EV) over thousands of executions.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `📐 <b>THE EXPECTED VALUE FORMULA:</b>\n` +
+    `<code>EV = (Win Rate % * Avg Win Size) - (Loss Rate % * Avg Loss Size)</code>\n\n` +
+    `To build a profitable automated setup, you must optimize three variables:\n` +
+    `1. <b>Execution Speed:</b> Land trades ahead of retail crowd spikes.\n` +
+    `2. <b>Filter Rigor:</b> Eliminate 95% of zero-liquidity honeypots before spending gas.\n` +
+    `3. <b>Asymmetric Risk Sizing:</b> Risk small amounts on speculative picks and scale size on high-conviction setups.\n\n` +
+    `<i>This guide details how to configure Sentry's engines to achieve maximum profitability.</i>`,
 
-// ✅ Navigation Keyboard Builder for CONFIG_GUIDE_PAGES
-function buildConfigGuideKeyboard(page: number) {
-    const buttons = [];
-    const navRow = [];
-    if (page > 0) navRow.push(Markup.button.callback('⬅️ Prev', `config_guide_page_${page - 1}`));
-    if (page < CONFIG_GUIDE_PAGES.length - 1) navRow.push(Markup.button.callback('Next ➡️', `config_guide_page_${page + 1}`));
-    if (navRow.length > 0) buttons.push(navRow);
-    buttons.push([Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]);
-    return Markup.inlineKeyboard(buttons);
-}
+    // PAGE 2: JITO PRIORITY FEES & BRIBE OPTIMIZATION
+    `⚙️ <b>CONFIG GUIDE: PRIORITY FEES & BRIBES</b> <i>(2/12)</i>\n\n` +
+    `<i>Solana block space is competitive. Priority fees bribe Jito validators to include your transaction in the current block.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `🚀 <b>PRIORITY LEVEL BREAKDOWN:</b>\n\n` +
+    `• <b>Eco 🍃 (0.0005 SOL):</b> Low priority. Use for quiet accumulation, limit fills, or non-urgent exits.\n\n` +
+    `• <b>Fast 🐎 (0.001 SOL):</b> <i>Recommended Default.</i> Outpaces 90% of standard Telegram bot trades during normal market conditions.\n\n` +
+    `• <b>Turbo ⚡ (0.005 SOL):</b> High priority. Essential during volatile market rallies or hyped Pump.fun launches.\n\n` +
+    `• <b>Custom ⚙️ (0.01 - 0.02 SOL):</b> Maximum priority bribe. Guarantees Block-0 inclusion during hyper-competitive launches.`,
 
+    // PAGE 3: EXECUTION ENGINES - SOR VS. LOW LATENCY
+    `⚙️ <b>CONFIG GUIDE: SOR VS. LOW LATENCY</b> <i>(3/12)</i>\n\n` +
+    `<i>In your Settings menu, you can toggle Smart Order Routing (SOR) on or off. Here is the mathematical trade-off:</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `⚡ <b>LOW LATENCY MODE (SOR OFF):</b>\n` +
+    `• Bypasses multi-pool quote queries and routes directly via Jupiter/PumpPortal.\n` +
+    `• <b>Saves ~100ms - 150ms of execution latency.</b>\n` +
+    `• <i>Best For:</i> Block-0 sniping on Pump.fun where speed is more important than price impact.\n\n` +
+    `💰 <b>SMART ORDER ROUTING (SOR ON):</b>\n` +
+    `• Queries Jupiter, Raydium, Meteora DLMM, and Orca in parallel to find the cheapest fill price across pools.\n` +
+    `• <i>Best For:</i> Standard trades and position sizes over 0.5 SOL where routing reduces price slippage.`,
 
-// 🟢 NEW: Configuration Guide Button Handler
-bot.action('btn_config_guide', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[0], buildConfigGuideKeyboard(0));
-});
+    // PAGE 4: ADAPTIVE SLIPPAGE VS. STATIC SLIPPAGE
+    `⚙️ <b>CONFIG GUIDE: ADAPTIVE SLIPPAGE</b> <i>(4/12)</i>\n\n` +
+    `<i>Static slippage leads to failed trades during pumps or overpaying during calm periods.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `📈 <b>HOW ADAPTIVE SLIPPAGE WORKS:</b>\n` +
+    `When enabled, Sentry evaluates 5-minute price momentum and pool liquidity before broadcasting:\n\n` +
+    `• <b>Volatile Pumps (M5 > 25%):</b> Auto-raises slippage tolerance to <b>28% - 35%</b> so your buy or sell never fails.\n` +
+    `• <b>Thin Liquidity (< $15k):</b> Sets minimum slippage to <b>25%</b> to overcome price impact.\n` +
+    `• <b>Calm Markets (M5 < 3%):</b> Auto-lowers slippage to <b>12%</b> to protect your cost basis.\n\n` +
+    `<i>Recommendation: Keep Adaptive Slippage ON for automated exits and manual buys.</i>`,
 
-// 🟢 NEW: Configuration Guide Page Navigation Handler
-bot.action(/^config_guide_page_(\d+)$/, async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const page = parseInt(ctx.match[1]);
-    if (page < 0 || page >= CONFIG_GUIDE_PAGES.length) return;
-    await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[page], buildConfigGuideKeyboard(page));
-});
+    // PAGE 5: AUTO-SNIPER - SCORING & FILTERS
+    `⚙️ <b>CONFIG GUIDE: AUTO-SNIPER SCORING</b> <i>(5/12)</i>\n\n` +
+    `<i>Configure AI scoring to filter out scam launches automatically.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `🔍 <b>DEEP SCORING VS. FAST SCORING:</b>\n\n` +
+    `• <b>⚡ Fast Scoring:</b> Evaluates basic token age, volume, and liquidity in < 50ms. High speed, minimal safety check.\n\n` +
+    `• <b>🔍 Deep Scoring (Recommended):</b> Runs full heuristic checks: Rugcheck API summary, top 10 holder concentration, developer launch history, LP lock/burn verification, and simulated tax sellability.\n\n` +
+    `⭐ <b>MINIMUM AI SCORE THRESHOLD:</b>\n` +
+    `• <b>Score < 50:</b> High risk / unproven.\n` +
+    `• <b>Score 60 - 75:</b> Optimal balance between launch frequency and safety.\n` +
+    `• <b>Score 80+:</b> Strict filter (fewer snipes, higher win rate).`,
 
+    // PAGE 6: AUTO-SNIPER - ANTI-RUG & SUPPLY SAFEGUARDS
+    `⚙️ <b>CONFIG GUIDE: SUPPLY SAFEGUARDS</b> <i>(6/12)</i>\n\n` +
+    `<i>Protect your sniper against developer dumps and fake volume launches.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `👻 <b>Anti-Dead Coin Shield (Pump.fun):</b>\n` +
+    `When ON, Sentry automatically skips tokens where the creator bought 0 supply on creation. Developers who risk 0 SOL almost always abandon the token.\n\n` +
+    `🐋 <b>Max Dev Bag Limit (%):</b>\n` +
+    `Aborts the snipe if the developer wallet holds more than your set percentage of total supply at launch (e.g., <code>Max Dev Bag: 10%</code>).\n\n` +
+    `⏱️ <b>Block Delay (Seconds):</b>\n` +
+    `Set to <code>0 Seconds</code> for instant Block-0 execution, or <code>2 - 3 Seconds</code> to let anti-bot tax traps trigger first.`,
+
+    // PAGE 7: AUTO-SNIPER - DYNAMIC SIZING ENGINE
+    `⚙️ <b>CONFIG GUIDE: DYNAMIC SIZING MATH</b> <i>(7/12)</i>\n\n` +
+    `<i>Dynamic Sizing replaces fixed buy amounts with a conviction-weighted math curve.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `📐 <b>THE SIZING FORMULA:</b>\n` +
+    `<code>Size = BaseRiskUnit * (Score / 100)^Exponent * MaxMultiplier</code>\n\n` +
+    `• <b>Base Risk Unit (e.g., 0.02 SOL):</b> Your minimum bet size on baseline tokens.\n` +
+    `• <b>Max Risk Multiplier (e.g., 5.0x):</b> Maximum scaling factor for top-tier gems.\n` +
+    `• <b>Exponent Curves:</b>\n` +
+    `  ├ <b>1.0 (Linear):</b> Straight proportional scaling.\n` +
+    `  ├ <b>2.0 (Aggressive - Recommended):</b> Squares conviction. A 90-score token receives ~4x the size of a 50-score token.\n` +
+    `  └ <b>3.0 (Exponential):</b> Cubes conviction. Only the top 5% of tokens receive maximum allocation.`,
+
+    // PAGE 8: AUTO-SNIPER - PROFITABILITY PRESETS
+    `⚙️ <b>CONFIG GUIDE: SNIPER PRESETS</b> <i>(8/12)</i>\n\n` +
+    `<i>Recommended configuration profiles for different risk appetites:</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `🔥 <b>PROFILE A: Aggressive Trench Runner</b>\n` +
+    `• Mode: Pump.fun | Score Mode: Fast | Min Score: 50 | Base Risk: 0.05 SOL | Max Multiplier: 3x | Exp: 1.0 | Anti-Dead: OFF | Dev Limit: 20% | Delay: 0s\n\n` +
+    `🎯 <b>PROFILE B: High-Conviction Gem Hunter (Recommended)</b>\n` +
+    `• Mode: BOTH | Score Mode: Deep | Min Score: 65 | Base Risk: 0.02 SOL | Max Multiplier: 5x | Exp: 2.0 | Anti-Dead: ON | Dev Limit: 10% | Delay: 1s\n\n` +
+    `🛡️ <b>PROFILE C: Capital Preservation</b>\n` +
+    `• Mode: Raydium LPs | Score Mode: Deep | Min Score: 80 | Base Risk: 0.01 SOL | Max Multiplier: 4x | Exp: 3.0 | Anti-Dead: ON | Dev Limit: 5% | Delay: 3s`,
+
+    // PAGE 9: AI COIN CALLER - SCANNER TUNING
+    `⚙️ <b>CONFIG GUIDE: AI CALLER SETUP</b> <i>(9/12)</i>\n\n` +
+    `<i>The AI Coin Caller scans mempool telemetry every 15 seconds to alert you to early breakout momentum.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `• <b>Min Score (60 - 75):</b> Filters out low-volume duds before sending alerts.\n\n` +
+    `• <b>Max Token Age (10 - 30m):</b> Catches momentum early in the launch lifecycle.\n\n` +
+    `• <b>Momentum Range (15% to 300%):</b> Captures active breakout volume while avoiding parabolic top-buyers (> 500%).\n\n` +
+    `• <b>Min Liquidity ($5,000):</b> Ensures adequate pool depth so 1-tap buys fill cleanly.\n\n` +
+    `• <b>MEV Shield (ON):</b> Enforces private Jito bundle execution on all 1-tap snipes.`,
+
+    // PAGE 10: AUTOMATED EXITS - THE 1:3 GOLDEN RATIO
+    `⚙️ <b>CONFIG GUIDE: AUTOMATED EXIT RATIOS</b> <i>(10/12)</i>\n\n` +
+    `<i>Trading without predefined exits guarantees long-term portfolio drawdown.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `📐 <b>THE 1:3 GOLDEN RISK-TO-REWARD RATIO:</b>\n` +
+    `• <b>Auto-Trailing Drop (Stop Loss):</b> <code>-15%</code>\n` +
+    `• <b>Auto-Take Profit (TP):</b> <code>+45%</code>\n\n` +
+    `📊 <b>MATHEMATICAL PROOF:</b>\n` +
+    `Over 10 executed trades at 0.1 SOL size ($100 total allocation):\n` +
+    `• <b>4 Wins (+45%):</b> <code>4 * +0.045 SOL = +0.18 SOL</code>\n` +
+    `• <b>6 Losses (-15%):</b> <code>6 * -0.015 SOL = -0.09 SOL</code>\n` +
+    `• <b>Net Result:</b> <code>+0.09 SOL profit</code> (a <b>+9% net return</b> despite a 60% loss rate!).`,
+
+    // PAGE 11: LIMIT ORDERS & DCA (TWAP) STRATEGY
+    `⚙️ <b>CONFIG GUIDE: LIMITS & DCA (TWAP)</b> <i>(11/12)</i>\n\n` +
+    `<i>Automate accumulation without moving chart prices or staring at screens.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `📉 <b>LIMIT ORDERS (BUY THE DIP):</b>\n` +
+    `Set target USD buy prices (e.g., <code>JUPyiw... 0.005 $50</code>). Sentry monitors live price feeds and executes via Jito the moment the target is hit.\n\n` +
+    `🔁 <b>DCA / TWAP ACCUMULATION:</b>\n` +
+    `Splits large positions into smaller time-weighted tranches (e.g., Buy $10 every 30 minutes up to $200 total budget).\n\n` +
+    `<i>Every Limit or DCA fill automatically arms an independent Trailing Stop Loss in memory.</i>`,
+
+    // PAGE 12: ANTI-RUG SHIELD & FRONT-RUNNING EXITS
+    `⚙️ <b>CONFIG GUIDE: ANTI-RUG SHIELD</b> <i>(12/12)</i>\n\n` +
+    `<i>Sentry protects open positions against developer liquidity pulls using Yellowstone gRPC streams.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `🚨 <b>HOW THE ANTI-RUG SHIELD WORKS:</b>\n\n` +
+    `1. Sentry monitors low-level instruction logs on active token liquidity pools.\n` +
+    `2. If a developer broadcasts a <code>RemoveLiquidity</code> or <code>Withdraw</code> instruction, Sentry detects the raw transaction in the mempool.\n` +
+    `3. Sentry instantly constructs a high-priority, pre-signed Jito exit bundle for all exposed users, <b>front-running the developer's pull to exit your position before the liquidity disappears</b>.\n\n` +
+    `<i>This shield operates automatically in the background for all active Trailing Guards.</i>`
+];
+
+// =========================================================
+// ⌨️ KEYBOARD BUILDERS & ACTION HANDLERS
+// =========================================================
 
 function buildGuideKeyboard(page: number) {
     const buttons = [];
@@ -2065,6 +2096,17 @@ function buildGuideKeyboard(page: number) {
     return Markup.inlineKeyboard(buttons);
 }
 
+function buildConfigGuideKeyboard(page: number) {
+    const buttons = [];
+    const navRow = [];
+    if (page > 0) navRow.push(Markup.button.callback('⬅️ Prev', `config_guide_page_${page - 1}`));
+    if (page < CONFIG_GUIDE_PAGES.length - 1) navRow.push(Markup.button.callback('Next ➡️', `config_guide_page_${page + 1}`));
+    if (navRow.length > 0) buttons.push(navRow);
+    buttons.push([Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]);
+    return Markup.inlineKeyboard(buttons);
+}
+
+// 🟢 Operations Manual Button Handlers
 bot.action('btn_trade_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     await safeEditMessageText(ctx, TRADE_GUIDE_PAGES[0], buildGuideKeyboard(0));
@@ -2076,6 +2118,22 @@ bot.action(/^trade_guide_page_(\d+)$/, async (ctx) => {
     if (page < 0 || page >= TRADE_GUIDE_PAGES.length) return;
     await safeEditMessageText(ctx, TRADE_GUIDE_PAGES[page], buildGuideKeyboard(page));
 });
+
+// 🟢 Configuration Guide Button Handlers
+bot.action('btn_config_guide', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[0], buildConfigGuideKeyboard(0));
+});
+
+bot.action(/^config_guide_page_(\d+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const page = parseInt(ctx.match[1]);
+    if (page < 0 || page >= CONFIG_GUIDE_PAGES.length) return;
+    await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[page], buildConfigGuideKeyboard(page));
+});
+
+
+
 
 bot.action('action_create_vault', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -4929,7 +4987,117 @@ if (isExp) {
 }
 
   // 4. THE SIMULATION EDITOR (DASHBOARD FORGE)
-  const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
+// 4. THE SIMULATION EDITOR (DASHBOARD FORGE)
+const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
+if (isSimEdit) {
+    await redis.del(`state:simedit:${telegramId}`);
+    
+    const lines = text.split('\n').filter(l => l.trim() !== '');
+    const parsedData: Record<string, string> = {};
+    
+    for (const line of lines) {
+        const parts = line.split(':');
+        if (parts.length < 2) continue;
+        const key = parts[0].trim().toUpperCase();
+        const value = parts.slice(1).join(':').trim();
+        parsedData[key] = value;
+    }
+
+    if (!parsedData['BALANCE_SOL'] || !parsedData['WINS'] || !parsedData['LOSSES']) {
+        return ctx.reply("❌ Missing required fields. Must include: BALANCE_SOL, WINS, LOSSES.");
+    }
+
+    const loader = await ctx.reply("<i>⏳ Re-initializing simulation engine...</i>", { parse_mode: 'HTML' });
+
+    try {
+        const wins = parseInt(parsedData['WINS']) || 0;
+        const losses = parseInt(parsedData['LOSSES']) || 0;
+        const balance = parseFloat(parsedData['BALANCE_SOL']) || 0;
+        const volume = parseFloat(parsedData['VOL'] || '0');
+        const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '0');
+        const spend = parseFloat(parsedData['SPEND'] || '0');
+
+        // 1. Set basic Redis counters (balance, starting balance, etc.)
+        await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
+        await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
+        await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
+        await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
+
+        // 2. Generate synthetic trades to make computeUniversalStats() work
+        const totalTrades = wins + losses;
+        const avgVolume = totalTrades > 0 ? volume / totalTrades : 0;
+        const now = Date.now();
+        const syntheticTrades = [];
+
+        // Generate winning trades (random PnL between +15% and +95%)
+        for (let i = 0; i < wins; i++) {
+            const pnlPercent = 15 + Math.random() * 80;
+            const amt = avgVolume * (0.8 + Math.random() * 0.4);
+            syntheticTrades.push({
+                createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
+                isBuy: false,
+                amountInSol: amt,
+                profitPercent: pnlPercent,
+                realizedPnlSol: amt * (pnlPercent / 100),
+                strategy: 'SIMULATED'
+            });
+        }
+
+        // Generate losing trades (random PnL between -5% and -20%)
+        for (let i = 0; i < losses; i++) {
+            const pnlPercent = -(5 + Math.random() * 15);
+            const amt = avgVolume * (0.8 + Math.random() * 0.4);
+            syntheticTrades.push({
+                createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
+                isBuy: false,
+                amountInSol: amt,
+                profitPercent: pnlPercent,
+                realizedPnlSol: amt * (pnlPercent / 100),
+                strategy: 'SIMULATED'
+            });
+        }
+
+        // Shuffle and store in Redis
+        syntheticTrades.sort(() => Math.random() - 0.5);
+        await redis.set(`sim:trades:${telegramId}`, JSON.stringify(syntheticTrades.slice(0, 500))); // keep max 500 for performance
+        await redis.set(`sim:volume:${telegramId}`, volume.toString());
+
+        // 3. Store counter keys (optional, some legacy endpoints may use them)
+        await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
+        await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
+        await redis.set(`sim:stats:totalTrades:${telegramId}`, totalTrades.toString());
+        await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toString());
+
+        // 4. Persist to PostgreSQL
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (user) {
+            await prisma.simState.upsert({
+                where: { userId: user.id },
+                update: { 
+                    balance: balance, 
+                    startingBalance: balance, 
+                    volume: volume,
+                    active: true 
+                },
+                create: { 
+                    userId: user.id, 
+                    balance: balance, 
+                    startingBalance: balance, 
+                    volume: volume, 
+                    active: true 
+                }
+            });
+        }
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+            `✅ <b>SIMULATION FORGE COMPLETE</b>\n\nBalance: ${balance.toFixed(4)} SOL\nTotal Trades Set: <b>${totalTrades}</b> (${wins} Wins / ${losses} Losses)`, 
+            { parse_mode: 'HTML' }
+        );
+    } catch (e: any) {
+        await ctx.reply(`🔴 Forge Error: ${e.message}`);
+    }
+    return;
+}
   if (isSimEdit) {
       await redis.del(`state:simedit:${telegramId}`);
       
@@ -5583,7 +5751,7 @@ app.post('/api/stats-window', async (req, res) => {
                 manual: { count: manualTrades.length, pnl: manualPnl },
                 auto: { count: autoTrades.length, pnl: autoPnl }
             });
-        } {
+        } else { // 🟢 FIX: Added missing 'else'
             const liveStats = await getStatsForWindow(telegramId, 'live', 86400);
             return res.json({
                 manual: { count: liveStats.tradeCount, pnl: liveStats.totalPnl },
@@ -5711,6 +5879,7 @@ app.post('/api/toggle-sim', async (req, res) => {
 
 
 // 🟢 FIX: Connects /simedit HOURLY_CHART to the Bar Chart
+// 🟢 FIX: Connects /simedit HOURLY_CHART to the Bar Chart
 app.post('/api/analytics/hourly', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -5721,6 +5890,7 @@ app.post('/api/analytics/hourly', async (req, res) => {
         const isSim = await isSimulationActive(telegramId);
         
         if (isSim) {
+            // 1. If the user has manually forged stats, use those
             const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
             if (forgedRaw) {
                 const f = JSON.parse(forgedRaw);
@@ -5734,6 +5904,37 @@ app.post('/api/analytics/hourly', async (req, res) => {
                     return res.json(result);
                 }
             }
+
+            // 2. Fallback: Calculate Hourly Data from REAL sim:trades
+            const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
+            const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+            
+            const hourlyMap = new Map<number, { totalPnlSol: number, winCount: number, tradeCount: number }>();
+            for (let h = 0; h < 24; h++) hourlyMap.set(h, { totalPnlSol: 0, winCount: 0, tradeCount: 0 });
+
+            trades.forEach((t: any) => {
+                if (!t.isBuy) {
+                    const hour = new Date(t.createdAt).getUTCHours();
+                    const entry = hourlyMap.get(hour);
+                    if (entry) {
+                        entry.totalPnlSol += (t.realizedPnlSol || 0);
+                        entry.tradeCount += 1;
+                        if ((t.realizedPnlSol || 0) > 0) entry.winCount += 1;
+                    }
+                }
+            });
+
+            const result = [];
+            for (let h = 0; h < 24; h++) {
+                const d = hourlyMap.get(h);
+                const winRate = d && d.tradeCount > 0 ? (d.winCount / d.tradeCount) * 100 : 0;
+                result.push({
+                    hour: h,
+                    totalPnlSol: d ? d.totalPnlSol : 0,
+                    winRate: parseFloat(winRate.toFixed(1))
+                });
+            }
+            return res.json(result);
         }
         
         const { getHourlyPerformance } = await import('./services/analytics.service.js');

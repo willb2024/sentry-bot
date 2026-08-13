@@ -2,12 +2,9 @@
 import { redis } from '../lib/redis.js';
 import crypto from 'crypto';
 import { subscribeToMintPrice, unsubscribeFromMintPrice } from './guard-price-feed.service.js';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { generatePreSignedExitTxMulti } from './engine.service.js';
 
-const prisma = new PrismaClient();
-
-// 🟢 EXPORTED TYPES
 export const ORDER_TYPES = {
     DCA: 'DCA',
     LIMIT: 'LIMIT',
@@ -24,8 +21,8 @@ export interface TrailingOrder {
     amountInSol: number;
     entryPrice: number;           
     takeProfitPercent?: number; 
-    maxHoldMinutes?: number; // 🟢 TIME-BASED EXIT SUPPORT
-    createdAt?: number;      // 🟢 AGE TRACKING
+    maxHoldMinutes?: number; 
+    createdAt?: number;      
 }
 
 export async function syncGuardsFromDb() {
@@ -37,7 +34,6 @@ export async function syncGuardsFromDb() {
         });
         
         for (const g of dbGuards) {
-            // 🟢 FIX: Avoid unsafe 'as any' casting that results in NaN runtime evaluation
             const maxHold = (g as any).maxHoldMinutes as number | null | undefined;
             const order: TrailingOrder = {
                 id: g.id,
@@ -112,8 +108,6 @@ export async function updateEntryPrice(orderId: string, entryPrice: number) {
     await updateGuardSafe(orderId, (order) => { order.entryPrice = entryPrice; });
 }
 
-
-
 export async function addTrailingStopToMemory(
     telegramId: string, tokenAddress: string, trailingPercent: number, 
     amountInSol: number, currentPrice: number, takeProfitPercent?: number,
@@ -146,7 +140,6 @@ export async function addTrailingStopToMemory(
         }
     } catch (e: any) {}
 
-    // 🟢 FIX 3: Immediate Pre-sign generation for sub-1s Jito execution
     setTimeout(async () => {
         try {
             const payloads = await generatePreSignedExitTxMulti(telegramId, tokenAddress);
@@ -167,7 +160,6 @@ export async function removeOrderFromMemory(orderId: string, telegramId: string,
         await redis.srem(`user_guards:${telegramId}`, orderId);
         await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, orderId);
 
-        // 🟢 FIX: Suppress potential WebSocket unsubscription errors to ensure DB updates persist
         try {
             await unsubscribeFromMintPrice(tokenAddress, orderId);
         } catch (e) {
@@ -198,7 +190,6 @@ export async function cancelAllGuardsForToken(telegramId: string, tokenAddress: 
             if (raw) {
                 await removeOrderFromMemory(id, telegramId, tokenAddress);
             } else {
-                // Zombie Cleanup
                 await redis.srem(`active_guards_global`, id);
                 await redis.srem(`user_guards:${telegramId}`, id);
                 await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, id);
@@ -226,7 +217,6 @@ export async function cancelAllUserGuards(telegramId: string): Promise<number> {
                     await redis.srem(`user_guards:${telegramId}`, orderId);
                 }
             } else {
-                // Zombie Cleanup
                 await redis.srem(`active_guards_global`, orderId);
                 await redis.srem(`user_guards:${telegramId}`, orderId);
             }

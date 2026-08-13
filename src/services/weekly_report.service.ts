@@ -4,6 +4,7 @@ import { redis } from '../lib/redis.js';
 
 import { prisma } from '../lib/prisma.js';
 
+
 export interface WeeklyStats {
     telegramId: string;
     username: string;
@@ -21,7 +22,6 @@ export interface WeeklyStats {
     weeklyPnlSol: number;
 }
 
-// 🟢 FIX: Added precomputedRank and totalUsersCount to parameters
 export async function computeWeeklyStats(telegramId: string, precomputedRank?: number, totalUsersCount?: number): Promise<WeeklyStats | null> {
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
@@ -48,7 +48,6 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
     const sellTrades = weekTrades.filter(t => !t.isBuy);
 
     const totalVolumeSol = weekTrades.reduce((sum, t) => sum + t.amountInSol, 0);
-    // 🟢 FIX: Reads actual fees from database instead of guessing 1%
     const totalFeesPaidSol = weekTrades.reduce((sum, t) => sum + (t.feeChargedSol || 0), 0);
 
     let wins = 0, losses = 0, weeklyPnlSol = 0;
@@ -74,7 +73,6 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
     const totalClosed = wins + losses;
     const winRate = totalClosed > 0 ? (wins / totalClosed) * 100 : 0;
 
-
     let affiliateEarnedSol = 0;
     user.recruits.forEach(r => {
         r.trades.forEach(t => {
@@ -82,12 +80,11 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
         });
     });
 
-    const sentryPoints = 0; // Deprecated
+    const sentryPoints = Math.floor((user.totalVolumeSol || 0) * 10000);
 
     let pointsRank = precomputedRank;
     let totalUsers = totalUsersCount;
 
-    // Fallback if called manually via /stats command
     if (pointsRank === undefined || totalUsers === undefined) {
         const allUsers = await prisma.user.findMany({ select: { telegramId: true, totalVolumeSol: true } });
         const sorted = allUsers
@@ -159,7 +156,6 @@ export function formatWeeklyReport(stats: WeeklyStats): string {
     );
 }
 
-// Replace the dispatch loop in sendWeeklyReportsToAll:
 export async function sendWeeklyReportsToAll(bot: any): Promise<void> {
     console.log('📬 [WEEKLY REPORT] Starting weekly report dispatch...');
 
@@ -169,7 +165,6 @@ export async function sendWeeklyReportsToAll(bot: any): Promise<void> {
 
     let sent = 0, failed = 0;
 
-    // 🟢 FIX 35: Parallel batching (avoids Telegram flood limit while still executing quickly)
     const BATCH_SIZE = 10;
     const batches = [];
     for (let i = 0; i < allUsers.length; i += BATCH_SIZE) {
@@ -187,9 +182,12 @@ export async function sendWeeklyReportsToAll(bot: any): Promise<void> {
             sent++;
         })).catch(() => { failed++; });
 
-        // Cooldown to respect Telegram 30/s limit
         await new Promise(r => setTimeout(r, 2000));
     }
 
     console.log(`📬 [WEEKLY REPORT] Done. Sent: ${sent}, Failed/Skipped: ${failed}`);
 }
+
+// 🟢 FIX: Added precomputedRank and totalUsersCount to parameters
+
+

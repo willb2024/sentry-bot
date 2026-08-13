@@ -1,22 +1,16 @@
 // src/services/guild.service.ts
-
-import { PrismaClient } from '@prisma/client';
 import { PublicKey, Keypair, SystemProgram, TransactionMessage, VersionedTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { redis } from '../lib/redis.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
+import { prisma } from '../lib/prisma.js';
 
 dotenv.config();
 
-import { prisma } from '../lib/prisma.js';
-
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
 
-
-// Replace createGuild in src/services/guild.service.ts
-// Replace createGuild in src/services/guild.service.ts
 export async function createGuild(
     telegramId: string,
     name: string,
@@ -48,7 +42,6 @@ export async function createGuild(
         return { success: false, message: e.message };
     }
 }
-
 
 export async function joinGuild(telegramId: string, guildCode: string): Promise<{ success: boolean; message: string; guildName?: string; rewardDescription?: string | null }> {
     try {
@@ -82,7 +75,7 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
 
         const points = volumeSol / 0.1; // 10 GLP per SOL
 
-        await Promise.all(memberships.map(async (membership) => {
+        for (const membership of memberships) {
             await prisma.guildMembership.update({
                 where: { id: membership.id },
                 data: {
@@ -93,7 +86,7 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
             });
 
             await redis.zincrby(`guild_lb:${membership.guildId}`, points, user.id);
-        }));
+        }
     } catch (e) {}
 }
 
@@ -215,7 +208,6 @@ export async function executeGuildAirdrop(
                 lamports: lamportsPer
             }));
 
-        // 🟢 FIX: Executing transfer instructions in chunks of 20 to avoid block limits
         const CHUNK_SIZE = 20;
         let confirmedTxs = 0;
         let lastSig = "";
@@ -283,7 +275,6 @@ export async function executeTieredAirdrop(
         }
         if (instructions.length === 0) return { success: false, message: "No eligible recipients." };
 
-        // 🟢 FIX: Executing transfer instructions in chunks of 20 to avoid block limits
         const CHUNK_SIZE = 20;
         let confirmedTxs = 0;
         let lastSig = "";
