@@ -1,14 +1,15 @@
-import { PrismaClient } from '@prisma/client';
+// src/services/payout.service.ts
 import { PublicKey, Keypair, SystemProgram, TransactionMessage, VersionedTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { connection } from '../lib/connection.js'; 
 import { redis } from '../lib/redis.js';
 import { decryptKey } from './vault.service.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
+import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton
+import { redlock } from '../lib/redlock.js';
+import { logger } from '../lib/logger.js';
 
 dotenv.config();
-
-import { prisma } from '../lib/prisma.js';
 
 const DAILY_PAYOUT_CAP_SOL = parseFloat(process.env.TREASURY_DAILY_PAYOUT_CAP_SOL || '50');
 const SINGLE_PAYOUT_ALERT_THRESHOLD_SOL = parseFloat(process.env.PAYOUT_ALERT_THRESHOLD_SOL || '5');
@@ -42,8 +43,12 @@ async function alertAdmins(message: string) {
 
 export async function processAffiliatePayout(userId: string): Promise<{ success: boolean; signature?: string; message: string }> {
     const lockKey = `lock:payout:${userId}`;
-    const isLocked = await redis.set(lockKey, 'LOCKED', 'EX', 90, 'NX');
-    if (!isLocked) return { success: false, message: "Payout already processing. Please wait 90 seconds." };
+    let lock;
+    try {
+        lock = await redlock.acquire([lockKey], 90000); 
+    } catch (e) {
+        return { success: false, message: "Payout already processing. Please wait 90 seconds." };
+    }
 
     let amountToPay = 0;
     let rewardsDebited = false;
@@ -61,25 +66,17 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
 
         amountToPay = user.pendingRewardsSol;
         
-        // 🟢 DAILY CAP CHECK
         const todaysTotal = await getTodaysPayoutTotal();
         if (todaysTotal + amountToPay > DAILY_PAYOUT_CAP_SOL) {
-            await redis.del(lockKey);
-            await alertAdmins(
-                `🚨 <b>PAYOUT CAP HIT</b>\n\nUser ${userId} tried to claim ${amountToPay.toFixed(4)} SOL.\n` +
-                `Today's total would be ${(todaysTotal + amountToPay).toFixed(4)} SOL, exceeding the ${DAILY_PAYOUT_CAP_SOL} SOL daily cap.\n` +
-                `Payout was blocked. Manual review needed.`
-            );
+            await alertAdmins(`🚨 <b>PAYOUT CAP HIT</b>\n\nUser ${userId} tried to claim ${amountToPay.toFixed(4)} SOL.\nBlocked.`);
             return { success: false, message: "Daily payout limit reached platform-wide. Please try again tomorrow or contact support." };
         }
 
-        // 🟢 SINGLE-PAYOUT ANOMALY ALERT
         if (amountToPay >= SINGLE_PAYOUT_ALERT_THRESHOLD_SOL) {
             alertAdmins(`⚠️ <b>Large Payout</b>\n\nUser ${userId} claiming ${amountToPay.toFixed(4)} SOL. Signature will follow.`);
         }
 
         const lamportsToPay = Math.floor(amountToPay * LAMPORTS_PER_SOL);
-
         await prisma.user.update({ where: { id: user.id }, data: { pendingRewardsSol: 0 } });
         rewardsDebited = true; 
 
@@ -111,7 +108,7 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
         try {
             await connection.sendRawTransaction(txBuffer, { skipPreflight: true });
         } catch (sendError: any) {
-            console.warn(`⚠️ [PAYOUT] RPC threw error, but Tx might land. Polling ${signature}... Error: ${sendError.message}`);
+            logger.warn(`⚠️ [PAYOUT] RPC threw error, but Tx might land. Polling ${signature}...`, { error: sendError.message });
         }
 
         let isConfirmed = false;
@@ -131,19 +128,19 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
         }
 
         await recordPayout(amountToPay);
-        await redis.del(lockKey);
         return { success: true, signature: signature, message: "Instant Payout Successful." };
 
     } catch (e: any) {
-        console.error(`🔴 [PAYOUT] Execution failed for user ${userId}: ${e.message}`);
+        logger.error(`🔴 [PAYOUT] Execution failed for user ${userId}`, { error: e.message });
         if (rewardsDebited && amountToPay > 0) {
             try {
                 await prisma.user.update({ where: { id: userId }, data: { pendingRewardsSol: { increment: amountToPay } } });
             } catch (refundErr: any) {
-                console.error(`🔴 [CRITICAL] Failed to refund payout for user ${userId}: ${refundErr.message}`);
+                logger.error(`🔴 [CRITICAL] Failed to refund payout for user ${userId}`, { error: refundErr.message });
             }
         }
-        await redis.del(lockKey);
         return { success: false, message: e.message };
+    } finally {
+        if (lock) await (lock as any).release();
     }
 }

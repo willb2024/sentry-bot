@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { connection } from '../lib/connection.js'; 
 import { redis } from '../lib/redis.js';
 import { rpcLimiter } from '../lib/rpc-limiter.js';
+import { getTokenMetadata } from './price.service.js';
 
 dotenv.config();
 
@@ -31,7 +32,6 @@ export async function getUserPositions(telegramId: string) {
 
         await Promise.all(activePubkeys.map(async (pubKey) => {
             try {
-                // 🟢 FIX: Wrap all RPC fetches inside our custom rpcLimiter to avoid rate limit bans
                 const [splAccounts, token2022Accounts] = await Promise.all([
                     rpcLimiter.run(() => 
                         connection.getParsedTokenAccountsByOwner(pubKey, { programId: TOKEN_PROGRAM_ID }, 'confirmed')
@@ -63,43 +63,23 @@ export async function getUserPositions(telegramId: string) {
         if (rawPositions.length === 0) return [];
 
         const uniqueMints = rawPositions.map(p => p.mint);
-        let tokenMetadata: Record<string, { price: number, symbol: string, name: string }> = {};
-
-        // DexScreener parallel processing chunks
-        const chunks: string[] = [];
-        for (let i = 0; i < uniqueMints.length; i += 30) {
-            chunks.push(uniqueMints.slice(i, i + 30).join(','));
-        }
-
-        await Promise.all(chunks.map(async (chunk) => {
-            try {
-                const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk}`, { signal: AbortSignal.timeout(8000) });
-                if (res.ok) {
-                    const data = (await res.json()) as any;
-                    (data.pairs || []).forEach((pair: any) => {
-                        const baseAddress = pair.baseToken.address;
-                        if (!tokenMetadata[baseAddress]) {
-                            tokenMetadata[baseAddress] = {
-                                price: parseFloat(pair.priceUsd || "0"),
-                                symbol: pair.baseToken.symbol || "UNKNOWN",
-                                name: pair.baseToken.name || "Unknown Token"
-                            };
-                        }
-                    });
-                }
-            } catch (e) {
-                console.warn("⚠️ [POSITIONS] DexScreener chunk fetch timeout.");
-            }
-        }));
+        
+        // Use metadata cache
+        const metadataResults = await Promise.all(uniqueMints.map(mint => getTokenMetadata(mint)));
+        
+        const tokenMetadata: Record<string, any> = {};
+        uniqueMints.forEach((mint, index) => {
+            tokenMetadata[mint] = metadataResults[index];
+        });
 
         const mappedPositions = rawPositions.map(p => {
-            const meta = tokenMetadata[p.mint] || { price: 0, symbol: "UNKNOWN", name: "Unknown Token" };
+            const meta = tokenMetadata[p.mint] || { priceUsd: 0, symbol: "UNKNOWN", name: "Unknown Token" };
             return {
                 ...p,
                 symbol: meta.symbol,
                 name: meta.name,
-                priceUsd: meta.price,
-                valueUsd: p.amount * meta.price
+                priceUsd: meta.priceUsd,
+                valueUsd: p.amount * meta.priceUsd
             };
         })
         .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 

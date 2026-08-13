@@ -4,6 +4,8 @@ import { connection, coldConnection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 import { getMint } from '@solana/spl-token';
 import { rpcLimiter } from '../lib/rpc-limiter.js';
+import { dexScreenerLimiter, rugCheckLimiter } from '../lib/api-limiter.js';
+import axios from 'axios';
 
 const PUMP_FUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const BASE58_MINT_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -43,6 +45,42 @@ export async function getCachedMintInfo(mint: string): Promise<{ decimals: numbe
     }
 }
 
+export async function getTokenMetadata(mint: string): Promise<{
+    symbol: string;
+    decimals: number;
+    liquidityUsd: number;
+    volume24h: number;
+    priceUsd: number;
+    name: string;
+}> {
+    const cacheKey = `token_metadata:${mint}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    try {
+        const res = await dexScreenerLimiter(() =>
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`)
+        );
+        
+        const pair = res.data?.pairs?.[0];
+        if (!pair) throw new Error('Token not found');
+
+        const metadata = {
+            symbol: pair.baseToken.symbol || "UNKNOWN",
+            name: pair.baseToken.name || "Unknown Token",
+            decimals: 6,
+            liquidityUsd: pair.liquidity?.usd || 0,
+            volume24h: pair.volume?.h24 || 0,
+            priceUsd: parseFloat(pair.priceUsd || '0'),
+        };
+
+        await redis.set(cacheKey, JSON.stringify(metadata), 'EX', 300); 
+        return metadata;
+    } catch (e) {
+        return { symbol: "UNKNOWN", name: "Unknown Token", decimals: 6, liquidityUsd: 0, volume24h: 0, priceUsd: 0 };
+    }
+}
+
 export async function getTokenRiskDetails(tokenMint: string): Promise<{
     isUnsafe: boolean; isHoneypot: boolean; isMintable: boolean; top10Pct: number; score: number;
 }> {
@@ -51,11 +89,11 @@ export async function getTokenRiskDetails(tokenMint: string): Promise<{
         const cached = await redis.get(key);
         if (cached) return JSON.parse(cached);
 
-        const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
-            { signal: AbortSignal.timeout(4000) }); 
-        if (!res.ok) return { isUnsafe: false, isHoneypot: false, isMintable: false, top10Pct: 0, score: 0 };
-
-        const data = (await res.json()) as any;
+        const res = await rugCheckLimiter(() => 
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 4000 })
+        );
+        
+        const data = res.data;
         const risks = data.risks || [];
         const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
         const isMintable = !!(data.token && data.token.mintAuthority);
@@ -159,12 +197,11 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
             }
         } catch (e) {}
 
-        const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`,
-            { signal: AbortSignal.timeout(4000) });
+        const res = await rugCheckLimiter(() => 
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 4000 })
+        );
 
-        if (!res.ok) throw new Error("Timeout or API error");
-
-        const data = (await res.json()) as any;
+        const data = res.data;
         const risks = data.risks || [];
 
         const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
@@ -179,7 +216,6 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
         return isUnsafe;
     } catch (_) {
-        // 🟢 FIX 40: Do not block perfectly good trades just because rugcheck is rate-limiting you
         await redis.set(key, 'uncertain', 'EX', 45).catch(() => {});
         return false; 
     }

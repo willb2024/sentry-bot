@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { generatePnlCard } from './image.service.js';
 import { computeTokenScore, TokenStats, buildAuditTrailMessage } from './caller.service.js';
-import { ensureFirstTradeAnchor } from './engine.service.js';
 import { cachedSolUsdPrice } from './grpc.service.js';
 
 
@@ -291,6 +290,7 @@ export async function simExecuteSnipe(
     amountSol: number, 
     strategy: string = 'MANUAL'
 ): Promise<{ success: boolean; signature: string; message: string; volumeSpent: number }> {
+    const { ensureFirstTradeAnchor } = await import('./engine.service.js');
     await ensureFirstTradeAnchor(telegramId);
     const currentBal = parseFloat(await getSimBalance(telegramId));
     let actualSolSpent = amountSol;

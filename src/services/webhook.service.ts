@@ -1,9 +1,7 @@
 // src/services/webhook.service.ts
-import { PrismaClient } from '@prisma/client';
 import axios from 'axios';
 import crypto from 'crypto';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton
 
 export async function fireWebhook(telegramId: string, eventName: string, payload: any) {
     try {

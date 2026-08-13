@@ -14,10 +14,11 @@ import dns from 'dns';
 import { getLiveWalletBalance } from './deposit.service.js';
 import { fireWebhook } from './webhook.service.js';
 import https from 'https';
+import { logger } from '../lib/logger.js';
+import { jitoLimiter } from '../lib/api-limiter.js';
 
 dotenv.config();
 
-// 🟢 FIX: Safe PublicKey parser to prevent fatal runtime crashes on malformed strings
 function safePublicKey(address: string | undefined | null): PublicKey | null {
     if (!address) return null;
     try {
@@ -27,7 +28,6 @@ function safePublicKey(address: string | undefined | null): PublicKey | null {
     }
 }
 
-// Performance Optimization: Cache priority fees
 let cachedPriorityFee = 1_000_000;
 let lastPriorityFeeFetch = 0;
 
@@ -46,7 +46,6 @@ const CRITICAL_DOMAINS = [
 function resolveViaDoh(hostname: string): Promise<string | null> {
     return new Promise(async (resolve) => {
         if (dohCache[hostname]) return resolve(dohCache[hostname]);
-        
         const cachedIp = await redis.get(`doh_cache:${hostname}`);
         if (cachedIp) return resolve(cachedIp);
 
@@ -90,10 +89,10 @@ const secureDoHLookup = (hostname: string, options: any, callback: any) => {
 };
 
 export async function warmDnsCache(): Promise<void> {
-    console.log('🌐 [DNS] Pre-warming DoH cache for critical endpoints...');
+    logger.info('🌐 [DNS] Pre-warming DoH cache for critical endpoints...');
     await Promise.all(CRITICAL_DOMAINS.map(async (domain) => {
         const ip = await resolveViaDoh(domain);
-        if (ip) console.log(`  ✅ ${domain} → ${ip}`);
+        if (ip) logger.info(`  ✅ ${domain} → ${ip}`);
     }));
 }
 
@@ -147,9 +146,13 @@ const JITO_TIP_ACCOUNTS = [
 let cachedBlockhash: { blockhash: string; lastValidBlockHeight: number } | null = null;
 connection.getLatestBlockhash('confirmed').then(b => { cachedBlockhash = b; }).catch(() => {});
 
-setInterval(async () => {
+// Push into global array for graceful shutdown
+declare global { var _sentryIntervals: NodeJS.Timeout[]; }
+if (!global._sentryIntervals) global._sentryIntervals = [];
+
+global._sentryIntervals.push(setInterval(async () => {
     try { cachedBlockhash = await connection.getLatestBlockhash('confirmed'); } catch (_) {}
-}, 15000);
+}, 15000));
 
 const keypairCache = new Map<string, Keypair>();
 
@@ -204,9 +207,6 @@ export async function checkRecentMevActivityCached(tokenMint: string): Promise<b
     }
 }
 
-// ============================================================================
-// 🟢 WALL STREET FEATURE 3: DYNAMIC VOLATILITY-ADAPTIVE SLIPPAGE
-// ============================================================================
 export async function getVolatilityAdjustedSlippage(tokenMint: string, userBaseSlippage: number): Promise<number> {
     try {
         const cacheKey = `volatility_slip:${tokenMint}`;
@@ -245,9 +245,6 @@ export async function getVolatilityAdjustedSlippage(tokenMint: string, userBaseS
     }
 }
 
-// ============================================================================
-// 🟢 WALL STREET FEATURE 1: TRANSACTION COST ANALYSIS (TCA)
-// ============================================================================
 export interface TcaExecutionReport {
     confirmed: boolean;
     expectedPriceSol: number;
@@ -324,56 +321,49 @@ export async function sendToJitoBundle(
     tipTx: VersionedTransaction,
     allowRawFallback: boolean = true
 ): Promise<boolean> {
-    try {
-        const base64Swap = Buffer.from(swapTx.serialize()).toString('base64');
-        const base64Tip = Buffer.from(tipTx.serialize()).toString('base64');
-        const bundledTxs = [base64Swap, base64Tip];
+    const JITO_REGIONS = [
+        'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
+    ];
 
-        const JITO_REGIONS = [
-            'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
-            'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
-            'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
-            'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
-            'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
-        ];
+    const bundledTxs = [
+        Buffer.from(swapTx.serialize()).toString('base64'),
+        Buffer.from(tipTx.serialize()).toString('base64')
+    ];
 
-        const requests = JITO_REGIONS.map(url => 
-            axiosClient.post(url, {
-                jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] 
-            }, { 
-                headers: { 'Content-Type': 'application/json', ...API_HEADERS }, timeout: 3000
-            })
-        );
-
-        const results = await Promise.allSettled(requests);
-        let jitoSuccess = false;
-
-        for (const res of results) {
-            if (res.status === 'fulfilled' && res.value.data && !res.value.data.error) {
-                jitoSuccess = true;
-                break;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const shuffled = JITO_REGIONS.sort(() => Math.random() - 0.5);
+        for (const url of shuffled) {
+            try {
+                const res = await jitoLimiter(() => axiosClient.post(url, {
+                    jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] 
+                }, { headers: { 'Content-Type': 'application/json' }, timeout: 3000 }));
+                
+                if (res.data && !res.data.error) return true;
+            } catch (e: any) {
+                logger.warn(`Jito attempt ${attempt} to ${url} failed: ${e.message}`);
             }
         }
+        await new Promise(r => setTimeout(r, 1000 * attempt)); 
+    }
 
-        if (allowRawFallback && !jitoSuccess) {
+    if (allowRawFallback) {
+        try {
             const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null);
             if (rawSig) {
                 await connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
                 return true;
             }
-            return false;
+        } catch (e: any) {
+            logger.error('Jito fallback RPC also failed', { error: e.message });
         }
-
-        return jitoSuccess;
-    } catch (e: any) {
-        console.error("🔴 [JITO BUNDLE] Fatal error:", e.message);
-        return false;
     }
+    return false;
 }
 
-// ============================================================================
-// 🟢 WALL STREET FEATURE 2: SMART ORDER ROUTING (SOR) + LOW LATENCY TOGGLE
-// ============================================================================
 export interface DexRouteQuote {
     dex: string;
     outAmount: number;
@@ -406,7 +396,7 @@ async function fetchApiTransaction(
     customPriorityFee: number = 0.001,
     pkEncrypted?: string,
     raydiumPoolId?: string,
-    useSOR: boolean = true // 🟢 DYNAMIC TOGGLE
+    useSOR: boolean = true 
 ): Promise<{ buffer: Buffer | null; errorLog: string; estimatedOutput?: number; winningRoute?: string }> {
     let globalErrorLog = "";
     const isPumpToken = mint.toLowerCase().endsWith("pump");
@@ -433,7 +423,6 @@ async function fetchApiTransaction(
             } catch (e: any) { globalErrorLog += `[PumpPortal: API Reject] `; }
         }
 
-        // Direct Raydium Bypass
         if (raydiumPoolId && pkEncrypted) {
             const { buildDirectRaydiumSwap } = await import('./raydium.service.js');
             const keypair = getCachedKeypair(vault, pkEncrypted);
@@ -446,7 +435,6 @@ async function fetchApiTransaction(
         let bestRoute: DexRouteQuote | undefined;
 
         if (useSOR) {
-            // 🟢 SMART ORDER ROUTING (SOR) - Multi-DEX Parallel
             const dexPools = ['Raydium', 'Meteora DLMM', 'Meteora', 'Pump.fun'];
             const quotePromises = dexPools.map(dex => getIsolatedDexQuote(dex, inputMint, outputMint, jupAmount, slippageBps));
 
@@ -467,7 +455,6 @@ async function fetchApiTransaction(
             validQuotes.sort((a, b) => b.outAmount - a.outAmount);
             bestRoute = validQuotes[0];
         } else {
-            // 🟢 LOW LATENCY MODE - Jupiter Direct (Skips multi-pool array)
             const res = await axiosClient.get(
                 `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`,
                 { headers: API_HEADERS, timeout: 2000 }
@@ -505,10 +492,9 @@ async function buildTipAndFeeTransaction(
     payer: Keypair, telegramId: string, expectedSolVolume: number,
     priorityLevel: string = "FAST", customPriorityFee: number = 0.001,
     isBumper: boolean = false, blockhash: string,
-    feeRate?: number // 🟢 NEW OPTIONAL PARAM
+    feeRate?: number 
 ): Promise<VersionedTransaction | null> {
     try {
-        // 🟢 IF FEE RATE IS PROVIDED, USE IT. OTHERWISE FETCH FROM DB.
         const platformFeeRate = feeRate ?? await getPlatformFeeRate(telegramId); 
         const feeLamports = BigInt(Math.round((expectedSolVolume * 1_000_000_000) * platformFeeRate));
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
@@ -552,7 +538,6 @@ export async function executeSnipe(
     strategy: string = 'MANUAL'
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
-    // 🟢 SIMULATION INTERCEPT: Pass strategy parameter to simExecuteSnipe correctly
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
         return await simExecuteSnipe(telegramId, targetCA, amountSol, strategy);
@@ -590,24 +575,18 @@ export async function executeSnipe(
 
         if (liveBalanceSol < amountSol + 0.005) return { success: false, message: "Insufficient Funds." };
 
-        // 1. Determine Slippage (Adaptive or Static)
         let selectedSlippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
         if (user.enableAdaptiveSlippage && overrideSlippage === undefined) {
-            // Only run volatility checks if Adaptive is ON and no explicit override exists
             const volatileSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
             if (volatileSlippage > selectedSlippage) {
-                console.log(`🛡️ [ADAPTIVE SLIPPAGE] Raised tolerance from ${selectedSlippage}% to ${volatileSlippage}% due to market volatility.`);
                 selectedSlippage = volatileSlippage;
             }
         }
 
-        // 2. Determine Routing (SOR or Direct Jupiter)
         let raydiumPoolIdToUse: string | undefined = raydiumPoolId;
         let routeMode = "Standard";
         if (user.enableSOR && !raydiumPoolId) {
-            // If SOR is ON, we pass NO pool ID to the fetcher, allowing it to execute the 4-way SOR.
             routeMode = "SOR (4-Pool Routing)";
-            console.log(`⚡ [SOR ENGINE] Routing via Smart Order Routing for ${targetCA.substring(0,6)}...`);
             raydiumPoolIdToUse = undefined; 
         } else {
             routeMode = "Fast (Direct Jupiter)";
@@ -629,7 +608,6 @@ export async function executeSnipe(
         let walletErrors: string[] = [];
         const latestBlockhash = await getLatestBlockhashWithCache();
 
-        // 🟢 FETCH FEE RATE ONCE FOR ALL WALLETS TO PREVENT DB DEADLOCK
         const feeRate = await getPlatformFeeRate(user.telegramId);
 
         const executionPromises = wallets.map(async (w, index) => {
@@ -642,7 +620,6 @@ export async function executeSnipe(
                 return { success: false, index };
             }
 
-            // 3. Execute the Transaction (Passing all dynamic flags)
             const apiRes = await fetchApiTransaction(
                 'buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, 
                 selectedSlippage, priorityLevel, customPriorityFee, undefined, raydiumPoolIdToUse, user.enableSOR ?? true
@@ -662,7 +639,6 @@ export async function executeSnipe(
             }
             swapTx.sign([w]);
 
-            // 🟢 PASS THE PRE-FETCHED FEE RATE
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash, feeRate);
             if (!tipTx) { walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
 
@@ -678,7 +654,6 @@ export async function executeSnipe(
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
             if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
 
-            // 🟢 TCA LOGGING
             const expectedOutput = apiRes.estimatedOutput || 0;
             const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true);
             
@@ -757,7 +732,6 @@ export async function executeExit(
     strategy: string = 'MANUAL'
 ): Promise<{ success: boolean; signature?: string; message: string }> {
 
-    // 🟢 SIMULATION INTERCEPT: Pass strategy parameter to simExecuteExit correctly
     const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
         return await simExecuteExit(telegramId, targetCA, sellPercentage, undefined, strategy);
@@ -770,7 +744,6 @@ export async function executeExit(
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No Vault." };
 
-        // 🟢 VOLATILITY ADAPTIVE SLIPPAGE APPLIED (Checks DB Toggle)
         let selectedSlippage = sellPercentage === 100 ? 100.0 : (user.slippagePercent || 20.0);
         if ((user.enableAdaptiveSlippage ?? true) && sellPercentage !== 100) {
             const volatileSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
@@ -796,7 +769,7 @@ export async function executeExit(
         let walletErrors: string[] = [];
         const latestBlockhash = await getLatestBlockhashWithCache();
         const balances = await Promise.all(wallets.map(w => connection.getBalance(w.publicKey).catch(() => 0)));
-        const feeRate = await getPlatformFeeRate(user.telegramId); // 🟢 Fetch once!
+        const feeRate = await getPlatformFeeRate(user.telegramId);
 
         const executionPromises = wallets.map(async (w, index) => {
             const vaultPubkey = w.publicKey;
@@ -832,14 +805,12 @@ export async function executeExit(
             
             let swapTx: VersionedTransaction;
             try {
-                // 🟢 1. Build the swapTx FIRST to ensure the payload isn't too large
                 swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             } catch (e: any) {
                 walletErrors[index] = `Malformed TX buffer: ${e.message}`; walletReport[index] = `W${index + 1}: 🔴 Format`; return { success: false, index };
             }
             swapTx.sign([w]);
 
-            // 🟢 2. Calculate the original invested amount to accurately capture the 1% fee on Sells
             let volumeToRecord = dynamicFeeBase;
             try {
                 const allBuys = await prisma.trade.findMany({ where: { userId: user.id, tokenAddress: targetCA, isBuy: true, status: 'CONFIRMED' } });
@@ -849,7 +820,6 @@ export async function executeExit(
                 }
             } catch (_) {}
 
-            // 🟢 3. Build Tip & Fee Tx AFTER SwapTx is successfully deserialized, using volumeToRecord
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, volumeToRecord, priorityLevel, customPriorityFee, isBumper, latestBlockhash.blockhash, feeRate);
             if (!tipTx) { walletErrors[index] = `Sign Error.`; walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
             
@@ -858,7 +828,6 @@ export async function executeExit(
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
             if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
 
-            // 🟢 TCA APPLIED: Execute exit relies on verified on-chain execution output
             const expectedOutput = apiRes.estimatedOutput || 0;
             const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, decimals, false);
             
@@ -998,7 +967,6 @@ export async function generatePreSignedExitTxMulti(telegramId: string, targetCA:
                 const rawBalance = BigInt(parsedAccounts.value[0].account.data.parsed.info.tokenAmount.amount);
                 if (rawBalance === 0n) return null;
 
-                // 🟢 VOLATILITY ADAPTIVE SLIPPAGE ON PRESIGNED INSTANT EXITS
                 let selectedSlippage = user.slippagePercent || 20.0;
                 if (user.enableAdaptiveSlippage ?? true) {
                     selectedSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
@@ -1034,4 +1002,59 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
     const all = await generatePreSignedExitTxMulti(telegramId, targetCA);
     const first = all.find(p => p.walletIndex === 0);
     return first ? { swapBase64: first.swapBase64, tipBase64: first.tipBase64 } : null;
+}
+
+// 🟢 NEW: LIMIT ORDER WATCHER LOGIC EXPORTED FOR BULLMQ WORKER
+export async function processLimitOrders(bot: any) {
+    const { prisma } = await import('../lib/prisma.js');
+    const cachedLimitOrders = await prisma.activeOrder.findMany({
+        where: { orderType: 'LIMIT', isActive: true },
+        include: { user: true }
+    });
+
+    if (cachedLimitOrders.length === 0) return;
+
+    for (const order of cachedLimitOrders) {
+        let price = await getCachedTokenPrice(order.tokenAddress);
+        if (price === 0) {
+            try {
+                const res = await axiosClient.get(`https://api.dexscreener.com/latest/dex/tokens/${order.tokenAddress}`, { timeout: 2000 });
+                price = parseFloat(res.data?.pairs?.[0]?.priceUsd || "0");
+            } catch (_) {}
+        }
+        if (price === 0) continue; 
+
+        if (price <= (order.targetPriceUsd || 0)) {
+            const result = await executeSnipe(order.user.telegramId, order.tokenAddress, order.amountSol);
+            
+            if (result.success) {
+                await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
+
+                if (order.trailingPercent) {
+                    const { addTrailingStopToMemory } = await import('./order.service.js');
+                    await addTrailingStopToMemory(
+                        order.user.telegramId, order.tokenAddress, order.trailingPercent,
+                        order.amountSol, price, order.takeProfitPercent || undefined
+                    );
+                }
+
+                try {
+                    await bot.telegram.sendMessage(
+                        order.user.telegramId,
+                        `🟢 <b>LIMIT ORDER FILLED!</b>\n\nToken: <code>${order.tokenAddress.substring(0,8)}...</code>\nTarget: $${order.targetPriceUsd}\nFilled at: $${price}\nAmount: ${order.amountSol} SOL\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
+                        { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                    );
+                } catch (_) {}
+            } else {
+                await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
+                try {
+                    await bot.telegram.sendMessage(
+                        order.user.telegramId,
+                        `🔴 <b>LIMIT ORDER FAILED</b>\n\nToken: <code>${order.tokenAddress.substring(0,8)}...</code>\nReason: ${result.message}\n<i>Order has been deactivated.</i>`,
+                        { parse_mode: 'HTML' }
+                    );
+                } catch (_) {}
+            }
+        }
+    }
 }

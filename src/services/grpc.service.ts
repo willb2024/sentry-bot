@@ -4,7 +4,6 @@ import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, g
 import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
-
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { prisma } from '../lib/prisma.js';
 import WebSocket from 'ws';
@@ -15,26 +14,24 @@ import crypto from 'crypto';
 import { subscribeToMintPrice, unsubscribeFromMintPrice, getLivePriceSol } from './guard-price-feed.service.js';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
+import { logger } from '../lib/logger.js';
+import { redlock } from '../lib/redlock.js';
 
 dotenv.config();
 
 const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
-
 const GRPC_URL = `https://atlas-mainnet.helius-rpc.com`;
 const PUMP_FUN_PROGRAM  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
-
 const METEORA_DLMM_PROGRAM = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
 const METEORA_DBC_PROGRAM = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
 const METEORA_DAMM_V2_PROGRAM = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG";
-
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 const recentlySnipedTokens = new Set<string>();
 let pollerStarted  = false;
 export let isGrpcDisabled = false;
 let raydiumWsFallbackStarted = false;
-
 const activeSubscriptions = new Map<string, number>(); 
 let isPolling = false;
 
@@ -42,6 +39,10 @@ export let cachedSolUsdPrice = 150.0;
 export let isPriceReady = false; 
 
 export const recentNewMints: { mint: string, symbol: string, creator: string, firstSeenAt: number }[] = [];
+
+// Interval Tracker
+declare global { var _sentryIntervals: NodeJS.Timeout[]; }
+if (!global._sentryIntervals) global._sentryIntervals = [];
 
 function trackNewMint(mint: string, symbol: string = "UNKNOWN", creator: string = "") {
     recentNewMints.push({ mint, symbol, creator, firstSeenAt: Date.now() });
@@ -56,52 +57,42 @@ export function getRecentNewMints() {
     return [...recentNewMints];
 }
 
-async function acquireGuardLock(guardId: string, ttlSeconds: number = 20): Promise<boolean> {
-    const result = await redis.set(`lock:guard_exec:${guardId}`, '1', 'EX', ttlSeconds, 'NX');
-    return result === 'OK';
-}
-
-async function releaseGuardLock(guardId: string): Promise<void> {
-    await redis.del(`lock:guard_exec:${guardId}`).catch(() => {});
-}
-
 export async function syncInitialSolPrice() {
     try {
         const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
         const price = res.data?.data?.[WSOL_MINT]?.price;
         if (price && price > 0) {
             cachedSolUsdPrice = parseFloat(price);
-            console.log(`🟢 [HFT ENGINE] Synchronized SOL boot price: $${cachedSolUsdPrice} USD.`);
+            logger.info(`🟢 [HFT ENGINE] Synchronized SOL boot price: $${cachedSolUsdPrice} USD.`);
         }
     } catch (e) {
-        console.warn("⚠️ [HFT ENGINE] Boot price check timed out, using default $150.0.");
+        logger.warn("⚠️ [HFT ENGINE] Boot price check timed out, using default $150.0.");
     } finally {
         isPriceReady = true; 
     }
 }
 syncInitialSolPrice();
 
-setInterval(async () => {
+global._sentryIntervals.push(setInterval(async () => {
     try {
         const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
         const price = res.data?.data?.[WSOL_MINT]?.price;
         if (price && price > 0) cachedSolUsdPrice = parseFloat(price);
     } catch (_) {}
-}, 15_000);
+}, 15_000));
 
 let cachedActiveSnipers: any[] = [];
-setInterval(async () => {
+global._sentryIntervals.push(setInterval(async () => {
     try {
         cachedActiveSnipers = await prisma.autoSnipeConfig.findMany({
-            where: { isActive: true },
-            include: { user: true }
+            where: { isActive: true }, include: { user: true }
         });
     } catch (_) {}
-}, 3_000);
+}, 3_000));
 
 let cachedActiveGuards: TrailingOrder[] = [];
 let cachedLimitOrders: any[] = [];
-setInterval(async () => {
+global._sentryIntervals.push(setInterval(async () => {
     try {
         cachedActiveGuards = await getAllActiveGuards();
         cachedLimitOrders  = await prisma.activeOrder.findMany({
@@ -109,9 +100,9 @@ setInterval(async () => {
             include: { user: true }
         });
     } catch (_) {}
-}, 2_000);
+}, 2_000));
 
-setInterval(async () => {
+global._sentryIntervals.push(setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
         if (await redis.get(`lock:guard_exec:${guard.id}`)) return;
         try {
@@ -122,7 +113,7 @@ setInterval(async () => {
             }
         } catch (e) {}
     }));
-}, 5_000);
+}, 5_000));
 
 export function releaseGuardSubscription(tokenAddress: string) {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
@@ -210,283 +201,203 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
     // 🎮 SIMULATION BRANCH
     // ==============================================
     if (await isSimulationActive(guardSnapshot.telegramId)) {
-        if (await redis.get(`lock:guard_exec:${guardSnapshot.id}`)) return;
-
-        const createdKey = `sim:guard_created:${guardSnapshot.id}`;
-        let createdAtStr = await redis.get(createdKey);
-        if (!createdAtStr) {
-            createdAtStr = Date.now().toString();
-            await redis.set(createdKey, createdAtStr, 'EX', 3600);
-        }
-
-        if (guardSnapshot.maxHoldMinutes && guardSnapshot.createdAt) {
-            const ageMinutes = (Date.now() - new Date(guardSnapshot.createdAt).getTime()) / 60000;
-            if (ageMinutes >= guardSnapshot.maxHoldMinutes) {
-                const gotLock = await acquireGuardLock(guardSnapshot.id, 20);
-                if (!gotLock) return;
-
-                const finalPnl = applySimSlippage(0); 
-                await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, finalPnl);
-                await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
-                try { await bot.telegram.sendMessage(guardSnapshot.telegramId, `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guardSnapshot.tokenAddress}</code>\nMax hold time reached. Position sold at market.`, { parse_mode: 'HTML' }); } catch (_) {}
-                await releaseGuardLock(guardSnapshot.id);
-                return;
-            }
-        }
-
-        const elapsedMs = Date.now() - parseInt(createdAtStr);
-        const MIN_DELAY_MS = 1200;   
-        const RAMP_WINDOW_MS = 2000; 
-
-        if (elapsedMs < MIN_DELAY_MS) return;
-
-        const rampProgress = Math.min(1, (elapsedMs - MIN_DELAY_MS) / RAMP_WINDOW_MS);
-        const triggerProbability = 0.15 + rampProgress * 0.85; 
-
-        if (Math.random() > triggerProbability) return;
-
-        await redis.del(createdKey);
-        
-        const gotLock = await acquireGuardLock(guardSnapshot.id, 20);
-        if (!gotLock) return;
-
-        await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
-
-        const isProfit = await getNextSimOutcome(guardSnapshot.telegramId, 'guard');
-        const targetPnl = isProfit ? (guardSnapshot.takeProfitPercent || 50) : -Math.abs(guardSnapshot.trailingPercent);
-        const pnlPercent = applySimSlippage(targetPnl);
-
-        let actualPeakDrop = guardSnapshot.trailingPercent;
-        if (!isProfit) {
-            try {
-                const rawPos = await redis.get(`sim:positions:${guardSnapshot.telegramId}`);
-                if (rawPos) {
-                    const positions = JSON.parse(rawPos);
-                    const pos = positions.find((p: any) => p.mint === guardSnapshot.tokenAddress);
-                    if (pos && pos.highestSeenPrice && pos.priceUsd) {
-                        const drop = ((pos.highestSeenPrice - pos.priceUsd) / pos.highestSeenPrice) * 100;
-                        if (drop > 0) actualPeakDrop = parseFloat(drop.toFixed(1));
-                    }
-                }
-            } catch (_) {}
-        }
-
-        await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
-        await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
+        let lock;
+        try { lock = await redlock.acquire([`lock:guard_exec:${guardSnapshot.id}`], 20000); } catch (e) { return; }
 
         try {
-            const user = await prisma.user.findUnique({ where: { telegramId: guardSnapshot.telegramId } });
-            const imageBuffer = await generatePnlCard(guardSnapshot.tokenAddress, pnlPercent, user?.referralCode ?? undefined);
+            const createdKey = `sim:guard_created:${guardSnapshot.id}`;
+            let createdAtStr = await redis.get(createdKey);
+            if (!createdAtStr) {
+                createdAtStr = Date.now().toString();
+                await redis.set(createdKey, createdAtStr, 'EX', 3600);
+            }
 
-            const rawSolPnl = guardSnapshot.amountInSol * (pnlPercent / 100);
-            const platformFee = (guardSnapshot.amountInSol * (1 + pnlPercent / 100)) * 0.01;
-            const jitoTip = 0.0015;
-            const solPnl = rawSolPnl - platformFee - jitoTip;
-            
-            const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\n` +
-                `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
-                `${pnlPercent < 0 ? `Configured Drop Threshold: <b>-${guardSnapshot.trailingPercent}%</b>\nActual Peak Drop: <b>-${actualPeakDrop}%</b>\n` : ''}` +
-                `Realized PnL (incl. fees): <b>${pnlPercent.toFixed(1)}%</b>\n\n` +
-                `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
-                `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
+            if (guardSnapshot.maxHoldMinutes && guardSnapshot.createdAt) {
+                const ageMinutes = (Date.now() - new Date(guardSnapshot.createdAt).getTime()) / 60000;
+                if (ageMinutes >= guardSnapshot.maxHoldMinutes) {
+                    const finalPnl = applySimSlippage(0); 
+                    await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, finalPnl);
+                    await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
+                    try { await bot.telegram.sendMessage(guardSnapshot.telegramId, `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guardSnapshot.tokenAddress}</code>\nMax hold time reached. Position sold at market.`, { parse_mode: 'HTML' }); } catch (_) {}
+                    return;
+                }
+            }
 
-            const imgId = crypto.randomBytes(8).toString('hex');
-            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
-            const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
-            const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
-            const tweetText = encodeURIComponent(`Just secured a verified ${pnlPercent >= 0 ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${guardSnapshot.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\nVerified details: ${shareUrl}`);
-            const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+            const elapsedMs = Date.now() - parseInt(createdAtStr);
+            const MIN_DELAY_MS = 1200;   
+            const RAMP_WINDOW_MS = 2000; 
 
-            await bot.telegram.sendPhoto(
-                guardSnapshot.telegramId,
-                { source: imageBuffer },
-                { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
-            );
-        } catch (e: any) {
+            if (elapsedMs < MIN_DELAY_MS) return;
+
+            const rampProgress = Math.min(1, (elapsedMs - MIN_DELAY_MS) / RAMP_WINDOW_MS);
+            const triggerProbability = 0.15 + rampProgress * 0.85; 
+
+            if (Math.random() > triggerProbability) return;
+
+            await redis.del(createdKey);
+            await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
+
+            const isProfit = await getNextSimOutcome(guardSnapshot.telegramId, 'guard');
+            const targetPnl = isProfit ? (guardSnapshot.takeProfitPercent || 50) : -Math.abs(guardSnapshot.trailingPercent);
+            const pnlPercent = applySimSlippage(targetPnl);
+
+            let actualPeakDrop = guardSnapshot.trailingPercent;
+            if (!isProfit) {
+                try {
+                    const rawPos = await redis.get(`sim:positions:${guardSnapshot.telegramId}`);
+                    if (rawPos) {
+                        const positions = JSON.parse(rawPos);
+                        const pos = positions.find((p: any) => p.mint === guardSnapshot.tokenAddress);
+                        if (pos && pos.highestSeenPrice && pos.priceUsd) {
+                            const drop = ((pos.highestSeenPrice - pos.priceUsd) / pos.highestSeenPrice) * 100;
+                            if (drop > 0) actualPeakDrop = parseFloat(drop.toFixed(1));
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            await simExecuteExit(guardSnapshot.telegramId, guardSnapshot.tokenAddress, 100, pnlPercent);
+            await cancelAllGuardsForToken(guardSnapshot.telegramId, guardSnapshot.tokenAddress);
+
             try {
-                await bot.telegram.sendMessage(
-                    guardSnapshot.telegramId,
-                    `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\nPnL: <b>${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%</b>`,
-                    { parse_mode: 'HTML' }
-                );
-            } catch (_) {}
+                const user = await prisma.user.findUnique({ where: { telegramId: guardSnapshot.telegramId } });
+                const imageBuffer = await generatePnlCard(guardSnapshot.tokenAddress, pnlPercent, user?.referralCode ?? undefined);
+
+                const rawSolPnl = guardSnapshot.amountInSol * (pnlPercent / 100);
+                const platformFee = (guardSnapshot.amountInSol * (1 + pnlPercent / 100)) * 0.01;
+                const jitoTip = 0.0015;
+                const solPnl = rawSolPnl - platformFee - jitoTip;
+                
+                const captionText = `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\n` +
+                    `Token: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\n` +
+                    `${pnlPercent < 0 ? `Configured Drop Threshold: <b>-${guardSnapshot.trailingPercent}%</b>\nActual Peak Drop: <b>-${actualPeakDrop}%</b>\n` : ''}` +
+                    `Realized PnL (incl. fees): <b>${pnlPercent.toFixed(1)}%</b>\n\n` +
+                    `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
+                    `🔗 <a href="https://solscan.io/tx/${generateSimSignature()}">View on Solscan</a>`;
+
+                const imgId = crypto.randomBytes(8).toString('hex');
+                await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
+                const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
+                const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
+                const tweetText = encodeURIComponent(`Just secured a verified ${pnlPercent >= 0 ? `gain of +${pnlPercent.toFixed(1)}%` : `loss protection`} on $${guardSnapshot.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\nVerified details: ${shareUrl}`);
+                const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+
+                await bot.telegram.sendPhoto(guardSnapshot.telegramId, { source: imageBuffer }, { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn });
+            } catch (e: any) {
+                try {
+                    await bot.telegram.sendMessage(
+                        guardSnapshot.telegramId,
+                        `${pnlPercent >= 0 ? '🎯 <b>TAKE PROFIT TRIGGERED!</b>' : '🚨 <b>TRAILING GUARD TRIGGERED!</b>'}\n\nToken: <code>${guardSnapshot.tokenAddress.substring(0,8)}...</code>\nPnL: <b>${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%</b>`,
+                        { parse_mode: 'HTML' }
+                    );
+                } catch (_) {}
+            }
+        } finally {
+            if (lock) await (lock as any).release();
         }
-        await releaseGuardLock(guardSnapshot.id);
         return; 
     }
 
     // ==============================================
     // ⚡ LIVE GUARD BRANCH
     // ==============================================
-    if (await redis.get(`lock:guard_exec:${guardSnapshot.id}`)) return;
+    let lock;
+    try { lock = await redlock.acquire([`lock:guard_exec:${guardSnapshot.id}`], 20000); } catch (e) { return; }
 
-    let guard = guardSnapshot;
-    if (guardSnapshot.entryPrice === 0) {
-        const fresh = await fetchFreshGuard(guardSnapshot.id);
-        if (!fresh) return;
-        guard = fresh;
-    }
-
-    if (guard.maxHoldMinutes && guard.createdAt) {
-        const ageMinutes = (Date.now() - new Date(guard.createdAt).getTime()) / 60000;
-        if (ageMinutes >= guard.maxHoldMinutes) {
-            const gotLock = await acquireGuardLock(guard.id, 20);
-            if (!gotLock) return;
-
-            triggerInstantExit(guard).then(async (result) => {
-                if (result.success || (result as any).message?.includes("No tokens found")) {
-                    await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
-                    if (result.success) {
-                        try {
-                            await bot.telegram.sendMessage(
-                                guard.telegramId, 
-                                `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guard.tokenAddress}</code>\nMax hold time of ${guard.maxHoldMinutes}m reached. Position sold at market.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`, 
-                                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                            );
-                        } catch (_) {}
-                    }
-                }
-                await releaseGuardLock(guard.id);
-            }).catch(async () => await releaseGuardLock(guard.id));
-            return;
+    try {
+        let guard = guardSnapshot;
+        if (guardSnapshot.entryPrice === 0) {
+            const fresh = await fetchFreshGuard(guardSnapshot.id);
+            if (!fresh) return;
+            guard = fresh;
         }
-    }
 
-    if (guard.entryPrice === 0 && currentPriceNative > 0) {
-        guard.entryPrice = currentPriceNative;
-        updateEntryPrice(guard.id, currentPriceNative).catch(() => {});
-    }
-    const entryPrice = guard.entryPrice || currentPriceNative;
-
-    if (entryPrice > 0) {
-        const currentProfitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
-        if (currentProfitPercent >= 50.0) {
-            const minSafePrice = entryPrice * 1.05; 
-            const maxDropAllowed = ((currentPriceNative - minSafePrice) / currentPriceNative) * 100;
-            if (guard.trailingPercent > maxDropAllowed && maxDropAllowed > 0) guard.trailingPercent = maxDropAllowed; 
-        }
-    }
-
-    if (guard.takeProfitPercent && entryPrice > 0) {
-        const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
-        if (profitPercent >= guard.takeProfitPercent) {
-            const gotLock = await acquireGuardLock(guard.id, 20);
-            if (!gotLock) return;
-
-            triggerInstantExit(guard).then(async (result) => {
-                if (result.success || (result as any).message?.includes("No tokens found")) {
-                    await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
-                    
-                    if (result.success) {
-                        await redis.del(`balance_cache:${guard.telegramId}`);
-
-                        try {
-                            const user          = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
-                            const multiplier    = user?.activeWallets || 1;
-                            const profitSol     = (guard.amountInSol * (profitPercent / 100)) * multiplier;
-                            
-                            const imgId = crypto.randomBytes(8).toString('hex');
-                            const imageBuffer = await generatePnlCard(guard.tokenAddress, profitPercent, user?.referralCode ?? undefined);
-                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); 
-                            
-                            const tradeStartRaw = await redis.get(`trade_time:${guard.telegramId}:${guard.tokenAddress}`);
-                            let timeString = "";
-                            if (tradeStartRaw) {
-                                const diffMs = Date.now() - parseInt(tradeStartRaw);
-                                const mins = Math.floor(diffMs / 60000);
-                                const secs = Math.floor((diffMs % 60000) / 1000);
-                                timeString = `in ${mins > 0 ? `${mins}m ` : ''}${secs}s`;
-                            }
-
-                            const tweetText = encodeURIComponent(`Just exited $${guard.tokenAddress.substring(0,4).toUpperCase()} on Sentry Terminal ⚡\n+${profitPercent.toFixed(1)}% ${timeString}\nJito MEV bundle — zero sandwich attacks\n🔗 solscan.io/tx/${result.signature}\nt.me/${process.env.BOT_USERNAME || 'SentryTerminalBot'}?start=${user?.referralCode || ''}`);
-                            const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
-
-                            const captionText = `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n💰 <b>Net Profit: +${profitSol.toFixed(4)} SOL</b> (+${profitPercent.toFixed(1)}%)\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
-
-                            await bot.telegram.sendPhoto(
-                                guard.telegramId,
-                                { source: imageBuffer },
-                                { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
-                            );
-                        } catch (e: any) {
-                            console.error("Take profit image send failed:", e.message);
+        if (guard.maxHoldMinutes && guard.createdAt) {
+            const ageMinutes = (Date.now() - new Date(guard.createdAt).getTime()) / 60000;
+            if (ageMinutes >= guard.maxHoldMinutes) {
+                triggerInstantExit(guard).then(async (result) => {
+                    if (result.success || (result as any).message?.includes("No tokens found")) {
+                        await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
+                        if (result.success) {
+                            try {
+                                await bot.telegram.sendMessage(guard.telegramId, `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guard.tokenAddress}</code>\nMax hold time of ${guard.maxHoldMinutes}m reached. Position sold at market.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+                            } catch (_) {}
                         }
                     }
-                    await releaseGuardLock(guard.id);
-                } else {
-                    await releaseGuardLock(guard.id);
-                }
-            }).catch(async (e: any) => {
-                console.error("🔴 TP Execution Error:", e.message);
-                await releaseGuardLock(guard.id);
-            });
-            return; 
+                }).catch(() => {});
+                return;
+            }
         }
-    }
 
-    if (guard.highestSeenPrice === 0 || currentPriceNative > guard.highestSeenPrice) {
-        updateHighestSeen(guard.id, currentPriceNative).catch(() => {});
-    } else {
-        const dropPercent = ((guard.highestSeenPrice - currentPriceNative) / guard.highestSeenPrice) * 100;
+        if (guard.entryPrice === 0 && currentPriceNative > 0) {
+            guard.entryPrice = currentPriceNative;
+            updateEntryPrice(guard.id, currentPriceNative).catch(() => {});
+        }
+        const entryPrice = guard.entryPrice || currentPriceNative;
 
-        if (dropPercent >= guard.trailingPercent) {
-            const gotLock = await acquireGuardLock(guard.id, 20);
-            if (!gotLock) return;
+        if (entryPrice > 0) {
+            const currentProfitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
+            if (currentProfitPercent >= 50.0) {
+                const minSafePrice = entryPrice * 1.05; 
+                const maxDropAllowed = ((currentPriceNative - minSafePrice) / currentPriceNative) * 100;
+                if (guard.trailingPercent > maxDropAllowed && maxDropAllowed > 0) guard.trailingPercent = maxDropAllowed; 
+            }
+        }
 
-            triggerInstantExit(guard).then(async (result) => {
-                if (result.success || (result as any).message?.includes("No tokens found")) {
-                    await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
-                    
-                    if (result.success) {
-                        await redis.del(`balance_cache:${guard.telegramId}`);
-
-                        try {
-                            const user          = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
-                            const totalPnlPercent = entryPrice > 0 ? ((currentPriceNative - entryPrice) / entryPrice) * 100 : 0;
-
-                            const imgId = crypto.randomBytes(8).toString('hex');
-                            const imageBuffer = await generatePnlCard(guard.tokenAddress, totalPnlPercent, user?.referralCode ?? undefined);
-                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); 
-                            
-                            const tradeStartRaw = await redis.get(`trade_time:${guard.telegramId}:${guard.tokenAddress}`);
-                            let timeString = "";
-                            if (tradeStartRaw) {
-                                const diffMs = Date.now() - parseInt(tradeStartRaw);
-                                const mins = Math.floor(diffMs / 60000);
-                                const secs = Math.floor((diffMs % 60000) / 1000);
-                                timeString = `in ${mins > 0 ? `${mins}m ` : ''}${secs}s`;
-                            }
-
-                            const tweetText = encodeURIComponent(`Just exited $${guard.tokenAddress.substring(0,4).toUpperCase()} on Sentry Terminal ⚡\n${totalPnlPercent >= 0 ? '+' : ''}${totalPnlPercent.toFixed(1)}% ${timeString}\nJito MEV bundle — zero sandwich attacks\n🔗 solscan.io/tx/${result.signature}\nt.me/${process.env.BOT_USERNAME || 'SentryTerminalBot'}?start=${user?.referralCode || ''}`);
-                            const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share Guard to X (Twitter)', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
-
-                            const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\n` +
-                                `Token: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n` +
-                                `Configured Drop Threshold: <b>-${guard.trailingPercent}%</b>\n` +
-                                `Actual Peak Drop: <b>-${dropPercent.toFixed(1)}%</b>\n` +
-                                `Realized PnL (incl. fees): <b>${totalPnlPercent.toFixed(1)}%</b>\n\n` +
-                                `Status: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n` +
-                                `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
-
-                            await bot.telegram.sendPhoto(
-                                guard.telegramId,
-                                { source: imageBuffer },
-                                { caption: captionText, parse_mode: 'HTML', reply_markup: twitterBtn }
-                            );
-                        } catch (e: any) {
-                            console.error("Stop loss image send failed:", e.message);
+        if (guard.takeProfitPercent && entryPrice > 0) {
+            const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
+            if (profitPercent >= guard.takeProfitPercent) {
+                triggerInstantExit(guard).then(async (result) => {
+                    if (result.success || (result as any).message?.includes("No tokens found")) {
+                        await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
+                        if (result.success) {
+                            await redis.del(`balance_cache:${guard.telegramId}`);
+                            try {
+                                const user = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
+                                const multiplier = user?.activeWallets || 1;
+                                const profitSol = (guard.amountInSol * (profitPercent / 100)) * multiplier;
+                                const imgId = crypto.randomBytes(8).toString('hex');
+                                const imageBuffer = await generatePnlCard(guard.tokenAddress, profitPercent, user?.referralCode ?? undefined);
+                                await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); 
+                                const captionText = `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n💰 <b>Net Profit: +${profitSol.toFixed(4)} SOL</b> (+${profitPercent.toFixed(1)}%)\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
+                                await bot.telegram.sendPhoto(guard.telegramId, { source: imageBuffer }, { caption: captionText, parse_mode: 'HTML' });
+                            } catch (e) {}
                         }
                     }
-                    await releaseGuardLock(guard.id);
-                } else {
-                    await releaseGuardLock(guard.id);
-                }
-            }).catch(async () => await releaseGuardLock(guard.id));
+                }).catch(() => {});
+                return; 
+            }
         }
+
+        if (guard.highestSeenPrice === 0 || currentPriceNative > guard.highestSeenPrice) {
+            updateHighestSeen(guard.id, currentPriceNative).catch(() => {});
+        } else {
+            const dropPercent = ((guard.highestSeenPrice - currentPriceNative) / guard.highestSeenPrice) * 100;
+            if (dropPercent >= guard.trailingPercent) {
+                triggerInstantExit(guard).then(async (result) => {
+                    if (result.success || (result as any).message?.includes("No tokens found")) {
+                        await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
+                        if (result.success) {
+                            await redis.del(`balance_cache:${guard.telegramId}`);
+                            try {
+                                const user = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
+                                const totalPnlPercent = entryPrice > 0 ? ((currentPriceNative - entryPrice) / entryPrice) * 100 : 0;
+                                const imgId = crypto.randomBytes(8).toString('hex');
+                                const imageBuffer = await generatePnlCard(guard.tokenAddress, totalPnlPercent, user?.referralCode ?? undefined);
+                                await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200); 
+                                const captionText = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\nConfigured Drop Threshold: <b>-${guard.trailingPercent}%</b>\nActual Peak Drop: <b>-${dropPercent.toFixed(1)}%</b>\nRealized PnL: <b>${totalPnlPercent.toFixed(1)}%</b>\n\nStatus: 🟢 Auto-Sold 100% via Instant Pre-Signed Jito Bundle.\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
+                                await bot.telegram.sendPhoto(guard.telegramId, { source: imageBuffer }, { caption: captionText, parse_mode: 'HTML' });
+                            } catch (e) {}
+                        }
+                    }
+                }).catch(() => {});
+            }
+        }
+    } finally {
+        if (lock) await (lock as any).release();
     }
 }
 
-// Add this helper function above startUniversalGuardPoller
 async function fetchBulkTokenPrices(mints: string[]): Promise<Record<string, number>> {
     if (mints.length === 0) return {};
     try {
@@ -494,73 +405,57 @@ async function fetchBulkTokenPrices(mints: string[]): Promise<Record<string, num
         const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${mints.join(',')}`, { timeout: 2000 });
         const data = res.data?.data || {};
         const result: Record<string, number> = {};
-        for (const mint of mints) {
-            result[mint] = parseFloat(data[mint]?.price || '0');
-        }
+        for (const mint of mints) result[mint] = parseFloat(data[mint]?.price || '0');
         return result;
     } catch { return {}; }
 }
 
-export function startUniversalGuardPoller(bot: any) {
-    console.log("🛡️ [GUARD ENGINE] Push-Based Subscription Poller Initialized.");
+// Renamed and exported for BullMQ
+export async function processGuardOrders(bot: any) {
+    try {
+        const activeGuards = cachedActiveGuards; 
+        if (activeGuards.length === 0) return;
 
-    setInterval(async () => {
-        try {
-            // 🟢 FIX 41: Read strictly from RAM instead of smashing Redis every second
-            const activeGuards = cachedActiveGuards; 
-            if (activeGuards.length === 0) return;
-
-            const { isSimulationActive, walkSimPositionPrices } = await import('./simulation.service.js');
-
-            // 🟢 FIX 31: Group guards by token address to avoid duplicate API calls
-            const guardsByToken = new Map<string, TrailingOrder[]>();
-            for (const g of activeGuards) {
-                if (!guardsByToken.has(g.tokenAddress)) guardsByToken.set(g.tokenAddress, []);
-                guardsByToken.get(g.tokenAddress)!.push(g);
-            }
-
-            // Fetch all live prices in ONE network request
-            const tokenMints = Array.from(guardsByToken.keys());
-            const prices = await fetchBulkTokenPrices(tokenMints);
-
-            const uniqueTgIds = [...new Set(activeGuards.map(g => g.telegramId))];
-            const simFlags = new Map<string, boolean>();
-            await Promise.all(uniqueTgIds.map(async (id) => {
-                const isSim = await isSimulationActive(id);
-                simFlags.set(id, isSim);
-                if (isSim) walkSimPositionPrices(id).catch(() => {}); 
-            }));
-
-            await Promise.allSettled(activeGuards.map(async guard => {
-                const isSim = simFlags.get(guard.telegramId);
-                if (isSim) {
-                    return checkAndTriggerGuard(guard, 1.0, bot); 
-                } else {
-                    let livePrice = prices[guard.tokenAddress] ?? getLivePriceSol(guard.tokenAddress);
-                    
-                    if (livePrice == null || livePrice <= 0) {
-                        const { getCachedTokenPrice } = await import('./engine.service.js');
-                        livePrice = await getCachedTokenPrice(guard.tokenAddress).catch(() => 0);
-                    }
-                    
-                    if (livePrice <= 0) return; // Skip only if truly invalid
-                    return checkAndTriggerGuard(guard, livePrice, bot);
-                }
-            }));
-        } catch (e: any) {
-            console.error(`🔴 [GUARD POLLER] Tick failed: ${e.message}`);
+        const { isSimulationActive, walkSimPositionPrices } = await import('./simulation.service.js');
+        const guardsByToken = new Map<string, TrailingOrder[]>();
+        for (const g of activeGuards) {
+            if (!guardsByToken.has(g.tokenAddress)) guardsByToken.set(g.tokenAddress, []);
+            guardsByToken.get(g.tokenAddress)!.push(g);
         }
-    }, 1000);
 
-    // Keep the 15-second reconcile loop below...
+        const tokenMints = Array.from(guardsByToken.keys());
+        const prices = await fetchBulkTokenPrices(tokenMints);
+
+        const uniqueTgIds = [...new Set(activeGuards.map(g => g.telegramId))];
+        const simFlags = new Map<string, boolean>();
+        await Promise.all(uniqueTgIds.map(async (id) => {
+            const isSim = await isSimulationActive(id);
+            simFlags.set(id, isSim);
+            if (isSim) walkSimPositionPrices(id).catch(() => {}); 
+        }));
+
+        await Promise.allSettled(activeGuards.map(async guard => {
+            const isSim = simFlags.get(guard.telegramId);
+            if (isSim) return checkAndTriggerGuard(guard, 1.0, bot); 
+            
+            let livePrice = prices[guard.tokenAddress] ?? getLivePriceSol(guard.tokenAddress);
+            if (livePrice == null || livePrice <= 0) {
+                const { getCachedTokenPrice } = await import('./engine.service.js');
+                livePrice = await getCachedTokenPrice(guard.tokenAddress).catch(() => 0);
+            }
+            if (livePrice <= 0) return; 
+            return checkAndTriggerGuard(guard, livePrice, bot);
+        }));
+    } catch (e: any) {
+        logger.error(`🔴 [GUARD POLLER] Tick failed`, { error: e.message });
+    }
 }
 
 export function startPumpFunPolling() {
     if (pollerStarted) return;
     pollerStarted = true;
-    console.log("🔁 [PUMP POLL] Starting REST polling fallback (10s interval).");
-
-    setInterval(async () => {
+    
+    global._sentryIntervals.push(setInterval(async () => {
         try {
             const res = await axios.get(
                 'https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false',
@@ -575,11 +470,9 @@ export function startPumpFunPolling() {
                     added++;
                 }
             }
-            if (added > 0) console.log(`🔁 [PUMP POLL] Added ${added} new mints via REST poll. Buffer size: ${recentNewMints.length}`);
-        } catch (e: any) {
-            console.warn(`⚠️ [PUMP POLL] Fetch failed: ${e.message}`);
-        }
-    }, 10_000);
+            if (added > 0) logger.info(`🔁 [PUMP POLL] Added ${added} new mints. Buffer: ${recentNewMints.length}`);
+        } catch (e: any) { }
+    }, 10_000));
 }
 
 let isWsConnecting = false;
@@ -596,24 +489,15 @@ function connectPumpPortalStream(bot: any) {
 
     ws.on('open', () => {
         isWsConnecting = false;
-        console.log("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
-        
-        // 🟢 FIX: Verify readyState prior to sending payload
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
-        }
+        logger.info("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
         
         lastMessageAt = Date.now();
         if (wsHeartbeat) clearInterval(wsHeartbeat);
-        
         wsHeartbeat = setInterval(() => {
-            const secondsSinceLastMsg = Math.floor((Date.now() - lastMessageAt) / 1000);
-            console.log(`💓 [PUMP WS] Alive check. Last msg ${secondsSinceLastMsg}s ago. Buffer size: ${recentNewMints.length}`);
-            if (Date.now() - lastMessageAt > 90_000) {
-                console.warn("⚠️ [PUMP WS] No messages in 90s — forcing reconnect.");
-                ws.terminate();
-            }
+            if (Date.now() - lastMessageAt > 90_000) ws.terminate();
         }, 30_000);
+        global._sentryIntervals.push(wsHeartbeat);
     });
 
     ws.on('message', async (data: WebSocket.RawData) => {
@@ -624,22 +508,16 @@ function connectPumpPortalStream(bot: any) {
                 if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
                 recentlySnipedTokens.add(parsed.mint);
                 setTimeout(() => recentlySnipedTokens.delete(parsed.mint), 60_000);
-                
                 trackNewMint(parsed.mint, parsed.symbol); 
-
-                const devInitialBuySol = parsed.initialBuy || 0;
-                
-                await triggerAutoSnipes(bot, parsed.mint, parsed.symbol || "UNKNOWN", devInitialBuySol, 'PUMP');
+                await triggerAutoSnipes(bot, parsed.mint, parsed.symbol || "UNKNOWN", parsed.initialBuy || 0, 'PUMP');
             }
         } catch (_) {}
     });
 
-    ws.on('error', (err: any) => { console.warn(`⚠️ [PUMP WS] Error: ${err.message}`); });
-    
+    ws.on('error', (err: any) => { });
     ws.on('close', () => {
         isWsConnecting = false;
         if (wsHeartbeat) clearInterval(wsHeartbeat);
-        console.warn("⚠️ [PUMP WS] Dropped. Reconnecting in 30s to avoid 429 IP bans...");
         setTimeout(() => connectPumpPortalStream(bot), 30_000);
     });
 }
@@ -647,50 +525,27 @@ function connectPumpPortalStream(bot: any) {
 function connectRaydiumFallbackWatcher(bot: any) {
     if (raydiumWsFallbackStarted) return;
     raydiumWsFallbackStarted = true;
-
     const RAYDIUM_PUBLIC_KEY = new PublicKey(RAYDIUM_AMM_PROGRAM);
 
     connection.onLogs(RAYDIUM_PUBLIC_KEY, async (logs) => {
         if (logs.err) return;
-        
         if (logs.logs.some((l: string) => l.includes("initialize2"))) {
             try {
                 const tx = await connection.getParsedTransaction(logs.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }).catch(() => null);
                 if (!tx?.meta) return;
-
                 const tokenMint = tx.meta.postTokenBalances?.find((b: any) => b.mint !== WSOL_MINT)?.mint;
-
                 if (tokenMint && !recentlySnipedTokens.has(tokenMint)) {
                     if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
                     recentlySnipedTokens.add(tokenMint);
                     setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
-
                     const { extractPoolIdFromTx } = await import('./raydium.service.js');
                     const poolId = await extractPoolIdFromTx(logs.signature);
-
-                    console.log(`🧪 [RAYDIUM WS] New Pool: ${tokenMint} (Pool ID: ${poolId})`);
-                    
                     trackNewMint(tokenMint, "UNKNOWN"); 
-                    
                     await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
-                }
-            } catch (_) {}
-            return;
-        }
-
-        if (logs.logs.some((l: string) => l.includes("Instruction: Swap"))) {
-            try {
-                if (cachedActiveGuards.length > 0 || cachedLimitOrders.length > 0) {
-                    if (!isPolling) {
-                        isPolling = true;
-                        setImmediate(() => { isPolling = false; }); 
-                    }
                 }
             } catch (_) {}
         }
     }, 'confirmed');
-
-    console.log("🟡 [RAYDIUM] WebSocket push watcher armed for instant execution.");
 }
 
 export async function triggerAutoSnipes(
@@ -706,19 +561,14 @@ export async function triggerAutoSnipes(
         setTimeout(async () => {
             try {
                 const liveConfig = await prisma.autoSnipeConfig.findUnique({ 
-                    where: { id: sniper.id }, 
-                    include: { user: true } 
+                    where: { id: sniper.id }, include: { user: true } 
                 });
                 if (!liveConfig || !liveConfig.isActive) return;
 
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') return;
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
-                let score = 0;
-                let ageMins = 0;
-                let volUsd = 0;
-                let liqUsd = 0;
-                let priceChangeM5 = 0;
+                let score = 0, ageMins = 0, volUsd = 0, liqUsd = 0, priceChangeM5 = 0;
 
                 if (liveConfig.minScore > 0) {
                     try {
@@ -729,7 +579,6 @@ export async function triggerAutoSnipes(
                         const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
                         ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
                         const creatorWallet = seen?.creator || '';
-                        let hasSocials = false;
 
                         if (mode === 'PUMP') {
                             const { getBondingCurveAddress } = await import('./price.service.js');
@@ -748,12 +597,7 @@ export async function triggerAutoSnipes(
                             const { default: axios } = await import('axios');
                             const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 }).catch(() => null);
                             const pair = res?.data?.pairs?.[0];
-                            if (pair) {
-                                liqUsd = pair.liquidity?.usd || 0;
-                                volUsd = pair.volume?.h24 || 0;
-                                priceChangeM5 = pair.priceChange?.m5 || 0;
-                                hasSocials = (pair.info?.socials?.length || 0) > 0;
-                            }
+                            if (pair) { liqUsd = pair.liquidity?.usd || 0; volUsd = pair.volume?.h24 || 0; priceChangeM5 = pair.priceChange?.m5 || 0; }
                         }
 
                         let isRug = false, hasMev = false, devRep: any = { launchCount: 0, avgRugScore: 0, isKnownRugger: false }, lpLock: any = { locked: false, burned: false, lockPct: 0 }, velocity: any = { growthRate: 0, uniqueBuyers5m: 0 }, sellability: any = { sellable: true, estimatedTaxPct: 0 };
@@ -770,11 +614,7 @@ export async function triggerAutoSnipes(
                         }
 
                         const sentiment = await getSentimentScore(symbol);
-                        const stats = {
-                            ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials, isRug,
-                            devRep, lpLock, velocity, sellability, sentiment
-                        };
-
+                        const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials: false, isRug, devRep, lpLock, velocity, sellability, sentiment };
                         const heuristicResult = computeTokenScore(stats);
                         score = heuristicResult.score;
 
@@ -789,50 +629,30 @@ export async function triggerAutoSnipes(
                         }
 
                         if (score < liveConfig.minScore) return; 
-                    } catch (e) {
-                        return; 
-                    }
+                    } catch (e) { return; }
                 }
 
-                // 🟢 DYNAMIC SIZING ENGINE
-                let snipeAmount = liveConfig.amountSol; // Legacy fallback
+                let snipeAmount = liveConfig.amountSol; 
 
                 if (liveConfig.enableDynamicScaling) {
-                    // 1. Normalize score (clamp between 10 and 100 to avoid 0-size on terrible tokens)
                     const normalizedScore = Math.min(100, Math.max(10, score)) / 100;
-
-                    // 2. Apply user-selected exponent curve
                     const exponent = liveConfig.scaleExponent || 2.0;
                     const convictionMultiplier = Math.pow(normalizedScore, exponent);
-
-                    // 3. Calculate initial size
                     let calculatedSize = liveConfig.baseRiskUnitSol * convictionMultiplier * liveConfig.maxRiskMultiplier;
 
-                    // 4. LIQUIDITY PROTECTION (Never take more than 2% of a pool's liquidity)
                     if (liqUsd > 0 && cachedSolUsdPrice > 0) {
-                        const maxLiqAllocation = liqUsd * 0.02;
-                        const maxLiqInSol = maxLiqAllocation / cachedSolUsdPrice;
+                        const maxLiqInSol = (liqUsd * 0.02) / cachedSolUsdPrice;
                         calculatedSize = Math.min(calculatedSize, maxLiqInSol);
                     }
 
-                    // 5. BUDGET PROTECTION (Cannot exceed maxBudgetSol remaining)
-                    // 🟢 FIX: Dynamic import all 3 simulation functions here to avoid circular dependency errors
-                    const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
-                    
+                    const { getSessionSpend } = await import('./simulation.service.js');
                     const currentSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
                     const budgetRemaining = (liveConfig.maxBudgetSol || Infinity) - currentSpend;
                     calculatedSize = Math.min(calculatedSize, budgetRemaining);
-
-                    // 6. SAFETY FLOOR (Minimum snipe to cover Jito gas)
                     calculatedSize = Math.max(calculatedSize, 0.005);
-
                     snipeAmount = parseFloat(calculatedSize.toFixed(4));
-                } else {
-                    // 🟢 FIX: If dynamic scaling is off, we still need these imports to not crash later.
-                    const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
                 }
 
-                // EXECUTION BLOCK & BUDGET CHECK
                 const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
                 const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
                 const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, 'live');
@@ -857,14 +677,9 @@ export async function triggerAutoSnipes(
                     const spent = result.volumeSpent || intendedSpend;
                     
                     await addSessionSpend(liveConfig.user.telegramId, spent, 'live');
-                    if (sessionId) {
-                        await redis.rpush(`live:session_trades:${sessionId}`, JSON.stringify({ mint: mintCa, amountInSol: spent, realizedPnlSol: 0 }));
-                    }
+                    if (sessionId) await redis.rpush(`live:session_trades:${sessionId}`, JSON.stringify({ mint: mintCa, amountInSol: spent, realizedPnlSol: 0 }));
 
-                    await prisma.autoSnipeConfig.update({
-                        where: { id: liveConfig.id },
-                        data:  { totalSpentSol: { increment: spent } }
-                    });
+                    await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data:  { totalSpentSol: { increment: spent } } });
 
                     const entryPrice = await fetchLiveEntryPrice(mintCa);
                     const { addTrailingStopToMemory } = await import('./order.service.js');
@@ -875,23 +690,10 @@ export async function triggerAutoSnipes(
 
                     try {
                         const { buildAuditTrailMessage } = await import('./caller.service.js');
-                        const auditStats = {
-                            ageMins: ageMins,
-                            volume: volUsd,
-                            liquidity: liqUsd,
-                            priceChangeM5: priceChangeM5
-                        };
-                        const baseMsg = buildAuditTrailMessage(
-                            mintCa, score, auditStats, spent, liveConfig.autoTrailingDropPercent,
-                            liveConfig.autoTakeProfitPercent || 'OFF', false
-                        );
+                        const auditStats = { ageMins, volume: volUsd, liquidity: liqUsd, priceChangeM5 };
+                        const baseMsg = buildAuditTrailMessage(mintCa, score, auditStats, spent, liveConfig.autoTrailingDropPercent, liveConfig.autoTakeProfitPercent || 'OFF', false);
                         const finalMsg = `${baseMsg}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
-                        await bot.telegram.sendMessage(liveConfig.user.telegramId, finalMsg, {
-                            parse_mode: 'HTML', link_preview_options: { is_disabled: true },
-                            reply_markup: { inline_keyboard: [
-                                [{ text: '💼 View Positions', callback_data: 'menu_positions' }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${mintCa}` }]
-                            ]}
-                        });
+                        await bot.telegram.sendMessage(liveConfig.user.telegramId, finalMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                     } catch (_) {}
                 } else {
                     await redis.del(sniperLockKey);
@@ -899,19 +701,11 @@ export async function triggerAutoSnipes(
                         const fundWarnKey = `warn_funds:${liveConfig.user.telegramId}`;
                         if (!(await redis.get(fundWarnKey))) {
                             await redis.set(fundWarnKey, '1', 'EX', 600);
-                            try {
-                                await bot.telegram.sendMessage(
-                                    liveConfig.user.telegramId,
-                                    `🔴 <b>AUTO-SNIPER FAILED: INSUFFICIENT FUNDS</b>\n\nTarget: <code>${mintCa}</code>\nYour wallet does not have enough SOL to execute this snipe (+ gas).\n\n<i>Sniper is still running, but please deposit SOL immediately to catch the next token.</i>`,
-                                    { parse_mode: 'HTML' }
-                                );
-                            } catch (_) {}
+                            try { await bot.telegram.sendMessage(liveConfig.user.telegramId, `🔴 <b>AUTO-SNIPER FAILED: INSUFFICIENT FUNDS</b>\n\nTarget: <code>${mintCa}</code>`, { parse_mode: 'HTML' }); } catch (_) {}
                         }
                     }
                 }
-            } catch (e: any) {
-                console.error("🔴 [AUTO-SNIPER] Execution failure:", e);
-            }
+            } catch (e: any) { }
         }, delayMs);
     }
 }
@@ -920,19 +714,12 @@ export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
         connectPumpPortalStream(bot);
         startPumpFunPolling();
-        startUniversalGuardPoller(bot);
         pollerStarted = true;
-        console.log("🟢 [SNIPER] PumpPortal WebSocket stream active.");
+        logger.info("🟢 [SNIPER] PumpPortal WebSocket stream active.");
     }
 
-    if (process.env.DISABLE_GRPC === 'true') {
-        console.log("🟡 [gRPC] DISABLE_GRPC=true — Yellowstone skipped. Raydium WS fallback armed.");
-        connectRaydiumFallbackWatcher(bot);
-        return;
-    }
-
-    // 🟢 FIX: Check key existence before calling constructor
-    if (!HELIUS_KEY || isGrpcDisabled) {
+    if (process.env.DISABLE_GRPC === 'true' || !HELIUS_KEY || isGrpcDisabled) {
+        logger.warn("🟡 [gRPC] Yellowstone skipped. Raydium WS fallback armed.");
         connectRaydiumFallbackWatcher(bot);
         return;
     }
@@ -959,15 +746,11 @@ export async function igniteYellowstoneStream(bot: any) {
                         });
 
                         if (exposedUsers.length > 0) {
-                            console.log(`🚨 [ANTI-RUG SHIELD] Dev liquidity pull detected on ${tokenMint}! Front-running for ${exposedUsers.length} users.`);
+                            logger.warn(`🚨 [ANTI-RUG] Dev liquidity pull detected on ${tokenMint}! Front-running for ${exposedUsers.length} users.`);
                             for (const order of exposedUsers) {
                                 const { executeExit } = await import('./engine.service.js');
                                 executeExit(order.user.telegramId, tokenMint, 100, true, 'ANTI_RUG_SHIELD');
-                                
-                                bot.telegram.sendMessage(order.user.telegramId, 
-                                    `🚨 <b>ANTI-RUG SHIELD ACTIVATED!</b>\n\nDeveloper liquidity pull detected on <code>${tokenMint}</code>.\n\nSentry Terminal has automatically fired a massive Block-0 Jito bundle to front-run the developer and exit your position before the liquidity is removed!`, 
-                                    { parse_mode: 'HTML' }
-                                ).catch(()=>{});
+                                bot.telegram.sendMessage(order.user.telegramId, `🚨 <b>ANTI-RUG SHIELD ACTIVATED!</b>\n\nDeveloper liquidity pull detected on <code>${tokenMint}</code>.`, { parse_mode: 'HTML' }).catch(()=>{});
                             }
                         }
                     }
@@ -975,26 +758,15 @@ export async function igniteYellowstoneStream(bot: any) {
             } catch (_) {}
         });
         stream.on("error", (err: any) => {
-            if (
-                err.message.includes("401") || 
-                err.message.includes("UNAUTHENTICATED") || 
-                err.message.includes("PermissionDenied") ||
-                err.message.includes("Free Tier") || 
-                err.message.includes("403")
-            ) {
+            if (err.message.includes("401") || err.message.includes("UNAUTHENTICATED") || err.message.includes("Free Tier")) {
                 if (!isGrpcDisabled) {
-                    console.warn("🟡 [HELIUS FREE TIER] Yellowstone gRPC stream requires a Growth plan. Gracefully engaging WebSocket stream & REST polling fallbacks.");
+                    logger.warn("🟡 [HELIUS FREE TIER] Yellowstone gRPC requires Growth plan. Engaging WS fallback.");
                     isGrpcDisabled = true;
                 }
                 try { stream.destroy(); } catch (_) {}
                 connectRaydiumFallbackWatcher(bot);
                 return;
             }
-
-            if (err.message.includes("EADDRNOTAVAIL")) {
-                stream.destroy(); setTimeout(() => igniteYellowstoneStream(bot), 3_000); return;
-            }
-
             stream.destroy(); setTimeout(() => igniteYellowstoneStream(bot), 3_000);
         });
 
@@ -1016,24 +788,13 @@ export async function igniteYellowstoneStream(bot: any) {
         };
 
         stream.write(request);
-        console.log("🟢 [gRPC] Yellowstone stream connected — Helius gRPC Active.");
+        logger.info("🟢 [gRPC] Yellowstone stream connected — Helius gRPC Active.");
 
     } catch (e: any) {
         if (!isGrpcDisabled) {
-            console.warn("🟡 [HELIUS gRPC] Initial stream connection unauthenticated. Arming Raydium WS fallback.");
+            logger.warn("🟡 [HELIUS gRPC] Initial connection failed. Arming Raydium WS fallback.");
             isGrpcDisabled = true;
             connectRaydiumFallbackWatcher(bot);
         }
     }
 }
-
-// Add at bottom of src/services/grpc.service.ts
-process.on('SIGINT', async () => {
-    console.log('🛑 [gRPC] Cleaning up active guard price subscriptions...');
-    for (const [mint, subId] of activeSubscriptions.entries()) {
-        try {
-            await connection.removeAccountChangeListener(subId);
-        } catch (_) {}
-    }
-    activeSubscriptions.clear();
-});

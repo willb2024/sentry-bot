@@ -2,11 +2,12 @@
 import { Telegraf, Markup, Context } from 'telegraf';
 
 import { startCopyTradeWatcher, syncCopyTradeListeners } from './services/copytrade.service.js';
-import { startDcaEngine } from './services/dca.service.js';
 import { computeUniversalStats } from './utils/math.utils.js';
 import { getBondingCurveAddress, decodePumpCurvePrice, checkTokenRugRisk } from './services/price.service.js';
 import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
+import { dcaQueue, guardQueue, limitQueue } from './queues/index.js';
+import { checkRedisHealth } from './lib/redis.js';
 import cors from 'cors';
 import { prisma } from './lib/prisma.js'; // 🟢 FIX: Use Singleton
 import dotenv from 'dotenv';
@@ -68,7 +69,6 @@ const bot = new Telegraf(BOT_TOKEN);
 
 dotenv.config();
 
-// 🟢 FIX 3: Environment Variable Validation
 const requiredEnv = [
     'BOT_TOKEN',
     'TREASURY_WALLET_ADDRESS',
@@ -79,9 +79,10 @@ const requiredEnv = [
     'PINATA_JWT',
     'WEBAPP_URL'
 ];
+
 for (const key of requiredEnv) {
     if (!process.env[key]) {
-        console.error(`❌ Missing required environment variable: ${key}`);
+        console.error(`❌ FATAL: Missing required environment variable: ${key}`);
         process.exit(1);
     }
 }
@@ -130,10 +131,12 @@ export function hashPin(pin: string): string {
 
 export function verifyPin(pin: string, stored: string): boolean {
     const [salt, hash] = stored.split(':');
-    const verifyHash = crypto.scryptSync(pin, salt, 64).toString('hex');
-    return verifyHash === hash;
+    const verifyHash = crypto.scryptSync(pin, salt, 64);
+    const storedHashBuffer = Buffer.from(hash, 'hex');
+    
+    if (verifyHash.length !== storedHashBuffer.length) return false;
+    return crypto.timingSafeEqual(verifyHash, storedHashBuffer);
 }
-
 
 export function maskAddress(address: string | null | undefined, hidden: boolean): string {
     if (!address) return "None";
@@ -254,6 +257,36 @@ app.post('/api/sol-price', (req, res) => {
         res.json({ price: cachedSolUsdPrice });
     } catch (e) { res.status(500).json({ error: 'Server Error' }); }
 });
+
+
+// 🟢 FIX: Secure Admin Health Endpoint
+app.get('/admin/health', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || authHeader !== `Bearer ${process.env.ADMIN_API_KEY}`) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const health = {
+        status: 'ok',
+        uptime: process.uptime(),
+        redis: await checkRedisHealth(),
+        activeGuards: (await redis.scard('active_guards_global')) || 0,
+        activeDCA: await prisma.activeOrder.count({ where: { orderType: 'DCA', isActive: true } }),
+        activeLimits: await prisma.activeOrder.count({ where: { orderType: 'LIMIT', isActive: true } }),
+        activeSnipers: await prisma.autoSnipeConfig.count({ where: { isActive: true } }),
+        rpcLatency: await measureRpcLatency(),
+        lastErrors: await redis.lrange('last_errors', 0, 9),
+    };
+    res.json(health);
+});
+
+async function measureRpcLatency(): Promise<number> {
+    const start = Date.now();
+    await connection.getLatestBlockhash();
+    return Date.now() - start;
+}
+
+
 
 app.post('/api/analytics', async (req, res) => {
     const initData = req.body.initData;
@@ -4911,309 +4944,480 @@ async function deleteKeysPattern(pattern: string) {
 
 
 
+
 // =========================================================
-// ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
+// ⚡ TEXT INTERCEPTOR & INTERACTIVE WIZARDS
 // =========================================================
+
+async function handleCancel(telegramId: string) {
+    const keysToClear = [
+        `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`,
+        `state:limit:${telegramId}`, `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`,
+        `state:enter_ref:${telegramId}`, `state:edit_slippage:${telegramId}`, `state:edit_custom_speed:${telegramId}`,
+        `state:set_pin:${telegramId}`, `state:autosnipe_amt:${telegramId}`, `state:autosnipe_sl:${telegramId}`,
+        `state:autosnipe_tp:${telegramId}`, `state:autosnipe_mc:${telegramId}`, `state:autosnipe_budget:${telegramId}`,
+        `state:autosnipe_dev:${telegramId}`, `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
+        `state:edit_caller_score:${telegramId}`, `state:edit_caller_liq:${telegramId}`, `state:edit_caller_vol:${telegramId}`,
+        `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`,
+        `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`, `state:guild_airdrop:${telegramId}`,
+        `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`,
+        `vip:awaiting_tx:${telegramId}`, `state:withdraw_pin:${telegramId}`, `state:credits_tx:${telegramId}`,
+        `credits:pending:${telegramId}`, `sim:autosnipe:${telegramId}`, `state:guard_ca:${telegramId}`,
+        `active_bumper:${telegramId}`, `state:dev_volume:${telegramId}`, `state:dev_nuke:${telegramId}`,
+        `token_launch:${telegramId}:step`, `token_launch:${telegramId}:name`, `token_launch:${telegramId}:symbol`,
+        `token_launch:${telegramId}:description`, `token_launch:${telegramId}:imageUrl`, `token_launch:${telegramId}:vanity`,
+        `token_launch:${telegramId}:devbuy`, `token_launch:${telegramId}:wallets`, `token_launch:${telegramId}:guard`,
+        `guild_setup:${telegramId}`, `state:autosnipe_base_risk:${telegramId}`, `state:autosnipe_max_multiplier:${telegramId}`,
+        `state:autosnipe_exponent:${telegramId}`
+    ];
+    for (let i = 0; i < keysToClear.length; i += 100) {
+        await redis.del(...keysToClear.slice(i, i + 100));
+    }
+}
+
 bot.on("text", async (ctx, next) => {
     if (!ctx.message || !('text' in ctx.message)) return next();
     const text = ctx.message.text.trim();
     const telegramId = ctx.from?.id?.toString();
-    if (!telegramId) return next(); 
+    if (!telegramId) return next();
 
-    // 1. GLOBAL CANCEL HANDLER & CHUNKED DELETE
+    // --- 1. GLOBAL CANCEL ---
     if (text.toLowerCase() === '/cancel' || text.toLowerCase() === 'cancel') {
-        const keysToClear = [
-            `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`, 
-            `state:limit:${telegramId}`, `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`,
-            `state:enter_ref:${telegramId}`, `state:edit_slippage:${telegramId}`, `state:edit_custom_speed:${telegramId}`, 
-            `state:set_pin:${telegramId}`, `state:autosnipe_amt:${telegramId}`, `state:autosnipe_sl:${telegramId}`,
-            `state:autosnipe_tp:${telegramId}`, `state:autosnipe_mc:${telegramId}`, `state:autosnipe_budget:${telegramId}`, 
-            `state:autosnipe_dev:${telegramId}`, `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
-            `state:edit_caller_score:${telegramId}`, `state:edit_caller_liq:${telegramId}`, `state:edit_caller_vol:${telegramId}`, 
-            `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`, `state:guild_tiered_drop:${telegramId}`, 
-            `state:guild_indiv_drop:${telegramId}`, `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`,
-            `vip:awaiting_tx:${telegramId}`, `state:withdraw_pin:${telegramId}`, `state:credits_tx:${telegramId}`, 
-            `credits:pending:${telegramId}`, `sim:autosnipe:${telegramId}`, `state:guard_ca:${telegramId}`,
-            `active_bumper:${telegramId}`, `state:dev_volume:${telegramId}`, `state:dev_nuke:${telegramId}`,
-            `token_launch:${telegramId}:step`, `token_launch:${telegramId}:name`, `token_launch:${telegramId}:symbol`,
-            `token_launch:${telegramId}:description`, `token_launch:${telegramId}:imageUrl`, `token_launch:${telegramId}:vanity`,
-            `token_launch:${telegramId}:devbuy`, `token_launch:${telegramId}:wallets`, `token_launch:${telegramId}:guard`
-        ];
-        
-        // 🟢 FIX 38: Chunk array to avoid Redis max-arguments exception on highly active accounts
-        for (let i = 0; i < keysToClear.length; i += 100) {
-            await redis.del(...keysToClear.slice(i, i + 100));
-        }
-
-        await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Bumpers Paused.</b> You are back to the main menu.`);
+        await handleCancel(telegramId);
+        await ctx.replyWithHTML(`✅ <b>Action Cancelled. Automations & Wizards Paused.</b> You are back to the main menu.`);
         await sendOrEditDashboard(ctx, telegramId, false);
         return;
     }
 
-    // 2. SET PIN HANDLER
+    // --- 2. TOKEN LAUNCH WIZARD ---
+    const launchStep = await redis.get(`token_launch:${telegramId}:step`);
+    if (launchStep && launchStep !== 'READY_TO_LAUNCH') {
+        switch (launchStep) {
+            case 'AWAITING_NAME':
+                if (text.length < 3 || text.length > 30) return ctx.reply("⚠️ Name must be 3-30 characters.");
+                await redis.set(`token_launch:${telegramId}:name`, text, 'EX', 900);
+                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_SYMBOL', 'EX', 900);
+                return ctx.replyWithHTML(`✏️ <b>Step 2/8:</b> What is the <b>Ticker Symbol</b>? (e.g., DOGE)\n\n<i>Reply with 1-10 characters.</i>`);
+            case 'AWAITING_SYMBOL':
+                if (text.length < 1 || text.length > 10) return ctx.reply("⚠️ Symbol must be 1-10 characters.");
+                await redis.set(`token_launch:${telegramId}:symbol`, text.toUpperCase(), 'EX', 900);
+                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_DESCRIPTION', 'EX', 900);
+                return ctx.replyWithHTML(`📝 <b>Step 3/8:</b> Write a <b>Description</b> (max 200 chars).\n\n<i>Reply with your text.</i>`);
+            case 'AWAITING_DESCRIPTION':
+                if (text.length > 200) return ctx.reply("⚠️ Description must be under 200 characters.");
+                await redis.set(`token_launch:${telegramId}:description`, text, 'EX', 900);
+                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_VANITY', 'EX', 900);
+                return ctx.replyWithHTML(`💎 <b>Step 4/8:</b> Enter a <b>Vanity Prefix</b> (max 4 chars, e.g., "PUMP"). Type "NO" to skip:`);
+            case 'AWAITING_VANITY':
+                await redis.set(`token_launch:${telegramId}:vanity`, text, 'EX', 900);
+                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_DEV_BUY', 'EX', 900);
+                return ctx.replyWithHTML(`💰 <b>Step 5/8:</b> Enter your <b>Dev Buy Amount in SOL</b> (e.g., 0.5). Type "0" for no dev buy:`);
+            case 'AWAITING_DEV_BUY':
+                if (isNaN(parseFloat(text))) return ctx.reply("⚠️ Must be a number.");
+                await redis.set(`token_launch:${telegramId}:devbuy`, text, 'EX', 900);
+                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_WALLETS', 'EX', 900);
+                return ctx.replyWithHTML(`👛 <b>Step 6/8:</b> Across how many <b>Sub-Wallets</b> should we split the buy? (1 to 4):`);
+            case 'AWAITING_WALLETS':
+                if (isNaN(parseInt(text)) || parseInt(text) < 1 || parseInt(text) > 4) return ctx.reply("⚠️ Enter a number between 1 and 4.");
+                await redis.set(`token_launch:${telegramId}:wallets`, text, 'EX', 900);
+                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_GUARD', 'EX', 900);
+                return ctx.replyWithHTML(`🛡️ <b>Step 7/8:</b> Enter an <b>Auto-Guard Stop Loss %</b> for your dev buy (e.g., 20). Type "0" to disable:`);
+            case 'AWAITING_GUARD':
+                if (isNaN(parseFloat(text))) return ctx.reply("⚠️ Must be a number.");
+                await redis.set(`token_launch:${telegramId}:guard`, text, 'EX', 900);
+                await redis.set(`token_launch:${telegramId}:step`, 'AWAITING_IMAGE', 'EX', 900);
+                return ctx.replyWithHTML(`🖼️ <b>Step 8/8:</b> Please <b>send an image</b> for your token logo to finalize setup.`);
+            default:
+                return ctx.reply("⚠️ Unknown step. Type /cancel to restart.");
+        }
+    }
+
+    // --- 3. GUILD SETUP WIZARD ---
+    const guildStep = await redis.hget(`guild_setup:${telegramId}`, 'step');
+    if (guildStep) {
+        if (guildStep === '1') {
+            if (text.length < 3 || text.length > 30) return ctx.reply("⚠️ Name must be 3-30 characters.");
+            await redis.hset(`guild_setup:${telegramId}`, { name: text, step: '2' });
+            await redis.expire(`guild_setup:${telegramId}`, 600);
+            return ctx.replyWithHTML(`🏰 <b>GUILD SETUP [Step 2/2]</b>\n\nWhat is the <b>Reward Description</b>? (e.g., "Top 10 get whitelist")\n\n<i>Reply with your reward description.</i>`);
+        } else if (guildStep === '2') {
+            if (text.length < 3 || text.length > 200) return ctx.reply("⚠️ Reward description must be 3-200 characters.");
+            await redis.hset(`guild_setup:${telegramId}`, { reward: text });
+            await redis.hdel(`guild_setup:${telegramId}`, 'step'); 
+            
+            const setupState = await redis.hgetall(`guild_setup:${telegramId}`);
+            return ctx.replyWithHTML(
+                `🏰 <b>GUILD READY FOR DEPLOYMENT</b>\n\n` +
+                `• <b>Name:</b> ${setupState.name}\n` +
+                `• <b>Reward:</b> ${setupState.reward}\n` +
+                `• <b>Creation Fee:</b> Free\n\n` +
+                `<i>Are you ready to deploy your Guild on-chain?</i>`,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback('🚀 CONFIRM & DEPLOY', 'action_confirm_guild_pay')],
+                    [Markup.button.callback('❌ Cancel', 'action_abort_guild_setup')]
+                ])
+            );
+        }
+    }
+
+    // --- 4. GUILD AIRDROPS (Tiered / Individual / Bulk) ---
+    const guildTiered = await redis.get(`state:guild_tiered_drop:${telegramId}`);
+    if (guildTiered) {
+        await redis.del(`state:guild_tiered_drop:${telegramId}`);
+        const parts = text.split(' ').map(parseFloat);
+        if (parts.length !== 3 || parts.some(isNaN)) return ctx.reply("🔴 Invalid format. Send: <code>[top3Sol] [next7Sol] [ranks11to50Sol]</code>", { parse_mode: 'HTML' });
+        const { executeTieredAirdrop } = await import('./services/guild.service.js');
+        const result = await executeTieredAirdrop(telegramId, guildTiered, parts[0], parts[1], parts[2]);
+        return ctx.replyWithHTML(result.success ? `✅ ${result.message}\n🔗 <a href="https://solscan.io/tx/${result.signature}">Receipt</a>` : `🔴 ${result.message}`);
+    }
+
+    const guildIndiv = await redis.get(`state:guild_indiv_drop:${telegramId}`);
+    if (guildIndiv) {
+        await redis.del(`state:guild_indiv_drop:${telegramId}`);
+        const parts = text.split(' ');
+        if (parts.length !== 2) return ctx.reply("🔴 Usage: <code>[rank] [amountSol]</code>", { parse_mode: 'HTML' });
+        const rank = parseInt(parts[0]);
+        const amount = parseFloat(parts[1]);
+        if (isNaN(rank) || isNaN(amount) || rank < 1) return ctx.reply("🔴 Invalid numbers.");
+        const { executeIndividualAirdrop } = await import('./services/guild.service.js');
+        const result = await executeIndividualAirdrop(telegramId, guildIndiv, rank, amount);
+        return ctx.replyWithHTML(result.success ? `✅ ${result.message}\n🔗 <a href="https://solscan.io/tx/${result.signature}">Receipt</a>` : `🔴 ${result.message}`);
+    }
+
+    const guildAirdrop = await redis.get(`state:guild_airdrop:${telegramId}`);
+    if (guildAirdrop) {
+        await redis.del(`state:guild_airdrop:${telegramId}`);
+        const totalSol = parseFloat(text);
+        if (isNaN(totalSol) || totalSol <= 0) return ctx.reply("🔴 Invalid amount.");
+        const { executeGuildAirdrop } = await import('./services/guild.service.js');
+        const result = await executeGuildAirdrop(telegramId, guildAirdrop, totalSol);
+        return ctx.replyWithHTML(result.success ? `✅ ${result.message}\n🔗 <a href="https://solscan.io/tx/${result.signature}">Receipt</a>` : `🔴 ${result.message}`);
+    }
+
+    // --- 5. EDIT GUILD NAME / REWARD ---
+    const editName = await redis.get(`state:edit_guild_name:${telegramId}`);
+    if (editName) {
+        await redis.del(`state:edit_guild_name:${telegramId}`);
+        if (text.length < 3 || text.length > 30) return ctx.reply("⚠️ Name must be 3-30 characters.");
+        await prisma.guild.update({ where: { id: editName }, data: { name: text } });
+        return ctx.replyWithHTML(`✅ Guild name updated to <b>${text}</b>.`);
+    }
+
+    const editReward = await redis.get(`state:edit_guild_reward:${telegramId}`);
+    if (editReward) {
+        await redis.del(`state:edit_guild_reward:${telegramId}`);
+        if (text.length < 3 || text.length > 200) return ctx.reply("⚠️ Reward must be 3-200 characters.");
+        await prisma.guild.update({ where: { id: editReward }, data: { rewardDescription: text } });
+        return ctx.replyWithHTML(`✅ Reward updated to <b>${text}</b>.`);
+    }
+
+    // --- 6. CALLER GUARD / DCA INPUT ---
+    const callerGuard = await redis.get(`state:caller_guard_input:${telegramId}`);
+    if (callerGuard) {
+        await redis.del(`state:caller_guard_input:${telegramId}`);
+        const parts = text.split(' ');
+        if (parts.length < 2 || parts.length > 3) return ctx.reply("🔴 Usage: <code>[drop%] [amountSol] [optional tp%]</code>", { parse_mode: 'HTML' });
+        const drop = parseFloat(parts[0]);
+        const amount = parseSolAmount(parts[1]);
+        const tp = parts.length === 3 ? parseFloat(parts[2]) : undefined;
+        if (isNaN(drop) || drop <= 0 || amount === null) return ctx.reply("🔴 Invalid parameters.");
+        const { addTrailingStopToMemory } = await import('./services/order.service.js');
+        const { executeSnipe, getCachedTokenPrice } = await import('./services/engine.service.js');
+        
+        const loader = await ctx.replyWithHTML(`⚡ <b>Executing Snipe for Guard...</b>`);
+        const snipeResult = await executeSnipe(telegramId, callerGuard, amount);
+        
+        if (!snipeResult.success) {
+            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 Buy failed: ${snipeResult.message}`, { parse_mode: 'HTML' });
+        }
+        
+        const entryPrice = await getCachedTokenPrice(callerGuard) || 0;
+        await addTrailingStopToMemory(telegramId, callerGuard, drop, amount, entryPrice, tp);
+        return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `✅ <b>Success!</b>\n🛡️ Guard deployed on <code>${callerGuard}</code> with ${drop}% trailing drop${tp ? ` and ${tp}% TP` : ''}.`, { parse_mode: 'HTML' });
+    }
+
+    const callerDca = await redis.get(`state:caller_dca_input:${telegramId}`);
+    if (callerDca) {
+        await redis.del(`state:caller_dca_input:${telegramId}`);
+        const parts = text.split(' ');
+        if (parts.length < 3) return ctx.reply("🔴 Usage: <code>[intervalMins] [amountSol] [drop%] [optional tp%] [optional maxBudget]</code>", { parse_mode: 'HTML' });
+        const interval = parseInt(parts[0]);
+        const amount = parseSolAmount(parts[1]);
+        const drop = parseFloat(parts[2]);
+        const tp = parts.length >= 4 ? parseFloat(parts[3]) : undefined;
+        const maxBudget = parts.length >= 5 ? parseFloat(parts[4]) : undefined;
+        
+        if (isNaN(interval) || interval < 1 || amount === null || isNaN(drop)) return ctx.reply("🔴 Invalid parameters.");
+        
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user) return next();
+        
+        await prisma.activeOrder.create({
+            data: {
+                userId: user.id, tokenAddress: callerDca, orderType: 'DCA',
+                amountSol: amount, dcaIntervalMins: interval, trailingPercent: drop,
+                takeProfitPercent: tp || null, maxBudgetSol: maxBudget || null, isActive: true
+            }
+        });
+        return ctx.replyWithHTML(`✅ DCA scheduled successfully for <code>${callerDca}</code>.`);
+    }
+
+    // --- 7. CREDIT PURCHASE TX ---
+    const creditTxState = await redis.get(`state:credits_tx:${telegramId}`);
+    if (creditTxState) {
+        await redis.del(`state:credits_tx:${telegramId}`);
+        const pendingPack = await redis.get(`credits:pending:${telegramId}`);
+        if (!pendingPack) return ctx.reply("⚠️ No pending purchase found.");
+        await redis.del(`credits:pending:${telegramId}`);
+
+        const loader = await ctx.reply("<i>⏳ Verifying transaction...</i>", { parse_mode: 'HTML' });
+
+        const { verifyVipPayment } = await import('./services/vip.service.js');
+        const { CREDIT_PACKS, addCredits } = await import('./services/credits.service.js');
+        const pack = CREDIT_PACKS[pendingPack as keyof typeof CREDIT_PACKS];
+        const treasury = process.env.TREASURY_WALLET_ADDRESS!;
+        
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user || !user.vaultAddress) return;
+
+        const { cachedSolUsdPrice } = await import('./services/grpc.service.js');
+        const expectedAmountSol = parseFloat((pack.priceUsd / (cachedSolUsdPrice || 160)).toFixed(4));
+
+        const valid = await verifyVipPayment(text, expectedAmountSol, treasury, user.vaultAddress);
+        if (!valid.valid) {
+            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Payment Invalid:</b> ${valid.reason}`, { parse_mode: 'HTML' });
+        }
+
+        const result = await addCredits(telegramId, pendingPack as any, text);
+        if (result.success) {
+            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `✅ <b>Credits added!</b> New balance: ${result.newBalance.toLocaleString()}`, { parse_mode: 'HTML' });
+        } else {
+            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, "🔴 Failed to add credits.", { parse_mode: 'HTML' });
+        }
+        return;
+    }
+
+    // --- 8. VIP PURCHASE TX ---
+    const vipTxState = await redis.get(`vip:awaiting_tx:${telegramId}`);
+    if (vipTxState) {
+        await redis.del(`vip:awaiting_tx:${telegramId}`);
+        const loader = await ctx.reply("<i>⏳ Verifying VIP payment...</i>", { parse_mode: 'HTML' });
+
+        const { verifyVipPayment, VIP_TIERS, grantVip } = await import('./services/vip.service.js');
+        const tierDef = VIP_TIERS[vipTxState as keyof typeof VIP_TIERS];
+        const treasury = process.env.TREASURY_WALLET_ADDRESS!;
+        
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user || !user.vaultAddress) return;
+
+        const valid = await verifyVipPayment(text, tierDef.priceSol, treasury, user.vaultAddress);
+        if (!valid.valid) {
+            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Payment Invalid:</b> ${valid.reason}`, { parse_mode: 'HTML' });
+        }
+
+        await grantVip(telegramId, vipTxState as any, 'PAID', text);
+        return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `👑 <b>VIP ACTIVATED!</b>\n\nWelcome to ${tierDef.label}. Your 0% fees and Turbo routing are now active.`, { parse_mode: 'HTML' });
+    }
+
+    // --- 9. WITHDRAWAL PIN VERIFICATION ---
+    const withdrawState = await redis.get(`state:withdraw_pin:${telegramId}`);
+    if (withdrawState) {
+        await redis.del(`state:withdraw_pin:${telegramId}`);
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user || !user.withdrawalPin) return ctx.reply("🔴 PIN not set up.");
+        
+        if (!verifyPin(text, user.withdrawalPin)) {
+            return ctx.replyWithHTML("🔴 <b>INVALID PIN</b>\n\nWithdrawal aborted.");
+        }
+        
+        const data = JSON.parse(withdrawState);
+        // Ensure executeWithdrawalProcess exists in this scope or import it
+        // @ts-ignore
+        await executeWithdrawalProcess(user, data.targetAddress, data.requestedAmount, data.isMax, telegramId, ctx, `lock:withdraw:${telegramId}`);
+        return;
+    }
+
+    // --- 10. SET PIN ---
     const isSettingPin = await redis.get(`state:set_pin:${telegramId}`);
     if (isSettingPin) {
         await redis.del(`state:set_pin:${telegramId}`);
         if (!/^\d{4,6}$/.test(text)) {
             return ctx.replyWithHTML(`🔴 <b>Invalid format.</b> PIN must be 4 to 6 numbers. Setup aborted.`);
         }
-        
-        // 🟢 FIX 11: Hash the PIN before saving to database to prevent plaintext exposure
         const hashed = hashPin(text);
         await prisma.user.update({ where: { telegramId }, data: { withdrawalPin: hashed } });
-        
-        await ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour vault is now secured. You will need to enter this PIN for any future withdrawals.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
+        return ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour vault is now secured. You will need to enter this PIN for any future withdrawals.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
+    }
+
+    // --- 11. AUTO-SNIPER & CONFIGURATION SETTINGS ---
+    const isBaseRisk = await redis.get(`state:autosnipe_base_risk:${telegramId}`);
+    if (isBaseRisk) {
+        await redis.del(`state:autosnipe_base_risk:${telegramId}`);
+        const amount = parseSolAmount(text);
+        if (amount === null || amount <= 0.001) return ctx.reply('🔴 Invalid amount. Must be > 0.001.');
+        const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+        if (!user?.autoSnipeConfig) return;
+        await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { baseRiskUnitSol: amount } });
+        await ctx.replyWithHTML(`✅ Base Risk Unit set to <b>${amount.toFixed(4)} SOL</b>.`);
+        await sendOrEditSniper(ctx, telegramId, true);
         return;
     }
 
-    // 3. WITHDRAWAL PIN VERIFICATION
-    const withdrawState = await redis.get(`state:withdraw_pin:${telegramId}`);
-    if (withdrawState) {
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-        if (!user || !user.withdrawalPin) {
-            await redis.del(`state:withdraw_pin:${telegramId}`);
-            return ctx.reply("🔴 PIN not set up correctly.");
-        }
-
-        // 🟢 FIX 11: Safely verify the hashed PIN against the database
-        if (!verifyPin(text, user.withdrawalPin)) {
-            await redis.del(`state:withdraw_pin:${telegramId}`);
-            return ctx.replyWithHTML(`🔴 <b>INVALID PIN</b>\n\nWithdrawal aborted for security.`);
-        }
-
-        await redis.del(`state:withdraw_pin:${telegramId}`);
-        const data = JSON.parse(withdrawState);
-        
-        // @ts-ignore
-        await executeWithdrawalProcess(user, data.targetAddress, data.requestedAmount, data.isMax, telegramId, ctx, `lock:withdraw:${telegramId}`);
+    const isMaxMult = await redis.get(`state:autosnipe_max_multiplier:${telegramId}`);
+    if (isMaxMult) {
+        await redis.del(`state:autosnipe_max_multiplier:${telegramId}`);
+        const val = parseFloat(text);
+        if (isNaN(val) || val < 1.0 || val > 100.0) return ctx.reply('🔴 Invalid. Enter a number between 1.0 and 100.0.');
+        const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+        if (!user?.autoSnipeConfig) return;
+        await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { maxRiskMultiplier: val } });
+        await ctx.replyWithHTML(`✅ Max Risk Multiplier set to <b>${val}x</b>.`);
+        await sendOrEditSniper(ctx, telegramId, true);
         return;
     }
 
-    // 1. Base Risk Unit
-const isBaseRisk = await redis.get(`state:autosnipe_base_risk:${telegramId}`);
-if (isBaseRisk) {
-    await redis.del(`state:autosnipe_base_risk:${telegramId}`);
-    const amount = parseSolAmount(text);
-    if (amount === null || amount <= 0.001) return ctx.reply('🔴 Invalid amount. Must be > 0.001.');
-    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
-    if (!user?.autoSnipeConfig) return;
-    await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { baseRiskUnitSol: amount } });
-    await ctx.replyWithHTML(`✅ Base Risk Unit set to <b>${amount.toFixed(4)} SOL</b>.`);
-    await sendOrEditSniper(ctx, telegramId, true);
-    return;
-}
-
-// 2. Max Risk Multiplier
-const isMaxMult = await redis.get(`state:autosnipe_max_multiplier:${telegramId}`);
-if (isMaxMult) {
-    await redis.del(`state:autosnipe_max_multiplier:${telegramId}`);
-    const val = parseFloat(text);
-    if (isNaN(val) || val < 1.0 || val > 100.0) return ctx.reply('🔴 Invalid. Enter a number between 1.0 and 100.0.');
-    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
-    if (!user?.autoSnipeConfig) return;
-    await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { maxRiskMultiplier: val } });
-    await ctx.replyWithHTML(`✅ Max Risk Multiplier set to <b>${val}x</b>.`);
-    await sendOrEditSniper(ctx, telegramId, true);
-    return;
-}
-
-// 3. Scaling Exponent
-const isExp = await redis.get(`state:autosnipe_exponent:${telegramId}`);
-if (isExp) {
-    await redis.del(`state:autosnipe_exponent:${telegramId}`);
-    const val = parseFloat(text);
-    if (isNaN(val) || val < 1.0 || val > 4.0) return ctx.reply('🔴 Invalid. Enter 1.0 (Linear), 2.0 (Aggressive), or 3.0 (Exponential).');
-    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
-    if (!user?.autoSnipeConfig) return;
-    await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { scaleExponent: val } });
-    await ctx.replyWithHTML(`✅ Scaling Curve exponent set to <b>${val}</b>.`);
-    await sendOrEditSniper(ctx, telegramId, true);
-    return;
-}
-
-  // 4. THE SIMULATION EDITOR (DASHBOARD FORGE)
-// 4. THE SIMULATION EDITOR (DASHBOARD FORGE)
-const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
-if (isSimEdit) {
-    await redis.del(`state:simedit:${telegramId}`);
-    
-    const lines = text.split('\n').filter(l => l.trim() !== '');
-    const parsedData: Record<string, string> = {};
-    
-    for (const line of lines) {
-        const parts = line.split(':');
-        if (parts.length < 2) continue;
-        const key = parts[0].trim().toUpperCase();
-        const value = parts.slice(1).join(':').trim();
-        parsedData[key] = value;
+    const isExp = await redis.get(`state:autosnipe_exponent:${telegramId}`);
+    if (isExp) {
+        await redis.del(`state:autosnipe_exponent:${telegramId}`);
+        const val = parseFloat(text);
+        if (isNaN(val) || val < 1.0 || val > 4.0) return ctx.reply('🔴 Invalid. Enter 1.0 (Linear), 2.0 (Aggressive), or 3.0 (Exponential).');
+        const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+        if (!user?.autoSnipeConfig) return;
+        await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { scaleExponent: val } });
+        await ctx.replyWithHTML(`✅ Scaling Curve exponent set to <b>${val}</b>.`);
+        await sendOrEditSniper(ctx, telegramId, true);
+        return;
     }
 
-    if (!parsedData['BALANCE_SOL'] || !parsedData['WINS'] || !parsedData['LOSSES']) {
-        return ctx.reply("❌ Missing required fields. Must include: BALANCE_SOL, WINS, LOSSES.");
+    const isEditSl = await redis.get(`state:edit_slippage:${telegramId}`);
+    if (isEditSl) {
+        await redis.del(`state:edit_slippage:${telegramId}`);
+        const sl = parseFloat(text);
+        if (isNaN(sl) || sl <= 0 || sl > 100) return ctx.reply("🔴 Invalid slippage.");
+        await prisma.user.update({ where: { telegramId }, data: { slippagePercent: sl } });
+        await ctx.replyWithHTML(`✅ Slippage updated to <b>${sl}%</b>.`);
+        await sendOrEditSettings(ctx, telegramId, true);
+        return;
     }
 
-    const loader = await ctx.reply("<i>⏳ Re-initializing simulation engine...</i>", { parse_mode: 'HTML' });
+    const isCustomSpeed = await redis.get(`state:edit_custom_speed:${telegramId}`);
+    if (isCustomSpeed) {
+        await redis.del(`state:edit_custom_speed:${telegramId}`);
+        const fee = parseFloat(text);
+        if (isNaN(fee) || fee <= 0) return ctx.reply("🔴 Invalid custom priority fee.");
+        await prisma.user.update({ where: { telegramId }, data: { priorityLevel: 'CUSTOM', customPriorityFee: fee } });
+        await ctx.replyWithHTML(`✅ Custom Jito bribe set to <b>${fee} SOL</b>.`);
+        await sendOrEditSettings(ctx, telegramId, true);
+        return;
+    }
 
-    try {
-        const wins = parseInt(parsedData['WINS']) || 0;
-        const losses = parseInt(parsedData['LOSSES']) || 0;
-        const balance = parseFloat(parsedData['BALANCE_SOL']) || 0;
-        const volume = parseFloat(parsedData['VOL'] || '0');
-        const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '0');
-        const spend = parseFloat(parsedData['SPEND'] || '0');
-
-        // 1. Set basic Redis counters (balance, starting balance, etc.)
-        await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
-        await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
-        await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
-        await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
-
-        // 2. Generate synthetic trades to make computeUniversalStats() work
-        const totalTrades = wins + losses;
-        const avgVolume = totalTrades > 0 ? volume / totalTrades : 0;
-        const now = Date.now();
-        const syntheticTrades = [];
-
-        // Generate winning trades (random PnL between +15% and +95%)
-        for (let i = 0; i < wins; i++) {
-            const pnlPercent = 15 + Math.random() * 80;
-            const amt = avgVolume * (0.8 + Math.random() * 0.4);
-            syntheticTrades.push({
-                createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
-                isBuy: false,
-                amountInSol: amt,
-                profitPercent: pnlPercent,
-                realizedPnlSol: amt * (pnlPercent / 100),
-                strategy: 'SIMULATED'
-            });
+    // --- 12. SIMULATION FORGE EDITOR ---
+    const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
+    if (isSimEdit) {
+        await redis.del(`state:simedit:${telegramId}`);
+        const lines = text.split('\n').filter(l => l.trim() !== '');
+        const parsedData: Record<string, string> = {};
+        for (const line of lines) {
+            const parts = line.split(':');
+            if (parts.length < 2) continue;
+            const key = parts[0].trim().toUpperCase();
+            const value = parts.slice(1).join(':').trim();
+            parsedData[key] = value;
         }
 
-        // Generate losing trades (random PnL between -5% and -20%)
-        for (let i = 0; i < losses; i++) {
-            const pnlPercent = -(5 + Math.random() * 15);
-            const amt = avgVolume * (0.8 + Math.random() * 0.4);
-            syntheticTrades.push({
-                createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
-                isBuy: false,
-                amountInSol: amt,
-                profitPercent: pnlPercent,
-                realizedPnlSol: amt * (pnlPercent / 100),
-                strategy: 'SIMULATED'
-            });
+        if (!parsedData['BALANCE_SOL'] || !parsedData['WINS'] || !parsedData['LOSSES']) {
+            return ctx.reply("❌ Missing required fields. Must include: BALANCE_SOL, WINS, LOSSES.");
         }
 
-        // Shuffle and store in Redis
-        syntheticTrades.sort(() => Math.random() - 0.5);
-        await redis.set(`sim:trades:${telegramId}`, JSON.stringify(syntheticTrades.slice(0, 500))); // keep max 500 for performance
-        await redis.set(`sim:volume:${telegramId}`, volume.toString());
+        const loader = await ctx.reply("<i>⏳ Re-initializing simulation engine...</i>", { parse_mode: 'HTML' });
 
-        // 3. Store counter keys (optional, some legacy endpoints may use them)
-        await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
-        await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
-        await redis.set(`sim:stats:totalTrades:${telegramId}`, totalTrades.toString());
-        await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toString());
+        try {
+            const wins = parseInt(parsedData['WINS']) || 0;
+            const losses = parseInt(parsedData['LOSSES']) || 0;
+            const balance = parseFloat(parsedData['BALANCE_SOL']) || 0;
+            const volume = parseFloat(parsedData['VOL'] || '0');
+            const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '0');
+            const spend = parseFloat(parsedData['SPEND'] || '0');
 
-        // 4. Persist to PostgreSQL
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-        if (user) {
-            await prisma.simState.upsert({
-                where: { userId: user.id },
-                update: { 
-                    balance: balance, 
-                    startingBalance: balance, 
-                    volume: volume,
-                    active: true 
-                },
-                create: { 
-                    userId: user.id, 
-                    balance: balance, 
-                    startingBalance: balance, 
-                    volume: volume, 
-                    active: true 
-                }
-            });
+            await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
+            await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
+            await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
+            await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
+
+            const totalTrades = wins + losses;
+            const avgVolume = totalTrades > 0 ? volume / totalTrades : 0;
+            const now = Date.now();
+            const syntheticTrades = [];
+
+            // Distribute randomized PnL
+            for (let i = 0; i < wins; i++) {
+                const pnlPercent = 15 + Math.random() * 80;
+                const amt = avgVolume * (0.8 + Math.random() * 0.4);
+                syntheticTrades.push({
+                    createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
+                    isBuy: false, amountInSol: amt, profitPercent: pnlPercent, realizedPnlSol: amt * (pnlPercent / 100), strategy: 'SIMULATED'
+                });
+            }
+
+            for (let i = 0; i < losses; i++) {
+                const pnlPercent = -(5 + Math.random() * 15);
+                const amt = avgVolume * (0.8 + Math.random() * 0.4);
+                syntheticTrades.push({
+                    createdAt: new Date(now - Math.random() * 30 * 86400000).toISOString(),
+                    isBuy: false, amountInSol: amt, profitPercent: pnlPercent, realizedPnlSol: amt * (pnlPercent / 100), strategy: 'SIMULATED'
+                });
+            }
+
+            syntheticTrades.sort(() => Math.random() - 0.5);
+            await redis.set(`sim:trades:${telegramId}`, JSON.stringify(syntheticTrades.slice(0, 500)));
+            await redis.set(`sim:volume:${telegramId}`, volume.toString());
+
+            await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
+            await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
+            await redis.set(`sim:stats:totalTrades:${telegramId}`, totalTrades.toString());
+            await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toString());
+
+            const user = await prisma.user.findUnique({ where: { telegramId } });
+            if (user) {
+                await prisma.simState.upsert({
+                    where: { userId: user.id },
+                    update: { balance, startingBalance: balance, volume, active: true },
+                    create: { userId: user.id, balance, startingBalance: balance, volume, active: true }
+                });
+            }
+
+            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                `✅ <b>SIMULATION FORGE COMPLETE</b>\n\nBalance: ${balance.toFixed(4)} SOL\nTotal Trades Set: <b>${totalTrades}</b> (${wins} Wins / ${losses} Losses)`, 
+                { parse_mode: 'HTML' }
+            );
+        } catch (e: any) {
+            return ctx.reply(`🔴 Forge Error: ${e.message}`);
         }
+    }
 
-        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
-            `✅ <b>SIMULATION FORGE COMPLETE</b>\n\nBalance: ${balance.toFixed(4)} SOL\nTotal Trades Set: <b>${totalTrades}</b> (${wins} Wins / ${losses} Losses)`, 
-            { parse_mode: 'HTML' }
+    // --- 15. CA DETECTION / MANUAL SNIPE FALLBACK ---
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
+        const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+        const defaultAmount = user?.autoSnipeConfig?.amountSol || 0.1;
+        await redis.set(`pending_buy:${telegramId}:${text}`, defaultAmount.toString(), 'EX', 120);
+        return ctx.replyWithHTML(
+            `⚡ <b>Token detected!</b>\n<code>${text}</code>\n\n` +
+            `Reply with the amount (SOL or $USD) to snipe, or tap confirm below.\n` +
+            `Default: <b>${defaultAmount} SOL</b>`,
+            Markup.inlineKeyboard([
+                [Markup.button.callback(`⚡ Confirm ${defaultAmount} SOL`, `confirm_buy_${text}`)],
+                [Markup.button.callback('❌ Cancel', 'cancel_buy')]
+            ])
         );
-    } catch (e: any) {
-        await ctx.reply(`🔴 Forge Error: ${e.message}`);
     }
-    return;
-}
-  if (isSimEdit) {
-      await redis.del(`state:simedit:${telegramId}`);
-      
-      const lines = text.split('\n').filter(l => l.trim() !== '');
-      const parsedData: Record<string, string> = {};
-      
-      for (const line of lines) {
-          const parts = line.split(':');
-          if (parts.length < 2) continue;
-          const key = parts[0].trim().toUpperCase();
-          const value = parts.slice(1).join(':').trim();
-          parsedData[key] = value;
-      }
-  
-      if (!parsedData['BALANCE_SOL'] || !parsedData['WINS'] || !parsedData['LOSSES']) {
-          return ctx.reply("❌ Missing required fields. Must include: BALANCE_SOL, WINS, LOSSES.");
-      }
-  
-      const loader = await ctx.reply("<i>⏳ Re-initializing simulation engine...</i>", { parse_mode: 'HTML' });
-  
-      try {
-          const wins = parseInt(parsedData['WINS']) || 0;
-          const losses = parseInt(parsedData['LOSSES']) || 0;
-          const balance = parseFloat(parsedData['BALANCE_SOL']) || 0;
-          const volume = parseFloat(parsedData['VOL'] || '0');
-  
-          await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
-          await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
-          await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
-          await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
-          await redis.set(`sim:stats:totalTrades:${telegramId}`, (wins + losses).toString());
-          
-          await redis.del(`sim:trades:${telegramId}`);
-          await redis.del(`sim:volume:${telegramId}`);
-  
-          const user = await prisma.user.findUnique({ where: { telegramId } });
-          if (user) {
-              await prisma.simState.upsert({
-                  where: { userId: user.id },
-                  update: { 
-                      balance: balance, 
-                      startingBalance: balance, 
-                      volume: volume,
-                      active: true 
-                  },
-                  create: { 
-                      userId: user.id, 
-                      balance: balance, 
-                      startingBalance: balance, 
-                      volume: volume, 
-                      active: true 
-                  }
-              });
-          }
-  
-          await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
-              `✅ <b>SIMULATION FORGE COMPLETE</b>\n\nBalance: ${balance.toFixed(4)} SOL\nTotal Trades Set: ${wins + losses}`, 
-              { parse_mode: 'HTML' }
-          );
-      } catch (e: any) {
-          await ctx.reply(`🔴 Forge Error: ${e.message}`);
-      }
-      return;
-  }
 
-    // Pass through to CA handler or specific command checks
+    // Pass-through for normal commands (like /start, /help, etc)
     if (text.startsWith("/")) return next();
-    
-    // ... (Your CA detection logic here)
+
     return next();
 });
+
+
 
 // 🟢 GAP 3 FIX: Seamlessly route the user from the "Watch Price" button directly into the Guard Flow
 bot.action(/^confirm_watch_(.+)$/, async (ctx) => {
@@ -6158,11 +6362,18 @@ async function bootEcosystem() {
 
         igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err.message));
         
-        startDcaEngine(bot);
+       
         startCopyTradeWatcher(bot); 
         startDepositWatcher(bot); 
         startCoinCaller(bot); 
-        startLimitOrderWatcher(bot);
+
+
+        // 🟢 FIX: Schedule recurring BullMQ jobs instead of setInterval
+        console.log('⏳ Booting BullMQ Background Task Queues...');
+        await dcaQueue.add('dca-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } }); // Every 5s
+        await guardQueue.add('guard-check', { bot }, { repeat: { pattern: '*/1 * * * * *' } }); // Every 1s
+        await limitQueue.add('limit-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } }); // Every 5s
+    
 
         cron.schedule('0 8 * * 1', async () => {
             console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
@@ -6216,10 +6427,36 @@ async function bootEcosystem() {
     scheduleTraining();
 }
 
-process.once('SIGINT', () => { try { if (bot.botInfo) bot.stop('SIGINT'); } catch(e){} prisma.$disconnect(); redis.quit(); });
-process.once('SIGTERM', () => { try { if (bot.botInfo) bot.stop('SIGTERM'); } catch(e){} prisma.$disconnect(); redis.quit(); });
+// 🟢 FIX: Graceful Shutdown System for BullMQ and Intervals
+declare global { var _sentryIntervals: NodeJS.Timeout[]; }
+if (!global._sentryIntervals) global._sentryIntervals = [];
 
-// Replace bootEcosystem(); at the bottom of src/index.ts
+const gracefulShutdown = async (signal: string) => {
+    console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+    
+    // Close BullMQ queues safely
+    await dcaQueue.close();
+    await guardQueue.close();
+    await limitQueue.close();
+    
+    // Clear all recurring intervals
+    for (const timer of global._sentryIntervals || []) {
+        clearInterval(timer);
+    }
+    
+    // Disconnect DB & Redis
+    await prisma.$disconnect();
+    await redis.quit();
+    
+    try { if (bot.botInfo) bot.stop(signal); } catch(e){}
+    
+    console.log('✅ Shutdown complete.');
+    process.exit(0);
+};
+  
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
 bootEcosystem().catch((err) => {
     console.error("🔴 [FATAL] Ecosystem boot failed!");
     console.error("Check your .env, database, and Redis connection. Error:", err);

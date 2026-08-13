@@ -1,9 +1,6 @@
 // src/services/weekly_report.service.ts
-import { PrismaClient } from '@prisma/client';
 import { redis } from '../lib/redis.js';
-
-import { prisma } from '../lib/prisma.js';
-
+import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton
 
 export interface WeeklyStats {
     telegramId: string;
@@ -141,7 +138,7 @@ export function formatWeeklyReport(stats: WeeklyStats): string {
         `📊 <b>TRADING PERFORMANCE</b>\n\n` +
         `${pnlEmoji} Weekly PnL: <b>${pnlSign}${stats.weeklyPnlSol.toFixed(4)} SOL</b>\n` +
         `${winEmoji} Win Rate: <b>${stats.winRate}%</b> (${stats.wins}W / ${stats.losses}L)\n` +
-        `💹 Volume Traded: <b>${stats.totalVolumeSol.toFixed(4)} SOL</b>\n` +
+        `% Volume Traded: <b>${stats.totalVolumeSol.toFixed(4)} SOL</b>\n` +
         `💸 Fees Paid: <b>${stats.totalFeesPaidSol.toFixed(4)} SOL</b>\n\n` +
         `━━━━━━━━━━━━━━━\n` +
         `🎯 <b>TOP TRADES</b>\n\n` +
@@ -187,7 +184,3 @@ export async function sendWeeklyReportsToAll(bot: any): Promise<void> {
 
     console.log(`📬 [WEEKLY REPORT] Done. Sent: ${sent}, Failed/Skipped: ${failed}`);
 }
-
-// 🟢 FIX: Added precomputedRank and totalUsersCount to parameters
-
-

@@ -6,15 +6,16 @@ import { redis } from '../lib/redis.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import { prisma } from '../lib/prisma.js';
+import { redlock } from '../lib/redlock.js';
 
 dotenv.config();
 
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
 
 export async function createGuild(
-    telegramId: string,
-    name: string,
-    description: string | null,
+    telegramId: string, 
+    name: string, 
+    description: string | null, 
     rewardDescription: string | null
 ): Promise<{ success: boolean; message: string; guildCode?: string }> {
     try {
@@ -33,7 +34,7 @@ export async function createGuild(
                 name,
                 description,
                 rewardDescription,
-                feePaidSol: 0
+                feePaidSol: 0 // 🟢 Free Creation
             }
         });
 
@@ -56,7 +57,6 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
         });
 
         await redis.set(`guild_member:${guild.id}:${user.id}`, "1");
-
         return { success: true, message: "Joined successfully.", guildName: guild.name, rewardDescription: guild.rewardDescription };
     } catch (e: any) {
         if (e.code === 'P2002') return { success: false, message: "You are already a member of this Guild." };
@@ -186,10 +186,12 @@ async function getGuildOwnerSigner(telegramId: string, guildId: string) {
     return { keypair: Keypair.fromSecretKey(bs58.decode(rawPk)), vaultPubkey: new PublicKey(user.vaultAddress) };
 }
 
-export async function executeGuildAirdrop(
-    telegramId: string, guildId: string, totalSol: number
-): Promise<{ success: boolean; message: string; signature?: string }> {
+// 🟢 REDLOCK ADDED FOR ALL 3 AIRDROP FUNCTIONS
+
+export async function executeGuildAirdrop(telegramId: string, guildId: string, totalSol: number): Promise<{ success: boolean; message: string; signature?: string }> {
+    let lock;
     try {
+        lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
         const signer = await getGuildOwnerSigner(telegramId, guildId);
         if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
 
@@ -200,13 +202,9 @@ export async function executeGuildAirdrop(
         const lamportsPer = Math.floor(perMember * LAMPORTS_PER_SOL);
         if (lamportsPer <= 0) return { success: false, message: "Amount too small to split." };
 
-        const instructions = top50
-            .filter(m => m && m.walletAddress && m.walletAddress !== "Unknown")
-            .map(m => SystemProgram.transfer({
-                fromPubkey: signer.vaultPubkey,
-                toPubkey: new PublicKey(m!.walletAddress),
-                lamports: lamportsPer
-            }));
+        const instructions = top50.filter(m => m && m.walletAddress && m.walletAddress !== "Unknown").map(m => SystemProgram.transfer({
+            fromPubkey: signer.vaultPubkey, toPubkey: new PublicKey(m!.walletAddress), lamports: lamportsPer
+        }));
 
         const CHUNK_SIZE = 20;
         let confirmedTxs = 0;
@@ -216,9 +214,7 @@ export async function executeGuildAirdrop(
             const chunk = instructions.slice(i, i + CHUNK_SIZE);
             const { blockhash } = await connection.getLatestBlockhash('confirmed');
             const vTx = new VersionedTransaction(new TransactionMessage({
-                payerKey: signer.vaultPubkey, 
-                recentBlockhash: blockhash, 
-                instructions: chunk
+                payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions: chunk
             }).compileToV0Message());
             vTx.sign([signer.keypair]);
             const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
@@ -230,7 +226,6 @@ export async function executeGuildAirdrop(
                 const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
                 if (status?.value && !status.value.err) { isConfirmed = true; break; }
             }
-            
             if (isConfirmed) confirmedTxs++;
         }
 
@@ -243,14 +238,16 @@ export async function executeGuildAirdrop(
 
         return { success: true, message: `Airdropped ${perMember.toFixed(4)} SOL to ${top50.length} members.`, signature: lastSig };
     } catch (e: any) {
-        return { success: false, message: e.message };
+        return { success: false, message: e.message || "Airdrop failed." };
+    } finally {
+        if (lock) await (lock as any).release();
     }
 }
 
-export async function executeTieredAirdrop(
-    telegramId: string, guildId: string, top3Sol: number, next7Sol: number, ranks11to50Sol: number
-): Promise<{ success: boolean; message: string; signature?: string }> {
+export async function executeTieredAirdrop(telegramId: string, guildId: string, top3Sol: number, next7Sol: number, ranks11to50Sol: number): Promise<{ success: boolean; message: string; signature?: string }> {
+    let lock;
     try {
+        lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
         const signer = await getGuildOwnerSigner(telegramId, guildId);
         if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
 
@@ -268,8 +265,7 @@ export async function executeTieredAirdrop(
             if (amount <= 0) continue;
 
             instructions.push(SystemProgram.transfer({
-                fromPubkey: signer.vaultPubkey, toPubkey: new PublicKey(m.walletAddress),
-                lamports: Math.floor(amount * LAMPORTS_PER_SOL)
+                fromPubkey: signer.vaultPubkey, toPubkey: new PublicKey(m.walletAddress), lamports: Math.floor(amount * LAMPORTS_PER_SOL)
             }));
             totalPaid += amount;
         }
@@ -283,9 +279,7 @@ export async function executeTieredAirdrop(
             const chunk = instructions.slice(i, i + CHUNK_SIZE);
             const { blockhash } = await connection.getLatestBlockhash('confirmed');
             const vTx = new VersionedTransaction(new TransactionMessage({
-                payerKey: signer.vaultPubkey, 
-                recentBlockhash: blockhash, 
-                instructions: chunk
+                payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions: chunk
             }).compileToV0Message());
             vTx.sign([signer.keypair]);
             const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
@@ -297,7 +291,6 @@ export async function executeTieredAirdrop(
                 const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
                 if (status?.value && !status.value.err) { isConfirmed = true; break; }
             }
-            
             if (isConfirmed) confirmedTxs++;
         }
 
@@ -305,14 +298,16 @@ export async function executeTieredAirdrop(
 
         return { success: true, message: `Distributed ${totalPaid.toFixed(4)} SOL across ${instructions.length} recipients.`, signature: lastSig };
     } catch (e: any) {
-        return { success: false, message: e.message };
+        return { success: false, message: e.message || "Airdrop failed." };
+    } finally {
+        if (lock) await (lock as any).release();
     }
 }
 
-export async function executeIndividualAirdrop(
-    telegramId: string, guildId: string, targetRank: number, amountSol: number
-): Promise<{ success: boolean; message: string; signature?: string }> {
+export async function executeIndividualAirdrop(telegramId: string, guildId: string, targetRank: number, amountSol: number): Promise<{ success: boolean; message: string; signature?: string }> {
+    let lock;
     try {
+        lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
         const signer = await getGuildOwnerSigner(telegramId, guildId);
         if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
 
@@ -344,6 +339,8 @@ export async function executeIndividualAirdrop(
 
         return { success: true, message: `Sent ${amountSol} SOL to @${target.username} (#${targetRank}).`, signature: sig };
     } catch (e: any) {
-        return { success: false, message: e.message };
+        return { success: false, message: e.message || "Airdrop failed." };
+    } finally {
+        if (lock) await (lock as any).release();
     }
 }
