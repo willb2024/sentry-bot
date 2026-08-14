@@ -5339,7 +5339,7 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
-// --- 12. SIMULATION FORGE EDITOR (FULL PARITY PARSER) ---
+// --- 12. SIMULATION FORGE EDITOR (WITH CREDITS, SLIPPAGE & BUDGET SUPPORT) ---
 const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
 if (isSimEdit) {
     await redis.del(`state:simedit:${telegramId}`);
@@ -5357,17 +5357,19 @@ if (isSimEdit) {
         return ctx.reply("❌ Missing required fields. Must include: BALANCE_SOL, WINS, LOSSES.");
     }
 
-    const loader = await ctx.reply("<i>⏳ Re-initializing simulation matrix & generating verified block ledger...</i>", { parse_mode: 'HTML' });
+    const loader = await ctx.reply("<i>⏳ Synchronizing Simulation Matrix & Unlocking AI Caller...</i>", { parse_mode: 'HTML' });
 
     try {
-        const wins = parseInt(parsedData['WINS']) || 625;
-        const losses = parseInt(parsedData['LOSSES']) || 375;
+        const wins = parseInt(parsedData['WINS']) || 1554;
+        const losses = parseInt(parsedData['LOSSES']) || 933;
+        const credits = parseInt(parsedData['CREDITS']) || 500;
         const balance = parseFloat(parsedData['BALANCE_SOL']) || 238.8700;
-        const volume = parseFloat(parsedData['VOL'] || '4507.7306');
+        const volume = parseFloat(parsedData['VOL']) || 4507.7306;
         const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '0');
         const spend = parseFloat(parsedData['SPEND'] || '0');
         const days = parseInt(parsedData['DAYS'] || '69');
         const risk = parseInt(parsedData['RISK_SCORE'] || '34');
+        const slippage = parseFloat((parsedData['SLIPPAGE'] || '0.12').replace('%', '')) || 0.12;
 
         // Parse 24H Activities
         const manualParts = (parsedData['MANUAL_24H'] || '0 | 0').split('|').map(s => parseFloat(s.trim()));
@@ -5392,7 +5394,7 @@ if (isSimEdit) {
 
         const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
-        // Save Redis Forged Meta
+        // 🟢 SAVE TO REDIS (Meta & Live Keys)
         const forgedPayload = {
             risk,
             manual24hCount,
@@ -5404,9 +5406,16 @@ if (isSimEdit) {
             strat2Name,
             strat2Pnl,
             hourlyChart,
-            firstTradeAt
+            firstTradeAt,
+            slippage,
+            maxBudget,
+            spend
         };
         await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
+
+        // 🟢 SET CREDITS & UNBLOCK AI CALLER
+        await redis.set(`sim:credits:${telegramId}`, credits.toString());
+        await redis.del(`sim_credits_warn:${telegramId}`); // Clear depleted warning lock
 
         await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
         await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
@@ -5414,7 +5423,7 @@ if (isSimEdit) {
         await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
         await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
 
-        // Generate exactly matching historical trades
+        // Generate 2,487 trades with realistic TCA slippage
         const totalTrades = wins + losses;
         const avgTradeSize = volume / totalTrades;
         const now = Date.now();
@@ -5428,12 +5437,12 @@ if (isSimEdit) {
             'ED5nyyWEzpPPiWimP8vYm7sD7TD3LAt3Q3gRTWHzPJBY'
         ];
 
-        // 1. Generate 16 24h Auto-Engine trades to match the rolling banner exactly
+        // 1. 24H Auto-Engine Trades (16 trades)
         for (let i = 0; i < 16; i++) {
-            const isWin = i < 11; // ~68% win rate in 24h
-            const pnlPct = isWin ? +(10 + Math.random() * 25) : -(5 + Math.random() * 10);
-            const size = 4.0 + Math.random() * 1.5;
-            const tradePnl = isWin ? (auto24hPnl / 11) * (0.8 + Math.random() * 0.4) : -((auto24hPnl * 0.3) / 5);
+            const isWin = i < 11;
+            const pnlPct = isWin ? +(12 + Math.random() * 20) : -(4 + Math.random() * 8);
+            const size = 1.5 + Math.random() * 0.8;
+            const tradePnl = isWin ? (auto24hPnl / 11) * (0.8 + Math.random() * 0.4) : -((auto24hPnl * 0.25) / 5);
             syntheticTrades.push({
                 createdAt: new Date(now - (i * 45 + Math.random() * 30) * 60000).toISOString(),
                 isBuy: false,
@@ -5442,20 +5451,20 @@ if (isSimEdit) {
                 realizedPnlSol: parseFloat(tradePnl.toFixed(4)),
                 strategy: 'Sniper Engine',
                 mint: sampleMints[i % sampleMints.length],
-                slippagePercent: 0.00
+                slippagePercent: slippage
             });
         }
 
-        // 2. Generate remaining wins
+        // 2. Wins pool
         const remainingWins = wins - 11;
         const winPnlPool = (strat1Pnl + strat2Pnl) - auto24hPnl;
         const avgWinPnl = winPnlPool / Math.max(1, remainingWins);
 
         for (let i = 0; i < remainingWins; i++) {
-            const pnlPercent = 12 + Math.random() * 45;
-            const amt = avgTradeSize * (0.8 + Math.random() * 0.4);
+            const pnlPercent = 10 + Math.random() * 45;
+            const amt = avgTradeSize * (0.7 + Math.random() * 0.6);
             const realizedPnlSol = avgWinPnl * (0.6 + Math.random() * 0.8);
-            const isManual = i % 6 === 0;
+            const isManual = i % 5 === 0;
             syntheticTrades.push({
                 createdAt: new Date(now - 86400000 - Math.random() * (days - 1) * 86400000).toISOString(),
                 isBuy: false,
@@ -5464,17 +5473,18 @@ if (isSimEdit) {
                 realizedPnlSol: parseFloat(realizedPnlSol.toFixed(4)),
                 strategy: isManual ? 'Manual / Direct' : 'Sniper Engine',
                 mint: sampleMints[i % sampleMints.length],
-                slippagePercent: 0.00
+                slippagePercent: slippage
             });
         }
 
-        // 3. Generate remaining losses
+        // 3. Losses pool (Tail risk calibrated to -1.0253 SOL)
         const remainingLosses = losses - 5;
         for (let i = 0; i < remainingLosses; i++) {
             const pnlPercent = -(5 + Math.random() * 18);
-            const amt = avgTradeSize * (0.8 + Math.random() * 0.4);
-            const realizedPnlSol = -amt * (Math.abs(pnlPercent) / 100);
-            const isManual = i % 8 === 0;
+            const amt = avgTradeSize * (0.7 + Math.random() * 0.6);
+            const isTail = i < (remainingLosses * 0.05);
+            const realizedPnlSol = isTail ? -(0.95 + Math.random() * 0.15) : -amt * (Math.abs(pnlPercent) / 100);
+            const isManual = i % 7 === 0;
             syntheticTrades.push({
                 createdAt: new Date(now - 86400000 - Math.random() * (days - 1) * 86400000).toISOString(),
                 isBuy: false,
@@ -5483,7 +5493,7 @@ if (isSimEdit) {
                 realizedPnlSol: parseFloat(realizedPnlSol.toFixed(4)),
                 strategy: isManual ? 'Manual / Direct' : 'Sniper Engine',
                 mint: sampleMints[i % sampleMints.length],
-                slippagePercent: 0.00
+                slippagePercent: slippage
             });
         }
 
@@ -5497,24 +5507,28 @@ if (isSimEdit) {
         await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toFixed(4));
         await redis.set(`sim:stats:totalPnlSol:${telegramId}`, (strat1Pnl + strat2Pnl).toFixed(4));
 
+        // 🟢 SAVE PERMANENTLY TO POSTGRESQL DATABASE
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
             await prisma.simState.upsert({
                 where: { userId: user.id },
-                update: { balance, startingBalance: balance, volume, active: true },
-                create: { userId: user.id, balance, startingBalance: balance, volume, active: true }
+                update: { balance, startingBalance: balance, volume, credits, active: true },
+                create: { userId: user.id, balance, startingBalance: balance, volume, credits, active: true }
             });
         }
 
         return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
             `✅ <b>SIMULATION FORGE SYNCHRONIZED</b>\n\n` +
-            `• Net Worth: <b>${balance.toFixed(4)} SOL ($${(balance * (cachedSolUsdPrice || 150)).toLocaleString(undefined, {minimumFractionDigits: 2})})</b>\n` +
+            `• Net Worth: <b>${balance.toFixed(4)} SOL ($${(balance * (cachedSolUsdPrice || 156.93)).toLocaleString(undefined, {minimumFractionDigits: 2})})</b>\n` +
+            `• AI Caller Credits: <b>${credits.toLocaleString()} Credits</b> <i>(AI Caller Unlocked & Scanning)</i>\n` +
             `• Total Trades: <b>${totalTrades.toLocaleString()} (${wins}W / ${losses}L — ${((wins/totalTrades)*100).toFixed(1)}%)</b>\n` +
             `• Volume: <b>${volume.toFixed(4)} SOL</b>\n` +
             `• Trading Days: <b>${days} Days</b>\n` +
+            `• Avg Slippage (TCA): <b>${slippage.toFixed(2)}%</b>\n` +
+            `• Exposure Budget: <b>${maxBudget > 0 ? `${spend} / ${maxBudget} SOL` : 'No Cap (∞)'}</b>\n` +
             `• 24H Activity: <b>${auto24hCount} Trades (+${auto24hPnl} SOL)</b>\n` +
-            `• Attribution: <b>${strat1Name} (+${strat1Pnl} SOL) | ${strat2Name} (+${strat2Pnl} SOL)</b>\n\n` +
-            `<i>Open your WebApp to view your dashboard.</i>`,
+            `• Strategies: <b>${strat1Name} (+${strat1Pnl.toFixed(4)} SOL) | ${strat2Name} (+${strat2Pnl.toFixed(4)} SOL)</b>\n\n` +
+            `<i>Open your WebApp to see your updated dashboard.</i>`,
             { parse_mode: 'HTML' }
         );
     } catch (e: any) {
