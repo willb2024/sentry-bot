@@ -5606,6 +5606,89 @@ bot.command('exporttrades', async (ctx) => {
     }
 });
 
+
+// =========================================================
+// 🎮 GRANULAR SIMULATION CONTROLS
+// =========================================================
+
+bot.command('simbalance', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    const parts = (ctx.message as any).text.split(' ');
+    if (parts.length < 2) return ctx.replyWithHTML('<b>Usage:</b> <code>/simbalance 250</code>');
+    const amt = parseFloat(parts[1]);
+    if (isNaN(amt) || amt < 0) return ctx.reply('🔴 Invalid amount.');
+    await redis.set(`sim:balance:${tgId}`, amt.toFixed(4));
+    await redis.set(`sim:starting_balance:${tgId}`, amt.toFixed(4));
+    const { saveSimulationState } = await import('./services/simulation.service.js');
+    await saveSimulationState(tgId!);
+    await ctx.replyWithHTML(`✅ <b>Sim balance set to ${amt.toFixed(4)} SOL</b>.`);
+});
+
+bot.command('simcredits', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    const parts = (ctx.message as any).text.split(' ');
+    if (parts.length < 2) return ctx.replyWithHTML('<b>Usage:</b> <code>/simcredits 500</code>');
+    const credits = parseInt(parts[1], 10);
+    if (isNaN(credits) || credits < 0) return ctx.reply('🔴 Invalid number.');
+    await redis.set(`sim:credits:${tgId}`, credits.toString());
+    await redis.del(`sim_credits_warn:${tgId}`);
+    const { saveSimulationState } = await import('./services/simulation.service.js');
+    await saveSimulationState(tgId!);
+    await ctx.replyWithHTML(`✅ <b>Sim credits set to ${credits.toLocaleString()}</b> (AI Caller unblocked).`);
+});
+
+bot.command('simtrades', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    const parts = (ctx.message as any).text.split(' ');
+    if (parts.length < 3) return ctx.replyWithHTML('<b>Usage:</b> <code>/simtrades [WINS] [LOSSES]</code> (e.g. <code>/simtrades 1554 933</code>)');
+    const wins = parseInt(parts[1], 10);
+    const losses = parseInt(parts[2], 10);
+    if (isNaN(wins) || isNaN(losses)) return ctx.reply('🔴 Invalid trade numbers.');
+    const totalTrades = wins + losses;
+    await redis.set(`sim:stats:wins:${tgId}`, wins.toString());
+    await redis.set(`sim:stats:losses:${tgId}`, losses.toString());
+    await redis.set(`sim:stats:totalTrades:${tgId}`, totalTrades.toString());
+    const { saveSimulationState } = await import('./services/simulation.service.js');
+    await saveSimulationState(tgId!);
+    await ctx.replyWithHTML(`✅ <b>Sim trades updated:</b> ${totalTrades.toLocaleString()} Total (${wins}W / ${losses}L — ${((wins/totalTrades)*100).toFixed(1)}% Win Rate).`);
+});
+
+bot.command('simdays', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    const parts = (ctx.message as any).text.split(' ');
+    if (parts.length < 2) return ctx.replyWithHTML('<b>Usage:</b> <code>/simdays 70</code>');
+    const days = parseInt(parts[1], 10);
+    if (isNaN(days) || days < 1) return ctx.reply('🔴 Invalid days.');
+    const anchor = new Date(Date.now() - days * 86400000).toISOString();
+    await redis.set(`sim:first_trade_at:${tgId}`, anchor);
+    await ctx.replyWithHTML(`✅ <b>Total trading days anchored to ${days} Days</b>.`);
+});
+
+bot.command('simbudget', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    const parts = (ctx.message as any).text.split(' ');
+    if (parts.length < 2) return ctx.replyWithHTML('<b>Usage:</b> <code>/simbudget [MAX_BUDGET] [SPEND]</code> (e.g. <code>/simbudget 10.0 3.5</code> or <code>/simbudget 0 0</code>)');
+    const maxBudget = parseFloat(parts[1]) || 0;
+    const spend = parseFloat(parts[2]) || 0;
+    await redis.set(`sim:max_budget:${tgId}`, maxBudget.toString(), 'EX', 86400);
+    await redis.set(`sim:session_spend:${tgId}`, spend.toString(), 'EX', 86400);
+    await ctx.replyWithHTML(`✅ <b>Exposure Limit set to:</b> ${maxBudget > 0 ? `${spend} / ${maxBudget} SOL` : 'No Cap (∞)'}.`);
+});
+
+bot.command('simreset', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+    const { setSimulationMode } = await import('./services/simulation.service.js');
+    await setSimulationMode(tgId!, true);
+    await ctx.replyWithHTML(`🧹 <b>Simulation reset to default clean state</b>.`);
+});
+
+
 // 🟢 NEW: Telegram /health Command
 bot.command('health', async (ctx) => {
     const loader = await ctx.replyWithHTML("<i>⏳ Interrogating system telemetry...</i>");

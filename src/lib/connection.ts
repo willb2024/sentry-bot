@@ -10,10 +10,8 @@ const PRIMARY_URL = process.env.PRIMARY_RPC_URL
     || process.env.HELIUS_RPC_URL 
     || (HELIUS_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}` : 'https://api.mainnet-beta.solana.com');
 
-// 🟢 FIX: Use the primary URL as backup to prevent falling back to the highly restrictive public mainnet
 const BACKUP_URL = process.env.BACKUP_RPC_URL || PRIMARY_URL;
 
-// 🟢 CRITICAL FIX: disableRetryOnRateLimit prevents web3.js from freezing the Telegram bot
 const primaryConnection = new Connection(PRIMARY_URL, {
     commitment: 'confirmed',
     disableRetryOnRateLimit: true 
@@ -36,19 +34,49 @@ const SYNC_REMOVAL_METHODS = new Set([
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 30_000; 
 
-let consecutivePrimaryFailures = 0;
 let circuitOpenedAt: number | null = null;
+let consecutiveSuccesses = 0;
 
 function isCircuitOpen(): boolean {
     if (circuitOpenedAt === null) return false;
     if (Date.now() - circuitOpenedAt >= CIRCUIT_BREAKER_COOLDOWN_MS) {
         circuitOpenedAt = null;
-        consecutivePrimaryFailures = 0;
+        consecutiveSuccesses = 0;
         return false;
     }
     return true;
 }
 
+const FAILURE_WINDOW_MS = 10_000;
+const MAX_FAILURES_IN_WINDOW = 6;
+const failureTimestamps: number[] = [];
+
+function recordPrimarySuccess() { 
+    consecutiveSuccesses++;
+    const now = Date.now();
+    while (failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
+        failureTimestamps.shift();
+    }
+    // 3 consecutive successes fully close and reset the circuit breaker
+    if (consecutiveSuccesses >= 3 && circuitOpenedAt !== null) {
+        circuitOpenedAt = null;
+        failureTimestamps.length = 0;
+        console.log("🟢 [RPC BREAKER] Primary RPC restored and circuit breaker closed.");
+    }
+}
+
+function recordPrimaryFailure() {
+    consecutiveSuccesses = 0;
+    const now = Date.now();
+    failureTimestamps.push(now);
+    while (failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
+        failureTimestamps.shift();
+    }
+    if (failureTimestamps.length >= MAX_FAILURES_IN_WINDOW) {
+        circuitOpenedAt = now;
+        console.warn(`🔴 [RPC BREAKER] ${MAX_FAILURES_IN_WINDOW} failures in 10s. Routing requests to backup RPC for 30s.`);
+    }
+}
 
 const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 10);
 let activeCount = 0;
@@ -141,31 +169,5 @@ export const connection = new Proxy(primaryConnection, {
         };
     }
 }) as unknown as Connection;
-
-
-// In src/lib/connection.ts
-const FAILURE_WINDOW_MS = 10_000;
-const MAX_FAILURES_IN_WINDOW = 8;
-const failureTimestamps: number[] = [];
-
-function recordPrimarySuccess() { 
-    const now = Date.now();
-    while(failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
-        failureTimestamps.shift();
-    }
-    if (failureTimestamps.length === 0) circuitOpenedAt = null; 
-}
-
-function recordPrimaryFailure() {
-    const now = Date.now();
-    failureTimestamps.push(now);
-    while(failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
-        failureTimestamps.shift();
-    }
-    if (failureTimestamps.length >= MAX_FAILURES_IN_WINDOW) {
-        circuitOpenedAt = now;
-        console.warn(`🔴 [RPC BREAKER] ${MAX_FAILURES_IN_WINDOW} failures in 10s. Routing to backup RPC for 30s.`);
-    }
-}
 
 export const coldConnection = backupConnection;
