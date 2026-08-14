@@ -176,6 +176,10 @@ export async function safeEditMessageText(ctx: any, text: string, options: any =
                 retries--;
             } else if (error.code === 400 && error.description?.includes('message is not modified')) {
                 return;
+            } else if (error.code === 400 && error.description?.includes("can't parse entities")) {
+                // Fallback: Strip parse_mode to ensure the text is delivered even if markup has an issue
+                console.warn(`⚠️ [TG HTML PARSE ERROR] Rendering plain text fallback:`, error.description);
+                return await ctx.editMessageText(text.replace(/<[^>]*>/g, ''), options);
             } else if (error.code === 400 || error.code === 403) {
                 console.warn(`⚠️ [TG] Edit ignored (code ${error.code}): ${error.description}`);
                 return;
@@ -1738,10 +1742,10 @@ bot.command('clearwatch', async (ctx) => {
 // =========================================================
 export const TRADE_GUIDE_PAGES: string[] = [
     // PAGE 1: VAULT INITIALIZATION & ARCHITECTURE
-    `📖 <b>HOW TO TRADE: VAULT ARCHITECTURE & FUNDING</b> <i>(1/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: VAULT ARCHITECTURE &amp; FUNDING</b> <i>(1/16)</i>\n\n` +
     `<i>Sentry is a non-custodial, high-frequency execution environment. Your keys are generated locally and encrypted using authenticated AES-256-GCM encryption with Scrypt key derivation.</i>\n\n` +
-    `<b>CORE ARCHITECTURE & INITIALIZATION:</b>\n` +
-    `1. <b>Cryptographic Key Generation:</b> Tap <b>Vault & Keys</b>. Sentry generates an isolated Solana keypair (W1) in memory. The private key is encrypted before touching disk.\n` +
+    `<b>CORE ARCHITECTURE &amp; INITIALIZATION:</b>\n` +
+    `1. <b>Cryptographic Key Generation:</b> Tap <b>Vault &amp; Keys</b>. Sentry generates an isolated Solana keypair (W1) in memory. The private key is encrypted before touching disk.\n` +
     `2. <b>Funding Your Node:</b> Copy your W1 public address and transfer SOL from Phantom, Solflare, or a CEX (Binance, Coinbase).\n` +
     `3. <b>Zero-RPC WebSocket Deposit Watcher:</b> Sentry runs an active account listener. The millisecond your deposit confirms on-chain, your balance updates without manual refreshing.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
@@ -1749,7 +1753,7 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `You open Phantom and transfer <code>2.5 SOL</code> to your Sentry W1 address <code>7xKX...9qZ</code>. Within 400ms of Solana slot finality, Sentry pings you: <i>"👛 Deposit Confirmed! Received +2.5000 SOL."</i> You are now armed to snipe with sub-millisecond execution.`,
 
     // PAGE 2: DASHBOARD METRICS & REAL-TIME AGGREGATION
-    `📖 <b>HOW TO TRADE: DASHBOARD METRICS & ACCOUNTING</b> <i>(2/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: DASHBOARD METRICS &amp; ACCOUNTING</b> <i>(2/16)</i>\n\n` +
     `<i>Your dashboard provides real-time quantitative portfolio telemetry calculated across closed trades and live balance feeds.</i>\n\n` +
     `<b>METRIC DEFINITIONS:</b>\n` +
     `• <b>💰 Net Worth:</b> Total liquid SOL balance across all active vaults plus real-time mark-to-market valuation of all open SPL tokens.\n` +
@@ -1761,20 +1765,20 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `You enter a position with <code>1.0 SOL</code> on $BONK. Price moves up +50%, and Sentry auto-exits for <code>1.5 SOL</code>. Your Realized PnL updates to <code>+0.5000 SOL (+50.0%)</code>, your Win Rate registers 1 Win / 0 Losses (100%), and Net Worth reflects the newly settled balance immediately.`,
 
-    // PAGE 3: INSTITUTIONAL QUANTITATIVE ANALYTICS
+    // PAGE 3: INSTITUTIONAL QUANTITATIVE ANALYTICS (FIXED HTML ESCAPING)
     `📖 <b>HOW TO TRADE: INSTITUTIONAL ANALYTICS</b> <i>(3/16)</i>\n\n` +
     `<i>Sentry incorporates Wall Street Transaction Cost Analysis (TCA) and statistical risk modeling into your WebApp.</i>\n\n` +
     `<b>QUANTITATIVE INDICATORS:</b>\n` +
-    `• <b>Avg Slippage (TCA):</b> Measures execution price variance against expected quote price. Low TCA (<1.0%) proves clean fills free from front-running.\n` +
+    `• <b>Avg Slippage (TCA):</b> Measures execution price variance against expected quote price. Low TCA (under 1.0%) proves clean fills free from front-running.\n` +
     `• <b>CVaR (5% Tail Risk):</b> Conditional Value at Risk measures the Expected Shortfall in your worst 5% historical drawdown events to prevent liquidation over-exposure.\n` +
     `• <b>Sharpe Ratio:</b> Annualized risk-adjusted return relative to daily standard deviation: <code>(Mean Daily Return ÷ Std Dev) × √365</code>.\n` +
     `• <b>Portfolio Risk Score (0-100%):</b> Analyzes liquidity depth, dev concentration, and token-2022 transfer fee tax traps on all held assets.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You review your TCA card: it reads <code>0.18%</code>. On a 10 SOL trade, you lost only 0.018 SOL to execution spread—compared to standard public DEX swaps that regularly lose 3-8% to sandwich bots.`,
+    `You review your TCA card: it reads <code>0.18%</code>. On a 10 SOL trade, you lost only 0.018 SOL to execution spread—compared to standard public DEX swaps that regularly lose 3% to 8% to sandwich bots.`,
 
     // PAGE 4: LIVE BLOOMBERG FEED & POSITION DRAWERS
-    `📖 <b>HOW TO TRADE: EXECUTION FEED & POSITION MANAGEMENT</b> <i>(4/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: EXECUTION FEED &amp; POSITION MANAGEMENT</b> <i>(4/16)</i>\n\n` +
     `<i>Monitor block-level trade settlement and manage active inventory from the WebApp.</i>\n\n` +
     `<b>INTERACTIVE COMPONENTS:</b>\n` +
     `• <b>Live Execution Feed:</b> A Bloomberg-style terminal stream displaying the last 10 block confirmations with timestamp, contract address, side (BUY/SELL), volume, and net PnL.\n` +
@@ -1785,10 +1789,10 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `A token you hold surges +200%. Open your WebApp, tap the token drawer, and click <b>50%</b>. Sentry constructs, signs, and routes a partial exit in a single Jito bundle—securing your initial capital while leaving 50% as a risk-free moonbag.`,
 
     // PAGE 5: CRYPTOGRAPHIC VAULT SECURITY & KEY EXPORT
-    `📖 <b>HOW TO TRADE: KEY SECURITY & MANAGEMENT</b> <i>(5/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: KEY SECURITY &amp; MANAGEMENT</b> <i>(5/16)</i>\n\n` +
     `<i>Complete sovereign ownership of your private keys with zero server-side exposure.</i>\n\n` +
     `<b>KEY MANAGEMENT PROTOCOLS:</b>\n` +
-    `1. <b>Ephemeral Key Export:</b> Go to <b>Vault & Keys</b> → tap <b>Export Keys</b>. Sentry displays your Base58 private keys with a strict <b>60-second auto-delete timer</b>.\n` +
+    `1. <b>Ephemeral Key Export:</b> Go to <b>Vault &amp; Keys</b> → tap <b>Export Keys</b>. Sentry displays your Base58 private keys with a strict <b>60-second auto-delete timer</b>.\n` +
     `2. <b>External Key Import:</b> Tap <b>Import Key</b> and paste any existing Solana private key to trade existing wallets with Sentry's sub-millisecond execution stack.\n` +
     `3. <b>Multi-Node Delegation:</b> Sentry can derive and manage up to 5 sub-wallets under your master profile for concurrent multi-lane execution.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
@@ -1799,7 +1803,7 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `📖 <b>HOW TO TRADE: MULTI-WALLET WHALE MODE</b> <i>(6/16)</i>\n\n` +
     `<i>Pump.fun and Raydium enforce per-wallet max buy limits at launch. Whale Mode bypasses these limits completely.</i>\n\n` +
     `<b>WHALE MODE DEPLOYMENT:</b>\n` +
-    `1. Navigate to <b>Vault & Keys</b> and select <b>2, 3, 4, or 5 Wallets</b>.\n` +
+    `1. Navigate to <b>Vault &amp; Keys</b> and select <b>2, 3, 4, or 5 Wallets</b>.\n` +
     `2. Deposit SOL into each individual sub-wallet address (W1 through W5).\n` +
     `3. When a buy triggers, Sentry packages distinct transactions from all active wallets into a single Jito bundle.\n` +
     `4. <b>Result:</b> All sub-wallets buy simultaneously in the exact same millisecond within Block-0 without getting flagged by anti-whale caps.\n` +
@@ -1809,10 +1813,10 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `A hyped launch restricts buys to 0.5 SOL per wallet. You activate 4 wallets with 0.5 SOL each. Sentry fires 4 concurrent transactions in 1 Jito bundle—securing 2.0 SOL total allocation on the opening block.`,
 
     // PAGE 7: WITHDRAWAL PIN & SESSION HIJACK PROTECTION
-    `📖 <b>HOW TO TRADE: WITHDRAWAL PIN & HARDENING</b> <i>(7/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: WITHDRAWAL PIN &amp; HARDENING</b> <i>(7/16)</i>\n\n` +
     `<i>Protect your capital against Telegram account takeovers, unauthorized desktop sessions, and phone theft.</i>\n\n` +
     `<b>SECURITY SPECIFICATIONS:</b>\n` +
-    `1. Go to <b>Vault & Keys</b> → tap <b>Set Withdrawal PIN</b>.\n` +
+    `1. Go to <b>Vault &amp; Keys</b> → tap <b>Set Withdrawal PIN</b>.\n` +
     `2. Choose a 4-to-6 digit secret code. Sentry stores it using one-way <code>scrypt</code> hashing with random salting.\n` +
     `3. Every manual withdrawal command (<code>/withdraw</code>) requires this PIN before transaction assembly.\n` +
     `4. <b>Automated Lockout Circuit:</b> Entering an incorrect PIN 3 times triggers an immediate <b>60-minute hardware lock</b> on all outgoing transfers.\n\n` +
@@ -1821,7 +1825,7 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `Someone gains access to your open Telegram session and types <code>/withdraw [ADDRESS] ALL</code>. Sentry intercepts the command and demands the PIN. Three failed attempts instantly locks down all withdrawal operations.`,
 
     // PAGE 8: ZERO-LATENCY WEBSOCKET COPY TRADING
-    `📖 <b>HOW TO TRADE: COPY TRADING & BOT FILTERING</b> <i>(8/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: COPY TRADING &amp; BOT FILTERING</b> <i>(8/16)</i>\n\n` +
     `<i>Mirror high-win-rate whale wallets with zero-RPC WebSocket event listeners.</i>\n\n` +
     `<b>COPY-TRADE MECHANICS:</b>\n` +
     `1. Go to <b>Copy Trade</b> → tap <b>Add Custom Wallet</b>.\n` +
@@ -1836,7 +1840,7 @@ export const TRADE_GUIDE_PAGES: string[] = [
     // PAGE 9: PAY-PER-RESULT AI CALLER CREDITS
     `📖 <b>HOW TO TRADE: PAY-PER-RESULT CREDITS</b> <i>(9/16)</i>\n\n` +
     `<i>Sentry uses a pay-per-result billing model for automated AI scans and alerts.</i>\n\n` +
-    `<b>BILLING RULES & LIFECYCLE:</b>\n` +
+    `<b>BILLING RULES &amp; LIFECYCLE:</b>\n` +
     `• Credits are deducted <b>only when a verified token match clears all safety filters</b> and is delivered to your chat.\n` +
     `• Empty scans, duds, and honeypot-filtered coins cost <b>0 credits</b>.\n` +
     `• <b>Credit Tiers:</b> Starter (150 creds / $30), Growth (280 creds / $50), Pro (450 creds / $75), Whale (2,000 creds / $100).\n` +
@@ -1865,15 +1869,15 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `1. Go to <b>Affiliates</b> → tap <b>Claim Payout</b>.\n` +
     `2. Minimum threshold: <b>0.10 SOL</b>.\n` +
     `3. Sentry's automated treasury signs and broadcasts a direct SOL transfer to your Primary Vault (W1).\n` +
-    `4. <b>Treasury Circuit Breakers:</b> Enforces a 50 SOL daily platform payout limit with automated multi-sig alerts on single claims >5 SOL.\n\n` +
+    `4. <b>Treasury Circuit Breakers:</b> Enforces a 50 SOL daily platform payout limit with automated multi-sig alerts on single claims exceeding 5 SOL.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Your affiliate rewards balance reaches <code>1.8500 SOL</code>. You tap <b>Claim Payout</b>. Within 3 seconds, a transaction lands in your W1 vault with a Solscan transaction signature provided in chat.`,
 
     // PAGE 12: CAPITAL WITHDRAWALS & GAS MANAGEMENT
-    `📖 <b>HOW TO TRADE: WITHDRAWALS & GAS BUFFERS</b> <i>(12/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: WITHDRAWALS &amp; GAS BUFFERS</b> <i>(12/16)</i>\n\n` +
     `<i>Withdraw your capital to cold storage or external wallets anytime.</i>\n\n` +
-    `<b>WITHDRAWAL SYNTAX & LOGIC:</b>\n` +
+    `<b>WITHDRAWAL SYNTAX &amp; LOGIC:</b>\n` +
     `• Standard: <code>/withdraw [DESTINATION_ADDRESS] [AMOUNT_SOL_OR_$USD]</code>\n` +
     `• Full Sweep: <code>/withdraw [DESTINATION_ADDRESS] ALL</code>\n` +
     `• <b>Gas Preservation Buffer:</b> Sentry retains <b>0.00005 SOL</b> to cover transaction fee computation.\n` +
@@ -1920,7 +1924,7 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `You deploy $ALPHA with a 1.0 SOL dev buy split across 3 sub-wallets. Sentry mines the vanity address, bundles creation + 3 buy transactions into Block-0 via Jito, and arms a -20% stop loss on your allocation automatically.`,
 
     // PAGE 16: WATCHLISTS, LAUNCH CALENDARS & TAX EXPORTS
-    `📖 <b>HOW TO TRADE: UTILITIES & COMPLIANCE</b> <i>(16/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: UTILITIES &amp; COMPLIANCE</b> <i>(16/16)</i>\n\n` +
     `<i>Integrated trader utilities for market monitoring and tax accounting.</i>\n\n` +
     `<b>UTILITY TOOLSET:</b>\n` +
     `• <b>Persistent Watchlist:</b> Send <code>/watch [CA] [TARGET_PRICE_USD]</code>. View real-time PnL and alert triggers with <code>/watchlist</code>.\n` +
@@ -1928,7 +1932,7 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>CSV Tax Ledger:</b> Send <code>/exporttrades</code> or tap Export CSV in the WebApp to download full transaction histories including fees, PnL, and Solscan signatures.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You spot a token at $0.005. You send <code>/watch [CA] 0.010</code>. When price crosses $0.010, Sentry sends an alert with a 1-tap Buy button. At tax season, you run <code>/exporttrades</code> to generate your complete trade history for accountants.`,
+    `You spot a token at $0.005. You send <code>/watch [CA] 0.010</code>. When price crosses $0.010, Sentry sends an alert with a 1-tap Buy button. At tax season, you run <code>/exporttrades</code> to generate your complete trade history for accountants.`
 ];
 
 
@@ -1936,168 +1940,208 @@ export const TRADE_GUIDE_PAGES: string[] = [
 // ⚙️ THE PROFITABILITY CONFIGURATION GUIDE (STRATEGY & MATH)
 // =========================================================
 export const CONFIG_GUIDE_PAGES: string[] = [
-    // PAGE 1: EXPECTED VALUE & QUANTITATIVE EDGE
-    `⚙️ <b>CONFIG GUIDE: EXPECTED VALUE & PROBABILITY</b> <i>(1/12)</i>\n\n` +
-    `<i>Profitable automated trading is governed by mathematical expectancy—not emotional prediction.</i>\n\n` +
-    `<b>THE EXPECTED VALUE (EV) FORMULA:</b>\n` +
+    // PAGE 1: THE QUANTITATIVE EDGE & EXPECTED VALUE
+    `⚙️ <b>CONFIG GUIDE: THE QUANTITATIVE EDGE & EXPECTED VALUE</b> <i>(1/12)</i>\n\n` +
+    `<i>Why do 95% of retail traders lose capital while quantitative hedge funds (Renaissance Technologies, Citadel, Jane Street) print billions consistently?</i>\n\n` +
+    `<b>RETAIL TRADING VS. QUANTITATIVE SYSTEMS:</b>\n` +
+    `• <b>Retail Traders:</b> Trade emotionally on FOMO, green candles, and social hype. They buy tops, hold losers to zero hoping for a bounce, and panic-sell bottoms. Their strategy has a <b>negative mathematical expectancy</b>.\n` +
+    `• <b>Quantitative Hedge Funds:</b> Discard emotion entirely. They treat the market as a statistical probability matrix where every entry, position size, and exit is governed by positive Expected Value (EV) and asymmetric risk management.\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `📐 <b>THE MATHEMATICAL EXPECTED VALUE (EV) FORMULA:</b>\n` +
     `<code>EV = (P_win × Avg_Win) - (P_loss × Avg_Loss)</code>\n\n` +
     `<b>MATHEMATICAL PROOF:</b>\n` +
-    `Suppose your strategy wins only <b>40% of trades</b>, but your risk parameters enforce a <b>1:3 Risk-to-Reward Ratio</b> (Average Win = +45%, Average Loss = -15%):\n` +
-    `<code>EV = (0.40 × 45) - (0.60 × 15)</code>\n` +
-    `<code>EV = 18.0 - 9.0 = +9.0% Expected Return per Trade</code>\n\n` +
-    `Even though you lose 60% of your trades, the mathematical expectation is consistently profitable over large sample sizes.\n\n` +
+    `Suppose your strategy wins only <b>40% of trades</b> (you lose 60% of the time). If your automated rules enforce a <b>1:3 Risk-to-Reward Ratio</b> (Average Win = +45%, Average Loss = -15%):\n` +
+    `<code>EV = (0.40 × 45%) - (0.60 × 15%)</code>\n` +
+    `<code>EV = 18.0% - 9.0% = +9.0% Expected Net Profit Per Trade</code>\n\n` +
+    `Over a sample size of 100 trades with 1.0 SOL bet per trade, this mathematical formula delivers <b>+9.00 SOL in net profit</b> despite losing 60 out of 100 trades.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `Set your <b>Auto-Trailing Drop to -15%</b> and <b>Auto-Take Profit to +45%</b>. Sentry will enforce this mathematical edge automatically on every trade.`,
+    `• Set <b>Auto-Trailing Drop to -15%</b> and <b>Auto-Take Profit to +45%</b>.\n` +
+    `• Enable <b>Dynamic Sizing</b> so high-score trades get allocated proportionally more capital.\n` +
+    `• Sentry will enforce this mathematical edge on every single trade automatically.`,
 
-    // PAGE 2: JITO VALIDATOR BRIBES & PRIORITY FEES
-    `⚙️ <b>CONFIG GUIDE: PRIORITY BRIBES & VALIDATOR ECONOMICS</b> <i>(2/12)</i>\n\n` +
-    `<i>Solana block production occurs every ~400ms. Validators order transactions by bribe density.</i>\n\n` +
-    `<b>PRIORITY LEVEL BREAKDOWN:</b>\n` +
-    `• <b>Eco 🍃 (0.0005 SOL Tip):</b> Low-priority lane. Best for quiet market hours and slow limit order accumulation.\n` +
-    `• <b>Fast 🐎 (0.001 SOL Tip):</b> <i>Recommended Default.</i> Out-bribes ~90% of retail transactions to ensure next-block inclusion.\n` +
-    `• <b>Turbo ⚡ (0.005 SOL Tip):</b> High-conviction setting for fast-moving breakouts and high-volatility pairs.\n` +
-    `• <b>Custom ⚙️ (0.010–0.025 SOL Tip):</b> Maximum-priority validator bribe for competitive Block-0 token launches.\n\n` +
+    // PAGE 2: THE KELLY CRITERION & CAPITAL ALLOCATION
+    `⚙️ <b>CONFIG GUIDE: KELLY CRITERION & RISK SIZING</b> <i>(2/12)</i>\n\n` +
+    `<i>Betting the exact same amount on every token regardless of quality guarantees long-term ruin. Quantitative funds scale bet sizes based on mathematical conviction.</i>\n\n` +
+    `<b>THE KELLY CRITERION FORMULA:</b>\n` +
+    `<code>f* = (b × p - q) ÷ b</code>\n` +
+    `• <code>f*</code> = Fraction of total portfolio to risk on the trade\n` +
+    `• <code>b</code> = Payout odds ratio (Reward ÷ Risk = 45% ÷ 15% = 3.0)\n` +
+    `• <code>p</code> = Probability of winning (e.g., 0.40)\n` +
+    `• <code>q</code> = Probability of losing (1 - p = 0.60)\n\n` +
+    `<code>f* = (3.0 × 0.40 - 0.60) ÷ 3.0 = (1.20 - 0.60) ÷ 3.0 = 20% Fractional Risk</code>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `For daily automated sniping, select <b>Fast (0.001 SOL)</b> in Settings. When participating in a hyped fair launch, switch to <b>Custom (0.015 SOL)</b> to guarantee your buy lands in the first available slot.`,
-
-    // PAGE 3: ROUTING ARCHITECTURE (SOR VS. LOW LATENCY)
-    `⚙️ <b>CONFIG GUIDE: ROUTING ARCHITECTURE (SOR VS LOW LATENCY)</b> <i>(3/12)</i>\n\n` +
-    `<i>Configure your execution path based on whether you need raw speed or best-price execution.</i>\n\n` +
-    `<b>ROUTING MODES:</b>\n` +
-    `• <b>Low Latency Mode (SOR OFF):</b> Routes orders directly to Jupiter/PumpPortal without evaluating alternate pools. <b>Saves 100–150ms of network latency.</b>\n` +
-    `• <b>Smart Order Routing (SOR ON):</b> Queries Jupiter, Raydium AMM, Meteora DLMM, and Orca simultaneously to split orders and minimize price impact.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `• <b>Sniping Fresh Launches:</b> Set <b>SOR: OFF</b>. Speed is the primary variable; saving 120ms gets you a better entry price than multi-pool routing.\n` +
-    `• <b>Trading Established Coins (>$50k Liq):</b> Set <b>SOR: ON</b>. Multi-DEX routing splits orders across pools, saving $15–$50 in slippage on larger positions.`,
-
-    // PAGE 4: VOLATILITY-ADAPTIVE SLIPPAGE MATH
-    `⚙️ <b>CONFIG GUIDE: ADAPTIVE SLIPPAGE ALGORITHMS</b> <i>(4/12)</i>\n\n` +
-    `<i>Static slippage leads to two failure modes: high slippage causes overpaying, while low slippage causes failed transactions.</i>\n\n` +
-    `<b>THE ADAPTIVE SLIPPAGE FORMULA:</b>\n` +
-    `Sentry monitors 5-minute volatility ($\Delta P_{5m}$) and liquidity depth ($L_{usd}$):\n` +
-    `<code>DynamicSlippage = BaseSlippage × (1 + VolatilityFactor) × LiquidityPenalty</code>\n\n` +
-    `<b>BEHAVIORAL RULES:</b>\n` +
-    `• $\Delta P_{5m} \ge 25\% \implies$ Slippage dynamically expands to <b>28.0%–35.0%</b> to prevent dropped transactions.\n` +
-    `• $\Delta P_{5m} < 3\%$ and $L_{usd} > \$50,000 \implies$ Slippage compresses to <b>12.0%</b> to protect your entry basis.\n` +
-    `• $L_{usd} < \$15,000 \implies$ Slippage floors at <b>25.0%</b> to account for bonding curve spread.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `Enable <b>Adaptive Slippage: ON</b> in Settings for hands-off trading. Sentry adjusts your slippage tolerance dynamically based on real-time market conditions.`,
-
-    // PAGE 5: AI SCORING MATRIX & MACHINE LEARNING
-    `⚙️ <b>CONFIG GUIDE: AI TOKEN SCORING MATRIX</b> <i>(5/12)</i>\n\n` +
-    `<i>Sentry evaluates new mints using a multi-factor heuristic model combined with Ridge Regression machine learning.</i>\n\n` +
-    `<b>SCORING BREAKDOWN (0–100 POINTS):</b>\n` +
-    `• <b>Token Age (0–30 pts):</b> Tokens <60 mins receive max points; decay applies linearly.\n` +
-    `• <b>Volume/Liquidity Quality (0–25 pts):</b> Rewards healthy volume ($20k–$100k+). Penalizes wash trading (Vol/Liq >25x).\n` +
-    `• <b>Momentum (0–20 pts):</b> Sweet spot: +15% to +60% in 5m. Parabolic surges (>150%) receive penalty flags.\n` +
-    `• <b>Security Audits:</b> Honeypots, mint authority, and freeze authority trigger an immediate <b>-100 score override (Score: 0)</b>.\n` +
-    `• <b>Holder Concentration:</b> Top 10 holders owning >25% incur progressive score deductions.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `In the Auto-Sniper, set <b>Scoring Mode: Deep Score</b> and <b>Min Score: 55</b>. This filters out ~95% of scam launches while capturing early legitimate runners.`,
-
-    // PAGE 6: SUPPLY SAFEGUARDS & ANTI-RUG PARAMETERS
-    `⚙️ <b>CONFIG GUIDE: SUPPLY SAFEGUARDS & ANTI-RUG</b> <i>(6/12)</i>\n\n` +
-    `<i>Protect your capital against developer dumps, ghost launches, and concentrated insider distributions.</i>\n\n` +
-    `<b>SAFETY PARAMETERS:</b>\n` +
-    `• <b>👻 Anti-Dead Coin Shield (Pump.fun):</b> Rejects tokens where the creator buys 0 initial supply. Devs with zero initial risk abandon tokens at a >98% rate.\n` +
-    `• <b>🐋 Max Dev Bag Limit (%):</b> Restricts buys if the creator holds more than your set threshold (e.g., 10%) of total supply.\n` +
-    `• <b>⏱️ Block Delay (Seconds):</b> Set to <code>0s</code> for Block-0 snipes, or <code>1–2s</code> to let initial sniper anti-bot taxes trigger before your buy executes.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `Set <b>Anti-Dead Shield: ON</b>, <b>Max Dev Bag: 10%</b>, and <b>Block Delay: 1 Second</b>. If a creator attempts to deploy a token and hold 25% of supply to dump, Sentry cancels the snipe instantly.`,
-
-    // PAGE 7: MATHEMATICAL DYNAMIC SIZING ENGINE
-    `⚙️ <b>CONFIG GUIDE: DYNAMIC SIZING MATHEMATICS</b> <i>(7/12)</i>\n\n` +
-    `<i>Replaces fixed bet sizes with a conviction-weighted formula derived from the Kelly Criterion.</i>\n\n` +
-    `<b>THE SYSTEM FORMULA:</b>\n` +
+    `📐 <b>SENTRY'S NON-LINEAR DYNAMIC SIZING EQUATION:</b>\n` +
     `<code>Trade Size = BaseRisk × (AI Score ÷ 100)^Exponent × MaxMultiplier</code>\n\n` +
-    `<b>VARIABLE PARAMETERS:</b>\n` +
-    `• <b>Base Risk Unit:</b> Baseline position size on a standard setup (e.g., <code>0.02 SOL</code>).\n` +
-    `• <b>Exponent Curve ($\gamma$):</b> Controls how aggressively size scales with conviction:\n` +
-    `  ├ <code>1.0 (Linear):</code> Size scales directly with score.\n` +
-    `  ├ <code>2.0 (Square - Recommended):</code> Exponential growth. A 90-score token receives ~3.2x more size than a 50-score token.\n` +
-    `  └ <code>3.0 (Cubic):</code> Hyper-aggressive allocation focused only on top 5% setups.\n` +
-    `• <b>Max Multiplier:</b> Absolute sizing cap (e.g., <code>5.0x</code>).\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL MATHEMATICAL EXAMPLE:</b>\n` +
-    `With Base = 0.02 SOL, Max Mult = 5x, and Exponent = 2.0:\n` +
-    `• <b>Score 90:</b> <code>0.02 × (0.90)^2 × 5.0 = 0.081 SOL</code> (~$12.50)\n` +
-    `• <b>Score 50:</b> <code>0.02 × (0.50)^2 × 5.0 = 0.025 SOL</code> (~$3.80)\n` +
-    `Sentry automatically allocates more capital to high-conviction setups and scales down on riskier coins.`,
-
-    // PAGE 8: BATTLE-TESTED AUTO-SNIPER PRESETS
-    `⚙️ <b>CONFIG GUIDE: BATTLE-TESTED PRESETS</b> <i>(8/12)</i>\n\n` +
-    `<i>Recommended configuration profiles for different capital sizes and risk tolerances:</i>\n\n` +
-    `🔥 <b>PROFILE A: Aggressive Trench Runner</b>\n` +
-    `• Target: Pump.fun | Scoring: Fast | Min Score: 50 | Base Risk: 0.05 SOL | Max Mult: 3x | Exp: 1.0 | Anti-Dead: OFF | Dev Limit: 20% | Delay: 0s\n` +
-    `• <i>Best for: High-speed momentum chasing on opening blocks.</i>\n\n` +
-    `🎯 <b>PROFILE B: High-Conviction Gem Hunter (Recommended)</b>\n` +
-    `• Target: BOTH | Scoring: Deep | Min Score: 55 | Base Risk: 0.02 SOL | Max Mult: 5x | Exp: 2.0 | Anti-Dead: ON | Dev Limit: 10% | Delay: 1s\n` +
-    `• <i>Best for: Optimal risk-adjusted compounding and anti-rug protection.</i>\n\n` +
-    `🛡️ <b>PROFILE C: Capital Preservation</b>\n` +
-    `• Target: Raydium LPs | Scoring: Deep | Min Score: 75 | Base Risk: 0.01 SOL | Max Mult: 4x | Exp: 3.0 | Anti-Dead: ON | Dev Limit: 5% | Delay: 3s\n` +
-    `• <i>Best for: Safer trading on audited, higher-liquidity liquidity pools.</i>`,
-
-    // PAGE 9: AI COIN CALLER OPTIMIZATION
-    `⚙️ <b>CONFIG GUIDE: AI COIN CALLER TUNING</b> <i>(9/12)</i>\n\n` +
-    `<i>The AI Caller scans the Solana mempool every 15 seconds to deliver breakout alerts to your chat.</i>\n\n` +
-    `<b>OPTIMAL FILTER THRESHOLDS:</b>\n` +
-    `• <b>Minimum Score (55–70):</b> Eliminates low-liquidity noise and dead launches.\n` +
-    `• <b>Max Token Age (15–45 Mins):</b> Catches momentum before tokens appear on public leaderboards.\n` +
-    `• <b>Momentum Range (+15% to +300%):</b> Captures active volume while avoiding exhausted pumps (>500%).\n` +
-    `• <b>Min Liquidity ($3,000–$10,000):</b> Ensures adequate pool depth for smooth fills.\n` +
-    `• <b>MEV Shield: ON:</b> Blocks tokens with active sandwich-bot transactions in recent blocks.\n\n` +
+    `• <b>Base Risk:</b> Baseline allocation for an average setup (e.g., <code>0.02 SOL</code>).\n` +
+    `• <b>AI Score:</b> Sentry's automated 0–100 safety score.\n` +
+    `• <b>Exponent (γ):</b> Power curve that punishes low scores and aggressively scales top setups.\n` +
+    `• <b>Max Multiplier:</b> Hard ceiling multiplier (e.g., <code>5.0x</code>).\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `Open <code>/caller</code>, set <b>Min Score: 55</b>, <b>Max Age: 30 Mins</b>, <b>Min Liq: $5,000</b>, and turn <b>MEV Shield: ON</b>. Sentry will send high-confidence breakout alerts with 1-tap Buy buttons.`,
+    `• Set <b>Base Risk: 0.02 SOL</b>\n` +
+    `• Set <b>Max Multiplier: 5x</b>\n` +
+    `• Set <b>Curve: Aggressive (Square, γ = 2.0)</b>\n` +
+    `• <i>Outcome:</i> A Score 90 token gets <b>0.081 SOL</b>, while a Score 50 token gets only <b>0.025 SOL</b>.`,
 
-    // PAGE 10: AUTOMATED EXITS (THE 1:3 GOLDEN RATIO)
-    `⚙️ <b>CONFIG GUIDE: ASYMMETRIC EXIT RATIOS</b> <i>(10/12)</i>\n\n` +
-    `<i>Exits must be mathematically defined before entering a position to maintain a positive Expected Value.</i>\n\n` +
-    `<b>THE 1:3 GOLDEN RATIO:</b>\n` +
+    // PAGE 3: EXECUTION ROUTING ARCHITECTURE (SOR VS LOW LATENCY)
+    `⚙️ <b>CONFIG GUIDE: ROUTING ENGINES (SOR VS LOW LATENCY)</b> <i>(3/12)</i>\n\n` +
+    `<i>Solana decentralized liquidity is fragmented across Pump.fun bonding curves, Raydium AMM/CPMM, Meteora DLMM, and Orca pools. Choosing the wrong route costs you money.</i>\n\n` +
+    `<b>THE TWO EXECUTION MODES:</b>\n\n` +
+    `1. <b>⚡ Low Latency Mode (SOR OFF):</b>\n` +
+    `• Direct socket execution straight to Jupiter or PumpPortal.\n` +
+    `• <b>Bypasses multi-DEX price queries to save 100ms to 150ms of network latency.</b>\n` +
+    `• <i>Ideal for:</i> Block-0 snipes on fresh Pump.fun launches where being first in the block is more important than routing across multiple pools.\n\n` +
+    `2. <b>💰 Smart Order Routing (SOR ON):</b>\n` +
+    `• Queries 4 DEX protocols simultaneously (Raydium, Meteora, Orca, Jupiter).\n` +
+    `• Splits large orders across pools with the deepest virtual reserves to minimize price impact.\n` +
+    `• <i>Ideal for:</i> Trades over $200 on tokens with established liquidity pools (over $50k liquidity).\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
+    `• <b>For Trench Sniping:</b> Toggle <b>SOR: OFF</b> in Settings for maximum millisecond advantage.\n` +
+    `• <b>For Standard Trading:</b> Toggle <b>SOR: ON</b> in Settings to save $15 to $50 in price slippage on larger buy and sell orders.`,
+
+    // PAGE 4: VOLATILITY-ADAPTIVE SLIPPAGE ALGORITHMS
+    `⚙️ <b>CONFIG GUIDE: ADAPTIVE SLIPPAGE MATH</b> <i>(4/12)</i>\n\n` +
+    `<i>Static slippage is a major reason retail traders fail: low slippage drops transactions during pumps, while high slippage leaves you vulnerable to sandwich bots.</i>\n\n` +
+    `<b>THE ADAPTIVE SLIPPAGE FORMULA:</b>\n` +
+    `Sentry monitors 5-minute price delta (ΔP_5m) and USD liquidity depth (L_usd):\n` +
+    `<code>Dynamic Slippage = BaseSlippage × (1 + VolatilityFactor) × LiquidityPenalty</code>\n\n` +
+    `<b>SYSTEM BEHAVIOR RULES:</b>\n` +
+    `• <b>High Volatility (ΔP_5m &ge; 25%):</b> Slippage expands dynamically to <b>28.0%–35.0%</b> to ensure your transaction confirms without dropping.\n` +
+    `• <b>Calm Market (ΔP_5m under 3% and L_usd over $50,000):</b> Slippage compresses to <b>12.0%</b> to protect your cost basis.\n` +
+    `• <b>Low Liquidity (L_usd under $15,000):</b> Slippage floors at <b>25.0%</b> to handle bonding curve spreads smoothly.\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
+    `• Open <b>Settings</b> → Toggle <b>Adaptive Slippage: ON</b>.\n` +
+    `• Set your base slippage to <b>20.0%</b>.\n` +
+    `• Sentry will calculate real-time pool metrics and adjust your slippage automatically on every transaction.`,
+
+    // PAGE 5: AI SCORING MATRIX & RIDGE REGRESSION ML
+    `⚙️ <b>CONFIG GUIDE: AI TOKEN SCORING MATRIX</b> <i>(5/12)</i>\n\n` +
+    `<i>Sentry filters mempool tokens using an 8-factor heuristic engine calibrated with a self-learning Ridge Regression machine learning model.</i>\n\n` +
+    `<b>SCORING VECTORS (0 TO 100 POINTS):</b>\n` +
+    `• <b>Token Age (0–30 pts):</b> Tokens under 60 minutes old receive maximum points; older tokens decay linearly.\n` +
+    `• <b>Volume Quality (0–25 pts):</b> Rewards high organic volume ($20k–$100k+). Penalizes wash trading if Vol/Liq ratio exceeds 25x.\n` +
+    `• <b>Price Momentum (0–20 pts):</b> Optimal range: +15% to +60% in 5 minutes. Parabolic runs over +150% get penalized for exhaustion risk.\n` +
+    `• <b>LP Lock Verification:</b> Burned or locked liquidity adds +15 points; unlocked LP on mature tokens deducts -20 points.\n` +
+    `• <b>Security Hard Stops:</b> Honeypots, mint authority, and freeze authority trigger an immediate <b>Score: 0 override</b>.\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
+    `• In the Auto-Sniper, set <b>Scoring Mode: Deep Score</b>.\n` +
+    `• Set <b>AI Min Score: 55</b>.\n` +
+    `• Sentry will run deep background audits and reject ~95% of scam launches automatically.`,
+
+    // PAGE 6: SUPPLY GATEKEEPING & ANTI-RUG CONTROLS
+    `⚙️ <b>CONFIG GUIDE: SUPPLY GATEKEEPING & ANTI-RUG</b> <i>(6/12)</i>\n\n` +
+    `<i>Filter out ghost launches, serial scammer wallets, and developer supply hoarding before spending SOL.</i>\n\n` +
+    `<b>SAFETY FILTERS EXPLAINED:</b>\n` +
+    `• <b>👻 Anti-Dead Coin Shield:</b> Blocks tokens where the creator buys 0 initial supply. Devs with zero financial skin in the game abandon tokens at a 98% rate.\n` +
+    `• <b>🐋 Max Dev Bag Limit (%):</b> Aborts the snipe if the developer buys or holds more than your configured percentage (e.g., 10%) of total supply.\n` +
+    `• <b>⏱️ Block Delay (Seconds):</b> Set to <code>0s</code> for immediate Block-0 execution, or <code>1–2s</code> to let initial anti-bot tax traps trigger first.\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
+    `• Set <b>Anti-Dead Shield: ON</b>\n` +
+    `• Set <b>Max Dev Bag: 10%</b>\n` +
+    `• Set <b>Block Delay: 1 Second</b>\n` +
+    `• <i>Outcome:</i> If a dev launches a coin and hoards 20% of the supply to dump, Sentry cancels your buy before broadcasting.`,
+
+    // PAGE 7: DYNAMIC SIZING CURVE CALIBRATION
+    `⚙️ <b>CONFIG GUIDE: DYNAMIC SIZING CALIBRATION</b> <i>(7/12)</i>\n\n` +
+    `<i>Calibrate the exponent parameter to match your portfolio size and risk profile.</i>\n\n` +
+    `<b>THE THREE SCALING CURVES (γ):</b>\n` +
+    `• <b>📈 1.0 — Linear:</b> Size scales proportionally with conviction. Best for small accounts (&lt; 2 SOL balance).\n` +
+    `• <b>🔥 2.0 — Aggressive Square (Recommended):</b> Squares the conviction score. Significantly reduces size on mediocre setups (Score 50) while deploying heavy capital on high-scoring gems (Score 85+).\n` +
+    `• <b>🚀 3.0 — Exponential Cubic:</b> Highly conservative. Allocates meaningful size only to the top 5% of all scored tokens.\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `📊 <b>ACTUAL SIZING COMPARISON TABLE:</b>\n` +
+    `<i>(Base Risk = 0.02 SOL | Max Multiplier = 5.0x | Max Cap = 0.10 SOL)</i>\n` +
+    `• <b>Score 50:</b> Linear = 0.050 SOL | Square = <b>0.025 SOL</b> | Cubic = 0.012 SOL\n` +
+    `• <b>Score 75:</b> Linear = 0.075 SOL | Square = <b>0.056 SOL</b> | Cubic = 0.042 SOL\n` +
+    `• <b>Score 90:</b> Linear = 0.090 SOL | Square = <b>0.081 SOL</b> | Cubic = 0.073 SOL\n` +
+    `• <b>Score 100:</b> Linear = 0.100 SOL | Square = <b>0.100 SOL</b> | Cubic = 0.100 SOL\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
+    `Open Auto-Sniper → Tap <b>Curve: Aggressive (Square)</b>. Set Base Risk to 1–2% of your total balance.`,
+
+    // PAGE 8: BATTLE-TESTED QUANTITATIVE PRESETS
+    `⚙️ <b>CONFIG GUIDE: THREE QUANTITATIVE PRESETS</b> <i>(8/12)</i>\n\n` +
+    `<i>Select the exact configuration profile that fits your trading capital and target strategy:</i>\n\n` +
+    `🔥 <b>PROFILE A: Aggressive Trench Runner</b>\n` +
+    `• Mode: Pump.fun | Score Mode: Fast | Min Score: 50\n` +
+    `• Base Risk: 0.05 SOL | Max Mult: 3x | Curve: Linear (1.0)\n` +
+    `• Anti-Dead: OFF | Dev Limit: 20% | Delay: 0s\n` +
+    `• <i>Best For:</i> Fast scalping on fresh momentum openings.\n\n` +
+    `🎯 <b>PROFILE B: High-Conviction Gem Hunter (Recommended)</b>\n` +
+    `• Mode: BOTH | Score Mode: Deep | Min Score: 55\n` +
+    `• Base Risk: 0.02 SOL | Max Mult: 5x | Curve: Square (2.0)\n` +
+    `• Anti-Dead: ON | Dev Limit: 10% | Delay: 1s\n` +
+    `• <i>Best For:</i> Balanced risk, compounding growth, and strict anti-rug protection.\n\n` +
+    `🛡️ <b>PROFILE C: Capital Preservation</b>\n` +
+    `• Mode: Raydium LPs | Score Mode: Deep | Min Score: 75\n` +
+    `• Base Risk: 0.01 SOL | Max Mult: 4x | Curve: Cubic (3.0)\n` +
+    `• Anti-Dead: ON | Dev Limit: 5% | Delay: 2s\n` +
+    `• <i>Best For:</i> Larger balances focusing strictly on audited, high-liquidity setups.`,
+
+    // PAGE 9: AI COIN CALLER OPTIMIZATION & PROJECTIONS
+    `⚙️ <b>CONFIG GUIDE: AI CALLER SCANNER TUNING</b> <i>(9/12)</i>\n\n` +
+    `<i>The AI Coin Caller monitors the Solana mempool continuously, issuing alerts with ML-calibrated target projections.</i>\n\n` +
+    `<b>OPTIMAL FILTER SETTINGS:</b>\n` +
+    `• <b>Min Score (55–70):</b> Cuts out noisy launches while keeping early breakouts visible.\n` +
+    `• <b>Max Token Age (15–45 Mins):</b> Catches momentum before tokens trend on DexScreener.\n` +
+    `• <b>Momentum Range (+15% to +300%):</b> Captures active volume while filtering out exhausted pumps (&gt;500%).\n` +
+    `• <b>Min Liquidity ($3,000–$10,000):</b> Ensures there is enough depth to execute your trade without high price impact.\n` +
+    `• <b>MEV Shield: ON:</b> Blocks tokens with sandwich bot transactions in recent blocks.\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
+    `Open <code>/caller</code>, set <b>Min Score: 55</b>, <b>Max Age: 30m</b>, <b>Min Liq: $5,000</b>, and turn <b>MEV Shield: ON</b>. Tap <b>Scan Mainnet Now</b> to test live matches.`,
+
+    // PAGE 10: AUTOMATED EXITS & ASYMMETRIC RATIOS
+    `⚙️ <b>CONFIG GUIDE: THE 1:3 ASYMMETRIC RATIO</b> <i>(10/12)</i>\n\n` +
+    `<i>Entering a trade without a predefined automated exit guarantees emotional mistakes. Enforce the 1:3 Golden Ratio.</i>\n\n` +
+    `<b>THE 1:3 GOLDEN RATIO SETUP:</b>\n` +
     `• <b>Auto-Trailing Drop (Stop Loss):</b> <code>-15%</code>\n` +
     `• <b>Auto-Take Profit (TP):</b> <code>+45%</code>\n\n` +
-    `<b>MATHEMATICAL PERFORMANCE MODEL (100 TRADES):</b>\n` +
-    `• 60 Losses × -0.15 SOL = <b>-9.00 SOL</b>\n` +
-    `• 40 Wins × +0.45 SOL = <b>+18.00 SOL</b>\n` +
-    `• <b>Net Portfolio Growth: +9.00 SOL</b>\n\n` +
-    `<b>DYNAMIC HIGH-WATER PEAK TRACKING:</b>\n` +
-    `Sentry's Trailing Stop adjusts to the highest price seen. If a token surges +80% and then drops 15% from its peak, Sentry exits at +65% profit—locking in gains rather than falling back to breakeven.\n\n` +
+    `<b>HOW HIGH-WATER PEAK TRACKING WORKS:</b>\n` +
+    `Sentry does not use static stop-losses. It tracks the highest price reached (High-Water Mark):\n` +
+    `1. You buy a token at <b>$1.00</b> (Stop Loss: <b>$0.85</b>).\n` +
+    `2. Price surges +80% to <b>$1.80</b>.\n` +
+    `3. Sentry raises your stop-loss automatically to 15% below the peak: <code>$1.80 × (1 - 0.15) = $1.53</code>.\n` +
+    `4. If price pulls back, Sentry sells at $1.53, locking in <b>+53% net profit</b> rather than letting the trade fall back to breakeven.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `Set <b>Auto-Trailing Drop to -15%</b> and <b>Take Profit to +45%</b> in your Auto-Sniper settings.`,
+    `In Auto-Sniper, set <b>Auto-Guard to -15%</b> and <b>Take Profit to +45%</b>.`,
 
     // PAGE 11: TWAP & LIMIT ORDER ACCUMULATION
-    `⚙️ <b>CONFIG GUIDE: TWAP & ALGORITHMIC ACCUMULATION</b> <i>(11/12)</i>\n\n` +
-    `<i>Execute large positions without spiking market price or alerting copy-trading bots.</i>\n\n` +
-    `<b>ALGORITHMIC ORDER TYPES:</b>\n` +
-    `• <b>Limit Orders (Dip Buying):</b> Buy only when a token drops to a specified target price: <code>/limit [CA] [TARGET_PRICE_USD] [AMOUNT]</code>.\n` +
-    `• <b>TWAP / DCA Engine (Time-Weighted Average Price):</b> Splits a large order into equal smaller purchases over set time intervals.\n\n` +
-    `<b>TWAP ADVANTAGES:</b>\n` +
-    `• Prevents price impact on thinner liquidity pools.\n` +
-    `• Averages out intraday volatility.\n` +
-    `• Conceals whale accumulation from on-chain tracking bots.\n\n` +
+    `⚙️ <b>CONFIG GUIDE: TWAP & LIMIT ACCUMULATION</b> <i>(11/12)</i>\n\n` +
+    `<i>Large market buys cause significant price impact and alert copy-trading bots. Use algorithmic accumulation instead.</i>\n\n` +
+    `<b>ALGORITHMIC ACCUMULATION TOOLS:</b>\n\n` +
+    `1. <b>📉 Limit Orders (Dip Buying):</b>\n` +
+    `• Buy only when price drops to your target valuation.\n` +
+    `• Command: <code>/limit [CA] [TARGET_PRICE_USD] [AMOUNT]</code>\n` +
+    `• Sentry monitors the price in memory and executes instantly via Jito when your target hits.\n\n` +
+    `2. <b>🔁 TWAP / DCA Engine (Time-Weighted Average Price):</b>\n` +
+    `• Splits a large order into smaller equal purchases over time intervals.\n` +
+    `• Command: <code>/dca [CA] [INTERVAL_MINS] [AMOUNT_SOL] [STOP_LOSS_%] [TP_%] [MAX_BUDGET]</code>\n` +
+    `• Conceals accumulation from on-chain tracking bots and averages out intraday price spikes.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `To accumulate 2.0 SOL of a token over 4 hours: Send <code>/dca [CA] 30 0.25 15 50 2.0</code>. Sentry will buy 0.25 SOL every 30 minutes until the 2.0 SOL budget is reached, arming a -15% stop loss on every fill.`,
+    `To accumulate 2.0 SOL of a token over 4 hours: Send <code>/dca [CA] 30 0.25 15 50 2.0</code>. Sentry buys 0.25 SOL every 30 minutes until 2.0 SOL total is spent.`,
 
-    // PAGE 12: MEMPOOL ANTI-RUG SHIELDS
+    // PAGE 12: MEMPOOL ANTI-RUG INTERCEPTION
     `⚙️ <b>CONFIG GUIDE: FRONT-RUNNING ANTI-RUG SHIELDS</b> <i>(12/12)</i>\n\n` +
-    `<i>Sentry monitors Solana validator gossip to detect and front-run malicious developer liquidity removals.</i>\n\n` +
-    `<b>HOW THE ANTI-RUG SHIELD WORKS:</b>\n` +
-    `1. Sentry's Yellowstone gRPC streams parse transactions in the mempool before block finalization.\n` +
-    `2. If a developer broadcasts a <code>RemoveLiquidity</code> or <code>Withdraw</code> instruction on a held token, Sentry flags the event instantly.\n` +
+    `<i>Sentry monitors Solana validator gossip to detect and front-run malicious liquidity removals before they confirm on-chain.</i>\n\n` +
+    `<b>ANTI-RUG SHIELD ARCHITECTURE:</b>\n` +
+    `1. Sentry's Yellowstone gRPC streams parse incoming mempool transactions in real time.\n` +
+    `2. If a token creator broadcasts a <code>RemoveLiquidity</code> or <code>Withdraw</code> transaction, Sentry intercepts it immediately.\n` +
     `3. Sentry constructs an emergency sell transaction using pre-signed exit buffers.\n` +
-    `4. The exit is routed through Jito with a turbo validator bribe, <b>landing your sell before the developer's pull transaction finalizes</b>.\n\n` +
+    `4. The emergency sell is bundled with a Turbo validator bribe, <b>landing your exit before the developer's pull transaction confirms</b>.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `The Anti-Rug Shield operates automatically in the background on all positions protected by an active Trailing Guard.`,
+    `• The Anti-Rug Shield operates automatically on any position protected by an active Trailing Guard.\n` +
+    `• Always keep at least <b>0.005 SOL</b> in your vault to cover emergency validator bribes.`,
 ];
+
 
 
 // =========================================================
@@ -2114,15 +2158,7 @@ function buildGuideKeyboard(page: number) {
     return Markup.inlineKeyboard(buttons);
 }
 
-function buildConfigGuideKeyboard(page: number) {
-    const buttons = [];
-    const navRow = [];
-    if (page > 0) navRow.push(Markup.button.callback('⬅️ Prev', `config_guide_page_${page - 1}`));
-    if (page < CONFIG_GUIDE_PAGES.length - 1) navRow.push(Markup.button.callback('Next ➡️', `config_guide_page_${page + 1}`));
-    if (navRow.length > 0) buttons.push(navRow);
-    buttons.push([Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]);
-    return Markup.inlineKeyboard(buttons);
-}
+
 
 // 🟢 Operations Manual Button Handlers
 bot.action('btn_trade_guide', async (ctx) => {
@@ -2138,18 +2174,38 @@ bot.action(/^trade_guide_page_(\d+)$/, async (ctx) => {
 });
 
 // 🟢 Configuration Guide Button Handlers (FIXED PAGINATION)
+
+
+// 🟢 Keyboard Builder for the Configuration Guide
+function buildConfigGuideKeyboard(page: number) {
+    const buttons = [];
+    const navRow = [];
+    if (page > 0) {
+        navRow.push(Markup.button.callback('⬅️ Prev', `config_guide_page_${page - 1}`));
+    }
+    if (page < CONFIG_GUIDE_PAGES.length - 1) {
+        navRow.push(Markup.button.callback('Next ➡️', `config_guide_page_${page + 1}`));
+    }
+    if (navRow.length > 0) {
+        buttons.push(navRow);
+    }
+    buttons.push([Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]);
+    return Markup.inlineKeyboard(buttons);
+}
+
+// 🟢 Action: Open Configuration Guide (Page 1)
 bot.action('btn_config_guide', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
+    try { await ctx.answerCbQuery(); } catch (e) {}
     await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[0], buildConfigGuideKeyboard(0));
 });
 
+// 🟢 Action: Navigate Configuration Guide Pages (1 to 12)
 bot.action(/^config_guide_page_(\d+)$/, async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
+    try { await ctx.answerCbQuery(); } catch (e) {}
     const page = parseInt(ctx.match[1], 10);
     if (isNaN(page) || page < 0 || page >= CONFIG_GUIDE_PAGES.length) return;
     await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[page], buildConfigGuideKeyboard(page));
 });
-
 
 
 bot.action('action_create_vault', async (ctx) => {
