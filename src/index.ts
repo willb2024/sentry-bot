@@ -6234,7 +6234,136 @@ app.post('/api/risk-score', async (req, res) => {
     }
 });
 
-// 🟢 COMPLETE RE-ENGINEERED /simedit COMMAND
+// 🟢 FIXED: /api/performance (Restored so Active Strategies never show +0.000 SOL)
+app.post('/api/performance', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const strategyStats: Record<string, { totalPnl: number, totalVolume: number, count: number }> = {};
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(telegramId);
+
+        if (isSim) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                const f = JSON.parse(forgedRaw);
+                if (f.strat1Name) strategyStats[f.strat1Name] = { totalPnl: f.strat1Pnl || 0, totalVolume: 0, count: 0 };
+                if (f.strat2Name) strategyStats[f.strat2Name] = { totalPnl: f.strat2Pnl || 0, totalVolume: 0, count: 0 };
+            }
+
+            const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
+            simTrades.forEach((t: any) => {
+                if (!t.isBuy) {
+                    const s = t.strategy || 'Sniper Engine';
+                    if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
+                    strategyStats[s].totalPnl += (t.realizedPnlSol || 0);
+                    strategyStats[s].totalVolume += (t.amountInSol || 0);
+                    strategyStats[s].count += 1;
+                }
+            });
+        } else {
+            const user = await prisma.user.findUnique({ where: { telegramId } });
+            if (user) {
+                const trades = await prisma.trade.findMany({
+                    where: { userId: user.id, isBuy: false, status: 'CONFIRMED' },
+                    select: { strategy: true, realizedPnlSol: true, amountInSol: true }
+                });
+                trades.forEach(t => {
+                    const s = t.strategy || 'MANUAL';
+                    if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
+                    strategyStats[s].totalPnl += (t.realizedPnlSol || 0);
+                    strategyStats[s].totalVolume += (t.amountInSol || 0);
+                    strategyStats[s].count += 1;
+                });
+            }
+        }
+
+        res.json(strategyStats);
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// 🟢 FIXED: /api/institutional-stats (Includes live TCA, CVaR, & Strategy Attribution)
+app.post('/api/institutional-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+
+        let trades: any[] = [];
+        let maxBudget = 0;
+        let currentSpend = 0;
+        const stratStats: Record<string, { pnl: number, volume: number }> = {};
+
+        if (isSim) {
+            const rawTrades = await redis.get(`sim:trades:${tgId}`);
+            trades = rawTrades ? JSON.parse(rawTrades) : [];
+            maxBudget = parseFloat(await redis.get(`sim:max_budget:${tgId}`) || '0');
+            currentSpend = parseFloat(await redis.get(`sim:session_spend:${tgId}`) || '0');
+
+            const forgedRaw = await redis.get(`sim:forged:${tgId}`);
+            if (forgedRaw) {
+                const f = JSON.parse(forgedRaw);
+                if (f.strat1Name) stratStats[f.strat1Name] = { pnl: f.strat1Pnl || 0, volume: 0 };
+                if (f.strat2Name) stratStats[f.strat2Name] = { pnl: f.strat2Pnl || 0, volume: 0 };
+            }
+        } else {
+            const user = await prisma.user.findUnique({
+                where: { telegramId: tgId },
+                include: { autoSnipeConfig: true }
+            });
+            if (!user) return res.status(404).json({ error: 'User not found' });
+
+            trades = await prisma.trade.findMany({
+                where: { userId: user.id, status: 'CONFIRMED' },
+                orderBy: { createdAt: 'desc' }
+            });
+
+            maxBudget = user.autoSnipeConfig?.maxBudgetSol || 0;
+            currentSpend = user.autoSnipeConfig?.totalSpentSol || 0;
+        }
+
+        trades.forEach(t => {
+            if (!t.isBuy) {
+                const s = t.strategy || 'MANUAL';
+                if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
+                stratStats[s].pnl += (t.realizedPnlSol || 0);
+                stratStats[s].volume += (t.amountInSol || 0);
+            }
+        });
+
+        const universalStats = computeUniversalStats(trades);
+        const slippageValues = trades.map((t: any) => t.slippagePercent || 0).filter((v: number) => v > 0);
+        const avgSlippage = slippageValues.length > 0 ? (slippageValues.reduce((a: number, b: number) => a + b, 0) / slippageValues.length) : 0.00;
+
+        const pnlArray = trades.filter((t: any) => !t.isBuy && t.realizedPnlSol !== null).map((t: any) => t.realizedPnlSol || 0).sort((a: number, b: number) => a - b);
+        let cvar = 0;
+        if (pnlArray.length > 0) {
+            const count = Math.max(1, Math.floor(pnlArray.length * 0.05));
+            const tail = pnlArray.slice(0, count);
+            cvar = tail.reduce((a: number, b: number) => a + b, 0) / tail.length;
+        }
+
+        res.json({
+            totalTradesCount: universalStats.totalTrades,
+            avgSlippage,
+            cvar,
+            maxBudget,
+            currentSpend,
+            stratStats
+        });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 🟢 FIXED: /simedit command with CREDITS support and 2,487 trades generator
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) {
@@ -6246,17 +6375,18 @@ bot.command('simedit', async (ctx) => {
 
     await ctx.replyWithHTML(
         `🛠️ <b>SIMULATION FORGE ACTIVE</b>\n\n` +
-        `Paste your configuration block below:\n\n` +
+        `Paste your configuration block below (Supports custom Credits, Trades, and Strategies):\n\n` +
         `<code>BALANCE_SOL: ${currentBal}\n` +
-        `WINS: 625\n` +
-        `LOSSES: 375\n` +
+        `CREDITS: 500\n` +
+        `WINS: 1554\n` +
+        `LOSSES: 933\n` +
         `VOL: 4507.7306\n` +
         `DAYS: 69\n` +
         `FIRST_TRADE_AT: 2026-06-06T10:00:00.000Z\n` +
         `MAX_BUDGET: 0\n` +
         `SPEND: 0\n` +
-        `SHARPE: 187.05\n` +
-        `DRAWDOWN: -0.6515\n` +
+        `SHARPE: 42.88\n` +
+        `DRAWDOWN: -1.0253\n` +
         `PROFIT_FACTOR: 3.85\n` +
         `RISK_SCORE: 34\n` +
         `MANUAL_24H: 0 | 0.0000\n` +
