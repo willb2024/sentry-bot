@@ -1195,6 +1195,37 @@
         }).catch(() => {});
     }
 
+    function renderTradeTicker(trades) {
+        const tickerContainer = document.getElementById('live-trade-ticker');
+        if (!tickerContainer) return;
+        if (!trades || trades.length === 0) {
+            tickerContainer.innerHTML = '<div class="text-gray-500 text-center py-6 italic">Awaiting on-chain execution data...</div>';
+            return;
+        }
+
+        let tickerHtml = '';
+        trades.slice(0, 10).forEach(t => {
+            const type = t.isBuy ? 'BUY' : 'SELL';
+            const color = t.isBuy ? '#10b981' : '#ef4444';
+            const addr = t.mint || t.tokenAddress || 'simula...';
+            const displayAddr = addr.length > 10 ? addr.substring(0, 6) + '...' : addr;
+            const pnlVal = t.profitPercent;
+            const pnlStr = !t.isBuy ? (pnlVal !== undefined && pnlVal !== null ? (pnlVal >= 0 ? `+${pnlVal.toFixed(1)}%` : `${pnlVal.toFixed(1)}%`) : '--') : '--';
+            const pnlColor = pnlVal >= 0 ? 'text-jupGreen' : 'text-neonRed';
+
+            tickerHtml += `
+                <div class="flex justify-between items-center py-1.5 border-b border-white/5 last:border-0 hover:bg-white/[0.03] px-2 rounded transition-colors cursor-default">
+                    <span class="text-gray-500 w-16">${new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
+                    <span class="text-white font-bold w-24 truncate font-mono">${displayAddr}</span>
+                    <span style="color:${color}" class="font-bold w-12 text-center font-mono">${type}</span>
+                    <span class="text-gray-300 w-20 text-right font-mono">${t.amountInSol ? t.amountInSol.toFixed(3) : '0.000'} SOL</span>
+                    <span class="font-bold w-16 text-right font-mono ${pnlColor}">${pnlStr}</span>
+                </div>
+            `;
+        });
+        tickerContainer.innerHTML = tickerHtml;
+    }
+
     async function exportTrades() {
         try {
             const res = await fetch('/api/trades/export', {
