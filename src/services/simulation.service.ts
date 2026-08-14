@@ -100,6 +100,7 @@ export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, m
     );
 }
 
+// 🟢 src/services/simulation.service.ts (Full Database Persistence)
 export async function saveSimulationState(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -116,27 +117,36 @@ export async function saveSimulationState(telegramId: string) {
     const positionsRaw = await redis.get(`sim:positions:${telegramId}`);
     const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
 
-    // 🟢 FIX 9: Save up to 500 trades for rich historical analytics
+    // 🟢 Writes directly to PostgreSQL Disk
     await prisma.simState.upsert({
         where: { userId: user.id },
         update: {
             balance, startingBalance, volume, credits, active, autoSnipeActive, positions,
             trades: { 
                 deleteMany: {}, 
-                create: trades.slice(0, 500).map((t: any) => ({
-                    userId: user.id, tokenAddress: t.mint || t.tokenAddress || 'unknown',
-                    isBuy: t.isBuy, amountInSol: t.amountInSol, profitPercent: t.profitPercent || 0,
-                    realizedPnlSol: t.realizedPnlSol || 0, createdAt: new Date(t.createdAt)
+                create: trades.slice(0, 2500).map((t: any) => ({
+                    userId: user.id,
+                    tokenAddress: t.mint || t.tokenAddress || 'unknown',
+                    isBuy: t.isBuy,
+                    amountInSol: t.amountInSol,
+                    profitPercent: t.profitPercent || 0,
+                    realizedPnlSol: t.realizedPnlSol || 0,
+                    createdAt: new Date(t.createdAt)
                 }))
             }
         },
         create: {
-            userId: user.id, balance, startingBalance, volume, credits, active, autoSnipeActive, positions,
+            userId: user.id,
+            balance, startingBalance, volume, credits, active, autoSnipeActive, positions,
             trades: { 
-                create: trades.slice(0, 500).map((t: any) => ({
-                    userId: user.id, tokenAddress: t.mint || t.tokenAddress || 'unknown',
-                    isBuy: t.isBuy, amountInSol: t.amountInSol, profitPercent: t.profitPercent || 0,
-                    realizedPnlSol: t.realizedPnlSol || 0, createdAt: new Date(t.createdAt)
+                create: trades.slice(0, 2500).map((t: any) => ({
+                    userId: user.id,
+                    tokenAddress: t.mint || t.tokenAddress || 'unknown',
+                    isBuy: t.isBuy,
+                    amountInSol: t.amountInSol,
+                    profitPercent: t.profitPercent || 0,
+                    realizedPnlSol: t.realizedPnlSol || 0,
+                    createdAt: new Date(t.createdAt)
                 }))
             }
         }

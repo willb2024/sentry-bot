@@ -384,6 +384,8 @@ app.post('/api/sim-stats', async (req, res) => {
         // This ensures "Total Trades", "Total Invested", and "Win Rate" are NEVER 0.
         const stats = computeUniversalStats(trades);
 
+        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0');
+
         res.json({
             isActive: true,
             balance,
@@ -392,12 +394,13 @@ app.post('/api/sim-stats', async (req, res) => {
             wins: stats.wins,
             losses: stats.losses,
             winRate: stats.winRate,
-            totalTrades: stats.totalTrades,            // <-- Fixes the "Total Trades" card
-            totalInvestedSol: stats.totalVolumeSol,    // <-- Fixes Invested Capital calculation
-            totalPnlSol: stats.totalPnLSol,            // <-- Fixes the "Realized PnL" card
+            totalTrades: stats.totalTrades,
+            totalInvestedSol: stats.totalVolumeSol,
+            totalPnlSol: stats.totalPnLSol,
             firstTradeAt,
+            credits, // 🟢 NOW SENT TO WEBAPP
             positions,
-            trades: trades.slice(0, 50) // Only send the 50 most recent for the Ticker
+            trades: trades.slice(0, 50)
         });
     } catch (e) {
         res.status(500).json({ error: 'Server Error' });
@@ -6500,8 +6503,6 @@ bot.action('toggle_sim_mode', async (ctx) => {
     await sendOrEditSettings(ctx, tgId, true);
 });
 
-// 3️⃣ Update /api/toggle-sim express route
-// 🟢 GLOBAL EXPRESS ROUTES (MUST BE OUTSIDE TELEGRAM HANDLERS)
 app.post('/api/analytics', async (req, res) => {
     const initData = req.body.initData;
     if (!initData) return res.status(401).json({ error: "No initData" });
@@ -6522,6 +6523,8 @@ app.post('/api/analytics', async (req, res) => {
             createdAt: t.createdAt,
             isBuy: t.isBuy,
             amountInSol: t.amountInSol,
+            tokenAddress: t.tokenAddress,
+            strategy: t.strategy,
             profitPercent: t.profitPercent || 0,
             realizedPnlSol: t.realizedPnlSol || 0
         }));
@@ -6529,7 +6532,14 @@ app.post('/api/analytics', async (req, res) => {
         const { getAdvancedStats } = await import('./services/analytics.service.js');
         const stats = await getAdvancedStats(tgId);
         
-        res.json({ trades: mappedTrades, stats });
+        // 🟢 SEND CREDITS IN LIVE MODE
+        res.json({ 
+            trades: mappedTrades, 
+            stats: {
+                ...stats,
+                credits: user.creditBalance || 0
+            } 
+        });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
