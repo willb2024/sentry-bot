@@ -5339,6 +5339,8 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
+
+
 // --- 12. SIMULATION FORGE EDITOR (WITH CREDITS, SLIPPAGE & BUDGET SUPPORT) ---
 const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
 if (isSimEdit) {
