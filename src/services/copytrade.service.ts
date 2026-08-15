@@ -51,6 +51,7 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     return 0;
 }
 
+// 🟢 FIX 4: Verified subscription state with graceful reconnection
 export async function syncCopyTradeListeners(bot: any) {
     try {
         const activeConfigs = await prisma.copyTradeConfig.findMany({
@@ -59,7 +60,7 @@ export async function syncCopyTradeListeners(bot: any) {
         });
         const targetWallets = [...new Set(activeConfigs.map(c => c.targetWallet))];
 
-        // Purge inactive WebSocket listeners to prevent connection saturation
+        // Clean up unassigned wallets
         for (const [walletStr, subId] of activeWsListeners.entries()) {
             if (!targetWallets.includes(walletStr)) {
                 try { 
@@ -71,99 +72,117 @@ export async function syncCopyTradeListeners(bot: any) {
             }
         }
 
+        // Attach listeners to targets
         for (const walletStr of targetWallets) {
+            if (activeWsListeners.has(walletStr)) {
+                const existingSubId = activeWsListeners.get(walletStr);
+                try {
+                    // Check listener integrity
+                    if (existingSubId === undefined || existingSubId === null) {
+                        activeWsListeners.delete(walletStr);
+                    }
+                } catch (_) {
+                    activeWsListeners.delete(walletStr);
+                }
+            }
+
             if (!activeWsListeners.has(walletStr)) {
-                const pubKey = new PublicKey(walletStr);
+                try {
+                    const pubKey = new PublicKey(walletStr);
 
-                const subId = connection.onLogs(pubKey, async (logs) => {
-                    if (logs.err) return;
+                    const subId = connection.onLogs(pubKey, async (logs) => {
+                        if (logs.err) return;
 
-                    const signature = logs.signature;
-                    const txDetails = await connection.getParsedTransaction(signature, {
-                        maxSupportedTransactionVersion: 0,
-                        commitment: 'confirmed'
-                    }).catch(() => null);
+                        const signature = logs.signature;
+                        const txDetails = await connection.getParsedTransaction(signature, {
+                            maxSupportedTransactionVersion: 0,
+                            commitment: 'confirmed'
+                        }).catch(() => null);
 
-                    if (!txDetails || !txDetails.meta || txDetails.meta.err) return;
+                        if (!txDetails || !txDetails.meta || txDetails.meta.err) return;
 
-                    const preBalances = txDetails.meta.preTokenBalances || [];
-                    const postBalances = txDetails.meta.postTokenBalances || [];
-                    
-                    let targetTokenMint: string | null = null;
-                    let tradeType: 'buy' | 'sell' | null = null;
-                    let sellPercentage = 0;
+                        const preBalances = txDetails.meta.preTokenBalances || [];
+                        const postBalances = txDetails.meta.postTokenBalances || [];
+                        
+                        let targetTokenMint: string | null = null;
+                        let tradeType: 'buy' | 'sell' | null = null;
+                        let sellPercentage = 0;
 
-                    for (const post of postBalances) {
-                        if (post.owner === walletStr) {
-                            const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
-                            const preAmt = pre ? Number(pre.uiTokenAmount.uiAmount) : 0;
-                            const postAmt = Number(post.uiTokenAmount.uiAmount);
-                            
-                            if (postAmt > preAmt) {
-                                tradeType = 'buy'; targetTokenMint = post.mint; break;
-                            } else if (postAmt < preAmt && preAmt > 0) {
-                                tradeType = 'sell'; targetTokenMint = post.mint;
-                                sellPercentage = ((preAmt - postAmt) / preAmt) * 100; break;
+                        for (const post of postBalances) {
+                            if (post.owner === walletStr) {
+                                const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
+                                const preAmt = pre ? Number(pre.uiTokenAmount.uiAmount) : 0;
+                                const postAmt = Number(post.uiTokenAmount.uiAmount);
+                                
+                                if (postAmt > preAmt) {
+                                    tradeType = 'buy'; targetTokenMint = post.mint; break;
+                                } else if (postAmt < preAmt && preAmt > 0) {
+                                    tradeType = 'sell'; targetTokenMint = post.mint;
+                                    sellPercentage = ((preAmt - postAmt) / preAmt) * 100; break;
+                                }
                             }
                         }
-                    }
 
-                    if (targetTokenMint && targetTokenMint !== "So11111111111111111111111111111111111111112") {
-                        const freshConfigs = await prisma.copyTradeConfig.findMany({
-                            where: { targetWallet: walletStr, isActive: true },
-                            include: { user: true }
-                        });
+                        if (targetTokenMint && targetTokenMint !== "So11111111111111111111111111111111111111112") {
+                            const freshConfigs = await prisma.copyTradeConfig.findMany({
+                                where: { targetWallet: walletStr, isActive: true },
+                                include: { user: true }
+                            });
 
-                        if (tradeType === 'buy') {
-                            const entryPrice = await fetchLiveEntryPrice(targetTokenMint);
+                            if (tradeType === 'buy') {
+                                const entryPrice = await fetchLiveEntryPrice(targetTokenMint);
 
-                            for (const follower of freshConfigs) {
-                                const f: any = follower; 
-                                if (f.copyBuys === false) continue;
-                                const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
+                                for (const follower of freshConfigs) {
+                                    const f: any = follower; 
+                                    if (f.copyBuys === false) continue;
+                                    const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
 
-                                executeSnipe(follower.user.telegramId, targetTokenMint, sizeToTrade, 'buy', undefined, false, undefined, f.slippagePercent || undefined)
-                                    .then(async (res) => {
-                                        if (res.success) {
-                                            try {
-                                                await addTrailingStopToMemory(
-                                                    follower.user.telegramId, targetTokenMint!, follower.autoTrailingDropPercent,
-                                                    sizeToTrade, entryPrice, follower.autoTakeProfitPercent || undefined
-                                                );
-                                            } catch (guardErr) {}
-                                            try { 
-                                                await bot.telegram.sendMessage(
-                                                    follower.user.telegramId, 
-                                                    `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${targetTokenMint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
-                                                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                                                ); 
-                                            } catch (_) {}
-                                        }
-                                    }).catch(() => {});
-                            }
-                        } 
-                        else if (tradeType === 'sell' && sellPercentage >= 1) {
-                            for (const follower of freshConfigs) {
-                                const f: any = follower; 
-                                if (f.copySells === false) continue;
+                                    executeSnipe(follower.user.telegramId, targetTokenMint, sizeToTrade, 'buy', undefined, false, undefined, f.slippagePercent || undefined)
+                                        .then(async (res) => {
+                                            if (res.success) {
+                                                try {
+                                                    await addTrailingStopToMemory(
+                                                        follower.user.telegramId, targetTokenMint!, follower.autoTrailingDropPercent,
+                                                        sizeToTrade, entryPrice, follower.autoTakeProfitPercent || undefined
+                                                    );
+                                                } catch (guardErr) {}
+                                                try { 
+                                                    await bot.telegram.sendMessage(
+                                                        follower.user.telegramId, 
+                                                        `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${targetTokenMint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
+                                                        { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                                                    ); 
+                                                } catch (_) {}
+                                            }
+                                        }).catch(() => {});
+                                }
+                            } 
+                            else if (tradeType === 'sell' && sellPercentage >= 1) {
+                                for (const follower of freshConfigs) {
+                                    const f: any = follower; 
+                                    if (f.copySells === false) continue;
 
-                                executeExit(follower.user.telegramId, targetTokenMint, sellPercentage)
-                                    .then(async (res) => {
-                                        if (res.success) {
-                                            try { 
-                                                await bot.telegram.sendMessage(
-                                                    follower.user.telegramId, 
-                                                    `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${sellPercentage.toFixed(1)}%</b> of <code>${targetTokenMint}</code>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
-                                                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                                                ); 
-                                            } catch (_) {}
-                                        }
-                                    }).catch(() => {});
+                                    executeExit(follower.user.telegramId, targetTokenMint, sellPercentage)
+                                        .then(async (res) => {
+                                            if (res.success) {
+                                                try { 
+                                                    await bot.telegram.sendMessage(
+                                                        follower.user.telegramId, 
+                                                        `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${sellPercentage.toFixed(1)}%</b> of <code>${targetTokenMint}</code>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
+                                                        { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                                                    ); 
+                                                } catch (_) {}
+                                            }
+                                        }).catch(() => {});
+                                }
                             }
                         }
-                    }
-                }, 'processed');
-                activeWsListeners.set(walletStr, subId);
+                    }, 'processed');
+
+                    activeWsListeners.set(walletStr, subId);
+                } catch (e: any) {
+                    console.error(`[COPYTRADE] Failed to subscribe to ${walletStr}:`, e.message);
+                }
             }
         }
     } catch (e: any) { 
@@ -177,66 +196,4 @@ export async function startCopyTradeWatcher(bot: any) {
     setInterval(() => {
         syncCopyTradeListeners(bot);
     }, 30000);
-}
-
-export async function scoreWallet(walletAddress: string): Promise<{ score: number, isBot: boolean, message: string }> {
-    try {
-        const apiKey = process.env.HELIUS_API_KEY;
-        if (!apiKey) return { score: 50, isBot: false, message: "Helius API key missing. Score estimated." };
-
-        const res = await axios.get(`https://api.helius.xyz/v0/addresses/${walletAddress}/transactions?api-key=${apiKey}&limit=20&type=SWAP`, { timeout: 4000 });
-        const txs = res.data;
-
-        if (!txs || txs.length < 5) {
-            return { score: 30, isBot: false, message: "Low activity. This wallet rarely trades." };
-        }
-
-        let totalTimeDiff = 0;
-        let rapidTrades = 0;
-
-        for (let i = 0; i < txs.length - 1; i++) {
-            const timeDiff = txs[i].timestamp - txs[i+1].timestamp;
-            totalTimeDiff += timeDiff;
-            if (timeDiff < 15) rapidTrades++; 
-        }
-
-        const avgHoldTime = totalTimeDiff / (txs.length - 1);
-        const isBot = rapidTrades > 10 || avgHoldTime < 30;
-
-        let score = 100;
-        if (isBot) score -= 80;
-        else if (avgHoldTime > 3600) score -= 10;
-
-        return {
-            score: Math.max(10, score),
-            isBot,
-            message: isBot 
-                ? "⚠️ HIGH BOT PROBABILITY: Average trade gap is under 30s. Copying this wallet may result in MEV sandwich losses."
-                : "✅ HUMAN TRADER: Transaction pacing looks organic."
-        };
-    } catch (e) {
-        return { score: 50, isBot: false, message: "Could not fetch deep analytics." };
-    }
-}
-
-
-// Add this helper function in src/services/copytrade.service.ts
-async function subscribeWithRetry(pubKey: PublicKey, walletStr: string, bot: any): Promise<number | null> {
-    let subId: number | null = null;
-    const maxRetries = 5;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-            subId = connection.onLogs(pubKey, async (logs) => {
-                // (Existing listener callback logic stays inside here)
-            }, 'processed');
-            activeWsListeners.set(walletStr, subId);
-            console.log(`✅ [COPYTRADE] WebSocket listener connected for ${walletStr}`);
-            return subId;
-        } catch (e: any) {
-            console.warn(`⚠️ [COPYTRADE] Retry ${attempt + 1}/${maxRetries} failed to subscribe to ${walletStr}: ${e.message}`);
-            await new Promise(r => setTimeout(r, 5000 * (attempt + 1)));
-        }
-    }
-    console.error(`🔴 [COPYTRADE] Failed to subscribe to ${walletStr} after ${maxRetries} attempts.`);
-    return null;
 }

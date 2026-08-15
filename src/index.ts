@@ -3958,6 +3958,8 @@ bot.action('action_consolidate_wallets', async (ctx) => {
             const vaultPubkey = new PublicKey(w.pub!);
             const balance = await connection.getBalance(vaultPubkey);
             const gasBuffer = 50000; // 0.00005 SOL
+            
+            // 🟢 FIX 8: Check gas buffer before assembling transaction
             if (balance > gasBuffer) {
                 const rawPk = decryptKey(w.pk!);
                 if (!rawPk) continue;
@@ -3968,6 +3970,8 @@ bot.action('action_consolidate_wallets', async (ctx) => {
                 tx.sign([keypair]);
                 await connection.sendRawTransaction(Buffer.from(tx.serialize()), { skipPreflight: true });
                 sweptSol += (balance - gasBuffer) / LAMPORTS_PER_SOL;
+            } else {
+                console.log(`[CONSOLIDATE] Skipping ${w.pub} - balance too low for gas`);
             }
         } catch(e) {}
     }
@@ -5500,15 +5504,25 @@ bot.on("text", async (ctx, next) => {
         return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `👑 <b>VIP ACTIVATED!</b>\n\nWelcome to ${tierDef.label}. Your 0% fees and Turbo routing are now active.`, { parse_mode: 'HTML' });
     }
 
-    // --- 12. WITHDRAWAL PIN VERIFICATION ---
     const withdrawState = await redis.get(`state:withdraw_pin:${telegramId}`);
     if (withdrawState) {
         await redis.del(`state:withdraw_pin:${telegramId}`);
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.withdrawalPin) return ctx.reply("🔴 PIN not set up.");
+        
         if (!verifyPin(text, user.withdrawalPin)) {
+            // Increment failure count
+            const fails = await redis.incr(`withdraw_failures:${telegramId}`);
+            if (fails >= 3) {
+                await redis.set(`withdraw_lockout:${telegramId}`, '1', 'EX', 3600);
+                await redis.del(`withdraw_failures:${telegramId}`);
+            }
             return ctx.replyWithHTML("🔴 <b>INVALID PIN</b>\n\nWithdrawal aborted.");
         }
+        
+        // 🟢 FIX 6: Reset failure counter on success
+        await redis.del(`withdraw_failures:${telegramId}`);
+        
         const data = JSON.parse(withdrawState);
         await executeWithdrawalProcess(user, data.targetAddress, data.requestedAmount, data.isMax, telegramId, ctx, `lock:withdraw:${telegramId}`);
         return;
@@ -5559,8 +5573,11 @@ bot.on("text", async (ctx, next) => {
         const refUser = await prisma.user.findUnique({ where: { referralCode: code } });
         if (!refUser) return ctx.reply("🔴 Invalid referral code.");
         const me = await prisma.user.findUnique({ where: { telegramId } });
-        if (me?.referredById) return ctx.reply("🔴 You are already bound to a referrer.");
+        
+        // 🟢 FIX 7: Prevent self-referral and re-binding
+        if (me?.referredById) return ctx.reply("🔴 You are already linked to a referrer.");
         if (me?.id === refUser.id) return ctx.reply("🔴 You cannot refer yourself.");
+        
         await prisma.user.update({
             where: { telegramId },
             data: { referredById: refUser.id, hasReferralDiscount: true }

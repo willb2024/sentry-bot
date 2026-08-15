@@ -35,6 +35,7 @@ function startFastPollLoop() {
     console.log("🟢 [GUARD FEED] Fast-poll loop active for non-pump-curve guarded tokens (1s interval).");
 }
 
+// Replace subscribeToMintPrice in src/services/guard-price-feed.service.ts
 export async function subscribeToMintPrice(mint: string, guardId: string): Promise<void> {
     if (mint.toLowerCase().endsWith('pump')) {
         const existing = activeSubscriptions.get(mint);
@@ -87,7 +88,11 @@ export async function subscribeToMintPrice(mint: string, guardId: string): Promi
         return;
     }
     fastPollTargets.set(mint, { lastPriceSol: 0, subscribers: new Set([guardId]) });
-    startFastPollLoop();
+    
+    // 🟢 FIX 11: Auto-start fast-poll loop
+    if (!fastPollLoopStarted) {
+        startFastPollLoop();
+    }
     console.log(`🟢 [GUARD FEED] Fast-poll registered for ${mint.substring(0, 8)}... (1s interval)`);
 }
 

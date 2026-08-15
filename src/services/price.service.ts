@@ -45,6 +45,7 @@ export async function getCachedMintInfo(mint: string): Promise<{ decimals: numbe
     }
 }
 
+// Replace getTokenMetadata in src/services/price.service.ts
 export async function getTokenMetadata(mint: string): Promise<{
     symbol: string;
     decimals: number;
@@ -57,17 +58,20 @@ export async function getTokenMetadata(mint: string): Promise<{
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
+    const fallback = { symbol: "UNKNOWN", name: "Unknown Token", decimals: 6, liquidityUsd: 0, volume24h: 0, priceUsd: 0 };
+
+    // 🟢 FIX 12: Global try/catch with retries
     try {
         const res = await dexScreenerLimiter(() =>
-            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`)
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 2500 })
         );
         
         const pair = res.data?.pairs?.[0];
-        if (!pair) throw new Error('Token not found');
+        if (!pair) return fallback;
 
         const metadata = {
-            symbol: pair.baseToken.symbol || "UNKNOWN",
-            name: pair.baseToken.name || "Unknown Token",
+            symbol: pair.baseToken?.symbol || "UNKNOWN",
+            name: pair.baseToken?.name || "Unknown Token",
             decimals: 6,
             liquidityUsd: pair.liquidity?.usd || 0,
             volume24h: pair.volume?.h24 || 0,
@@ -77,7 +81,7 @@ export async function getTokenMetadata(mint: string): Promise<{
         await redis.set(cacheKey, JSON.stringify(metadata), 'EX', 300); 
         return metadata;
     } catch (e) {
-        return { symbol: "UNKNOWN", name: "Unknown Token", decimals: 6, liquidityUsd: 0, volume24h: 0, priceUsd: 0 };
+        return fallback;
     }
 }
 

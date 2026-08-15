@@ -29,7 +29,6 @@ export interface SimPosition {
     volatilitySeed?: number;
 }
 
-// ─── UTILITIES & HELPERS ────────────────────────────────
 export function randomBase58(length: number): string {
     const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
     let result = '';
@@ -62,7 +61,6 @@ export function applySimSlippage(targetPnl: number): number {
     return parseFloat((targetPnl + absoluteDeviation).toFixed(2));
 }
 
-// ─── COUNTERS & ANCHORS ─────────────────────────────────
 export async function getSimCounters(telegramId: string) {
     const wins = parseInt(await redis.get(`sim:stats:wins:${telegramId}`) || '0');
     const losses = parseInt(await redis.get(`sim:stats:losses:${telegramId}`) || '0');
@@ -88,7 +86,6 @@ export async function setSimFirstTradeAt(telegramId: string, dateStr: string): P
     await redis.set(`sim:first_trade_at:${telegramId}`, dateStr);
 }
 
-// ─── SESSION BUDGET & SPEND ─────────────────────────────
 export async function getSessionSpend(telegramId: string, mode: 'live' | 'sim'): Promise<number> {
     const val = await redis.get(`autosnipe:session_spend:${mode}:${telegramId}`);
     return val ? parseFloat(val) : 0;
@@ -142,7 +139,6 @@ export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, m
     ).catch(() => {});
 }
 
-// ─── STATE MANAGEMENT ──────────────────────────────────
 export async function isSimulationActive(telegramId: string): Promise<boolean> {
     let val = await redis.get(`sim:active:${telegramId}`);
     if (val === null) {
@@ -257,7 +253,6 @@ export async function recordSimTrade(
     await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
 
-// ─── REAL-TIME PRICE SYNC & POSITION WATCHERS ───────────
 export async function updateSimPositions(telegramId: string): Promise<void> {
     const posKey = `sim:positions:${telegramId}`;
     const raw = await redis.get(posKey);
@@ -376,7 +371,6 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
     return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// ─── TRADE EXECUTION ────────────────────────────────────
 export async function simExecuteSnipe(
     telegramId: string, 
     tokenAddress: string, 
@@ -599,7 +593,6 @@ export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'gu
     return isWin;
 }
 
-// 🟢 BULLETPROOF SIM AUTO-SNIPER (DOES NOT DIE ON IDLE)
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
     const key = `sim:autosnipe:${telegramId}`;
     const current = await redis.get(key);
@@ -635,7 +628,6 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
         
-        // 🟢 FIX: Do not break if config is idle — sleep and continue
         if (!config || !config.isActive) {
             await new Promise(r => setTimeout(r, 3000));
             continue;
@@ -683,7 +675,7 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
     await saveSimulationState(telegramId);
 }
 
-// ─── LIFECYCLE & DATABASE PERSISTENCE ───────────────────
+// 🟢 FIX 1: setSimulationMode defaults to 238.8700 SOL on first activation
 export async function setSimulationMode(telegramId: string, active: boolean): Promise<void> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -771,15 +763,31 @@ export async function saveSimulationState(telegramId: string) {
     });
 }
 
+// 🟢 FIX 2: loadSimulationState creates default SimState if not found in database
 export async function loadSimulationState(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
 
-    const state = await prisma.simState.findUnique({ 
+    let state = await prisma.simState.findUnique({ 
         where: { userId: user.id }, 
         include: { trades: { orderBy: { createdAt: 'desc' }, take: 2500 } } 
     });
-    if (!state) return;
+
+    if (!state) {
+        state = await prisma.simState.create({
+            data: {
+                userId: user.id,
+                balance: 238.87,
+                startingBalance: 238.87,
+                volume: 0,
+                credits: 500,
+                active: false,
+                autoSnipeActive: false,
+                positions: []
+            },
+            include: { trades: true }
+        });
+    }
 
     await redis.set(`sim:balance:${telegramId}`, state.balance.toFixed(4));
     await redis.set(`sim:starting_balance:${telegramId}`, state.startingBalance.toFixed(4));
