@@ -315,12 +315,7 @@ app.post('/api/sim-trades', async (req, res) => {
 
 
 
-
-
-
-// ... (your other code) ...
-
-// 🟢 SINGLE AUTHORITATIVE /api/sim-stats ENDPOINT
+// Replace /api/sim-stats in src/index.ts
 app.post('/api/sim-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -341,7 +336,7 @@ app.post('/api/sim-stats', async (req, res) => {
             return res.json({
                 isActive: false, balance: '0.0000', startingBalance: '0.0000', volume: 0,
                 wins: 0, losses: 0, totalTrades: 0, totalInvestedSol: 0, totalPnlSol: 0,
-                positions: [], trades: [], firstTradeAt: null
+                positions: [], trades: [], firstTradeAt: null, credits: 0
             });
         }
 
@@ -353,33 +348,37 @@ app.post('/api/sim-stats', async (req, res) => {
         const tradesRaw = await redis.get(`sim:trades:${tgId}`);
         const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
         const firstTradeAt = await getSimFirstTradeAt(tgId);
+        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '500');
 
-        // 🟢 CRITICAL FIX: Calculate Stats using our Universal Math Engine
-        // This ensures "Total Trades", "Total Invested", and "Win Rate" are NEVER 0.
+        // Dynamic metrics calculation
         const stats = computeUniversalStats(trades);
-
-        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0');
 
         res.json({
             isActive: true,
             balance,
             startingBalance,
-            volume: stats.totalVolumeSol,
+            volume: stats.totalVolumeSol || volume,
             wins: stats.wins,
             losses: stats.losses,
             winRate: stats.winRate,
-            totalTrades: stats.totalTrades,
+            totalTrades: stats.totalTrades || trades.length,
             totalInvestedSol: stats.totalVolumeSol,
             totalPnlSol: stats.totalPnLSol,
             firstTradeAt,
-            credits, // 🟢 NOW SENT TO WEBAPP
+            credits,
             positions,
             trades: trades.slice(0, 50)
         });
-    } catch (e) {
+    } catch (e: any) {
         res.status(500).json({ error: 'Server Error' });
     }
 });
+
+
+// ... (your other code) ...
+
+// 🟢 SINGLE AUTHORITATIVE /api/sim-stats ENDPOINT
+
 
 // Add these admin commands in src/index.ts
 bot.command('clearsim', async (ctx) => {
