@@ -164,32 +164,6 @@ export async function safeSendMessage(tgId: string, text: string, options: any =
     }
 }
 
-export async function safeEditMessageText(ctx: any, text: string, options: any = {}) {
-    let retries = 3;
-    while (retries > 0) {
-        try {
-            return await ctx.editMessageText(text, { parse_mode: 'HTML', ...options });
-        } catch (error: any) {
-            if (error.code === 429) { 
-                const waitTime = error.parameters?.retry_after || 1;
-                await new Promise(r => setTimeout(r, waitTime * 1000));
-                retries--;
-            } else if (error.code === 400 && error.description?.includes('message is not modified')) {
-                return;
-            } else if (error.code === 400 && error.description?.includes("can't parse entities")) {
-                // Fallback: Strip parse_mode to ensure the text is delivered even if markup has an issue
-                console.warn(`⚠️ [TG HTML PARSE ERROR] Rendering plain text fallback:`, error.description);
-                return await ctx.editMessageText(text.replace(/<[^>]*>/g, ''), options);
-            } else if (error.code === 400 || error.code === 403) {
-                console.warn(`⚠️ [TG] Edit ignored (code ${error.code}): ${error.description}`);
-                return;
-            } else { 
-                console.error("🔴 [Telegram Edit Message Error]:", error.message);
-                break; 
-            }
-        }
-    }
-}
 
 // =========================================================
 // 🔒 SECURITY: STRICT PRIVATE CHAT LOCK
@@ -4954,22 +4928,50 @@ bot.action(/^launch_holders_(.+)$/, async (ctx) => {
 
 
 
+// In src/index.ts
 
+// 🟢 FIX 21: Clean up any stale intervals prior to boot
+if (global._sentryIntervals) {
+    for (const timer of global._sentryIntervals) clearInterval(timer);
+    global._sentryIntervals = [];
+}
 
-// =========================================================
-// ⚡ TEXT INTERCEPTOR: (Catches Redis States & Snipes)
-// =========================================================
+// 🟢 FIX 8: Safe edit message text with graceful boolean return
+export async function safeEditMessageText(ctx: any, text: string, options: any = {}): Promise<boolean> {
+    try {
+        await ctx.editMessageText(text, { parse_mode: 'HTML', ...options });
+        return true;
+    } catch (error: any) {
+        if (error.description?.includes('message is not modified')) return true;
+        if (error.description?.includes("can't parse entities")) {
+            try {
+                await ctx.editMessageText(text.replace(/<[^>]*>/g, ''), options);
+                return true;
+            } catch (_) {}
+        }
+        return false;
+    }
+}
 
+// 🟢 FIX 3 (Final Audit): Non-blocking yield for large Redis keyspace deletion
 async function deleteKeysPattern(pattern: string) {
-    
     let cursor = '0';
+    let keys: string[] = [];
     do {
         const [nextCursor, elements] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
         cursor = nextCursor;
-        if (elements.length > 0) await redis.del(...elements);
+        if (elements.length > 0) {
+            keys.push(...elements);
+            if (keys.length >= 300) {
+                await redis.del(...keys);
+                keys = [];
+                // Yield to event loop to prevent event loop lag
+                await new Promise(resolve => setImmediate(resolve));
+            }
+        }
     } while (cursor !== '0');
+    if (keys.length > 0) await redis.del(...keys);
 }
-
 
 
 

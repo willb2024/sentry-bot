@@ -59,6 +59,7 @@ export async function syncGuardsFromDb() {
     }
 }
 
+// 🟢 FIX 2: Clear Redis WATCH before retry to prevent deadlock & stale watch contexts
 async function updateGuardSafe(orderId: string, mutateFn: (order: TrailingOrder) => void) {
     const key = `order:trail:${orderId}`;
     const maxRetries = 5;
@@ -80,8 +81,12 @@ async function updateGuardSafe(orderId: string, mutateFn: (order: TrailingOrder)
         const execResult = await multi.exec();
 
         if (execResult !== null) return; 
+        
+        // 🟢 FIX: Unwatch on watch conflict before next attempt
+        await redis.unwatch();
+        await new Promise(r => setTimeout(r, 50 * (i + 1)));
     }
-    console.error(`🔴 [REDIS] Race condition blocked. Failed to update order ${orderId} after ${maxRetries} retries.`);
+    console.error(`🔴 [REDIS] Race condition blocked order ${orderId} after ${maxRetries} retries.`);
 }
 
 export async function getAllActiveGuards(): Promise<TrailingOrder[]> {
@@ -156,6 +161,7 @@ export async function addTrailingStopToMemory(
 export async function removeOrderFromMemory(orderId: string, telegramId: string, tokenAddress: string) {
     try {
         await redis.del(`order:trail:${orderId}`);
+        await redis.del(`presigned_exit_multi:${orderId}`); // 🟢 FIX: Purge pre-signed buffer
         await redis.srem(`active_guards_global`, orderId);
         await redis.srem(`user_guards:${telegramId}`, orderId);
         await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, orderId);
@@ -190,6 +196,7 @@ export async function cancelAllGuardsForToken(telegramId: string, tokenAddress: 
             if (raw) {
                 await removeOrderFromMemory(id, telegramId, tokenAddress);
             } else {
+                await redis.del(`presigned_exit_multi:${id}`);
                 await redis.srem(`active_guards_global`, id);
                 await redis.srem(`user_guards:${telegramId}`, id);
                 await redis.srem(`token_guards:${telegramId}:${tokenAddress}`, id);
@@ -213,10 +220,12 @@ export async function cancelAllUserGuards(telegramId: string): Promise<number> {
                     await removeOrderFromMemory(orderId, telegramId, order.tokenAddress);
                 } catch (e) {
                     await redis.del(`order:trail:${orderId}`);
+                    await redis.del(`presigned_exit_multi:${orderId}`);
                     await redis.srem(`active_guards_global`, orderId);
                     await redis.srem(`user_guards:${telegramId}`, orderId);
                 }
             } else {
+                await redis.del(`presigned_exit_multi:${orderId}`);
                 await redis.srem(`active_guards_global`, orderId);
                 await redis.srem(`user_guards:${telegramId}`, orderId);
             }

@@ -155,19 +155,17 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
         const { maxSlots } = await getPromoConfig();
 
         // 🟢 FIX: Atomic slot claiming with Redis Lua scripts to eliminate race conditions
-        const luaScript = `
-            local current = redis.call('incr', KEYS[1])
-            if current == 1 then
-                redis.call('expire', KEYS[1], 90000)
-            end
-            if current > tonumber(ARGV[1]) then
-                redis.call('decr', KEYS[1])
-                return 0
-            else
-                return current
-            end
-        `;
-        
+       // In checkAndGrantDailyVip in src/services/vip_promo.service.ts
+const luaScript = `
+local current = redis.call('incr', KEYS[1])
+redis.call('expire', KEYS[1], 90000) -- 🟢 FIX 11: Refresh expiry on every increment
+if current > tonumber(ARGV[1]) then
+    redis.call('decr', KEYS[1])
+    return 0
+else
+    return current
+end
+`;
         const currentCount = await redis.eval(luaScript, 1, `vip_promo:date:${today}`, maxSlots.toString()) as number;
 
         if (currentCount === 0) {

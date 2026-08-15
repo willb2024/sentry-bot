@@ -5,12 +5,88 @@ import { decryptKey } from './vault.service.js';
 import { redis } from '../lib/redis.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
-import { prisma } from '../lib/prisma.js';
+import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton
 import { redlock } from '../lib/redlock.js';
-
 dotenv.config();
 
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
+
+
+export async function exportLeaderboard(telegramId: string, guildId: string): Promise<string | null> {
+    try {
+        // 🟢 FIX: Use findFirst for owner relation query
+        const guild = await prisma.guild.findFirst({ where: { id: guildId, owner: { telegramId } } });
+        if (!guild) return null;
+
+        const lb = await getLeaderboard(guildId, 500);
+        let csv = `rank,telegram_username,wallet_address,glp,volume_sol\n`;
+        
+        lb.forEach(row => {
+            csv += `${row.rank},@${row.username},${row.walletAddress},${row.glp.toFixed(2)},${row.volumeSol.toFixed(4)}\n`;
+        });
+
+        return csv;
+    } catch (e) {
+        return null;
+    }
+}
+
+export async function executeGuildAirdrop(telegramId: string, guildId: string, totalSol: number): Promise<{ success: boolean; message: string; signature?: string }> {
+    let lock;
+    try {
+        lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
+        const signer = await getGuildOwnerSigner(telegramId, guildId);
+        if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
+
+        const top50 = await getLeaderboard(guildId, 50);
+        if (top50.length === 0) return { success: false, message: "No members to airdrop to." };
+
+        const perMember = totalSol / top50.length;
+        const lamportsPer = Math.floor(perMember * LAMPORTS_PER_SOL);
+        if (lamportsPer <= 0) return { success: false, message: "Amount too small to split." };
+
+        const instructions = top50.filter(m => m && m.walletAddress && m.walletAddress !== "Unknown").map(m => SystemProgram.transfer({
+            fromPubkey: signer.vaultPubkey, toPubkey: new PublicKey(m!.walletAddress), lamports: lamportsPer
+        }));
+
+        const CHUNK_SIZE = 20;
+        let confirmedTxs = 0;
+        let lastSig = "";
+
+        for (let i = 0; i < instructions.length; i += CHUNK_SIZE) {
+            const chunk = instructions.slice(i, i + CHUNK_SIZE);
+            const { blockhash } = await connection.getLatestBlockhash('confirmed');
+            const vTx = new VersionedTransaction(new TransactionMessage({
+                payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions: chunk
+            }).compileToV0Message());
+            vTx.sign([signer.keypair]);
+            const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+            lastSig = sig;
+
+            let isConfirmed = false;
+            for (let j = 0; j < 15; j++) {
+                await new Promise(r => setTimeout(r, 1000));
+                const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+                if (status?.value && !status.value.err) { isConfirmed = true; break; }
+            }
+            if (isConfirmed) confirmedTxs++;
+        }
+
+        if (confirmedTxs === 0) return { success: false, message: "All transaction batches dropped by the network." };
+
+        await prisma.guildMembership.updateMany({
+            where: { guildId, user: { vaultAddress: { in: top50.map(m => m?.walletAddress).filter((w): w is string => !!w && w !== 'Unknown') } } },
+            data: { airdropsReceivedSol: { increment: perMember } }
+        }).catch(() => {});
+
+        return { success: true, message: `Airdropped ${perMember.toFixed(4)} SOL to ${top50.length} members.`, signature: lastSig };
+    } catch (e: any) {
+        return { success: false, message: e.message || "Airdrop failed." };
+    } finally {
+        // 🟢 FIX 3: Strict redlock release in finally block
+        if (lock) await (lock as any).release().catch(() => {});
+    }
+}
 
 export async function createGuild(
     telegramId: string, 
@@ -120,23 +196,7 @@ export async function getLeaderboard(guildId: string, limit: number = 50) {
     }
 }
 
-export async function exportLeaderboard(telegramId: string, guildId: string): Promise<string | null> {
-    try {
-        const guild = await prisma.guild.findFirst({ where: { id: guildId, owner: { telegramId } } });
-        if (!guild) return null;
 
-        const lb = await getLeaderboard(guildId, 500);
-        let csv = `rank,telegram_username,wallet_address,glp,volume_sol\n`;
-        
-        lb.forEach(row => {
-            csv += `${row.rank},@${row.username},${row.walletAddress},${row.glp.toFixed(2)},${row.volumeSol.toFixed(4)}\n`;
-        });
-
-        return csv;
-    } catch (e) {
-        return null;
-    }
-}
 
 export async function updateRankCache(guildId: string) {
     try {
@@ -186,63 +246,9 @@ async function getGuildOwnerSigner(telegramId: string, guildId: string) {
     return { keypair: Keypair.fromSecretKey(bs58.decode(rawPk)), vaultPubkey: new PublicKey(user.vaultAddress) };
 }
 
-// 🟢 REDLOCK ADDED FOR ALL 3 AIRDROP FUNCTIONS
 
-export async function executeGuildAirdrop(telegramId: string, guildId: string, totalSol: number): Promise<{ success: boolean; message: string; signature?: string }> {
-    let lock;
-    try {
-        lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
-        const signer = await getGuildOwnerSigner(telegramId, guildId);
-        if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
 
-        const top50 = await getLeaderboard(guildId, 50);
-        if (top50.length === 0) return { success: false, message: "No members to airdrop to." };
 
-        const perMember = totalSol / top50.length;
-        const lamportsPer = Math.floor(perMember * LAMPORTS_PER_SOL);
-        if (lamportsPer <= 0) return { success: false, message: "Amount too small to split." };
-
-        const instructions = top50.filter(m => m && m.walletAddress && m.walletAddress !== "Unknown").map(m => SystemProgram.transfer({
-            fromPubkey: signer.vaultPubkey, toPubkey: new PublicKey(m!.walletAddress), lamports: lamportsPer
-        }));
-
-        const CHUNK_SIZE = 20;
-        let confirmedTxs = 0;
-        let lastSig = "";
-
-        for (let i = 0; i < instructions.length; i += CHUNK_SIZE) {
-            const chunk = instructions.slice(i, i + CHUNK_SIZE);
-            const { blockhash } = await connection.getLatestBlockhash('confirmed');
-            const vTx = new VersionedTransaction(new TransactionMessage({
-                payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions: chunk
-            }).compileToV0Message());
-            vTx.sign([signer.keypair]);
-            const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-            lastSig = sig;
-
-            let isConfirmed = false;
-            for (let j = 0; j < 15; j++) {
-                await new Promise(r => setTimeout(r, 1000));
-                const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-                if (status?.value && !status.value.err) { isConfirmed = true; break; }
-            }
-            if (isConfirmed) confirmedTxs++;
-        }
-
-        if (confirmedTxs === 0) return { success: false, message: "All transaction batches dropped by the network." };
-
-        await prisma.guildMembership.updateMany({
-            where: { guildId, user: { vaultAddress: { in: top50.map(m => m?.walletAddress).filter((w): w is string => !!w && w !== 'Unknown') } } },
-            data: { airdropsReceivedSol: { increment: perMember } }
-        }).catch(() => {});
-
-        return { success: true, message: `Airdropped ${perMember.toFixed(4)} SOL to ${top50.length} members.`, signature: lastSig };
-    } catch (e: any) {
-        return { success: false, message: e.message || "Airdrop failed." };
-    } finally {
-        if (lock) await (lock as any).release();
-    }
-}
 
 export async function executeTieredAirdrop(telegramId: string, guildId: string, top3Sol: number, next7Sol: number, ranks11to50Sol: number): Promise<{ success: boolean; message: string; signature?: string }> {
     let lock;

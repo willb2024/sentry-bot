@@ -12,19 +12,16 @@ const redisOptions: RedisOptions = {
   maxRetriesPerRequest: null,
   retryStrategy(times) {
     const delay = Math.min(times * 200, 3000);
-    console.warn(`[REDIS] Reconnecting in ${delay}ms... (Attempt ${times})`);
     return delay;
   },
-  reconnectOnError(err) {
-    console.error("🔴 [REDIS RECONNECT ERROR]:", err.message);
-    return true; // always attempt to reconnect
+  reconnectOnError() {
+    return true; 
   },
-  // --- CRITICAL FIXES for connection stability ---
-  keepAlive: 10000,           // send TCP keepalive every 10s
-  connectTimeout: 10000,      // 10s connection timeout
-  lazyConnect: false,         // connect immediately
+  keepAlive: 10000,           
+  connectTimeout: 10000,      
+  lazyConnect: false,         
   enableReadyCheck: true,
-  // ------------------------------------------------
+  enableAutoPipelining: true,
 };
 
 export const redis = new Redis(redisUrl as string, redisOptions);
@@ -41,7 +38,7 @@ redis.on('reconnecting', () => {
   console.warn('🔄 [REDIS] Attempting to reconnect...');
 });
 
-// Optional: export a helper to check health
+// 🟢 EXPORT checkRedisHealth (Resolves ts(2305) & ts(2339) in index.ts)
 export async function checkRedisHealth(): Promise<boolean> {
   try {
     const pong = await redis.ping();
@@ -51,7 +48,7 @@ export async function checkRedisHealth(): Promise<boolean> {
   }
 }
 
-// 🟢 FIX: Heartbeat ping to keep cloud provider TCP connections alive permanently
+// 🟢 Keep connection alive with 30s heartbeat ping
 setInterval(async () => {
   try { await redis.ping(); } catch (_) {}
 }, 30000);

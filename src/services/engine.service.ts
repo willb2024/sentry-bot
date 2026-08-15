@@ -1,5 +1,13 @@
 // src/services/engine.service.ts
-import { PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, Keypair, LAMPORTS_PER_SOL, Connection } from '@solana/web3.js';
+import { 
+    PublicKey, 
+    SystemProgram, 
+    VersionedTransaction, 
+    TransactionMessage, 
+    Keypair, 
+    LAMPORTS_PER_SOL, 
+    Connection 
+} from '@solana/web3.js';
 import { prisma } from '../lib/prisma.js'; 
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
@@ -57,7 +65,7 @@ function resolveViaDoh(hostname: string): Promise<string | null> {
             servername: 'dns.google',
             rejectUnauthorized: true,
             headers: { 'Accept': 'application/dns-json' },
-            timeout: 5000,
+            timeout: 4000,
         }, (res) => {
             let data = '';
             res.on('data', (chunk) => { data += chunk; });
@@ -102,7 +110,11 @@ const activeAgent = new https.Agent({
     keepAlive: true,
 });
 
-const axiosClient = axios.create({ httpsAgent: activeAgent });
+// Global 5-second timeout on all outgoing HTTP requests
+export const axiosClient = axios.create({ 
+    httpsAgent: activeAgent,
+    timeout: 5000 
+});
 
 export async function getDynamicPriorityFee(priorityLevel: string, customPriorityFee: number): Promise<number> {
     if (priorityLevel === 'ECO') return 500_000;
@@ -128,7 +140,7 @@ export async function getDynamicPriorityFee(priorityLevel: string, customPriorit
 }
 
 const API_HEADERS = {
-    'User-Agent': 'Mozilla/5.0',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
     'Accept': 'application/json'
 };
 
@@ -146,7 +158,6 @@ const JITO_TIP_ACCOUNTS = [
 let cachedBlockhash: { blockhash: string; lastValidBlockHeight: number } | null = null;
 connection.getLatestBlockhash('confirmed').then(b => { cachedBlockhash = b; }).catch(() => {});
 
-// Push into global array for graceful shutdown
 declare global { var _sentryIntervals: NodeJS.Timeout[]; }
 if (!global._sentryIntervals) global._sentryIntervals = [];
 
@@ -488,7 +499,7 @@ async function fetchApiTransaction(
     } catch (e: any) { return { buffer: null, errorLog: `Routing Fault: ${e.message}` }; }
 }
 
-async function buildTipAndFeeTransaction(
+export async function buildTipAndFeeTransaction(
     payer: Keypair, telegramId: string, expectedSolVolume: number,
     priorityLevel: string = "FAST", customPriorityFee: number = 0.001,
     isBumper: boolean = false, blockhash: string,
@@ -496,7 +507,12 @@ async function buildTipAndFeeTransaction(
 ): Promise<VersionedTransaction | null> {
     try {
         const platformFeeRate = feeRate ?? await getPlatformFeeRate(telegramId); 
-        const feeLamports = BigInt(Math.round((expectedSolVolume * 1_000_000_000) * platformFeeRate));
+        
+        // Overflow protection: Clamped calculation with BigInt
+        const safeVolume = Math.min(Math.max(0, expectedSolVolume), 10_000);
+        let feeLamports = BigInt(Math.round((safeVolume * 1_000_000_000) * platformFeeRate));
+        if (feeLamports > 50_000_000_000n) feeLamports = 50_000_000_000n; // Hard cap fee at 50 SOL
+
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
 
         let tipLamports = 100_000;
@@ -584,19 +600,16 @@ export async function executeSnipe(
         }
 
         let raydiumPoolIdToUse: string | undefined = raydiumPoolId;
-        let routeMode = "Standard";
         if (user.enableSOR && !raydiumPoolId) {
-            routeMode = "SOR (4-Pool Routing)";
             raydiumPoolIdToUse = undefined; 
-        } else {
-            routeMode = "Fast (Direct Jupiter)";
         }
         
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
 
+        // Decrypt key with strict null safety check
         const rawW1 = decryptKey(user.turnkeySubOrgId);
-        if (!rawW1) return { success: false, message: "Decryption Failed." };
+        if (!rawW1) return { success: false, message: "Decryption Failed: Primary wallet key could not be decrypted." };
         
         const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
         if (user.activeWallets >= 2 && user.pk2) { const pk = decryptKey(user.pk2); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
@@ -620,9 +633,12 @@ export async function executeSnipe(
                 return { success: false, index };
             }
 
+            const rawPkEncrypted = index === 0 ? user.turnkeySubOrgId : user[`pk${index+1}` as keyof typeof user];
+            const pkEncrypted = typeof rawPkEncrypted === 'string' ? rawPkEncrypted : undefined;
+
             const apiRes = await fetchApiTransaction(
                 'buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, 
-                selectedSlippage, priorityLevel, customPriorityFee, undefined, raydiumPoolIdToUse, user.enableSOR ?? true
+                selectedSlippage, priorityLevel, customPriorityFee, pkEncrypted, raydiumPoolIdToUse, user.enableSOR ?? true
             );
 
             if (!apiRes.buffer) { 
@@ -756,8 +772,9 @@ export async function executeExit(
         const customPriorityFee = user.customPriorityFee || 0.001;
         const useSOR = user.enableSOR ?? true;
 
+        // Strict null check on decryption
         const rawW1 = decryptKey(user.turnkeySubOrgId);
-        if (!rawW1) return { success: false, message: "Decryption Failed." };
+        if (!rawW1) return { success: false, message: "Decryption Failed: Primary wallet key could not be decrypted." };
 
         const wallets: Keypair[] = [Keypair.fromSecretKey(bs58.decode(rawW1))];
         if (user.activeWallets >= 2 && user.pk2) { const pk = decryptKey(user.pk2); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
@@ -1004,7 +1021,6 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
     return first ? { swapBase64: first.swapBase64, tipBase64: first.tipBase64 } : null;
 }
 
-// 🟢 NEW: LIMIT ORDER WATCHER LOGIC EXPORTED FOR BULLMQ WORKER
 export async function processLimitOrders(bot: any) {
     const { prisma } = await import('../lib/prisma.js');
     const cachedLimitOrders = await prisma.activeOrder.findMany({

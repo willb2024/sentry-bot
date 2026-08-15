@@ -10,7 +10,28 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     
+
+
+    
     <script>
+
+
+
+// 🟢 FIX 2 (Final Audit): Global fetch interceptor to gracefully handle 24h Telegram auth token expiry
+const originalFetch = window.fetch;
+    window.fetch = async function(...args) {
+        try {
+            const res = await originalFetch.apply(this, args);
+            if (res.status === 403) {
+                tg.ready();
+                location.reload();
+            }
+            return res;
+        } catch (e) {
+            throw e;
+        }
+    };
+    
         tailwind.config = {
             theme: {
                 extend: {

@@ -1,7 +1,20 @@
 // src/services/grpc.service.ts
 import Client from '@triton-one/yellowstone-grpc';
-import { executeSnipe, executeExit, generatePreSignedExitTx, sendToJitoBundle, getCachedTokenPrice } from './engine.service.js';
-import { addTrailingStopToMemory, getAllActiveGuards, updateHighestSeen, cancelAllGuardsForToken, updateEntryPrice, TrailingOrder } from './order.service.js';
+import { 
+    executeSnipe, 
+    executeExit, 
+    generatePreSignedExitTx, 
+    sendToJitoBundle, 
+    getCachedTokenPrice 
+} from './engine.service.js';
+import { 
+    addTrailingStopToMemory, 
+    getAllActiveGuards, 
+    updateHighestSeen, 
+    cancelAllGuardsForToken, 
+    updateEntryPrice, 
+    TrailingOrder 
+} from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { generatePnlCard } from './image.service.js';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
@@ -21,7 +34,7 @@ dotenv.config();
 
 const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
 const GRPC_URL = `https://atlas-mainnet.helius-rpc.com`;
-const PUMP_FUN_PROGRAM  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+const PUMP_FUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 const METEORA_DLMM_PROGRAM = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
 const METEORA_DBC_PROGRAM = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
@@ -29,18 +42,16 @@ const METEORA_DAMM_V2_PROGRAM = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG";
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 const recentlySnipedTokens = new Set<string>();
-let pollerStarted  = false;
+let pollerStarted = false;
 export let isGrpcDisabled = false;
 let raydiumWsFallbackStarted = false;
 const activeSubscriptions = new Map<string, number>(); 
-let isPolling = false;
 
-export let cachedSolUsdPrice = 150.0;
+export let cachedSolUsdPrice = 156.93;
 export let isPriceReady = false; 
 
-export const recentNewMints: { mint: string, symbol: string, creator: string, firstSeenAt: number }[] = [];
+export const recentNewMints: { mint: string; symbol: string; creator: string; firstSeenAt: number }[] = [];
 
-// Interval Tracker
 declare global { var _sentryIntervals: NodeJS.Timeout[]; }
 if (!global._sentryIntervals) global._sentryIntervals = [];
 
@@ -51,7 +62,7 @@ function trackNewMint(mint: string, symbol: string = "UNKNOWN", creator: string 
 
 export function getRecentNewMints() {
     const now = Date.now();
-    while(recentNewMints.length > 0 && now - recentNewMints[0].firstSeenAt > 30 * 60 * 1000) {
+    while (recentNewMints.length > 0 && now - recentNewMints[0].firstSeenAt > 30 * 60 * 1000) {
         recentNewMints.shift(); 
     }
     return [...recentNewMints];
@@ -61,12 +72,12 @@ export async function syncInitialSolPrice() {
     try {
         const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
         const price = res.data?.data?.[WSOL_MINT]?.price;
-        if (price && price > 0) {
+        if (price && parseFloat(price) > 0) {
             cachedSolUsdPrice = parseFloat(price);
             logger.info(`🟢 [HFT ENGINE] Synchronized SOL boot price: $${cachedSolUsdPrice} USD.`);
         }
     } catch (e) {
-        logger.warn("⚠️ [HFT ENGINE] Boot price check timed out, using default $150.0.");
+        logger.warn("⚠️ [HFT ENGINE] Boot price check timed out, using fallback $156.93.");
     } finally {
         isPriceReady = true; 
     }
@@ -77,7 +88,7 @@ global._sentryIntervals.push(setInterval(async () => {
     try {
         const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
         const price = res.data?.data?.[WSOL_MINT]?.price;
-        if (price && price > 0) cachedSolUsdPrice = parseFloat(price);
+        if (price && parseFloat(price) > 0) cachedSolUsdPrice = parseFloat(price);
     } catch (_) {}
 }, 15_000));
 
@@ -95,13 +106,14 @@ let cachedLimitOrders: any[] = [];
 global._sentryIntervals.push(setInterval(async () => {
     try {
         cachedActiveGuards = await getAllActiveGuards();
-        cachedLimitOrders  = await prisma.activeOrder.findMany({
+        cachedLimitOrders = await prisma.activeOrder.findMany({
             where: { orderType: { in: ['LIMIT', 'ALERT'] }, isActive: true },
             include: { user: true }
         });
     } catch (_) {}
 }, 2_000));
 
+// Pre-sign exit transactions for sub-millisecond execution
 global._sentryIntervals.push(setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
         if (await redis.get(`lock:guard_exec:${guard.id}`)) return;
@@ -162,7 +174,7 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     return 0;
 }
 
-async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: boolean, signature?: string, message?: string }> {
+async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: boolean; signature?: string; message?: string }> {
     try {
         const cachedPayload = await redis.get(`presigned_exit_multi:${guard.id}`);
         if (cachedPayload) {
@@ -194,7 +206,7 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
     return await executeExit(guard.telegramId, guard.tokenAddress, 100);
 }
 
-// Replace checkAndTriggerGuard inside src/services/grpc.service.ts
+// 🟢 Unified Guard Evaluator for both Live and Simulation modes
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
     const { isSimulationActive, simExecuteExit, generateSimSignature } = await import('./simulation.service.js');
     const isSim = await isSimulationActive(guardSnapshot.telegramId);
@@ -215,7 +227,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         const entryPrice = guard.entryPrice || currentPriceNative;
         if (entryPrice <= 0 || currentPriceNative <= 0) return;
 
-        // Check Max Hold Minutes Expiry
+        // 1. Max Hold Time Exit
         if (guard.maxHoldMinutes && guard.createdAt) {
             const ageMinutes = (Date.now() - new Date(guard.createdAt).getTime()) / 60000;
             if (ageMinutes >= guard.maxHoldMinutes) {
@@ -223,80 +235,118 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 if (isSim) {
                     await simExecuteExit(guard.telegramId, guard.tokenAddress, 100, pnlPercent);
                 } else {
-                    await executeExit(guard.telegramId, guard.tokenAddress, 100);
+                    await triggerInstantExit(guard);
                 }
                 await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                 try {
-                    await bot.telegram.sendMessage(guard.telegramId, 
-                        `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guard.tokenAddress}</code>\nMax hold time reached. Sold at market.\nPnL: <b>${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>`, 
-                        { parse_mode: 'HTML' }
+                    await bot.telegram.sendMessage(
+                        guard.telegramId, 
+                        `⏱️ <b>TIME-BASED EXIT TRIGGERED</b>\n\nToken: <code>${guard.tokenAddress}</code>\nMax hold time of ${guard.maxHoldMinutes}m reached. Position sold at market.\nPnL: <b>${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>`, 
+                        { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                     );
                 } catch (_) {}
                 return;
             }
         }
 
-        // Take Profit Check
+        // 2. Take Profit Trigger
         if (guard.takeProfitPercent && entryPrice > 0) {
             const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
             if (profitPercent >= guard.takeProfitPercent) {
+                let exitSig = "";
                 if (isSim) {
-                    await simExecuteExit(guard.telegramId, guard.tokenAddress, 100, profitPercent);
+                    const res = await simExecuteExit(guard.telegramId, guard.tokenAddress, 100, profitPercent);
+                    exitSig = res.signature || generateSimSignature();
                 } else {
-                    await triggerInstantExit(guard);
+                    const res = await triggerInstantExit(guard);
+                    exitSig = res.signature || "";
                 }
                 await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
-                
+                await redis.del(`balance_cache:${guard.telegramId}`);
+
                 try {
                     const user = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
                     const imageBuffer = await generatePnlCard(guard.tokenAddress, profitPercent, user?.referralCode ?? undefined);
-                    const caption = `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0,8)}...</code>\nNet PnL: <b>+${profitPercent.toFixed(2)}%</b>\nStatus: 🟢 Auto-Sold 100% via Jito Bundle.`;
-                    await bot.telegram.sendPhoto(guard.telegramId, { source: imageBuffer }, { caption, parse_mode: 'HTML' });
-                } catch (_) {}
+                    const imgId = crypto.randomBytes(8).toString('hex');
+                    await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
+
+                    const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
+                    const shareUrl = `${hostUrl}/share/${imgId}?ref=${user?.referralCode || ''}`;
+                    const tweetText = encodeURIComponent(`Just secured a gain of +${profitPercent.toFixed(1)}% on $${guard.tokenAddress.substring(0,6).toUpperCase()} using Sentry Terminal ⚡\n\n${shareUrl}`);
+                    const twitterBtn = { inline_keyboard: [[{ text: '🐦 Share to X', url: `https://twitter.com/intent/tweet?text=${tweetText}` }]] };
+
+                    const caption = `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\n` +
+                        `Token: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n` +
+                        `Net Profit: <b>+${profitPercent.toFixed(1)}%</b>\n` +
+                        `Status: 🟢 Auto-Sold 100% via Instant Jito Bundle.\n` +
+                        `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
+
+                    await bot.telegram.sendPhoto(guard.telegramId, { source: imageBuffer }, { caption, parse_mode: 'HTML', reply_markup: twitterBtn });
+                } catch (e) {}
                 return;
             }
         }
 
-        // High-Water Mark Trailing Stop Loss Check
+        // 3. High-Water Mark Trailing Stop-Loss
         if (guard.highestSeenPrice === 0 || currentPriceNative > guard.highestSeenPrice) {
             await updateHighestSeen(guard.id, currentPriceNative).catch(() => {});
         } else {
             const dropPercent = ((guard.highestSeenPrice - currentPriceNative) / guard.highestSeenPrice) * 100;
             if (dropPercent >= guard.trailingPercent) {
                 const totalPnlPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
+                let exitSig = "";
                 if (isSim) {
-                    await simExecuteExit(guard.telegramId, guard.tokenAddress, 100, totalPnlPercent);
+                    const res = await simExecuteExit(guard.telegramId, guard.tokenAddress, 100, totalPnlPercent);
+                    exitSig = res.signature || generateSimSignature();
                 } else {
-                    await triggerInstantExit(guard);
+                    const res = await triggerInstantExit(guard);
+                    exitSig = res.signature || "";
                 }
                 await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
+                await redis.del(`balance_cache:${guard.telegramId}`);
 
                 try {
                     const user = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
                     const imageBuffer = await generatePnlCard(guard.tokenAddress, totalPnlPercent, user?.referralCode ?? undefined);
-                    const caption = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0,8)}...</code>\nConfigured Drop: <b>-${guard.trailingPercent}%</b>\nRealized PnL: <b>${totalPnlPercent >= 0 ? '+' : ''}${totalPnlPercent.toFixed(2)}%</b>`;
+                    const imgId = crypto.randomBytes(8).toString('hex');
+                    await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
+
+                    const caption = `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\n` +
+                        `Token: <code>${guard.tokenAddress.substring(0, 8)}...</code>\n` +
+                        `Configured Drop: <b>-${guard.trailingPercent}%</b>\n` +
+                        `Actual Peak Drop: <b>-${dropPercent.toFixed(1)}%</b>\n` +
+                        `Realized PnL: <b>${totalPnlPercent >= 0 ? '+' : ''}${totalPnlPercent.toFixed(1)}%</b>\n\n` +
+                        `Status: 🟢 Auto-Sold 100% via Instant Jito Bundle.\n` +
+                        `🔗 <a href="https://solscan.io/tx/${exitSig}">View on Solscan</a>`;
+
                     await bot.telegram.sendPhoto(guard.telegramId, { source: imageBuffer }, { caption, parse_mode: 'HTML' });
-                } catch (_) {}
+                } catch (e) {}
             }
         }
     } finally {
-        if (lock) await (lock as any).release();
+        if (lock) await (lock as any).release().catch(() => {});
     }
 }
 
-async function fetchBulkTokenPrices(mints: string[]): Promise<Record<string, number>> {
+// 🟢 Isolated 20-mint batch pricing to prevent dropped batches on single-item failure [1]
+export async function fetchBulkTokenPrices(mints: string[]): Promise<Record<string, number>> {
     if (mints.length === 0) return {};
-    try {
-        const { default: axios } = await import('axios');
-        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${mints.join(',')}`, { timeout: 2000 });
-        const data = res.data?.data || {};
-        const result: Record<string, number> = {};
-        for (const mint of mints) result[mint] = parseFloat(data[mint]?.price || '0');
-        return result;
-    } catch { return {}; }
+    const result: Record<string, number> = {};
+
+    for (let i = 0; i < mints.length; i += 20) {
+        const chunk = mints.slice(i, i + 20);
+        try {
+            const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk.join(',')}`, { timeout: 2000 });
+            const data = res.data?.data || {};
+            for (const mint of chunk) {
+                result[mint] = parseFloat(data[mint]?.price || '0');
+            }
+        } catch (_) {}
+    }
+    return result;
 }
 
-// Renamed and exported for BullMQ
+// Exported BullMQ Guard Queue Worker Processor
 export async function processGuardOrders(bot: any) {
     try {
         const activeGuards = cachedActiveGuards; 
@@ -321,9 +371,6 @@ export async function processGuardOrders(bot: any) {
         }));
 
         await Promise.allSettled(activeGuards.map(async guard => {
-            const isSim = simFlags.get(guard.telegramId);
-            if (isSim) return checkAndTriggerGuard(guard, 1.0, bot); 
-            
             let livePrice = prices[guard.tokenAddress] ?? getLivePriceSol(guard.tokenAddress);
             if (livePrice == null || livePrice <= 0) {
                 const { getCachedTokenPrice } = await import('./engine.service.js');
@@ -362,9 +409,11 @@ export function startPumpFunPolling() {
 }
 
 let isWsConnecting = false;
+let wsReconnectDelay = 2000;
 let wsHeartbeat: NodeJS.Timeout | null = null;
 let lastMessageAt = Date.now();
 
+// 🟢 WebSocket Stream with exponential backoff reconnection
 function connectPumpPortalStream(bot: any) {
     if (isWsConnecting) return;
     isWsConnecting = true;
@@ -375,8 +424,11 @@ function connectPumpPortalStream(bot: any) {
 
     ws.on('open', () => {
         isWsConnecting = false;
+        wsReconnectDelay = 2000; // Reset backoff on successful connection
         logger.info("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+        }
         
         lastMessageAt = Date.now();
         if (wsHeartbeat) clearInterval(wsHeartbeat);
@@ -400,11 +452,12 @@ function connectPumpPortalStream(bot: any) {
         } catch (_) {}
     });
 
-    ws.on('error', (err: any) => { });
+    ws.on('error', () => {});
     ws.on('close', () => {
         isWsConnecting = false;
         if (wsHeartbeat) clearInterval(wsHeartbeat);
-        setTimeout(() => connectPumpPortalStream(bot), 30_000);
+        setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
+        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 60_000); // Back off up to 60s
     });
 }
 
@@ -458,7 +511,15 @@ export async function triggerAutoSnipes(
 
                 if (liveConfig.minScore > 0) {
                     try {
-                        const { computeTokenScore, getModelScore, getSentimentScore, getDevReputation, checkLpLockStatus, trackHolderVelocity, simulateSellability } = await import('./caller.service.js');
+                        const { 
+                            computeTokenScore, 
+                            getModelScore, 
+                            getSentimentScore, 
+                            getDevReputation, 
+                            checkLpLockStatus, 
+                            trackHolderVelocity, 
+                            simulateSellability 
+                        } = await import('./caller.service.js');
                         const { consumeSniperCredit } = await import('./credits.service.js');
                         const { checkTokenRugRisk, checkRecentMevActivity } = await import('./price.service.js');
 
@@ -469,7 +530,7 @@ export async function triggerAutoSnipes(
                         if (mode === 'PUMP') {
                             const { getBondingCurveAddress } = await import('./price.service.js');
                             const curvePda = getBondingCurveAddress(mintCa);
-                            const accInfo  = await connection.getAccountInfo(new PublicKey(curvePda));
+                            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
                             if (accInfo?.data) {
                                 const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
                                 if (buf.length >= 40) {
@@ -480,13 +541,16 @@ export async function triggerAutoSnipes(
                                 }
                             }
                         } else {
-                            const { default: axios } = await import('axios');
                             const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 }).catch(() => null);
                             const pair = res?.data?.pairs?.[0];
                             if (pair) { liqUsd = pair.liquidity?.usd || 0; volUsd = pair.volume?.h24 || 0; priceChangeM5 = pair.priceChange?.m5 || 0; }
                         }
 
-                        let isRug = false, hasMev = false, devRep: any = { launchCount: 0, avgRugScore: 0, isKnownRugger: false }, lpLock: any = { locked: false, burned: false, lockPct: 0 }, velocity: any = { growthRate: 0, uniqueBuyers5m: 0 }, sellability: any = { sellable: true, estimatedTaxPct: 0 };
+                        let isRug = false, hasMev = false;
+                        let devRep: any = { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
+                        let lpLock: any = { locked: false, burned: false, lockPct: 0 };
+                        let velocity: any = { growthRate: 0, uniqueBuyers5m: 0 };
+                        let sellability: any = { sellable: true, estimatedTaxPct: 0 };
 
                         if (liveConfig.useDeepScoring) {
                             [isRug, hasMev, devRep, lpLock, velocity, sellability] = await Promise.all([
@@ -520,6 +584,7 @@ export async function triggerAutoSnipes(
 
                 let snipeAmount = liveConfig.amountSol; 
 
+                // Conviction-Weighted Dynamic Sizing Math
                 if (liveConfig.enableDynamicScaling) {
                     const normalizedScore = Math.min(100, Math.max(10, score)) / 100;
                     const exponent = liveConfig.scaleExponent || 2.0;
@@ -557,15 +622,22 @@ export async function triggerAutoSnipes(
                 if (!isSnipeLocked) return;
 
                 const executionSlippage = liveConfig.useDeepScoring ? (liveConfig.user.slippagePercent + 5) : undefined;
-                const result = await executeSnipe(liveConfig.user.telegramId, mintCa, snipeAmount, 'buy', undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'SNIPER');
+                const result = await executeSnipe(
+                    liveConfig.user.telegramId, mintCa, snipeAmount, 'buy', 
+                    undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'SNIPER'
+                );
 
                 if (result.success) {
                     const spent = result.volumeSpent || intendedSpend;
                     
                     await addSessionSpend(liveConfig.user.telegramId, spent, 'live');
-                    if (sessionId) await redis.rpush(`live:session_trades:${sessionId}`, JSON.stringify({ mint: mintCa, amountInSol: spent, realizedPnlSol: 0 }));
+                    if (sessionId) {
+                        await redis.rpush(`live:session_trades:${sessionId}`, JSON.stringify({ 
+                            mint: mintCa, amountInSol: spent, realizedPnlSol: 0 
+                        }));
+                    }
 
-                    await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data:  { totalSpentSol: { increment: spent } } });
+                    await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { totalSpentSol: { increment: spent } } });
 
                     const entryPrice = await fetchLiveEntryPrice(mintCa);
                     const { addTrailingStopToMemory } = await import('./order.service.js');
@@ -577,7 +649,10 @@ export async function triggerAutoSnipes(
                     try {
                         const { buildAuditTrailMessage } = await import('./caller.service.js');
                         const auditStats = { ageMins, volume: volUsd, liquidity: liqUsd, priceChangeM5 };
-                        const baseMsg = buildAuditTrailMessage(mintCa, score, auditStats, spent, liveConfig.autoTrailingDropPercent, liveConfig.autoTakeProfitPercent || 'OFF', false);
+                        const baseMsg = buildAuditTrailMessage(
+                            mintCa, score, auditStats, spent, 
+                            liveConfig.autoTrailingDropPercent, liveConfig.autoTakeProfitPercent || 'OFF', false
+                        );
                         const finalMsg = `${baseMsg}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
                         await bot.telegram.sendMessage(liveConfig.user.telegramId, finalMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                     } catch (_) {}
@@ -587,15 +662,22 @@ export async function triggerAutoSnipes(
                         const fundWarnKey = `warn_funds:${liveConfig.user.telegramId}`;
                         if (!(await redis.get(fundWarnKey))) {
                             await redis.set(fundWarnKey, '1', 'EX', 600);
-                            try { await bot.telegram.sendMessage(liveConfig.user.telegramId, `🔴 <b>AUTO-SNIPER FAILED: INSUFFICIENT FUNDS</b>\n\nTarget: <code>${mintCa}</code>`, { parse_mode: 'HTML' }); } catch (_) {}
+                            try { 
+                                await bot.telegram.sendMessage(
+                                    liveConfig.user.telegramId, 
+                                    `🔴 <b>AUTO-SNIPER FAILED: INSUFFICIENT FUNDS</b>\n\nTarget: <code>${mintCa}</code>`, 
+                                    { parse_mode: 'HTML' }
+                                ); 
+                            } catch (_) {}
                         }
                     }
                 }
-            } catch (e: any) { }
+            } catch (e: any) {}
         }, delayMs);
     }
 }
 
+// 🟢 Yellowstone gRPC Stream for Anti-Rug Shield Front-Running
 export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
         connectPumpPortalStream(bot);
@@ -612,15 +694,16 @@ export async function igniteYellowstoneStream(bot: any) {
 
     try {
         const GrpcClient = (Client as any).default || Client;
-        const client     = new (GrpcClient as any)(GRPC_URL, HELIUS_KEY, {});
-        const stream     = await client.subscribe();
+        const client = new (GrpcClient as any)(GRPC_URL, HELIUS_KEY, {});
+        const stream = await client.subscribe();
 
         stream.on("data", async (data: any) => {
             if (!data.transaction?.transaction) return;
             try {
-                const tx   = data.transaction.transaction;
+                const tx = data.transaction.transaction;
                 const logs = tx.meta?.logMessages || [];
 
+                // Detect developer liquidity pulls in mempool before finality
                 if (logs.some((log: string) => log.includes("Instruction: Withdraw") || log.includes("Instruction: RemoveLiquidity"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
                     const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
@@ -636,13 +719,18 @@ export async function igniteYellowstoneStream(bot: any) {
                             for (const order of exposedUsers) {
                                 const { executeExit } = await import('./engine.service.js');
                                 executeExit(order.user.telegramId, tokenMint, 100, true, 'ANTI_RUG_SHIELD');
-                                bot.telegram.sendMessage(order.user.telegramId, `🚨 <b>ANTI-RUG SHIELD ACTIVATED!</b>\n\nDeveloper liquidity pull detected on <code>${tokenMint}</code>.`, { parse_mode: 'HTML' }).catch(()=>{});
+                                bot.telegram.sendMessage(
+                                    order.user.telegramId, 
+                                    `🚨 <b>ANTI-RUG SHIELD ACTIVATED!</b>\n\nDeveloper liquidity pull detected on <code>${tokenMint}</code>. Emergency exit broadcasted.`, 
+                                    { parse_mode: 'HTML' }
+                                ).catch(() => {});
                             }
                         }
                     }
                 }
             } catch (_) {}
         });
+
         stream.on("error", (err: any) => {
             if (err.message.includes("401") || err.message.includes("UNAUTHENTICATED") || err.message.includes("Free Tier")) {
                 if (!isGrpcDisabled) {
@@ -653,7 +741,8 @@ export async function igniteYellowstoneStream(bot: any) {
                 connectRaydiumFallbackWatcher(bot);
                 return;
             }
-            stream.destroy(); setTimeout(() => igniteYellowstoneStream(bot), 3_000);
+            stream.destroy(); 
+            setTimeout(() => igniteYellowstoneStream(bot), 3_000);
         });
 
         stream.on("end", () => {
@@ -662,7 +751,8 @@ export async function igniteYellowstoneStream(bot: any) {
         });
 
         const request = {
-            accounts: {}, slots: {},
+            accounts: {}, 
+            slots: {},
             transactions: {
                 pumpfun: { accountInclude: [PUMP_FUN_PROGRAM], accountExclude: [], accountRequired: [] },
                 raydium: { accountInclude: [RAYDIUM_AMM_PROGRAM], accountExclude: [], accountRequired: [] },
@@ -670,7 +760,12 @@ export async function igniteYellowstoneStream(bot: any) {
                 meteora_dbc: { accountInclude: [METEORA_DBC_PROGRAM], accountExclude: [], accountRequired: [] },
                 meteora_damm: { accountInclude: [METEORA_DAMM_V2_PROGRAM], accountExclude: [], accountRequired: [] }
             },
-            transactionsStatus: {}, blocks: {}, blocksMeta: {}, entry: {}, commitment: 1, accountsDataSlice: []
+            transactionsStatus: {}, 
+            blocks: {}, 
+            blocksMeta: {}, 
+            entry: {}, 
+            commitment: 1, 
+            accountsDataSlice: []
         };
 
         stream.write(request);

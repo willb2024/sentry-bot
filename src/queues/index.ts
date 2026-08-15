@@ -6,20 +6,54 @@ import { processGuardOrders } from '../services/grpc.service.js';
 import { processLimitOrders } from '../services/engine.service.js';
 import { logger } from '../lib/logger.js';
 
-// Initialize Queues
 export const dcaQueue = new Queue('dca', { connection: redis });
 export const guardQueue = new Queue('guard', { connection: redis });
 export const limitQueue = new Queue('limit', { connection: redis });
 
-// Initialize Workers
-new Worker('dca', async (job: Job) => {
-    if (job.data.bot) await processDcaOrders(job.data.bot);
-}, { connection: redis }).on('error', err => logger.error('DCA Worker Error', { error: err.message }));
+function createWorker(name: string, processor: (job: Job) => Promise<void>) {
+    let worker: Worker | null = null;
 
-new Worker('guard', async (job: Job) => {
-    if (job.data.bot) await processGuardOrders(job.data.bot);
-}, { connection: redis }).on('error', err => logger.error('Guard Worker Error', { error: err.message }));
+    const create = () => {
+        worker = new Worker(name, async (job: Job) => {
+            try {
+                await processor(job);
+            } catch (error: any) {
+                logger.error(`${name} worker processing exception`, { error: error.message });
+                throw error;
+            }
+        }, { connection: redis });
 
-new Worker('limit', async (job: Job) => {
-    if (job.data.bot) await processLimitOrders(job.data.bot);
-}, { connection: redis }).on('error', err => logger.error('Limit Worker Error', { error: err.message }));
+        worker.on('error', (err) => {
+            logger.error(`🔴 [${name.toUpperCase()} WORKER ERROR]`, { error: err.message });
+            setTimeout(() => {
+                if (worker) {
+                    worker.close().catch(() => {});
+                    worker = null;
+                }
+                create();
+            }, 5000);
+        });
+
+        worker.on('closed', () => {
+            logger.warn(`⚠️ [${name.toUpperCase()} WORKER] Connection closed. Restarting worker...`);
+            setTimeout(create, 5000);
+        });
+
+        return worker;
+    };
+
+    return create();
+}
+
+// 🟢 Auto-healing workers with auto-recovery
+createWorker('dca', async (job) => { 
+    if (job.data?.bot) await processDcaOrders(job.data.bot); 
+});
+
+createWorker('guard', async (job) => { 
+    if (job.data?.bot) await processGuardOrders(job.data.bot); 
+});
+
+createWorker('limit', async (job) => { 
+    if (job.data?.bot) await processLimitOrders(job.data.bot); 
+});
