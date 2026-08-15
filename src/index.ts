@@ -6582,6 +6582,7 @@ app.post('/api/risk-score', async (req, res) => {
 });
 
 // 🟢 FIXED: /api/performance (Restored so Active Strategies never show +0.000 SOL)
+// Replace app.post('/api/performance', ...) in src/index.ts
 app.post('/api/performance', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -6593,6 +6594,7 @@ app.post('/api/performance', async (req, res) => {
         const isSim = await isSimulationActive(telegramId);
 
         if (isSim) {
+            // Include forged defaults if present
             const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
             if (forgedRaw) {
                 const f = JSON.parse(forgedRaw);
@@ -6600,10 +6602,17 @@ app.post('/api/performance', async (req, res) => {
                 if (f.strat2Name) strategyStats[f.strat2Name] = { totalPnl: f.strat2Pnl || 0, totalVolume: 0, count: 0 };
             }
 
+            // Dynamically aggregate real simulated trades (Sniper, Manual, DCA, COPY_TRADE, LIMIT)
             const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
             simTrades.forEach((t: any) => {
                 if (!t.isBuy) {
-                    const s = t.strategy || 'Sniper Engine';
+                    let s = t.strategy || 'Sniper Engine';
+                    if (s === 'MANUAL') s = 'Manual / Direct';
+                    if (s === 'SNIPER') s = 'Sniper Engine';
+                    if (s === 'COPY_TRADE') s = 'Copy Trade';
+                    if (s === 'DCA') s = 'DCA Engine';
+                    if (s === 'LIMIT') s = 'Limit Order';
+
                     if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
                     strategyStats[s].totalPnl += (t.realizedPnlSol || 0);
                     strategyStats[s].totalVolume += (t.amountInSol || 0);
@@ -6618,7 +6627,13 @@ app.post('/api/performance', async (req, res) => {
                     select: { strategy: true, realizedPnlSol: true, amountInSol: true }
                 });
                 trades.forEach(t => {
-                    const s = t.strategy || 'MANUAL';
+                    let s = t.strategy || 'Manual / Direct';
+                    if (s === 'MANUAL') s = 'Manual / Direct';
+                    if (s === 'SNIPER') s = 'Sniper Engine';
+                    if (s === 'COPY_TRADE') s = 'Copy Trade';
+                    if (s === 'DCA') s = 'DCA Engine';
+                    if (s === 'LIMIT') s = 'Limit Order';
+
                     if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
                     strategyStats[s].totalPnl += (t.realizedPnlSol || 0);
                     strategyStats[s].totalVolume += (t.amountInSol || 0);

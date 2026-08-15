@@ -51,7 +51,6 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     return 0;
 }
 
-// 🟢 FIX 4: Verified subscription state with graceful reconnection
 export async function syncCopyTradeListeners(bot: any) {
     try {
         const activeConfigs = await prisma.copyTradeConfig.findMany({
@@ -60,7 +59,6 @@ export async function syncCopyTradeListeners(bot: any) {
         });
         const targetWallets = [...new Set(activeConfigs.map(c => c.targetWallet))];
 
-        // Clean up unassigned wallets
         for (const [walletStr, subId] of activeWsListeners.entries()) {
             if (!targetWallets.includes(walletStr)) {
                 try { 
@@ -72,20 +70,7 @@ export async function syncCopyTradeListeners(bot: any) {
             }
         }
 
-        // Attach listeners to targets
         for (const walletStr of targetWallets) {
-            if (activeWsListeners.has(walletStr)) {
-                const existingSubId = activeWsListeners.get(walletStr);
-                try {
-                    // Check listener integrity
-                    if (existingSubId === undefined || existingSubId === null) {
-                        activeWsListeners.delete(walletStr);
-                    }
-                } catch (_) {
-                    activeWsListeners.delete(walletStr);
-                }
-            }
-
             if (!activeWsListeners.has(walletStr)) {
                 try {
                     const pubKey = new PublicKey(walletStr);
@@ -115,10 +100,14 @@ export async function syncCopyTradeListeners(bot: any) {
                                 const postAmt = Number(post.uiTokenAmount.uiAmount);
                                 
                                 if (postAmt > preAmt) {
-                                    tradeType = 'buy'; targetTokenMint = post.mint; break;
+                                    tradeType = 'buy'; 
+                                    targetTokenMint = post.mint; 
+                                    break;
                                 } else if (postAmt < preAmt && preAmt > 0) {
-                                    tradeType = 'sell'; targetTokenMint = post.mint;
-                                    sellPercentage = ((preAmt - postAmt) / preAmt) * 100; break;
+                                    tradeType = 'sell'; 
+                                    targetTokenMint = post.mint;
+                                    sellPercentage = ((preAmt - postAmt) / preAmt) * 100; 
+                                    break;
                                 }
                             }
                         }
@@ -137,24 +126,40 @@ export async function syncCopyTradeListeners(bot: any) {
                                     if (f.copyBuys === false) continue;
                                     const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
 
-                                    executeSnipe(follower.user.telegramId, targetTokenMint, sizeToTrade, 'buy', undefined, false, undefined, f.slippagePercent || undefined)
-                                        .then(async (res) => {
-                                            if (res.success) {
-                                                try {
-                                                    await addTrailingStopToMemory(
-                                                        follower.user.telegramId, targetTokenMint!, follower.autoTrailingDropPercent,
-                                                        sizeToTrade, entryPrice, follower.autoTakeProfitPercent || undefined
-                                                    );
-                                                } catch (guardErr) {}
-                                                try { 
-                                                    await bot.telegram.sendMessage(
-                                                        follower.user.telegramId, 
-                                                        `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nBought Token: <code>${targetTokenMint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
-                                                        { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                                                    ); 
-                                                } catch (_) {}
-                                            }
-                                        }).catch(() => {});
+                                    // 🟢 FIX: Set strategy to 'COPY_TRADE'
+                                    executeSnipe(
+                                        follower.user.telegramId,
+                                        targetTokenMint,
+                                        sizeToTrade,
+                                        'buy',
+                                        undefined,
+                                        false,
+                                        undefined,
+                                        f.slippagePercent || undefined,
+                                        0,
+                                        undefined,
+                                        'COPY_TRADE'
+                                    ).then(async (res) => {
+                                        if (res.success) {
+                                            try {
+                                                await addTrailingStopToMemory(
+                                                    follower.user.telegramId,
+                                                    targetTokenMint!,
+                                                    follower.autoTrailingDropPercent,
+                                                    sizeToTrade,
+                                                    entryPrice,
+                                                    follower.autoTakeProfitPercent || undefined
+                                                );
+                                            } catch (guardErr) {}
+                                            try { 
+                                                await bot.telegram.sendMessage(
+                                                    follower.user.telegramId, 
+                                                    `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nToken: <code>${targetTokenMint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
+                                                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                                                ); 
+                                            } catch (_) {}
+                                        }
+                                    }).catch(() => {});
                                 }
                             } 
                             else if (tradeType === 'sell' && sellPercentage >= 1) {
@@ -162,18 +167,24 @@ export async function syncCopyTradeListeners(bot: any) {
                                     const f: any = follower; 
                                     if (f.copySells === false) continue;
 
-                                    executeExit(follower.user.telegramId, targetTokenMint, sellPercentage)
-                                        .then(async (res) => {
-                                            if (res.success) {
-                                                try { 
-                                                    await bot.telegram.sendMessage(
-                                                        follower.user.telegramId, 
-                                                        `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${sellPercentage.toFixed(1)}%</b> of <code>${targetTokenMint}</code>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
-                                                        { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                                                    ); 
-                                                } catch (_) {}
-                                            }
-                                        }).catch(() => {});
+                                    // 🟢 FIX: Set strategy to 'COPY_TRADE'
+                                    executeExit(
+                                        follower.user.telegramId,
+                                        targetTokenMint,
+                                        sellPercentage,
+                                        false,
+                                        'COPY_TRADE'
+                                    ).then(async (res) => {
+                                        if (res.success) {
+                                            try { 
+                                                await bot.telegram.sendMessage(
+                                                    follower.user.telegramId, 
+                                                    `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${sellPercentage.toFixed(1)}%</b> of <code>${targetTokenMint}</code>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
+                                                    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+                                                ); 
+                                            } catch (_) {}
+                                        }
+                                    }).catch(() => {});
                                 }
                             }
                         }

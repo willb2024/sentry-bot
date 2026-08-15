@@ -1021,16 +1021,17 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
     return first ? { swapBase64: first.swapBase64, tipBase64: first.tipBase64 } : null;
 }
 
+// Replace processLimitOrders in src/services/engine.service.ts
 export async function processLimitOrders(bot: any) {
     const { prisma } = await import('../lib/prisma.js');
-    const cachedLimitOrders = await prisma.activeOrder.findMany({
+    const freshOrders = await prisma.activeOrder.findMany({
         where: { orderType: 'LIMIT', isActive: true },
         include: { user: true }
     });
 
-    if (cachedLimitOrders.length === 0) return;
+    if (freshOrders.length === 0) return;
 
-    for (const order of cachedLimitOrders) {
+    for (const order of freshOrders) {
         let price = await getCachedTokenPrice(order.tokenAddress);
         if (price === 0) {
             try {
@@ -1041,7 +1042,20 @@ export async function processLimitOrders(bot: any) {
         if (price === 0) continue; 
 
         if (price <= (order.targetPriceUsd || 0)) {
-            const result = await executeSnipe(order.user.telegramId, order.tokenAddress, order.amountSol);
+            // 🟢 FIX: Pass strategy 'LIMIT'
+            const result = await executeSnipe(
+                order.user.telegramId,
+                order.tokenAddress,
+                order.amountSol,
+                'buy',
+                undefined,
+                false,
+                undefined,
+                undefined,
+                0,
+                undefined,
+                'LIMIT'
+            );
             
             if (result.success) {
                 await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
@@ -1049,8 +1063,12 @@ export async function processLimitOrders(bot: any) {
                 if (order.trailingPercent) {
                     const { addTrailingStopToMemory } = await import('./order.service.js');
                     await addTrailingStopToMemory(
-                        order.user.telegramId, order.tokenAddress, order.trailingPercent,
-                        order.amountSol, price, order.takeProfitPercent || undefined
+                        order.user.telegramId,
+                        order.tokenAddress,
+                        order.trailingPercent,
+                        order.amountSol,
+                        price,
+                        order.takeProfitPercent || undefined
                     );
                 }
 

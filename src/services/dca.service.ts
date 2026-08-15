@@ -14,7 +14,6 @@ dotenv.config();
 
 let cachedDcaOrders: any[] = [];
 
-// Allow tracking intervals globally for graceful shutdown
 declare global { var _sentryIntervals: NodeJS.Timeout[]; }
 if (!global._sentryIntervals) global._sentryIntervals = [];
 
@@ -29,7 +28,6 @@ global._sentryIntervals.push(setInterval(async () => {
     }
 }, 10000));
 
-// Renamed from startDcaEngine to processDcaOrders (runs once per BullMQ job)
 export async function processDcaOrders(bot: any) {
     const executionSnapshot = [...cachedDcaOrders];
     if (executionSnapshot.length === 0) return;
@@ -38,7 +36,6 @@ export async function processDcaOrders(bot: any) {
 
     for (let i = 0; i < executionSnapshot.length; i++) {
         const order = executionSnapshot[i];
-
         const intervalMs = (order.dcaIntervalMins || 60) * 60 * 1000;
         const timeSinceLastBuy = now.getTime() - new Date(order.updatedAt).getTime();
 
@@ -46,9 +43,10 @@ export async function processDcaOrders(bot: any) {
             const lockKey = `lock:dca_exec:${order.id}`;
             let lock;
             try {
-                // REDLOCK implemented
                 lock = await redlock.acquire([lockKey], Math.max(60000, intervalMs - 5000));
-            } catch (e) { continue; } // Already processing
+            } catch (e) { 
+                continue; 
+            }
 
             try {
                 const liveCheck = await prisma.activeOrder.findUnique({ where: { id: order.id } });
@@ -65,15 +63,14 @@ export async function processDcaOrders(bot: any) {
                     try {
                         await bot.telegram.sendMessage(
                             order.user.telegramId,
-                            `✅ <b>DCA COMPLETE: Max Buys Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nLimit of ${order.maxBuys} buys has been successfully hit.`,
+                            `✅ <b>DCA COMPLETE: Max Buys Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nLimit of ${order.maxBuys} buys reached.`,
                             { parse_mode: 'HTML' }
                         );
                     } catch (_) {}
                     continue;
                 }
 
-                const intendedSpend = order.amountSol * order.user.activeWallets;
-
+                const intendedSpend = order.amountSol * (order.user?.activeWallets || 1);
                 const allocKey = `dca_allocated:${order.id}`;
                 const luaAlloc = `
                     local key = KEYS[1]
@@ -104,7 +101,20 @@ export async function processDcaOrders(bot: any) {
                 if (idx !== -1) cachedDcaOrders[idx].updatedAt = new Date();
                 await prisma.activeOrder.update({ where: { id: order.id }, data: { updatedAt: new Date() } });
 
-                executeSnipe(order.user.telegramId, order.tokenAddress, order.amountSol).then(async (result) => {
+                // 🟢 FIX: Explicitly set strategy to 'DCA'
+                executeSnipe(
+                    order.user.telegramId,
+                    order.tokenAddress,
+                    order.amountSol,
+                    'buy',
+                    undefined,
+                    false,
+                    undefined,
+                    undefined,
+                    0,
+                    undefined,
+                    'DCA'
+                ).then(async (result) => {
                     const activeAlloc = parseFloat(await redis.get(allocKey) || '0');
                     await redis.set(allocKey, Math.max(0, activeAlloc - intendedSpend).toString(), 'EX', 120);
 
@@ -132,7 +142,14 @@ export async function processDcaOrders(bot: any) {
                             }
                         } catch (_) {}
 
-                        await addTrailingStopToMemory(order.user.telegramId, order.tokenAddress, order.trailingPercent || 20.0, order.amountSol, initialPriceNative, order.takeProfitPercent || undefined);
+                        await addTrailingStopToMemory(
+                            order.user.telegramId,
+                            order.tokenAddress,
+                            order.trailingPercent || 20.0,
+                            order.amountSol,
+                            initialPriceNative,
+                            order.takeProfitPercent || undefined
+                        );
 
                         try {
                             const tpText = order.takeProfitPercent ? `+${order.takeProfitPercent}% TP` : '';
@@ -161,7 +178,7 @@ export async function processDcaOrders(bot: any) {
                 });
 
             } finally {
-                // Let the TTL expire or naturally release based on interval setup
+                if (lock) await (lock as any).release().catch(() => {});
             }
         }
     }
