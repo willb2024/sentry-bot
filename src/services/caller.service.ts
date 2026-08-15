@@ -9,7 +9,6 @@ import { connection } from '../lib/connection.js';
 
 const BASE58_MINT_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-// 🟢 FIX: Safe PublicKey validator
 function safePublicKey(address: string | undefined | null): PublicKey | null {
     if (!address) return null;
     try {
@@ -51,9 +50,17 @@ export interface CallerFilters {
 
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
     const defaultFilters: CallerFilters = {
-        isActive: false, minScore: 55, maxAgeMins: 90, minPctChange: 10, maxPctChange: 500,
-        minLiquidity: 2000, minVolume24h: 2000, blockMev: true, minHolders: 50,
-        maxSupply: 1_000_000_000, minLiquidityLockPercent: 0
+        isActive: false, 
+        minScore: 55, 
+        maxAgeMins: 90, 
+        minPctChange: 10, 
+        maxPctChange: 500,
+        minLiquidity: 2000, 
+        minVolume24h: 2000, 
+        blockMev: true, 
+        minHolders: 50,
+        maxSupply: 1_000_000_000, 
+        minLiquidityLockPercent: 0
     };
     try {
         const raw = await redis.get(`caller_filters:${telegramId}`);
@@ -290,7 +297,7 @@ export async function trainCallerModel() {
             normalization: norm, metrics: { valR2, trainSampleCount: trainX.length, valSampleCount: valX.length, isUsable }
         }));
 
-        if (!isUsable) console.warn(`⚠️ [CALLER ML] Model validation R² (${valR2.toFixed(3)}) below threshold (${MIN_VAL_R2}). Marked unusable — will fall back to heuristic scoring.`);
+        if (!isUsable) console.warn(`⚠️ [CALLER ML] Model validation R² (${valR2.toFixed(3)}) below threshold (${MIN_VAL_R2}). Marked unusable — falling back to heuristic scoring.`);
     } catch (e) {
         console.error(`🔴 [CALLER ML] Training Failed:`, e);
     }
@@ -327,8 +334,6 @@ export async function scheduleTraining() {
                 console.log(`🧠 [CALLER ML] ${newSamples} new finalized predictions since last train — retraining.`);
                 await trainCallerModel();
                 lastTrainedCount = currentCount;
-            } else {
-                console.log(`🧠 [CALLER ML] Only ${newSamples} new samples — skipping retrain.`);
             }
         } catch (e) {
             console.error('🔴 [CALLER ML] Scheduled training check failed:', e);
@@ -624,7 +629,6 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
         }
     }
 
-    // 🟢 FIX: Allow scores below 55 (stops the 55 clamp bug)
     return { score: Math.max(0, score), reasons };
 }
 
@@ -672,16 +676,14 @@ async function fetchRecentNewMints() {
             for (const mintChunk of missingChunks) {
                 const pdaChunk = mintChunk.map(m => {
                     const pubKey = safePublicKey(getBondingCurveAddress(m));
-                    return pubKey ? pubKey : new PublicKey(getBondingCurveAddress(m)); // fallback for compilation matching
+                    return pubKey ? pubKey : new PublicKey(getBondingCurveAddress(m));
                 });
                 
-                // Remove nulls just in case
                 const validPdaChunk = pdaChunk.filter(p => p !== null);
 
                 const accInfos = await connection.getMultipleAccountsInfo(validPdaChunk).catch(() => null);
                 if (accInfos) {
                     accInfos.forEach((accInfo, idx) => {
-                        // 🟢 FIX: Guard against null account data
                         if (!accInfo?.data) return;
                         const mint = mintChunk[idx];
                         const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
@@ -797,9 +799,17 @@ async function fetchFreshRaydiumPairs() {
     }
 }
 
-// 🟢 NEW EXPORT: Exported so other files (grpc.service) can call it
 export async function scoreTokens() {
     try {
+        // 🟢 REST FALLBACK: Hydrate queue if buffer is cold
+        const recentMints = getRecentNewMints();
+        if (recentMints.length === 0) {
+            const freshRest = await fetchFreshViaRest();
+            if (freshRest.length > 0) {
+                console.log(`🌐 [CALLER] Hydrated ${freshRest.length} fresh pairs via REST fallback.`);
+            }
+        }
+
         const [newMints, pumpFallback, restFallback, boosted, raydiumPairs] = await Promise.all([
             fetchRecentNewMints(), fetchFreshPumpTokens(), fetchFreshViaRest(), fetchBoostedPairs(), fetchFreshRaydiumPairs() 
         ]);
@@ -827,10 +837,9 @@ export async function scoreTokens() {
             for (const chunk of chunks) {
                 const pdas = chunk.map(p => {
                     const pubKey = safePublicKey(getBondingCurveAddress(p.mint));
-                    return pubKey ? pubKey : new PublicKey(getBondingCurveAddress(p.mint)); // fallback
+                    return pubKey ? pubKey : new PublicKey(getBondingCurveAddress(p.mint));
                 });
                 
-                // Filter out nulls safely
                 const validPdaChunk = pdas.filter(p => p !== null);
 
                 const accInfos = await connection.getMultipleAccountsInfo(validPdaChunk).catch(() => null);
@@ -947,7 +956,6 @@ export async function scoreTokens() {
     }
 }
 
-// 🟢 NEW EXPORT: Exported so index.ts and grpc.service.ts can hook into the background cron process
 export function startCallerEvaluator() {
     setInterval(async () => {
         try {
@@ -1017,12 +1025,12 @@ export function startCallerEvaluator() {
     }, 5 * 60 * 1000);
 }
 
-// 🟢 NEW EXPORT: startCoinCaller
 let isScoring = false;
 
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Live loop (15s) & Sim loop (5s) active.");
 
+    // ─── 1. SIMULATION POLLING LOOP (5s) ────────────────────
     setInterval(async () => {
         try {
             const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
@@ -1042,7 +1050,13 @@ export async function startCoinCaller(bot: any) {
                         const warnKey = `sim_credits_warn:${user.telegramId}`;
                         if (!(await redis.get(warnKey))) {
                             await redis.set(warnKey, '1', 'EX', 600);
-                            try { await bot.telegram.sendMessage(user.telegramId, `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour AI Caller has paused. Use <code>/simcredits 500</code> to reload.`, { parse_mode: 'HTML' }); } catch(_) {}
+                            try { 
+                                await bot.telegram.sendMessage(
+                                    user.telegramId, 
+                                    `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour AI Caller has paused. Use <code>/simcredits 500</code> to reload.`, 
+                                    { parse_mode: 'HTML' }
+                                ); 
+                            } catch(_) {}
                         }
                         continue;
                     }
@@ -1071,6 +1085,7 @@ export async function startCoinCaller(bot: any) {
         } catch (_) {}
     }, 5000); 
 
+    // ─── 2. LIVE MAINNET POLLING LOOP (15s) ──────────────────
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
@@ -1144,7 +1159,6 @@ export async function startCoinCaller(bot: any) {
     }, 15000);
 }
 
-// 🟢 EXPORT: Added for TokenStats
 export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean }> {
     if (!creatorWallet) return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
     const cacheKey = `dev_rep:${creatorWallet}`;
@@ -1184,7 +1198,6 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
     }
 }
 
-// 🟢 EXPORT: Added for TokenStats
 export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: boolean; burned: boolean; lockPct: number }> {
     const cacheKey = `lp_lock:${mintAddress}`;
     const cached = await redis.get(cacheKey);
@@ -1222,7 +1235,6 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
     }
 }
 
-// 🟢 EXPORT: Added for TokenStats
 export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
     const cacheKey = `velocity_cache:${mintAddress}`;
     const cached = await redis.get(cacheKey);
@@ -1255,7 +1267,6 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
     }
 }
 
-// 🟢 EXPORT: Added for TokenStats
 export async function simulateSellability(mintAddress: string, probeSolSize: number = 0.1): Promise<{ sellable: boolean; estimatedTaxPct: number }> {
     const cacheKey = `sellable:${mintAddress}`;
     const cached = await redis.get(cacheKey);

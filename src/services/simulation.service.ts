@@ -119,7 +119,6 @@ export async function setSimSessionSpend(telegramId: string, amount: number): Pr
     await redis.set(`sim:session_spend:${telegramId}`, amount.toString(), 'EX', 86400);
 }
 
-// 🟢 FIX 1: sendBudgetExhaustedSummary
 export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, mode: 'live' | 'sim', sessionId: string | null) {
     if (!sessionId) return;
     const tradesKey = `${mode}:session_trades:${sessionId}`;
@@ -304,7 +303,6 @@ export async function updateSimPositions(telegramId: string): Promise<void> {
     }
 }
 
-// 🟢 FIX 2: walkSimPositionPrices (Bridge alias for grpc.service)
 export async function walkSimPositionPrices(telegramId: string): Promise<void> {
     await updateSimPositions(telegramId);
 }
@@ -484,7 +482,6 @@ export async function simExecuteExit(
     };
 }
 
-// 🟢 FIX 3: generateSimCallerAlert
 export async function generateSimCallerAlert(
     telegramId: string,
     filters: {
@@ -602,7 +599,7 @@ export async function getNextSimOutcome(telegramId: string, type: 'caller' | 'gu
     return isWin;
 }
 
-// 🟢 FIX 4: toggleSimAutoSnipe
+// 🟢 BULLETPROOF SIM AUTO-SNIPER (DOES NOT DIE ON IDLE)
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
     const key = `sim:autosnipe:${telegramId}`;
     const current = await redis.get(key);
@@ -637,7 +634,12 @@ async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
 
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
-        if (!config || !config.isActive) break;
+        
+        // 🟢 FIX: Do not break if config is idle — sleep and continue
+        if (!config || !config.isActive) {
+            await new Promise(r => setTimeout(r, 3000));
+            continue;
+        }
 
         const currentSpend = await getSessionSpend(telegramId, 'sim');
         const snipeAmount = config.amountSol || 0.05;
