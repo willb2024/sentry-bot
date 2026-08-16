@@ -3,20 +3,18 @@ import { PublicKey } from '@solana/web3.js';
 import { prisma } from '../lib/prisma.js';
 import { connection } from '../lib/connection.js';
 
-// 🟢 FIX: Safe PublicKey validator
-function safePublicKey(address: string | undefined | null): PublicKey | null {
-    if (!address) return null;
-    try {
-        return new PublicKey(address);
-    } catch {
-        return null;
+const activeListeners = new Map<string, { subId: number; lastBalance: number }>();
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) {
+        chunks.push(arr.slice(i, i + size));
     }
+    return chunks;
 }
 
-const activeListeners = new Map<string, { subId: number, lastBalance: number }>();
-
 export async function startDepositWatcher(bot: any) {
-    console.log("👛 [DEPOSIT WATCHER] Real-time Multi-Wallet WebSocket monitor initialized.");
+    console.log("👛 [DEPOSIT WATCHER] Batched Multi-Wallet monitor initialized (60s cycle).");
 
     setInterval(async () => {
         try {
@@ -35,7 +33,7 @@ export async function startDepositWatcher(bot: any) {
                 }
             });
 
-            const addressToUserMap = new Map<string, { user: any, label: string }>();
+            const addressToUserMap = new Map<string, { user: any; label: string }>();
 
             for (const u of activeUsers) {
                 if (u.vaultAddress) addressToUserMap.set(u.vaultAddress, { user: u, label: 'W1 (Main)' });
@@ -45,88 +43,63 @@ export async function startDepositWatcher(bot: any) {
                 if (u.activeWallets >= 5 && u.vault5) addressToUserMap.set(u.vault5, { user: u, label: 'W5' });
             }
 
-            const activeAddresses = new Set(addressToUserMap.keys());
+            const allAddresses = Array.from(addressToUserMap.keys());
+            if (allAddresses.length === 0) return;
 
-            for (const [address, data] of activeListeners.entries()) {
-                if (!activeAddresses.has(address)) {
-                    try {
-                        await connection.removeAccountChangeListener(data.subId);
-                    } catch (e: any) {
-                        console.warn(`⚠️ [DEPOSIT] Failed to remove listener for ${address}: ${e.message}`);
-                    } finally {
-                        activeListeners.delete(address);
+            // Batch fetch balances in chunks of 100 to stay within Solana RPC limits
+            const addressChunks = chunkArray(allAddresses, 100);
+            const balanceMap = new Map<string, number>();
+
+            for (const chunk of addressChunks) {
+                try {
+                    const pubkeys = chunk.map(addr => new PublicKey(addr));
+                    const accounts = await connection.getMultipleAccountsInfo(pubkeys).catch(() => null);
+                    if (accounts) {
+                        accounts.forEach((acc, idx) => {
+                            const balanceSol = acc ? acc.lamports / 1_000_000_000 : 0;
+                            balanceMap.set(chunk[idx], balanceSol);
+                        });
                     }
+                } catch (chunkErr: any) {
+                    console.warn("⚠️ [DEPOSIT] Batch RPC fetch warning:", chunkErr.message);
                 }
             }
 
+            // Process balance changes
             for (const [address, meta] of addressToUserMap.entries()) {
-                if (!activeListeners.has(address)) {
-                    // 🟢 FIX: Safe Key Generation
-                    const pubKey = safePublicKey(address);
-                    if (!pubKey) continue; 
+                const newBalanceSol = balanceMap.get(address);
+                if (newBalanceSol === undefined) continue;
 
-                    const initialBalanceLamports = await connection.getBalance(pubKey).catch((e) => {
-                        console.error(`⚠️ [DEPOSIT] Init Fetch Failed for ${address}: ${e.message}`);
-                        return null;
-                    });
+                const cached = activeListeners.get(address);
 
-                    if (initialBalanceLamports === null) continue;
+                if (cached) {
+                    const oldBalanceSol = cached.lastBalance;
 
-                    const initialBalanceSol = initialBalanceSolCalculated(initialBalanceLamports);
+                    if (newBalanceSol > oldBalanceSol + 0.001) {
+                        const depositAmount = newBalanceSol - oldBalanceSol;
+                        console.log(`👛 [DEPOSIT DETECTED] +${depositAmount.toFixed(4)} SOL into ${address} (${meta.label})`);
 
-                    let subId: number | undefined;
-                    try {
-                        subId = connection.onAccountChange(pubKey, async (accountInfo) => {
-                            const newBalanceSol = accountInfo.lamports / 1_000_000_000;
-                            const cachedData = activeListeners.get(address);
-
-                            if (cachedData) {
-                                const oldBalanceSol = cachedData.lastBalance;
-
-                                if (newBalanceSol > oldBalanceSol) {
-                                    const depositAmount = newBalanceSol - oldBalanceSol;
-                                    
-                                    if (depositAmount < 0.001) {
-                                        activeListeners.set(address, { subId: cachedData.subId, lastBalance: newBalanceSol });
-                                        return;
-                                    }
-                                    
-                                    console.log(`👛 [DEPOSIT DETECTED] +${depositAmount.toFixed(4)} SOL into ${address} (${meta.label})`);
-
-                                    try {
-                                        await bot.telegram.sendMessage(meta.user.telegramId,
-                                            `👛 <b>DEPOSIT CONFIRMED!</b>\n\n` +
-                                            `Received: <b>+${depositAmount.toFixed(4)} SOL</b> into <b>${meta.label}</b>.\n` +
-                                            `Wallet Balance: <b>${newBalanceSol.toFixed(4)} SOL</b>.\n\n` +
-                                            `<i>Ready to trade! Send a Token Address (CA) into this chat to buy, or open the dashboard with /start.</i>`,
-                                            { parse_mode: 'HTML' }
-                                        );
-                                    } catch (e: any) {
-                                        console.error(`🔴 [DEPOSIT] Telegram Notification Failed for ${address}: ${e.message}`);
-                                    }
-                                }
-
-                                activeListeners.set(address, { subId: cachedData.subId, lastBalance: newBalanceSol });
-                            }
-                        }, 'confirmed');
-                    } catch (e: any) {
-                        console.error(`🔴 [DEPOSIT] Failed to subscribe for ${address}: ${e.message}`);
-                        continue; 
+                        try {
+                            await bot.telegram.sendMessage(meta.user.telegramId,
+                                `👛 <b>DEPOSIT CONFIRMED!</b>\n\n` +
+                                `Received: <b>+${depositAmount.toFixed(4)} SOL</b> into <b>${meta.label}</b>.\n` +
+                                `Wallet Balance: <b>${newBalanceSol.toFixed(4)} SOL</b>.\n\n` +
+                                `<i>Ready to trade! Send a Token Address (CA) into this chat to buy, or open the dashboard with /start.</i>`,
+                                { parse_mode: 'HTML' }
+                            );
+                        } catch (tgErr: any) {
+                            console.error(`🔴 [DEPOSIT] Telegram Notification Failed for ${address}:`, tgErr.message);
+                        }
                     }
-
-                    if (subId !== undefined && subId !== 0) {
-                        activeListeners.set(address, { subId, lastBalance: initialBalanceSol });
-                    }
+                    activeListeners.set(address, { subId: cached.subId, lastBalance: newBalanceSol });
+                } else {
+                    activeListeners.set(address, { subId: 0, lastBalance: newBalanceSol });
                 }
             }
         } catch (error: any) {
             console.error("🔴 [DEPOSIT] Watcher Sync Error:", error.message);
         }
-    }, 30000);
-}
-
-function initialBalanceSolCalculated(lamports: number): number {
-    return lamports / 1_000_000_000;
+    }, 60000);
 }
 
 export function getLiveWalletBalance(walletAddress: string): number | null {

@@ -12,7 +12,7 @@ import { isSimulationActive } from './simulation.service.js';
 dotenv.config();
 
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
-const PRICE_SOL = 0.2; // 0.2 SOL activation fee
+const PRICE_SOL = 0.2; // 0.2 SOL Activation Fee
 
 export async function createGuild(
     telegramId: string, 
@@ -39,7 +39,7 @@ export async function createGuild(
                     name,
                     description,
                     rewardDescription,
-                    feePaidSol: 0 // Free in simulation
+                    feePaidSol: 0 // Free in simulation mode
                 }
             });
             return { success: true, message: "Guild successfully established (Simulation).", guildCode };
@@ -242,7 +242,6 @@ async function getGuildOwnerSigner(telegramId: string, guildId: string) {
     return { keypair: Keypair.fromSecretKey(bs58.decode(rawPk)), vaultPubkey: new PublicKey(user.vaultAddress) };
 }
 
-// 🟢 RESTORED: executeGuildAirdrop (Flat bulk split)
 export async function executeGuildAirdrop(telegramId: string, guildId: string, totalSol: number): Promise<{ success: boolean; message: string; signature?: string }> {
     let lock;
     try {
