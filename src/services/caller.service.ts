@@ -1085,6 +1085,15 @@ export async function startCoinCaller(bot: any) {
         } catch (_) {}
     }, 5000); 
 
+
+    // ─── 3. SIMULATED COPY-TRADE LOOP (5s) ──────────────────
+setInterval(async () => {
+    try {
+        const { processSimCopyTrades } = await import('./simulation.service.js');
+        await processSimCopyTrades(bot);
+    } catch (_) {}
+}, 5000);
+
     // ─── 2. LIVE MAINNET POLLING LOOP (15s) ──────────────────
     setInterval(async () => {
         if (isScoring) return;

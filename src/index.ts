@@ -516,18 +516,21 @@ app.get('/share/:imgId', async (req, res) => {
 
 // 🟢 FIX: Serves 100% persistent simulation stats to the WebApp for any user in sim mode
 
-
-
-
 app.post('/api/positions', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
-        const telegramId = JSON.parse(
-            new URLSearchParams(req.body.initData).get('user')!
-        ).id.toString();
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(401).json([]);
         
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        if (await isSimulationActive(telegramId)) {
+            const posRaw = await redis.get(`sim:positions:${telegramId}`);
+            const simPos = posRaw ? JSON.parse(posRaw) : [];
+            return res.json(simPos);
+        }
+
         const positions = await getUserPositions(telegramId);
         if (positions && positions.length > 0) {
             for (const p of positions) {
@@ -538,7 +541,7 @@ app.post('/api/positions', async (req, res) => {
                 }
             }
         }
-        res.json(positions);
+        res.json(positions || []);
     } catch (e) { res.status(500).json([]); }
 });
 
@@ -1232,6 +1235,10 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
 
 bot.action('action_create_guild_prompt', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
     
     const msg = `🏰 <b>SENTRY GUILDS: BUILD A LOYAL COMMUNITY</b>\n\n` +
                 `<b>What is a Guild?</b>\n` +
@@ -1241,7 +1248,8 @@ bot.action('action_create_guild_prompt', async (ctx) => {
                 `You get a verified, rank-ordered leaderboard of the people actually buying your bags, allowing you to reward your truest, most loyal supporters.\n\n` +
                 `<b>The Ultimate Perk (50% Rev-Share):</b>\n` +
                 `By bringing your community to Sentry, you earn <b>50% of the platform fees</b> on every single trade your members make, forever. Your loyal community becomes a passive income stream.\n\n` +
-                `<i>Your Developer Suite subscription covers the infrastructure cost. Launching your Guild today is completely free.</i>`;
+                `💳 <b>Activation Fee:</b> ${feeDisplay}\n\n` +
+                `<i>Launch your Guild today to start tracking volume.</i>`;
     
     await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
         [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
@@ -1314,6 +1322,10 @@ bot.action('action_start_guild_wizard', async (ctx) => {
         return ctx.replyWithHTML("🔴 <b>Limit Reached:</b> You already own a Guild.");
     }
 
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
+
     await redis.hset(`guild_setup:${tgId}`, { step: 1 });
     await redis.expire(`guild_setup:${tgId}`, 600);
     
@@ -1322,22 +1334,25 @@ bot.action('action_start_guild_wizard', async (ctx) => {
         `Let's build your empire.\n\n` +
         `What is the <b>Name</b> of your community?\n` +
         `<i>(e.g., Alpha Wolves Community)</i>\n\n` +
+        `💳 <b>Activation Fee:</b> ${feeDisplay}\n\n` +
         `Reply to this message with your desired name.`,
         Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel Setup', 'action_abort_guild_setup')]])
     );
 });
 
 
-// 🟢 CLAUDE FIX 4.9: Pipe-Delimited Guild Creation
 bot.command('createguild', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { ownedGuild: true } });
     if (user?.ownedGuild) return ctx.reply("🔴 You already own a Guild.");
 
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
+
     const text = (ctx.message as any).text.replace('/createguild', '').trim();
     
-    // If they provided the exact pipe-delimited syntax, skip the wizard and deploy instantly
     if (text) {
         const parts = text.split('|').map((p: string) => p.trim());
         if (parts.length === 3) {
@@ -1358,10 +1373,15 @@ bot.command('createguild', async (ctx) => {
         }
     }
 
-    // Otherwise, push them into the interactive wizard
     await redis.hset(`guild_setup:${tgId}`, { step: 1 });
     await redis.expire(`guild_setup:${tgId}`, 600);
-    await ctx.replyWithHTML(`🏰 <b>GUILD SETUP [Step 1/2]</b>\n\nWhat is the name of your community?\n<i>(e.g., Alpha Wolves Community)</i>\n\nReply to this message with the name. (Type /cancel to abort)`);
+    await ctx.replyWithHTML(
+        `🏰 <b>GUILD SETUP [Step 1/2]</b>\n\n` +
+        `What is the name of your community?\n` +
+        `<i>(e.g., Alpha Wolves Community)</i>\n\n` +
+        `💳 <b>Cost:</b> ${feeDisplay}\n\n` +
+        `Reply to this message with the name. (Type /cancel to abort)`
+    );
 });
 
 
@@ -1432,30 +1452,27 @@ bot.action('action_manage_guild', async (ctx) => {
     
     if (!user) return;
 
-    // 🟢 D2 FIX: Removed the 2.0 SOL price reference from the UI.
     if (!user.ownedGuild) {
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+        const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
+
         const createMsg = 
             `🏰 <b>SENTRY GUILDS: COMMAND YOUR COMMUNITY</b>\n\n` +
             `<b>What is a Sentry Guild?</b>\n` +
             `A Sentry Guild is your private, on-chain loyalty and monetization engine. It transforms your passive audience into a highly coordinated trading powerhouse under your brand.\n\n` +
-            `<b>Why You Need It & Its Benefits:</b>\n` +
-            `• <b>Filter Fake Bots (Sybil Protection):</b> Giveaway channels are plagued by automated bot farms. A Sentry Guild tracks <i>actual on-chain volume</i>, proving who is genuinely supporting your project with skin in the game.\n` +
-            `• <b>Real-Time Leadership Gamification:</b> Sentry computes a live-updating leaderboard of your members. Keep your chat highly competitive and run active trading contests natively.\n` +
-            `• <b>Passive Revenue Generation:</b> You earn <b>50% of our platform fee</b> on every trade executed by your Guild members—forever. Your community becomes a compounding passive yield generator.\n` +
-            `• <b>Direct KOL Custom Whitelisting:</b> Export highly-qualified, ranked wallets to whitelist or issue customized rewards cleanly via CSV.\n\n` +
-            `💳 <b>Cost:</b> Free — Included with your Sentry account.\n\n` +
+            `<b>Why You Need It:</b>\n` +
+            `• <b>Filter Fake Bots:</b> Track <i>actual on-chain volume</i> to reward real supporters.\n` +
+            `• <b>Live Leaderboard:</b> Sentry calculates live member rankings for automated airdrops.\n` +
+            `• <b>Passive Revenue:</b> Earn <b>50% of our platform fee</b> on every trade executed by members.\n\n` +
+            `💳 <b>Cost:</b> ${feeDisplay}\n\n` +
             `Use the command below to launch your Guild:\n` +
             `<code>/createguild [Name] | [Description] | [Reward]</code>`;
         
-        return ctx.editMessageText(createMsg, { 
-            parse_mode: 'HTML', 
-            reply_markup: { 
-                inline_keyboard: [
-                    [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
-                    [ { text: '⬅️ Back', callback_data: 'action_guild_menu' } ]
-                ] 
-            } 
-        }).catch(() => {});
+        return safeEditMessageText(ctx, createMsg, Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
+            [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
+        ]));
     }
 
     const guild = user.ownedGuild;
@@ -1464,16 +1481,13 @@ bot.action('action_manage_guild', async (ctx) => {
 
     const text = `🏰 <b>GUILD MANAGEMENT PANEL</b>\n\n• <b>Community Name:</b> <code>${guild.name}</code>\n• <b>Guild Code:</b> <code>${guild.guildCode}</code>\n• <b>Reward Program:</b> <i>"${guild.rewardDescription || 'No active reward'}"</i>\n\n📈 <b>Global Stats:</b>\n  ├ Members Registered: <b>${totalMembers}</b>\n  └ Total Volume: <b>${totalVol.toFixed(2)} SOL</b>\n\n🔗 <b>Your Exclusive Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=guild_${guild.guildCode}</code>\n\n<i>(When members click this, they auto-join your community and you receive 50% of their platform fees as an affiliate permanently!)</i>`;
 
-    await ctx.editMessageText(text, { 
-        parse_mode: 'HTML', 
-        ...Markup.inlineKeyboard([
-            [Markup.button.callback('🏆 Tiered Drop (Top 10)', `tiered_drop_${guild.id}`)],
-            [Markup.button.callback('👤 Pay Individual Member', `indiv_drop_${guild.id}`)],
-            [Markup.button.callback('✏️ Edit Name', `edit_g_name_${guild.id}`), Markup.button.callback('🎁 Edit Reward', `edit_g_reward_${guild.id}`)],
-            [Markup.button.callback('📥 Export Wallets (CSV)', `export_guild_${guild.id}`)],
-            [Markup.button.callback('⬅️ Back to Guilds', 'action_guild_menu')]
-        ])
-    });
+    await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
+        [Markup.button.callback('🏆 Tiered Drop (Top 10)', `tiered_drop_${guild.id}`)],
+        [Markup.button.callback('👤 Pay Individual Member', `indiv_drop_${guild.id}`)],
+        [Markup.button.callback('✏️ Edit Name', `edit_g_name_${guild.id}`), Markup.button.callback('🎁 Edit Reward', `edit_g_reward_${guild.id}`)],
+        [Markup.button.callback('📥 Export Wallets (CSV)', `export_guild_${guild.id}`)],
+        [Markup.button.callback('⬅️ Back to Guilds', 'action_guild_menu')]
+    ]));
 });
 
 bot.action(/^tiered_drop_(.+)$/, async (ctx) => {
@@ -4037,7 +4051,23 @@ bot.action(/^buy_credits_(starter|growth|pro|whale)$/, async (ctx) => {
     const packKey = ctx.match[1] as any;
     const tgId = ctx.from?.id.toString()!;
     const { CREDIT_PACKS } = await import('./services/credits.service.js');
+    const { isSimulationActive } = await import('./services/simulation.service.js');
     const pack = CREDIT_PACKS[packKey as keyof typeof CREDIT_PACKS];
+
+    // 🟢 SIMULATION FREE TOP-UP
+    if (await isSimulationActive(tgId)) {
+        const cur = parseInt(await redis.get(`sim:credits:${tgId}`) || '0');
+        const newBal = cur + pack.credits;
+        await redis.set(`sim:credits:${tgId}`, newBal.toString());
+        await redis.del(`sim_credits_warn:${tgId}`);
+        return safeEditMessageText(ctx,
+            `💳 <b>SIMULATION CREDITS GRANTED</b>\n\n` +
+            `Added <b>+${pack.credits.toLocaleString()}</b> virtual credits for the <b>${pack.name}</b> pack.\n` +
+            `Current Sim Credits: <b>${newBal.toLocaleString()}</b>\n\n` +
+            `<i>(Simulation Mode: No payment required).</i>`,
+            Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Credits Menu', 'menu_credits')]])
+        );
+    }
 
     const priceSol = parseFloat((pack.priceUsd / cachedSolUsdPrice).toFixed(4));
     const treasury = process.env.TREASURY_WALLET_ADDRESS!;
@@ -4298,22 +4328,56 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const lockout = await redis.get(`withdraw_lockout:${telegramId}`);
-    if (lockout) {
-        return ctx.replyWithHTML(`🚨 <b>SECURITY LOCKOUT ACTIVE</b>\n\nToo many failed PIN attempts. Withdrawals are locked for 60 minutes to protect your funds.`);
-    }
-
-    const withdrawLockKey = `lock:withdraw:${telegramId}`;
-    const isLocked = await redis.set(withdrawLockKey, 'LOCKED', 'EX', 60, 'NX');
-    if (!isLocked) return ctx.replyWithHTML("⚠️ <b>Withdrawal already processing.</b> Please wait for the current request to settle.");
+    const { isSimulationActive, getSimBalance } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(telegramId);
 
     const text = (ctx.message as any).text || "";
     const inputParts = text.trim().split(/\s+/);
 
     if (inputParts.length !== 3) {
-        await redis.del(withdrawLockKey);
         return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Please use: <code>/withdraw [ADDRESS] [AMOUNT]</code> or <code>/withdraw [ADDRESS] ALL</code>`);
     }
+
+    const targetAddress = inputParts[1]!;
+    const amountStr = inputParts[2]!.toLowerCase();
+    const isMax = amountStr === 'all' || amountStr === 'max';
+    const parsedAmount = parseSolAmount(amountStr);
+    const requestedAmount: number = isMax ? 0 : (parsedAmount !== null ? parsedAmount : 0);
+
+    if (!isMax && requestedAmount <= 0) {
+        return ctx.reply("🔴 Invalid amount specified. Use a number (e.g. 1.5) or USD (e.g. $50).");
+    }
+
+    try { new PublicKey(targetAddress); } 
+    catch (e) { return ctx.reply("🔴 Invalid destination Solana address."); }
+
+    // 🟢 SIMULATION WITHDRAWAL BYPASS
+    if (isSim) {
+        const currentBal = parseFloat(await getSimBalance(telegramId));
+        const toDeduct = isMax ? currentBal : requestedAmount;
+        if (toDeduct > currentBal || currentBal <= 0) {
+            return ctx.replyWithHTML(`🔴 <b>Insufficient Simulated Funds.</b> Balance: <code>${currentBal.toFixed(4)} SOL</code>`);
+        }
+        const updatedBal = Math.max(0, currentBal - toDeduct);
+        await redis.set(`sim:balance:${telegramId}`, updatedBal.toFixed(4));
+        return ctx.replyWithHTML(
+            `🟢 <b>SIMULATED WITHDRAWAL CONFIRMED</b>\n\n` +
+            `• Swept Amount: <b>${toDeduct.toFixed(4)} SOL</b>\n` +
+            `• Destination: <code>${targetAddress}</code>\n` +
+            `• Remaining Sim Balance: <b>${updatedBal.toFixed(4)} SOL</b>\n\n` +
+            `<i>(Simulation Mode: No on-chain funds moved).</i>`
+        );
+    }
+
+    // Live execution route
+    const lockout = await redis.get(`withdraw_lockout:${telegramId}`);
+    if (lockout) {
+        return ctx.replyWithHTML(`🚨 <b>SECURITY LOCKOUT ACTIVE</b>\n\nToo many failed PIN attempts. Withdrawals are locked for 60 minutes.`);
+    }
+
+    const withdrawLockKey = `lock:withdraw:${telegramId}`;
+    const isLocked = await redis.set(withdrawLockKey, 'LOCKED', 'EX', 60, 'NX');
+    if (!isLocked) return ctx.replyWithHTML("⚠️ <b>Withdrawal already processing.</b> Please wait.");
 
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user || !user.vaultAddress || !user.turnkeySubOrgId) {
@@ -4321,29 +4385,11 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
         return ctx.reply("🔴 Authentication Failed. No Vault found.");
     }
 
-    const targetAddress = inputParts[1]!;
-    const amountStr = inputParts[2]!.toLowerCase();
-    const isMax = amountStr === 'all' || amountStr === 'max';
-    
-    // @ts-ignore
-    const parsedAmount = parseSolAmount(amountStr);
-    const requestedAmount: number = isMax ? 0 : (parsedAmount !== null ? parsedAmount : 0);
-    
-    if (!isMax && requestedAmount <= 0) {
-        await redis.del(withdrawLockKey);
-        return ctx.reply("🔴 Invalid amount specified. Use a number (e.g. 1.5) or USD (e.g. $50).");
-    }
-
-    try { new PublicKey(targetAddress); } 
-    catch (e) { await redis.del(withdrawLockKey); return ctx.reply("🔴 Invalid destination Solana address."); }
-
-    // Start PIN verification flow if PIN exists
     if (user.withdrawalPin) {
         await redis.set(`state:withdraw_pin:${telegramId}`, JSON.stringify({ targetAddress, isMax, requestedAmount }), 'EX', 120);
-        return ctx.replyWithHTML(`🔒 <b>PIN REQUIRED</b>\n\nPlease reply with your 4 to 6 digit security PIN to authorize this withdrawal.\n\n<i>This message sequence will self-destruct for security.</i>`);
+        return ctx.replyWithHTML(`🔒 <b>PIN REQUIRED</b>\n\nPlease reply with your 4 to 6 digit security PIN to authorize this withdrawal.`);
     }
 
-    // @ts-ignore
     await executeWithdrawalProcess(user, targetAddress, requestedAmount, isMax, telegramId, ctx, withdrawLockKey);
 });
 
@@ -6208,7 +6254,7 @@ bot.action('action_confirm_guild_pay', async (ctx) => {
 
     const loader = await ctx.replyWithHTML(`<i>⏳ Deploying secure database schema and registering "<b>${setupState.name}</b>"...</i>`);
     
-    // We execute createGuild here, which is completely free in the code
+    const { createGuild } = await import('./services/guild.service.js');
     const result = await createGuild(tgId, setupState.name, "Sentry Loyalty Node", setupState.reward);
 
     await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});

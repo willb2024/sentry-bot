@@ -29,6 +29,7 @@ import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { redlock } from '../lib/redlock.js';
+import { calculateDynamicSize } from './simulation.service.js';
 
 dotenv.config();
 
@@ -363,10 +364,8 @@ export async function processGuardOrders(bot: any) {
         const prices = await fetchBulkTokenPrices(tokenMints);
 
         const uniqueTgIds = [...new Set(activeGuards.map(g => g.telegramId))];
-        const simFlags = new Map<string, boolean>();
         await Promise.all(uniqueTgIds.map(async (id) => {
             const isSim = await isSimulationActive(id);
-            simFlags.set(id, isSim);
             if (isSim) walkSimPositionPrices(id).catch(() => {}); 
         }));
 
@@ -424,7 +423,7 @@ function connectPumpPortalStream(bot: any) {
 
     ws.on('open', () => {
         isWsConnecting = false;
-        wsReconnectDelay = 2000; // Reset backoff on successful connection
+        wsReconnectDelay = 2000;
         logger.info("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
         if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
@@ -457,7 +456,7 @@ function connectPumpPortalStream(bot: any) {
         isWsConnecting = false;
         if (wsHeartbeat) clearInterval(wsHeartbeat);
         setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
-        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 60_000); // Back off up to 60s
+        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 60_000);
     });
 }
 
@@ -582,33 +581,18 @@ export async function triggerAutoSnipes(
                     } catch (e) { return; }
                 }
 
-                let snipeAmount = liveConfig.amountSol; 
-
-                // Conviction-Weighted Dynamic Sizing Math
+                // 🟢 REPLACED: Use shared calculateDynamicSize helper
+                let snipeAmount = liveConfig.amountSol;
                 if (liveConfig.enableDynamicScaling) {
-                    const normalizedScore = Math.min(100, Math.max(10, score)) / 100;
-                    const exponent = liveConfig.scaleExponent || 2.0;
-                    const convictionMultiplier = Math.pow(normalizedScore, exponent);
-                    let calculatedSize = liveConfig.baseRiskUnitSol * convictionMultiplier * liveConfig.maxRiskMultiplier;
-
-                    if (liqUsd > 0 && cachedSolUsdPrice > 0) {
-                        const maxLiqInSol = (liqUsd * 0.02) / cachedSolUsdPrice;
-                        calculatedSize = Math.min(calculatedSize, maxLiqInSol);
-                    }
-
-                    const { getSessionSpend } = await import('./simulation.service.js');
-                    const currentSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
-                    const budgetRemaining = (liveConfig.maxBudgetSol || Infinity) - currentSpend;
-                    calculatedSize = Math.min(calculatedSize, budgetRemaining);
-                    calculatedSize = Math.max(calculatedSize, 0.005);
-                    snipeAmount = parseFloat(calculatedSize.toFixed(4));
+                    snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice);
                 }
 
                 const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
                 const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
                 const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, 'live');
-                const intendedSpend = snipeAmount * liveConfig.user.activeWallets;
+                const intendedSpend = snipeAmount * (liveConfig.user.activeWallets || 1);
 
+                // 🟢 LIVE BUDGET EXHAUSTION CAP & NOTIFICATION
                 if (liveConfig.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
                     await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
                     await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
@@ -645,6 +629,13 @@ export async function triggerAutoSnipes(
                         liveConfig.user.telegramId, mintCa, liveConfig.autoTrailingDropPercent,
                         snipeAmount, entryPrice, liveConfig.autoTakeProfitPercent || undefined
                     );
+
+                    // Check if newly added spend now exhaustively hit the budget
+                    const updatedSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
+                    if (liveConfig.maxBudgetSol && updatedSpend >= liveConfig.maxBudgetSol) {
+                        await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
+                        await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
+                    }
 
                     try {
                         const { buildAuditTrailMessage } = await import('./caller.service.js');
