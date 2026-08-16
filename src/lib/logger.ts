@@ -1,6 +1,5 @@
+// src/lib/logger.ts
 import winston from 'winston';
-
-
 
 function safeSerialize(value: any, seen = new WeakSet()): any {
   if (value instanceof Error) {

@@ -46,7 +46,6 @@ export async function startDepositWatcher(bot: any) {
             const allAddresses = Array.from(addressToUserMap.keys());
             if (allAddresses.length === 0) return;
 
-            // Batch fetch balances in chunks of 100 to stay within Solana RPC limits
             const addressChunks = chunkArray(allAddresses, 100);
             const balanceMap = new Map<string, number>();
 
@@ -65,7 +64,6 @@ export async function startDepositWatcher(bot: any) {
                 }
             }
 
-            // Process balance changes
             for (const [address, meta] of addressToUserMap.entries()) {
                 const newBalanceSol = balanceMap.get(address);
                 if (newBalanceSol === undefined) continue;

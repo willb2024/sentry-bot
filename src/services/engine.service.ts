@@ -110,7 +110,6 @@ const activeAgent = new https.Agent({
     keepAlive: true,
 });
 
-// Global 5-second timeout on all outgoing HTTP requests
 export const axiosClient = axios.create({ 
     httpsAgent: activeAgent,
     timeout: 5000 
@@ -508,10 +507,9 @@ export async function buildTipAndFeeTransaction(
     try {
         const platformFeeRate = feeRate ?? await getPlatformFeeRate(telegramId); 
         
-        // Overflow protection: Clamped calculation with BigInt
         const safeVolume = Math.min(Math.max(0, expectedSolVolume), 10_000);
         let feeLamports = BigInt(Math.round((safeVolume * 1_000_000_000) * platformFeeRate));
-        if (feeLamports > 50_000_000_000n) feeLamports = 50_000_000_000n; // Hard cap fee at 50 SOL
+        if (feeLamports > 50_000_000_000n) feeLamports = 50_000_000_000n;
 
         const partnerWallet = process.env.TREASURY_WALLET_ADDRESS;
 
@@ -551,7 +549,7 @@ export async function executeSnipe(
     overrideSlippage?: number,
     antiMevDelayMs: number = 0,
     customRpcUrl?: string,
-    strategy: string = 'MANUAL'
+    strategy: string = 'Manual / Direct'
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
@@ -607,7 +605,6 @@ export async function executeSnipe(
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
 
-        // Decrypt key with strict null safety check
         const rawW1 = decryptKey(user.turnkeySubOrgId);
         if (!rawW1) return { success: false, message: "Decryption Failed: Primary wallet key could not be decrypted." };
         
@@ -745,7 +742,7 @@ export async function executeSnipe(
 
 export async function executeExit(
     telegramId: string, targetCA: string, sellPercentage: number = 100, isBumper: boolean = false,
-    strategy: string = 'MANUAL'
+    strategy: string = 'Manual / Direct'
 ): Promise<{ success: boolean; signature?: string; message: string }> {
 
     const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
@@ -772,7 +769,6 @@ export async function executeExit(
         const customPriorityFee = user.customPriorityFee || 0.001;
         const useSOR = user.enableSOR ?? true;
 
-        // Strict null check on decryption
         const rawW1 = decryptKey(user.turnkeySubOrgId);
         if (!rawW1) return { success: false, message: "Decryption Failed: Primary wallet key could not be decrypted." };
 
@@ -1021,7 +1017,6 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
     return first ? { swapBase64: first.swapBase64, tipBase64: first.tipBase64 } : null;
 }
 
-// Replace processLimitOrders in src/services/engine.service.ts
 export async function processLimitOrders(bot: any) {
     const { prisma } = await import('../lib/prisma.js');
     const freshOrders = await prisma.activeOrder.findMany({
@@ -1042,7 +1037,6 @@ export async function processLimitOrders(bot: any) {
         if (price === 0) continue; 
 
         if (price <= (order.targetPriceUsd || 0)) {
-            // 🟢 FIX: Pass strategy 'LIMIT'
             const result = await executeSnipe(
                 order.user.telegramId,
                 order.tokenAddress,
@@ -1054,7 +1048,7 @@ export async function processLimitOrders(bot: any) {
                 undefined,
                 0,
                 undefined,
-                'LIMIT'
+                'Limit Order'
             );
             
             if (result.success) {

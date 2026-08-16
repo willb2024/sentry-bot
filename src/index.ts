@@ -4351,7 +4351,6 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
     try { new PublicKey(targetAddress); } 
     catch (e) { return ctx.reply("🔴 Invalid destination Solana address."); }
 
-    // 🟢 SIMULATION WITHDRAWAL BYPASS
     if (isSim) {
         const currentBal = parseFloat(await getSimBalance(telegramId));
         const toDeduct = isMax ? currentBal : requestedAmount;
@@ -4369,7 +4368,6 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
         );
     }
 
-    // Live execution route
     const lockout = await redis.get(`withdraw_lockout:${telegramId}`);
     if (lockout) {
         return ctx.replyWithHTML(`🚨 <b>SECURITY LOCKOUT ACTIVE</b>\n\nToo many failed PIN attempts. Withdrawals are locked for 60 minutes.`);
@@ -4392,7 +4390,6 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
 
     await executeWithdrawalProcess(user, targetAddress, requestedAmount, isMax, telegramId, ctx, withdrawLockKey);
 });
-
 
 // =========================================================
 // 👀 WATCHLIST COMMAND
@@ -6667,27 +6664,24 @@ app.post('/api/risk-score', async (req, res) => {
 });
 
 // 🟢 FIXED: /api/performance (Restored so Active Strategies never show +0.000 SOL)
-// Replace app.post('/api/performance', ...) in src/index.ts
 app.post('/api/performance', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = extractTelegramId(req.body.initData);
         if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-        const strategyStats: Record<string, { totalPnl: number, totalVolume: number, count: number }> = {};
+        const strategyStats: Record<string, { totalPnl: number, totalVolume: number, count: number }> = {
+            'Sniper Engine': { totalPnl: 0, totalVolume: 0, count: 0 },
+            'Manual / Direct': { totalPnl: 0, totalVolume: 0, count: 0 },
+            'DCA Engine': { totalPnl: 0, totalVolume: 0, count: 0 },
+            'Copy Trade': { totalPnl: 0, totalVolume: 0, count: 0 },
+            'Limit Order': { totalPnl: 0, totalVolume: 0, count: 0 }
+        };
+
         const { isSimulationActive } = await import('./services/simulation.service.js');
         const isSim = await isSimulationActive(telegramId);
 
         if (isSim) {
-            // Include forged defaults if present
-            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                if (f.strat1Name) strategyStats[f.strat1Name] = { totalPnl: f.strat1Pnl || 0, totalVolume: 0, count: 0 };
-                if (f.strat2Name) strategyStats[f.strat2Name] = { totalPnl: f.strat2Pnl || 0, totalVolume: 0, count: 0 };
-            }
-
-            // Dynamically aggregate real simulated trades (Sniper, Manual, DCA, COPY_TRADE, LIMIT)
             const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
             simTrades.forEach((t: any) => {
                 if (!t.isBuy) {
@@ -7160,6 +7154,9 @@ async function bootEcosystem() {
         startDepositWatcher(bot); 
         startCoinCaller(bot); 
 
+// 🟢 NEW: Starts the fast simulation position and TP/SL resolver
+const { startSimulationGuardResolver } = await import('./services/simulation.service.js');
+startSimulationGuardResolver(bot);
 
         // 🟢 FIX: Schedule recurring BullMQ jobs instead of setInterval
         console.log('⏳ Booting BullMQ Background Task Queues...');

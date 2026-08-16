@@ -12,7 +12,7 @@ import { isSimulationActive } from './simulation.service.js';
 dotenv.config();
 
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
-const PRICE_SOL = 0.2; // 0.2 SOL Activation Fee
+const PRICE_SOL = 0.2; // 🟢 Updated to 0.2 SOL
 
 export async function createGuild(
     telegramId: string, 
@@ -39,7 +39,7 @@ export async function createGuild(
                     name,
                     description,
                     rewardDescription,
-                    feePaidSol: 0 // Free in simulation mode
+                    feePaidSol: 0
                 }
             });
             return { success: true, message: "Guild successfully established (Simulation).", guildCode };

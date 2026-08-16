@@ -114,7 +114,6 @@ global._sentryIntervals.push(setInterval(async () => {
     } catch (_) {}
 }, 2_000));
 
-// Pre-sign exit transactions for sub-millisecond execution
 global._sentryIntervals.push(setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
         if (await redis.get(`lock:guard_exec:${guard.id}`)) return;
@@ -207,7 +206,6 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
     return await executeExit(guard.telegramId, guard.tokenAddress, 100);
 }
 
-// 🟢 Unified Guard Evaluator for both Live and Simulation modes
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
     const { isSimulationActive, simExecuteExit, generateSimSignature } = await import('./simulation.service.js');
     const isSim = await isSimulationActive(guardSnapshot.telegramId);
@@ -228,7 +226,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         const entryPrice = guard.entryPrice || currentPriceNative;
         if (entryPrice <= 0 || currentPriceNative <= 0) return;
 
-        // 1. Max Hold Time Exit
         if (guard.maxHoldMinutes && guard.createdAt) {
             const ageMinutes = (Date.now() - new Date(guard.createdAt).getTime()) / 60000;
             if (ageMinutes >= guard.maxHoldMinutes) {
@@ -250,7 +247,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             }
         }
 
-        // 2. Take Profit Trigger
         if (guard.takeProfitPercent && entryPrice > 0) {
             const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
             if (profitPercent >= guard.takeProfitPercent) {
@@ -288,7 +284,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             }
         }
 
-        // 3. High-Water Mark Trailing Stop-Loss
         if (guard.highestSeenPrice === 0 || currentPriceNative > guard.highestSeenPrice) {
             await updateHighestSeen(guard.id, currentPriceNative).catch(() => {});
         } else {
@@ -329,7 +324,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
     }
 }
 
-// 🟢 Isolated 20-mint batch pricing to prevent dropped batches on single-item failure [1]
 export async function fetchBulkTokenPrices(mints: string[]): Promise<Record<string, number>> {
     if (mints.length === 0) return {};
     const result: Record<string, number> = {};
@@ -347,7 +341,6 @@ export async function fetchBulkTokenPrices(mints: string[]): Promise<Record<stri
     return result;
 }
 
-// Exported BullMQ Guard Queue Worker Processor
 export async function processGuardOrders(bot: any) {
     try {
         const activeGuards = cachedActiveGuards; 
@@ -412,7 +405,6 @@ let wsReconnectDelay = 2000;
 let wsHeartbeat: NodeJS.Timeout | null = null;
 let lastMessageAt = Date.now();
 
-// 🟢 WebSocket Stream with exponential backoff reconnection
 function connectPumpPortalStream(bot: any) {
     if (isWsConnecting) return;
     isWsConnecting = true;
@@ -581,7 +573,6 @@ export async function triggerAutoSnipes(
                     } catch (e) { return; }
                 }
 
-                // 🟢 REPLACED: Use shared calculateDynamicSize helper
                 let snipeAmount = liveConfig.amountSol;
                 if (liveConfig.enableDynamicScaling) {
                     snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice);
@@ -592,7 +583,6 @@ export async function triggerAutoSnipes(
                 const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, 'live');
                 const intendedSpend = snipeAmount * (liveConfig.user.activeWallets || 1);
 
-                // 🟢 LIVE BUDGET EXHAUSTION CAP & NOTIFICATION
                 if (liveConfig.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
                     await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
                     await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
@@ -608,7 +598,7 @@ export async function triggerAutoSnipes(
                 const executionSlippage = liveConfig.useDeepScoring ? (liveConfig.user.slippagePercent + 5) : undefined;
                 const result = await executeSnipe(
                     liveConfig.user.telegramId, mintCa, snipeAmount, 'buy', 
-                    undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'SNIPER'
+                    undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'Sniper Engine'
                 );
 
                 if (result.success) {
@@ -630,7 +620,6 @@ export async function triggerAutoSnipes(
                         snipeAmount, entryPrice, liveConfig.autoTakeProfitPercent || undefined
                     );
 
-                    // Check if newly added spend now exhaustively hit the budget
                     const updatedSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
                     if (liveConfig.maxBudgetSol && updatedSpend >= liveConfig.maxBudgetSol) {
                         await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
@@ -649,26 +638,12 @@ export async function triggerAutoSnipes(
                     } catch (_) {}
                 } else {
                     await redis.del(sniperLockKey);
-                    if (result.message.includes("Insufficient Funds")) {
-                        const fundWarnKey = `warn_funds:${liveConfig.user.telegramId}`;
-                        if (!(await redis.get(fundWarnKey))) {
-                            await redis.set(fundWarnKey, '1', 'EX', 600);
-                            try { 
-                                await bot.telegram.sendMessage(
-                                    liveConfig.user.telegramId, 
-                                    `🔴 <b>AUTO-SNIPER FAILED: INSUFFICIENT FUNDS</b>\n\nTarget: <code>${mintCa}</code>`, 
-                                    { parse_mode: 'HTML' }
-                                ); 
-                            } catch (_) {}
-                        }
-                    }
                 }
             } catch (e: any) {}
         }, delayMs);
     }
 }
 
-// 🟢 Yellowstone gRPC Stream for Anti-Rug Shield Front-Running
 export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
         connectPumpPortalStream(bot);
@@ -694,7 +669,6 @@ export async function igniteYellowstoneStream(bot: any) {
                 const tx = data.transaction.transaction;
                 const logs = tx.meta?.logMessages || [];
 
-                // Detect developer liquidity pulls in mempool before finality
                 if (logs.some((log: string) => log.includes("Instruction: Withdraw") || log.includes("Instruction: RemoveLiquidity"))) {
                     const postBalances = tx.meta?.postTokenBalances || [];
                     const tokenMint = postBalances.find((b: any) => b.mint !== WSOL_MINT)?.mint;
@@ -709,7 +683,7 @@ export async function igniteYellowstoneStream(bot: any) {
                             logger.warn(`🚨 [ANTI-RUG] Dev liquidity pull detected on ${tokenMint}! Front-running for ${exposedUsers.length} users.`);
                             for (const order of exposedUsers) {
                                 const { executeExit } = await import('./engine.service.js');
-                                executeExit(order.user.telegramId, tokenMint, 100, true, 'ANTI_RUG_SHIELD');
+                                executeExit(order.user.telegramId, tokenMint, 100, true, 'Anti-Rug Shield');
                                 bot.telegram.sendMessage(
                                     order.user.telegramId, 
                                     `🚨 <b>ANTI-RUG SHIELD ACTIVATED!</b>\n\nDeveloper liquidity pull detected on <code>${tokenMint}</code>. Emergency exit broadcasted.`, 
