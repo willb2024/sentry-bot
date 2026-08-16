@@ -681,6 +681,8 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
     const sessionId = await redis.get(`autosnipe:session_id:sim:${telegramId}`);
     let loopCounter = 0;
 
+    console.log(`🎯 [SIM AUTO-SNIPER] Loop started for Telegram ID: ${telegramId}`);
+
     while (await redis.get(`sim:autosnipe:${telegramId}`) === 'true' && await isSimulationActive(telegramId)) {
         loopCounter++;
         if (loopCounter > 1000) {
@@ -689,40 +691,47 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             break;
         }
 
+        // 1. Fetch user & config
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
         
-        if (!config || !config.isActive) {
+        // 🟢 FIX: Only check if config exists — do NOT check config.isActive (simulation state is governed by Redis)
+        if (!config) {
             await new Promise(r => setTimeout(r, 3000));
             continue;
         }
 
+        // 2. Fetch a token candidate
         const token = await getRealTokenForSimDisplay();
 
+        // 3. Generate realistic telemetry & AI score
         const stats: TokenStats = {
-            ageMins: Math.floor(Math.random() * 60) + 1,
-            volume24h: 5000 + Math.random() * 50000,
-            liquidity: 3000 + Math.random() * 20000,
-            priceChangeM5: (Math.random() * 50) - 10,
-            hasSocials: Math.random() > 0.4,
+            ageMins: Math.floor(Math.random() * 45) + 1,
+            volume24h: 15000 + Math.random() * 60000,
+            liquidity: 8000 + Math.random() * 30000,
+            priceChangeM5: (Math.random() * 45) + 5,
+            hasSocials: true,
             isRug: false,
             devRep: { launchCount: Math.floor(Math.random() * 5), avgRugScore: 0, isKnownRugger: false },
             lpLock: { burned: true, locked: true, lockPct: 100 },
-            velocity: { growthRate: 20 + Math.random() * 40, uniqueBuyers5m: 10 + Math.random() * 20 },
+            velocity: { growthRate: 30 + Math.random() * 40, uniqueBuyers5m: 15 + Math.random() * 20 },
             sellability: { sellable: true, estimatedTaxPct: 0 }
         };
 
         const scoreRes = computeTokenScore(stats);
         let score = scoreRes.score;
 
+        // Apply AI Minimum Score Filter
         if (config.minScore > 0 && score < config.minScore) {
             await new Promise(r => setTimeout(r, 2000));
             continue;
         }
 
+        // 4. Calculate sizing
         const solPrice = cachedSolUsdPrice || 156.93;
         const snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice);
 
+        // 5. Budget exposure checks
         const currentSpend = await getSessionSpend(telegramId, 'sim');
         const intendedSpend = snipeAmount * (user?.activeWallets || 1);
 
@@ -732,6 +741,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             break;
         }
 
+        // 6. Execute simulated buy
         const result = await simExecuteSnipe(telegramId, token.mint, snipeAmount, 'SNIPER');
 
         if (result.success) {
@@ -744,6 +754,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
                 }));
             }
 
+            // 7. Deploy trailing stop guard
             if (config.autoTrailingDropPercent > 0) {
                 const entryPrice = await getCachedTokenPrice(token.mint).catch(() => 0.00001);
                 await addTrailingStopToMemory(
@@ -756,6 +767,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
                 );
             }
 
+            // 8. Send Telegram trade confirmation
             try {
                 await bot.telegram.sendMessage(telegramId,
                     `🎯 <b>SIM AUTO-SNIPE EXECUTED</b>\n\n` +
@@ -769,7 +781,8 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             } catch (_) {}
         }
 
-        const organicDelayMs = [3000, 5000, 8000, 12000][Math.floor(Math.random() * 4)] + Math.random() * 1000;
+        // Delay between snipes (4 - 10 seconds)
+        const organicDelayMs = [4000, 6000, 8000, 10000][Math.floor(Math.random() * 4)] + Math.random() * 500;
         await new Promise(r => setTimeout(r, organicDelayMs));
     }
 
