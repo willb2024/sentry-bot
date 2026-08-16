@@ -5616,7 +5616,7 @@ bot.on("text", async (ctx, next) => {
         return ctx.replyWithHTML(`✅ Broadcast sent to <b>${sent} users</b>.`);
     }
 
-  // --- 18. SIMULATION FORGE EDITOR (MULTI-STRATEGY DYNAMIC PARSER) ---
+// --- 18. SIMULATION FORGE EDITOR (MULTI-STRATEGY DYNAMIC PARSER) ---
 const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
 if (isSimEdit) {
     await redis.del(`state:simedit:${telegramId}`);
@@ -5715,9 +5715,14 @@ if (isSimEdit) {
             'ED5nyyWEzpPPiWimP8vYm7sD7TD3LAt3Q3gRTWHzPJBY'
         ];
 
-        const stratNames = Object.keys(stratStats).length > 0 
-            ? Object.keys(stratStats) 
-            : ['Sniper Engine', 'Manual / Direct', 'DCA Engine', 'Copy Trade'];
+        // 🟢 PROBABILISTIC STRATEGY DISTRIBUTION (10 : 1 : 0.6 : 0.5)
+        const getWeightedStrategy = () => {
+            const rand = Math.random() * 12.1;
+            if (rand < 10.0) return 'Sniper Engine';   // ~82.6%
+            if (rand < 11.0) return 'Manual / Direct'; // ~8.3%
+            if (rand < 11.6) return 'DCA Engine';      // ~5.0%
+            return 'Copy Trade';                       // ~4.1%
+        };
 
         // 1. 24H Activity (16 Auto-Engine Trades)
         for (let i = 0; i < 16; i++) {
@@ -5746,7 +5751,7 @@ if (isSimEdit) {
             const pnlPercent = 10 + Math.random() * 45;
             const amt = avgTradeSize * (0.7 + Math.random() * 0.6);
             const realizedPnlSol = avgWinPnl * (0.6 + Math.random() * 0.8);
-            const strat = stratNames[i % stratNames.length];
+            const strat = getWeightedStrategy();
             syntheticTrades.push({
                 createdAt: new Date(now - 86400000 - Math.random() * (days - 1) * 86400000).toISOString(),
                 isBuy: false,
@@ -5766,7 +5771,7 @@ if (isSimEdit) {
             const amt = avgTradeSize * (0.7 + Math.random() * 0.6);
             const isTail = i < (remainingLosses * 0.05);
             const realizedPnlSol = isTail ? -(0.95 + Math.random() * 0.15) : -amt * (Math.abs(pnlPercent) / 100);
-            const strat = stratNames[i % stratNames.length];
+            const strat = getWeightedStrategy();
             syntheticTrades.push({
                 createdAt: new Date(now - 86400000 - Math.random() * (days - 1) * 86400000).toISOString(),
                 isBuy: false,
@@ -5798,6 +5803,7 @@ if (isSimEdit) {
             });
         }
 
+        const { cachedSolUsdPrice } = await import('./services/grpc.service.js');
         let stratSummary = Object.entries(stratStats).map(([name, s]) => `• ${name}: <b>+${s.pnl.toFixed(4)} SOL</b>`).join('\n');
 
         return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
@@ -5807,9 +5813,9 @@ if (isSimEdit) {
             `• Total Trades: <b>${totalTrades.toLocaleString()} (${wins}W / ${losses}L — ${((wins/totalTrades)*100).toFixed(1)}%)</b>\n` +
             `• Volume: <b>${volume.toFixed(4)} SOL</b>\n` +
             `• Trading Days: <b>${days} Days</b>\n` +
-            `• Exposure Budget: <b>${spend.toFixed(2)} / ${maxBudget.toFixed(2)} SOL (${((spend / maxBudget) * 100).toFixed(1)}%)</b>\n` +
+            `• Exposure Budget: <b>${spend.toFixed(2)} / ${maxBudget.toFixed(2)} SOL (${maxBudget > 0 ? ((spend / maxBudget) * 100).toFixed(1) : '0'}%)</b>\n` +
             `• Risk Score: <b>${risk}% (Safe Risk)</b>\n\n` +
-            `📊 <b>Active Strategies:</b>\n${stratSummary || '• Default Strategies Active'}\n\n` +
+            `📊 <b>Active Strategies:</b>\n${stratSummary}\n\n` +
             `<i>Open your WebApp to see your updated dashboard.</i>`,
             { parse_mode: 'HTML' }
         );
@@ -6758,7 +6764,8 @@ app.post('/api/institutional-stats', async (req, res) => {
     }
 });
 
-// 🟢 FIXED: /simedit command with CREDITS support and 2,487 trades generator
+
+// 🟢 FIXED: /simedit command with CREDITS support and 4 Strategies
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!isAdmin(tgId)) {
@@ -6772,23 +6779,26 @@ bot.command('simedit', async (ctx) => {
         `🛠️ <b>SIMULATION FORGE ACTIVE</b>\n\n` +
         `Paste your configuration block below (Supports custom Credits, Trades, and Strategies):\n\n` +
         `<code>BALANCE_SOL: ${currentBal}\n` +
-        `CREDITS: 500\n` +
+        `CREDITS: 4298\n` +
         `WINS: 1554\n` +
         `LOSSES: 933\n` +
-        `VOL: 4507.7306\n` +
-        `DAYS: 69\n` +
-        `FIRST_TRADE_AT: 2026-06-06T10:00:00.000Z\n` +
-        `MAX_BUDGET: 0\n` +
-        `SPEND: 0\n` +
+        `VOL: 4570.3773\n` +
+        `DAYS: 83\n` +
+        `FIRST_TRADE_AT: 2026-05-25T10:00:00.000Z\n` +
+        `MAX_BUDGET: 389\n` +
+        `SPEND: 48\n` +
+        `SLIPPAGE: 0.12\n` +
         `SHARPE: 42.88\n` +
         `DRAWDOWN: -1.0253\n` +
         `PROFIT_FACTOR: 3.85\n` +
-        `RISK_SCORE: 34\n` +
+        `RISK_SCORE: 26\n` +
         `MANUAL_24H: 0 | 0.0000\n` +
         `AUTO_24H: 16 | 5.3929\n` +
         `HOURLY_CHART: 0.4, 0.8, -0.1, 1.2, 2.5, 0.0, 4.1, 1.5, -0.3, 0.9, 1.8, 3.2, 0.5, 1.1, -0.2, 2.0, 0.8, 1.4, -0.5, 0.7, 1.9, 2.8, 0.3, 1.6\n` +
         `STRAT1: Sniper Engine | 979.6932\n` +
-        `STRAT2: Manual / Direct | 178.9491</code>`
+        `STRAT2: Manual / Direct | 97.9693\n` +
+        `STRAT3: DCA Engine | 58.7816\n` +
+        `STRAT4: Copy Trade | 48.9847</code>`
     );
 });
 
