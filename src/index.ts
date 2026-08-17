@@ -342,7 +342,9 @@ app.post('/api/sim-trades', async (req, res) => {
 
 
 
-// Replace /api/sim-stats in src/index.ts
+
+
+
 // src/index.ts
 app.post('/api/sim-stats', async (req, res) => {
     try {
@@ -378,7 +380,7 @@ app.post('/api/sim-stats', async (req, res) => {
         const firstTradeAt = await getSimFirstTradeAt(tgId);
         const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '4298');
 
-        // Dynamic metrics calculation across the live trades array
+        // Dynamic metrics calculation over the live trades array
         const { computeUniversalStats } = await import('./utils/math.utils.js');
         const stats = computeUniversalStats(trades);
 
@@ -388,7 +390,7 @@ app.post('/api/sim-stats', async (req, res) => {
         let losses = stats.losses;
         let winRate = stats.winRate;
 
-        // Apply forged base if starting from fresh simedit configuration
+        // Apply forged PnL fallback if present
         const forgedRaw = await redis.get(`sim:forged:${tgId}`);
         if (forgedRaw) {
             try {
@@ -4948,28 +4950,28 @@ async function deleteKeysPattern(pattern: string) {
 async function handleCancel(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (user) {
-        // 🟢 1. Halt Live Auto-Sniper
+        // 1. Halt Live Auto-Sniper
         await prisma.autoSnipeConfig.updateMany({ where: { userId: user.id }, data: { isActive: false } });
 
-        // 🟢 2. Halt Live DCA Schedules & Pending Limit Orders
+        // 2. Halt Live DCA Schedules & Limit Orders
         await prisma.activeOrder.updateMany({ where: { userId: user.id, isActive: true }, data: { isActive: false } });
 
-        // 🟢 3. Halt Live Copy Trades
+        // 3. Halt Live Copy Trades
         await prisma.copyTradeConfig.updateMany({ where: { userId: user.id }, data: { isActive: false } });
         syncCopyTradeListeners(bot);
 
-        // 🟢 4. Clear Trailing Guards in Memory & Database
+        // 4. Clear Trailing Guards
         await cancelAllUserGuards(telegramId);
 
-        // 🟢 5. Halt Simulation Auto-Sniper
+        // 5. Halt Simulation Auto-Sniper
         await redis.set(`sim:autosnipe:${telegramId}`, 'false');
 
-        // 🟢 6. Deactivate AI Caller Scanning Loop
+        // 6. Stop AI Caller Scanning
         const { setUserCallerFilters } = await import('./services/caller.service.js');
         await setUserCallerFilters(telegramId, { isActive: false });
     }
 
-    // 🟢 7. Clear all wizard/prompt session state keys in Redis
+    // 7. Clear all interactive wizard states in Redis
     const keysToClear = [
         `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`,
         `state:limit:${telegramId}`, `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`,
@@ -5626,6 +5628,9 @@ if (isSimEdit) {
     const loader = await ctx.reply("<i>⏳ Synchronizing Simulation Matrix & Unlocking AI Caller...</i>", { parse_mode: 'HTML' });
 
     try {
+        // 🟢 1. FORCE SIMULATION MODE ACTIVE IMMEDIATELY
+        await redis.set(`sim:active:${telegramId}`, 'true');
+
         const wins = parseInt(parsedData['WINS']) || 1554;
         const losses = parseInt(parsedData['LOSSES']) || 933;
         const credits = parseInt(parsedData['CREDITS']) || 4298;
@@ -5637,7 +5642,7 @@ if (isSimEdit) {
         const risk = parseInt(parsedData['RISK_SCORE'] || '26');
         const slippage = parseFloat((parsedData['SLIPPAGE'] || '0.85').replace('%', '')) || 0.85;
 
-        // Parse 24H Activities
+        // 24H Activities
         const manualParts = (parsedData['MANUAL_24H'] || '0 | 0').split('|').map(s => parseFloat(s.trim()));
         const autoParts = (parsedData['AUTO_24H'] || '16 | 5.3929').split('|').map(s => parseFloat(s.trim()));
         const manual24hCount = manualParts[0] || 0;
@@ -5645,7 +5650,7 @@ if (isSimEdit) {
         const auto24hCount = autoParts[0] || 16;
         const auto24hPnl = autoParts[1] || 5.3929;
 
-        // Parse Strategies
+        // Strategies
         const stratStats: Record<string, { pnl: number, volume: number }> = {};
         let totalStratPnl = 0;
 
@@ -5664,17 +5669,16 @@ if (isSimEdit) {
         const hourlyChart = (parsedData['HOURLY_CHART'] || '').split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
         const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
-        // 🟢 1. EXPLICITLY ACTIVATE SIMULATION MODE IN REDIS
-        await redis.set(`sim:active:${telegramId}`, 'true');
+        // 🟢 2. PERSIST ALL SIMULATION KEYS (ALIGNED WITH GETSESSIONSPEND)
         await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
         await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
         await redis.set(`sim:first_trade_at:${telegramId}`, firstTradeAt);
         await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
         await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
+        await redis.set(`autosnipe:session_spend:sim:${telegramId}`, spend.toString(), 'EX', 86400); // 🟢 Key alignment
         await redis.set(`sim:credits:${telegramId}`, credits.toString());
         await redis.del(`sim_credits_warn:${telegramId}`);
 
-        // 🟢 2. PERSIST FORGED OVERRIDES & REAL-TIME STATS
         const forgedPayload = {
             risk,
             manual24hCount,
@@ -5698,7 +5702,7 @@ if (isSimEdit) {
         await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toFixed(4));
         await redis.set(`sim:stats:totalPnlSol:${telegramId}`, totalStratPnl.toFixed(4));
 
-        // 🟢 3. GENERATE INITIAL 2,487 TRADES
+        // 🟢 3. GENERATE SYNTHETIC TRADES
         const avgTradeSize = volume / totalTrades;
         const now = Date.now();
         const syntheticTrades = [];
@@ -5782,9 +5786,27 @@ if (isSimEdit) {
         syntheticTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         await redis.set(`sim:trades:${telegramId}`, JSON.stringify(syntheticTrades));
 
-        // 🟢 4. PERSIST TO DATABASE
+        // 🟢 4. SYNC DATABASE AUTOSNIPECONFIG & SIMSTATE
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
+            // Update AutoSnipeConfig so the sniper loop respects the budget immediately
+            const autoConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
+            if (autoConfig) {
+                await prisma.autoSnipeConfig.update({
+                    where: { id: autoConfig.id },
+                    data: { maxBudgetSol: maxBudget > 0 ? maxBudget : null }
+                });
+            } else {
+                await prisma.autoSnipeConfig.create({
+                    data: {
+                        userId: user.id,
+                        maxBudgetSol: maxBudget > 0 ? maxBudget : null,
+                        amountSol: 0.05,
+                        sniperMode: "PUMP"
+                    }
+                });
+            }
+
             await prisma.simState.upsert({
                 where: { userId: user.id },
                 update: { balance, startingBalance: balance, volume, credits, active: true },
