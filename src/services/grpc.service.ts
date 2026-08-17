@@ -480,22 +480,36 @@ function connectRaydiumFallbackWatcher(bot: any) {
     }, 'confirmed');
 }
 
+// src/services/grpc.service.ts
+
+// 🟢 Accepts audit reasons array directly to format rich notifications
 function buildSniperAuditMessage(
-    mint: string, score: number, stats: any, invested: number,
-    trailingDrop: number, takeProfit: number | string, strategy: string, signature: string
+    mint: string, 
+    score: number, 
+    stats: any, 
+    reasons: string[], 
+    invested: number,
+    trailingDrop: number, 
+    takeProfit: number | string, 
+    strategy: string, 
+    signature: string
 ): string {
-    let audit = `🟢 <b>SNIPE CONFIRMED!</b>\n\n`;
+    let audit = `🟢 <b>SNIPE CONFIRMED!${strategy === 'Sniper Engine' ? ' (AUTO)' : ''}</b>\n\n`;
     audit += `Token: <code>${mint.substring(0, 8)}...</code>\n`;
     audit += `Strategy: <b>${strategy}</b>\n`;
     audit += `Score: <b>${score}/100</b> ⭐\n\n`;
     
     audit += `<b>Audit Trail:</b>\n`;
-    audit += `${stats.ageMins < 60 ? '✅' : '⚠️'} 🕐 Age: ${Math.floor(stats.ageMins)}m\n`;
-    audit += `${stats.volume > 20000 ? '✅' : '⚠️'} 💰 Vol: $${(stats.volume / 1000).toFixed(1)}k\n`;
-    audit += `${stats.priceChangeM5 > 15 ? '✅' : '⚠️'} 📈 Mom: ${stats.priceChangeM5 >= 0 ? '+' : ''}${stats.priceChangeM5.toFixed(1)}%\n`;
-    audit += `${stats.liquidity > 20000 ? '✅' : '⚠️'} 💧 Liq: $${(stats.liquidity / 1000).toFixed(1)}k\n`;
-    if (stats.socials) audit += `✅ 🌐 Socials present\n`;
-    if (stats.lpLock && (stats.lpLock.burned || stats.lpLock.lockPct > 80)) audit += `✅ 🔒 LP Secured (${stats.lpLock.lockPct.toFixed(0)}% Locked/Burned)\n`;
+    if (reasons && reasons.length > 0) {
+        reasons.forEach(r => audit += `✅ ${r}\n`);
+    } else {
+        audit += `${stats.ageMins < 60 ? '✅' : '⚠️'} 🕐 Age: ${Math.floor(stats.ageMins || 0)}m\n`;
+        audit += `${stats.volume > 20000 ? '✅' : '⚠️'} 💰 Vol: $${((stats.volume || 0) / 1000).toFixed(1)}k\n`;
+        audit += `${stats.priceChangeM5 > 15 ? '✅' : '⚠️'} 📈 Mom: ${(stats.priceChangeM5 || 0) >= 0 ? '+' : ''}${(stats.priceChangeM5 || 0).toFixed(1)}%\n`;
+        audit += `${stats.liquidity > 20000 ? '✅' : '⚠️'} 💧 Liq: $${((stats.liquidity || 0) / 1000).toFixed(1)}k\n`;
+        if (stats.socials) audit += `✅ 🌐 Socials present\n`;
+        if (stats.lpLock && (stats.lpLock.burned || stats.lpLock.lockPct > 80)) audit += `✅ 🔒 LP Secured (${stats.lpLock.lockPct.toFixed(0)}% Locked/Burned)\n`;
+    }
     
     audit += `\nInvested: <b>${invested.toFixed(4)} SOL</b>\n`;
     audit += `Trailing Drop: <b>-${trailingDrop}%</b>\n`;
@@ -525,12 +539,11 @@ export async function triggerAutoSnipes(
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) return;
 
                 let score = 0, ageMins = 0, volUsd = 0, liqUsd = 0, priceChangeM5 = 0;
+                let auditReasons: string[] = [];
+                let auditStats: any = { ageMins: 0, volume: 0, liquidity: 0, priceChangeM5: 0, socials: false, lpLock: { lockPct: 0, burned: false } };
 
                 if (liveConfig.minScore > 0) {
                     try {
-                        let score = 0, ageMins = 0, volUsd = 0, liqUsd = 0, priceChangeM5 = 0;
-
-                        // 🟢 Check pre-scored cache from AI Caller first (fast-path)
                         const cachedHotTokens = await redis.get('caller:hot_scored_tokens');
                         let preScoredToken: any = null;
                         if (cachedHotTokens) {
@@ -540,14 +553,25 @@ export async function triggerAutoSnipes(
                             } catch (_) {}
                         }
 
+                        // 🟢 Use cached AI Caller audit trail if available
                         if (preScoredToken && preScoredToken.totalScore !== undefined) {
                             score = preScoredToken.totalScore;
                             volUsd = preScoredToken.volume || 0;
                             liqUsd = preScoredToken.liquidity || 0;
                             priceChangeM5 = preScoredToken.priceChangeM5 || 0;
                             ageMins = preScoredToken.ageMins || 0;
+
+                            auditReasons = preScoredToken.reasons || [];
+                            auditStats = {
+                                ageMins: preScoredToken.ageMins || 0,
+                                volume: preScoredToken.volume || 0,
+                                liquidity: preScoredToken.liquidity || 0,
+                                priceChangeM5: preScoredToken.priceChangeM5 || 0,
+                                socials: preScoredToken.stats?.hasSocials ?? (preScoredToken.socials?.length > 0),
+                                lpLock: preScoredToken.stats?.lpLock ?? { lockPct: 100, burned: true }
+                            };
                         } else {
-                            // Raw scoring fallback if token is brand new to the block
+                            // Fallback raw on-chain scoring
                             const { 
                                 computeTokenScore, 
                                 getModelScore, 
@@ -604,6 +628,8 @@ export async function triggerAutoSnipes(
                             const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials: false, isRug, devRep, lpLock, velocity, sellability, sentiment };
                             const heuristicResult = computeTokenScore(stats);
                             score = heuristicResult.score;
+                            auditReasons = heuristicResult.reasons || [];
+                            auditStats = { ageMins, volume: volUsd, liquidity: liqUsd, priceChangeM5, socials: true, lpLock: lpLock || { lockPct: 100, burned: true } };
 
                             if (score < liveConfig.minScore) return;
                             
@@ -686,8 +712,10 @@ export async function triggerAutoSnipes(
 
                     try {
                         const finalMsg = buildSniperAuditMessage(
-                            mintCa, score, 
-                            { ageMins, volume: volUsd, liquidity: liqUsd, priceChangeM5, socials: true, lpLock: { lockPct: 100 } }, 
+                            mintCa, 
+                            score, 
+                            auditStats,
+                            auditReasons, 
                             spent, 
                             liveConfig.autoTrailingDropPercent, 
                             liveConfig.autoTakeProfitPercent || 'OFF', 
@@ -703,6 +731,8 @@ export async function triggerAutoSnipes(
         }, delayMs);
     }
 }
+
+
 
 export async function igniteYellowstoneStream(bot: any) {
     if (!pollerStarted) {
