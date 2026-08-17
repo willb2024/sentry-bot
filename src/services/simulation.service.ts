@@ -546,47 +546,9 @@ export async function processSimCopyTrades(bot: any) {
     }
 }
 
-// ─── SIMULATION AUTO-SNIPER CONTROLLERS ──────────────────
-export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
-    const key = `sim:autosnipe:${telegramId}`;
-    const current = await redis.get(key);
-    const newState = current === 'true' ? 'false' : 'true';
-    await redis.set(key, newState);
-    
-    if (newState === 'true') {
-        const sessionId = crypto.randomUUID();
-        await redis.set(`autosnipe:session_id:sim:${telegramId}`, sessionId, 'EX', 86400);
-        await redis.del(`autosnipe:session_spend:sim:${telegramId}`);
-        await redis.del(`sim:session_trades:${sessionId}`);
-        if (!activeSimLoops.has(telegramId)) {
-            activeSimLoops.add(telegramId);
-            runSimAutoSnipeLoop(telegramId, bot).finally(() => activeSimLoops.delete(telegramId));
-        }
-    } else {
-        activeSimLoops.delete(telegramId);
-    }
-    await saveSimulationState(telegramId);
-    return newState === 'true';
-}
 
-export async function recoverSimAutoSnipeLoops(bot: any) {
-    try {
-        const keys = await redis.keys('sim:autosnipe:*');
-        for (const key of keys) {
-            const state = await redis.get(key);
-            if (state === 'true') {
-                const tgId = key.replace('sim:autosnipe:', '');
-                if (!activeSimLoops.has(tgId) && await isSimulationActive(tgId)) {
-                    activeSimLoops.add(tgId);
-                    runSimAutoSnipeLoop(tgId, bot).finally(() => activeSimLoops.delete(tgId));
-                    console.log(`🔄 [BOOT RECOVERY] Restarted Sim Auto-Sniper for ${tgId}`);
-                }
-            }
-        }
-    } catch (e: any) {
-        console.error("🔴 [BOOT RECOVERY] Failed to recover sim sniper loops:", e.message);
-    }
-}
+
+
 
 // src/services/simulation.service.ts
 export async function simExecuteSnipe(
@@ -693,22 +655,94 @@ export async function simExecuteSnipe(
     };
 }
 
-export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
+// ─── SIMULATION AUTO-SNIPER CONTROLLERS ──────────────────
+export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
+    const key = `sim:autosnipe:${telegramId}`;
+    const current = await redis.get(key);
+    const newState = current === 'true' ? 'false' : 'true';
+    await redis.set(key, newState);
+
+    if (newState === 'true') {
+        const sessionId = crypto.randomUUID();
+        const genId = crypto.randomUUID();
+        // 🟢 Generate atomic kill-switch token
+        await redis.set(`sim:autosnipe:gen:${telegramId}`, genId, 'EX', 86400);
+        await redis.set(`autosnipe:session_id:sim:${telegramId}`, sessionId, 'EX', 86400);
+        await redis.del(`autosnipe:session_spend:sim:${telegramId}`);
+        await redis.del(`sim:session_spend:${telegramId}`);
+        await redis.del(`sim:session_trades:${sessionId}`);
+        if (!activeSimLoops.has(telegramId)) {
+            activeSimLoops.add(telegramId);
+            runSimAutoSnipeLoop(telegramId, bot, genId).finally(() => activeSimLoops.delete(telegramId));
+        }
+    } else {
+        // 🟢 Invalidate any active loop immediately
+        await redis.del(`sim:autosnipe:gen:${telegramId}`);
+        activeSimLoops.delete(telegramId);
+    }
+    await saveSimulationState(telegramId);
+    return newState === 'true';
+}
+
+export async function killSimAutoSnipe(telegramId: string): Promise<void> {
+    await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+    await redis.del(`sim:autosnipe:gen:${telegramId}`);
+    activeSimLoops.delete(telegramId);
+}
+
+export async function recoverSimAutoSnipeLoops(bot: any) {
+    try {
+        const keys = await redis.keys('sim:autosnipe:*');
+        for (const key of keys) {
+            if (key.includes(':gen:')) continue; // Skip token keys
+            const state = await redis.get(key);
+            if (state === 'true') {
+                const tgId = key.replace('sim:autosnipe:', '');
+                if (!activeSimLoops.has(tgId) && await isSimulationActive(tgId)) {
+                    activeSimLoops.add(tgId);
+                    let genId = await redis.get(`sim:autosnipe:gen:${tgId}`);
+                    if (!genId) {
+                        genId = crypto.randomUUID();
+                        await redis.set(`sim:autosnipe:gen:${tgId}`, genId, 'EX', 86400);
+                    }
+                    runSimAutoSnipeLoop(tgId, bot, genId).finally(() => activeSimLoops.delete(tgId));
+                    console.log(`🔄 [BOOT RECOVERY] Restarted Sim Auto-Sniper for ${tgId}`);
+                }
+            }
+        }
+    } catch (e: any) {
+        console.error("🔴 [BOOT RECOVERY] Failed to recover sim sniper loops:", e.message);
+    }
+}
+
+export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: string) {
+    if (!genId) {
+        genId = crypto.randomUUID();
+        await redis.set(`sim:autosnipe:gen:${telegramId}`, genId, 'EX', 86400);
+    }
     const sessionId = await redis.get(`autosnipe:session_id:sim:${telegramId}`);
     let loopCounter = 0;
 
-    while (await redis.get(`sim:autosnipe:${telegramId}`) === 'true' && await isSimulationActive(telegramId)) {
+    while (true) {
+        // 🟢 Checkpoint 1: Loop entry check
+        const [active, currentGen] = await Promise.all([
+            redis.get(`sim:autosnipe:${telegramId}`),
+            redis.get(`sim:autosnipe:gen:${telegramId}`)
+        ]);
+        if (active !== 'true' || currentGen !== genId) break;
+        if (!(await isSimulationActive(telegramId))) break;
+
         loopCounter++;
-        if (loopCounter > 2000) {
-            await redis.set(`sim:autosnipe:${telegramId}`, 'false');
-            break;
+        if (loopCounter > 2000) { 
+            await killSimAutoSnipe(telegramId); 
+            break; 
         }
 
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
-        if (!config) {
-            await new Promise(r => setTimeout(r, 1000));
-            continue;
+        if (!config) { 
+            await new Promise(r => setTimeout(r, 1000)); 
+            continue; 
         }
 
         const token = await getRealTokenForSimDisplay();
@@ -734,6 +768,13 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             continue;
         }
 
+        // 🟢 Checkpoint 2: Re-check right before spending/calculating size
+        const [activeNow, genNow] = await Promise.all([
+            redis.get(`sim:autosnipe:${telegramId}`),
+            redis.get(`sim:autosnipe:gen:${telegramId}`)
+        ]);
+        if (activeNow !== 'true' || genNow !== genId) break;
+
         const solPrice = cachedSolUsdPrice || 156.93;
         const snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice);
 
@@ -741,7 +782,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const intendedSpend = snipeAmount * (user?.activeWallets || 1);
 
         if (config.maxBudgetSol && currentSpend + intendedSpend > config.maxBudgetSol) {
-            await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+            await killSimAutoSnipe(telegramId);
             await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
             break;
         }
@@ -756,29 +797,39 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             config.autoTakeProfitPercent || 45
         );
 
+        // 🟢 Checkpoint 3: Verify token generation didn't change while trade was executing
+        const [activeAfter, genAfter] = await Promise.all([
+            redis.get(`sim:autosnipe:${telegramId}`),
+            redis.get(`sim:autosnipe:gen:${telegramId}`)
+        ]);
+        const stillActive = activeAfter === 'true' && genAfter === genId;
+
         if (result.success) {
             await addSessionSpend(telegramId, result.volumeSpent, 'sim');
 
-            try {
-                // 🟢 Build and dispatch the complete rich audit trail message
-                let auditMessage = `🎯 <b>SIM AUTO-SNIPE EXECUTED</b>\n\n`;
-                auditMessage += `Token: <code>${token.mint.substring(0, 8)}...</code>\n`;
-                auditMessage += `Strategy: <b>Sniper Engine</b>\n`;
-                auditMessage += `Score: <b>${score}/100</b> ⭐\n\n`;
-                auditMessage += `<b>Audit Trail:</b>\n`;
-                (result.auditReasons || []).forEach(r => auditMessage += `✅ ${r}\n`);
-                auditMessage += `\nInvested: <b>${result.volumeSpent.toFixed(4)} SOL</b>\n`;
-                auditMessage += `Trailing Drop: <b>-${config.autoTrailingDropPercent || 15}%</b>\n`;
-                auditMessage += `Take Profit: <b>${typeof config.autoTakeProfitPercent === 'number' ? '+' + config.autoTakeProfitPercent + '%' : 'OFF'}</b>\n\n`;
-                auditMessage += `Status: 🟢 Confirmed (Simulated)\n`;
-                auditMessage += `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
+            if (stillActive) {
+                try {
+                    let auditMessage = `🎯 <b>SIM AUTO-SNIPE EXECUTED</b>\n\n`;
+                    auditMessage += `Token: <code>${token.mint.substring(0, 8)}...</code>\n`;
+                    auditMessage += `Strategy: <b>Sniper Engine</b>\n`;
+                    auditMessage += `Score: <b>${score}/100</b> ⭐\n\n`;
+                    auditMessage += `<b>Audit Trail:</b>\n`;
+                    (result.auditReasons || []).forEach(r => auditMessage += `✅ ${r}\n`);
+                    auditMessage += `\nInvested: <b>${result.volumeSpent.toFixed(4)} SOL</b>\n`;
+                    auditMessage += `Trailing Drop: <b>-${config.autoTrailingDropPercent || 15}%</b>\n`;
+                    auditMessage += `Take Profit: <b>${typeof config.autoTakeProfitPercent === 'number' ? '+' + config.autoTakeProfitPercent + '%' : 'OFF'}</b>\n\n`;
+                    auditMessage += `Status: 🟢 Confirmed (Simulated)\n`;
+                    auditMessage += `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
 
-                await bot.telegram.sendMessage(telegramId, auditMessage, { 
-                    parse_mode: 'HTML', 
-                    link_preview_options: { is_disabled: true } 
-                });
-            } catch (_) {}
+                    await bot.telegram.sendMessage(telegramId, auditMessage, { 
+                        parse_mode: 'HTML', 
+                        link_preview_options: { is_disabled: true } 
+                    });
+                } catch (_) {}
+            }
         }
+
+        if (!stillActive) break; // 🟢 Stop immediately if cancelled
 
         const organicDelayMs = 500 + Math.random() * 1000;
         await new Promise(r => setTimeout(r, organicDelayMs));

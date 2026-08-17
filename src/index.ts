@@ -2767,13 +2767,11 @@ bot.command('leaderboard', async (ctx) => {
 });
 
 
-// 🟢 GLOBAL PANIC CANCEL
 bot.action('action_global_cancel', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    // 🟢 UX FIX: Loader
     await safeEditMessageText(ctx, `<i>🛑 Shutting down all trading engines and clearing active memory...</i>`);
 
     const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
@@ -2786,6 +2784,10 @@ bot.action('action_global_cancel', async (ctx) => {
     syncCopyTradeListeners(bot);
     const cancelledGuards = await cancelAllUserGuards(tgId);
     
+    // 🟢 Hard kill sim loop and token
+    const { killSimAutoSnipe } = await import('./services/simulation.service.js');
+    await killSimAutoSnipe(tgId);
+
     const { setUserCallerFilters } = await import('./services/caller.service.js');
     await setUserCallerFilters(tgId, { isActive: false });
 
@@ -4945,8 +4947,6 @@ async function deleteKeysPattern(pattern: string) {
     if (keys.length > 0) await redis.del(...keys);
 }
 
-
-// src/index.ts
 async function handleCancel(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (user) {
@@ -4963,15 +4963,16 @@ async function handleCancel(telegramId: string) {
         // 4. Clear Trailing Guards
         await cancelAllUserGuards(telegramId);
 
-        // 5. Halt Simulation Auto-Sniper
-        await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+        // 🟢 5. Hard Kill Sim Auto-Sniper & Invalidate Token Generation
+        const { killSimAutoSnipe } = await import('./services/simulation.service.js');
+        await killSimAutoSnipe(telegramId);
 
         // 6. Stop AI Caller Scanning
         const { setUserCallerFilters } = await import('./services/caller.service.js');
         await setUserCallerFilters(telegramId, { isActive: false });
     }
 
-    // 7. Clear all interactive wizard states in Redis
+    // 7. Clear all interactive wizard session states
     const keysToClear = [
         `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`,
         `state:limit:${telegramId}`, `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`,
