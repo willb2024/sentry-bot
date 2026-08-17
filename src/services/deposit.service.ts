@@ -51,12 +51,23 @@ export async function startDepositWatcher(bot: any) {
 
             for (const chunk of addressChunks) {
                 try {
-                    const pubkeys = chunk.map(addr => new PublicKey(addr));
+                    const validChunk: string[] = [];
+                    const pubkeys: PublicKey[] = [];
+
+                    for (const addr of chunk) {
+                        try {
+                            pubkeys.push(new PublicKey(addr));
+                            validChunk.push(addr);
+                        } catch (_) {}
+                    }
+
+                    if (pubkeys.length === 0) continue;
+
                     const accounts = await connection.getMultipleAccountsInfo(pubkeys).catch(() => null);
                     if (accounts) {
                         accounts.forEach((acc, idx) => {
                             const balanceSol = acc ? acc.lamports / 1_000_000_000 : 0;
-                            balanceMap.set(chunk[idx], balanceSol);
+                            balanceMap.set(validChunk[idx], balanceSol);
                         });
                     }
                 } catch (chunkErr: any) {

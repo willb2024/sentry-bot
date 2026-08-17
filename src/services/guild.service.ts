@@ -12,7 +12,7 @@ import { isSimulationActive } from './simulation.service.js';
 dotenv.config();
 
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
-const PRICE_SOL = 0.2; // 🟢 0.2 SOL activation fee
+const PRICE_SOL = 0.2; // 0.2 SOL activation fee (free in simulation)
 
 export async function createGuild(
     telegramId: string, 
@@ -256,9 +256,18 @@ export async function executeGuildAirdrop(telegramId: string, guildId: string, t
         const lamportsPer = Math.floor(perMember * LAMPORTS_PER_SOL);
         if (lamportsPer <= 0) return { success: false, message: "Amount too small to split." };
 
-        const instructions = top50.filter(m => m && m.walletAddress && m.walletAddress !== "Unknown").map(m => SystemProgram.transfer({
-            fromPubkey: signer.vaultPubkey, toPubkey: new PublicKey(m!.walletAddress), lamports: lamportsPer
-        }));
+        const instructions = [];
+        for (const m of top50) {
+            if (!m || !m.walletAddress || m.walletAddress === "Unknown") continue;
+            try {
+                const destPubkey = new PublicKey(m.walletAddress);
+                instructions.push(SystemProgram.transfer({
+                    fromPubkey: signer.vaultPubkey, toPubkey: destPubkey, lamports: lamportsPer
+                }));
+            } catch (_) {}
+        }
+
+        if (instructions.length === 0) return { success: false, message: "No valid recipient addresses." };
 
         const CHUNK_SIZE = 20;
         let confirmedTxs = 0;
@@ -318,10 +327,13 @@ export async function executeTieredAirdrop(telegramId: string, guildId: string, 
             else amount = ranks11to50Sol;
             if (amount <= 0) continue;
 
-            instructions.push(SystemProgram.transfer({
-                fromPubkey: signer.vaultPubkey, toPubkey: new PublicKey(m.walletAddress), lamports: Math.floor(amount * LAMPORTS_PER_SOL)
-            }));
-            totalPaid += amount;
+            try {
+                const destPubkey = new PublicKey(m.walletAddress);
+                instructions.push(SystemProgram.transfer({
+                    fromPubkey: signer.vaultPubkey, toPubkey: destPubkey, lamports: Math.floor(amount * LAMPORTS_PER_SOL)
+                }));
+                totalPaid += amount;
+            } catch (_) {}
         }
         if (instructions.length === 0) return { success: false, message: "No eligible recipients." };
 
@@ -371,27 +383,32 @@ export async function executeIndividualAirdrop(telegramId: string, guildId: stri
             return { success: false, message: `No member found at rank #${targetRank}.` };
         }
 
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const vTx = new VersionedTransaction(new TransactionMessage({
-            payerKey: signer.vaultPubkey, recentBlockhash: blockhash,
-            instructions: [SystemProgram.transfer({
-                fromPubkey: signer.vaultPubkey, toPubkey: new PublicKey(target.walletAddress),
-                lamports: Math.floor(amountSol * LAMPORTS_PER_SOL)
-            })]
-        }).compileToV0Message());
-        vTx.sign([signer.keypair]);
+        try {
+            const destPubkey = new PublicKey(target.walletAddress);
+            const { blockhash } = await connection.getLatestBlockhash('confirmed');
+            const vTx = new VersionedTransaction(new TransactionMessage({
+                payerKey: signer.vaultPubkey, recentBlockhash: blockhash,
+                instructions: [SystemProgram.transfer({
+                    fromPubkey: signer.vaultPubkey, toPubkey: destPubkey,
+                    lamports: Math.floor(amountSol * LAMPORTS_PER_SOL)
+                })]
+            }).compileToV0Message());
+            vTx.sign([signer.keypair]);
 
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+            const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
 
-        let confirmed = false;
-        for (let i = 0; i < 15; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) { confirmed = true; break; }
+            let confirmed = false;
+            for (let i = 0; i < 15; i++) {
+                await new Promise(r => setTimeout(r, 2000));
+                const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+                if (status?.value && !status.value.err) { confirmed = true; break; }
+            }
+            if (!confirmed) return { success: false, message: "Transaction dropped by network." };
+
+            return { success: true, message: `Sent ${amountSol} SOL to @${target.username} (#${targetRank}).`, signature: sig };
+        } catch (addrErr: any) {
+            return { success: false, message: `Invalid recipient wallet address: ${target.walletAddress}` };
         }
-        if (!confirmed) return { success: false, message: "Transaction dropped by network." };
-
-        return { success: true, message: `Sent ${amountSol} SOL to @${target.username} (#${targetRank}).`, signature: sig };
     } catch (e: any) {
         return { success: false, message: e.message || "Airdrop failed." };
     } finally {

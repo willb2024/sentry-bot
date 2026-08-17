@@ -4930,6 +4930,24 @@ async function deleteKeysPattern(pattern: string) {
 // =========================================================
 
 async function handleCancel(telegramId: string) {
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (user) {
+        // 🟢 1. Halt Live Automations
+        await prisma.autoSnipeConfig.updateMany({ where: { userId: user.id }, data: { isActive: false } });
+        await prisma.activeOrder.updateMany({ where: { userId: user.id, isActive: true }, data: { isActive: false } });
+        await prisma.copyTradeConfig.updateMany({ where: { userId: user.id }, data: { isActive: false } });
+        
+        // 🟢 2. Halt Simulation Automations
+        await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+        
+        // 🟢 3. Clear In-Memory Trailing Guards
+        await cancelAllUserGuards(telegramId);
+        
+        // 🟢 4. Deactivate AI Caller
+        const { setUserCallerFilters } = await import('./services/caller.service.js');
+        await setUserCallerFilters(telegramId, { isActive: false });
+    }
+
     const keysToClear = [
         `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`,
         `state:limit:${telegramId}`, `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`,
@@ -7206,8 +7224,10 @@ async function bootEcosystem() {
         startCoinCaller(bot); 
 
         // 🟢 Starts the High-Frequency Simulation TP/SL Guard Resolver
-        const { startSimulationGuardResolver } = await import('./services/simulation.service.js');
+
+        const { startSimulationGuardResolver, recoverSimAutoSnipeLoops } = await import('./services/simulation.service.js');
         startSimulationGuardResolver(bot);
+        await recoverSimAutoSnipeLoops(bot); // 🟢 Auto-recovers sim sniper on boot
 
         console.log('⏳ Booting BullMQ Background Task Queues...');
         await dcaQueue.add('dca-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } });

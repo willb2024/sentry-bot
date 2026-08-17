@@ -4,14 +4,8 @@ import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { generatePnlCard } from './image.service.js';
 import { cachedSolUsdPrice } from './grpc.service.js';
-import { getLivePriceSol, subscribeToMintPrice } from './guard-price-feed.service.js';
-import { getCachedTokenPrice } from './engine.service.js';
-import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { computeTokenScore, TokenStats } from './caller.service.js';
-import { connection } from '../lib/connection.js';
-import { PublicKey } from '@solana/web3.js';
 import axios from 'axios';
-import { addTrailingStopToMemory } from './order.service.js';
 import { awardGuildPoints } from './guild.service.js';
 
 const activeSimLoops = new Set<string>();
@@ -444,10 +438,6 @@ export async function simExecuteSnipe(
     const posKey = `sim:positions:${telegramId}`;
     const existing: SimPosition[] = JSON.parse(await redis.get(posKey) || '[]');
     
-    // Calibrate realistic outcome trajectory based on AI Score:
-    // Score >= 75 -> 68% Win Rate
-    // Score >= 55 -> 58% Win Rate
-    // Score < 55  -> 38% Win Rate
     let winProbability = 0.38;
     if (score >= 75) winProbability = 0.68;
     else if (score >= 55) winProbability = 0.58;
@@ -470,7 +460,7 @@ export async function simExecuteSnipe(
         strategy,
         score,
         winTrajectory,
-        ticksRemaining: 4, // Exits in ~8 seconds
+        ticksRemaining: 4,
         createdAt: Date.now()
     };
 
@@ -480,9 +470,7 @@ export async function simExecuteSnipe(
     await recordSimTrade(telegramId, true, amountSol, 0, strategy, tokenAddress, 0.12);
     await recordStatsEvent(telegramId, 'sim', 0);
     
-    // 🟢 Awards Guild Points in simulation
     await awardGuildPoints(telegramId, amountSol).catch(() => {});
-    
     await saveSimulationState(telegramId);
 
     return { 
@@ -530,9 +518,7 @@ export async function simExecuteExit(
     await recordSimTrade(telegramId, false, soldSol, pnlPercent, strategy, tokenAddress, 0.12);
     await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
 
-    // 🟢 Awards Guild Points on simulated exits
     await awardGuildPoints(telegramId, soldSol).catch(() => {});
-
     await saveSimulationState(telegramId);
 
     return { 
@@ -578,7 +564,6 @@ export async function generateSimCallerAlert(
 
         const scoreRes = computeTokenScore(stats);
         
-        // Strict threshold check: score >= minScore
         if (scoreRes.score >= (filters.minScore || 55)) {
             return {
                 mint: realToken.mint,
@@ -629,7 +614,7 @@ export async function processSimCopyTrades(bot: any) {
     }
 }
 
-// ─── SIMULATION AUTO-SNIPER LOOP ─────────────────────────
+// ─── SIMULATION AUTO-SNIPER CONTROLLERS ──────────────────
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
     const key = `sim:autosnipe:${telegramId}`;
     const current = await redis.get(key);
@@ -652,6 +637,25 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
     return newState === 'true';
 }
 
+export async function recoverSimAutoSnipeLoops(bot: any) {
+    try {
+        const keys = await redis.keys('sim:autosnipe:*');
+        for (const key of keys) {
+            const state = await redis.get(key);
+            if (state === 'true') {
+                const tgId = key.replace('sim:autosnipe:', '');
+                if (!activeSimLoops.has(tgId) && await isSimulationActive(tgId)) {
+                    activeSimLoops.add(tgId);
+                    runSimAutoSnipeLoop(tgId, bot).finally(() => activeSimLoops.delete(tgId));
+                    console.log(`🔄 [BOOT RECOVERY] Restarted Sim Auto-Sniper for ${tgId}`);
+                }
+            }
+        }
+    } catch (e: any) {
+        console.error("🔴 [BOOT RECOVERY] Failed to recover sim sniper loops:", e.message);
+    }
+}
+
 export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
     const sessionId = await redis.get(`autosnipe:session_id:sim:${telegramId}`);
     let loopCounter = 0;
@@ -666,7 +670,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
         const config = user?.autoSnipeConfig;
         if (!config) {
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 1000));
             continue;
         }
 
@@ -688,9 +692,8 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const scoreRes = computeTokenScore(stats);
         let score = scoreRes.score;
 
-        // Strict filter: score >= minScore
         if (config.minScore > 0 && score < config.minScore) {
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 500));
             continue;
         }
 
@@ -733,7 +736,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
             } catch (_) {}
         }
 
-        const organicDelayMs = 3000 + Math.random() * 3000;
+        const organicDelayMs = 500 + Math.random() * 1000;
         await new Promise(r => setTimeout(r, organicDelayMs));
     }
 

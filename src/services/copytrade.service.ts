@@ -148,8 +148,8 @@ export async function syncCopyTradeListeners(bot: any) {
                                         f.slippagePercent || undefined,
                                         0,
                                         undefined,
-                                        'Copy Trade'
-                                    ).then(async (res) => {
+                                        'Copy Trade' // 🟢 Exact match
+                                    ).then(async (res) =>{
                                         if (res.success) {
                                             try {
                                                 await addTrailingStopToMemory(
@@ -177,13 +177,13 @@ export async function syncCopyTradeListeners(bot: any) {
                                     if (await isSimulationActive(follower.user.telegramId)) continue;
                                     const f: any = follower; 
                                     if (f.copySells === false) continue;
-
+                                    
                                     executeExit(
                                         follower.user.telegramId,
                                         targetTokenMint,
                                         sellPercentage,
                                         false,
-                                        'Copy Trade'
+                                        'Copy Trade' // 🟢 Exact match
                                     ).then(async (res) => {
                                         if (res.success) {
                                             try { 

@@ -528,71 +528,92 @@ export async function triggerAutoSnipes(
 
                 if (liveConfig.minScore > 0) {
                     try {
-                        const { 
-                            computeTokenScore, 
-                            getModelScore, 
-                            getSentimentScore, 
-                            getDevReputation, 
-                            checkLpLockStatus, 
-                            trackHolderVelocity, 
-                            simulateSellability 
-                        } = await import('./caller.service.js');
-                        const { consumeSniperCredit } = await import('./credits.service.js');
-                        const { checkTokenRugRisk, checkRecentMevActivity } = await import('./price.service.js');
+                        let score = 0, ageMins = 0, volUsd = 0, liqUsd = 0, priceChangeM5 = 0;
 
-                        const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
-                        ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
-                        const creatorWallet = seen?.creator || '';
+                        // 🟢 Check pre-scored cache from AI Caller first (fast-path)
+                        const cachedHotTokens = await redis.get('caller:hot_scored_tokens');
+                        let preScoredToken: any = null;
+                        if (cachedHotTokens) {
+                            try {
+                                const hotTokens = JSON.parse(cachedHotTokens);
+                                preScoredToken = hotTokens.find((t: any) => t.mint === mintCa);
+                            } catch (_) {}
+                        }
 
-                        if (mode === 'PUMP') {
-                            const { getBondingCurveAddress } = await import('./price.service.js');
-                            const curvePda = getBondingCurveAddress(mintCa);
-                            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
-                            if (accInfo?.data) {
-                                const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-                                if (buf.length >= 40) {
-                                    const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
-                                    const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
-                                    liqUsd = virtualSolReserves * cachedSolUsdPrice;
-                                    volUsd = realSolReserves * cachedSolUsdPrice * 2;
-                                }
-                            }
+                        if (preScoredToken && preScoredToken.totalScore !== undefined) {
+                            score = preScoredToken.totalScore;
+                            volUsd = preScoredToken.volume || 0;
+                            liqUsd = preScoredToken.liquidity || 0;
+                            priceChangeM5 = preScoredToken.priceChangeM5 || 0;
+                            ageMins = preScoredToken.ageMins || 0;
                         } else {
-                            const res = await axiosClient.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 }).catch(() => null);
-                            const pair = res?.data?.pairs?.[0];
-                            if (pair) { liqUsd = pair.liquidity?.usd || 0; volUsd = pair.volume?.h24 || 0; priceChangeM5 = pair.priceChange?.m5 || 0; }
-                        }
+                            // Raw scoring fallback if token is brand new to the block
+                            const { 
+                                computeTokenScore, 
+                                getModelScore, 
+                                getSentimentScore, 
+                                getDevReputation, 
+                                checkLpLockStatus, 
+                                trackHolderVelocity, 
+                                simulateSellability 
+                            } = await import('./caller.service.js');
+                            const { consumeSniperCredit } = await import('./credits.service.js');
+                            const { checkTokenRugRisk, checkRecentMevActivity } = await import('./price.service.js');
 
-                        let isRug = false, hasMev = false;
-                        let devRep: any = { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
-                        let lpLock: any = { locked: false, burned: false, lockPct: 0 };
-                        let velocity: any = { growthRate: 0, uniqueBuyers5m: 0 };
-                        let sellability: any = { sellable: true, estimatedTaxPct: 0 };
+                            const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
+                            ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
+                            const creatorWallet = seen?.creator || '';
 
-                        if (liveConfig.useDeepScoring) {
-                            [isRug, hasMev, devRep, lpLock, velocity, sellability] = await Promise.all([
-                                checkTokenRugRisk(mintCa).catch(() => true),
-                                checkRecentMevActivity(mintCa).catch(() => true),
-                                getDevReputation(creatorWallet).catch(() => ({ launchCount: 0, avgRugScore: 0, isKnownRugger: false })),
-                                checkLpLockStatus(mintCa).catch(() => ({ locked: false, burned: false, lockPct: 0 })),
-                                trackHolderVelocity(mintCa).catch(() => ({ growthRate: 0, uniqueBuyers5m: 0 })),
-                                mode === 'PUMP' ? Promise.resolve({ sellable: true, estimatedTaxPct: 0 }) : simulateSellability(mintCa).catch(() => ({ sellable: true, estimatedTaxPct: 0 }))
-                            ]);
-                        }
+                            if (mode === 'PUMP') {
+                                const { getBondingCurveAddress } = await import('./price.service.js');
+                                const curvePda = getBondingCurveAddress(mintCa);
+                                const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
+                                if (accInfo?.data) {
+                                    const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+                                    if (buf.length >= 40) {
+                                        const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
+                                        const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
+                                        liqUsd = virtualSolReserves * cachedSolUsdPrice;
+                                        volUsd = realSolReserves * cachedSolUsdPrice * 2;
+                                    }
+                                }
+                            } else {
+                                const res = await axiosClient.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 }).catch(() => null);
+                                const pair = res?.data?.pairs?.[0];
+                                if (pair) { liqUsd = pair.liquidity?.usd || 0; volUsd = pair.volume?.h24 || 0; priceChangeM5 = pair.priceChange?.m5 || 0; }
+                            }
 
-                        const sentiment = await getSentimentScore(symbol);
-                        const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials: false, isRug, devRep, lpLock, velocity, sellability, sentiment };
-                        const heuristicResult = computeTokenScore(stats);
-                        score = heuristicResult.score;
+                            let isRug = false, hasMev = false;
+                            let devRep: any = { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
+                            let lpLock: any = { locked: false, burned: false, lockPct: 0 };
+                            let velocity: any = { growthRate: 0, uniqueBuyers5m: 0 };
+                            let sellability: any = { sellable: true, estimatedTaxPct: 0 };
 
-                        if (score < liveConfig.minScore) return;
-                        
-                        const creditResult = await consumeSniperCredit(liveConfig.user.telegramId, mintCa);
-                        const useML = creditResult.success && !creditResult.fallback;
+                            if (liveConfig.useDeepScoring) {
+                                [isRug, hasMev, devRep, lpLock, velocity, sellability] = await Promise.all([
+                                    checkTokenRugRisk(mintCa).catch(() => true),
+                                    checkRecentMevActivity(mintCa).catch(() => true),
+                                    getDevReputation(creatorWallet).catch(() => ({ launchCount: 0, avgRugScore: 0, isKnownRugger: false })),
+                                    checkLpLockStatus(mintCa).catch(() => ({ locked: false, burned: false, lockPct: 0 })),
+                                    trackHolderVelocity(mintCa).catch(() => ({ growthRate: 0, uniqueBuyers5m: 0 })),
+                                    mode === 'PUMP' ? Promise.resolve({ sellable: true, estimatedTaxPct: 0 }) : simulateSellability(mintCa).catch(() => ({ sellable: true, estimatedTaxPct: 0 }))
+                                ]);
+                            }
 
-                        if (useML) {
-                            const mlScore = await getModelScore(mintCa, stats);
-                            if (mlScore !== null) score = mlScore;
+                            const sentiment = await getSentimentScore(symbol);
+                            const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials: false, isRug, devRep, lpLock, velocity, sellability, sentiment };
+                            const heuristicResult = computeTokenScore(stats);
+                            score = heuristicResult.score;
+
+                            if (score < liveConfig.minScore) return;
+                            
+                            const creditResult = await consumeSniperCredit(liveConfig.user.telegramId, mintCa);
+                            const useML = creditResult.success && !creditResult.fallback;
+
+                            if (useML) {
+                                const mlScore = await getModelScore(mintCa, stats);
+                                if (mlScore !== null) score = mlScore;
+                            }
                         }
 
                         if (score < liveConfig.minScore) return; 
