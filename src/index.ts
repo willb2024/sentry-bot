@@ -481,18 +481,85 @@ bot.command('resetlive', async (ctx) => {
     }
 });
 
-// 🟢 NEW: Toggle Simulation Mode Endpoint
-app.post('/api/toggle-sim', async (req, res) => {
+// src/index.ts - Replace /api/institutional-stats
+app.post('/api/institutional-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const tgId = extractTelegramId(req.body.initData);
-        if (!tgId) return res.status(401).json({ error: "Invalid initData" });
-        const { setSimulationMode } = await import('./services/simulation.service.js');
-        await setSimulationMode(tgId, req.body.active);
-        res.json({ success: true });
-    } catch (e) { res.status(500).json({ error: 'Server Error' }); }
-});
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
 
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+
+        let trades: any[] = [];
+        let maxBudget = 0;
+        let currentSpend = 0;
+        const stratStats: Record<string, { pnl: number, volume: number }> = {};
+
+        const user = await prisma.user.findUnique({
+            where: { telegramId: tgId },
+            include: { autoSnipeConfig: true }
+        });
+        maxBudget = user?.autoSnipeConfig?.maxBudgetSol || 0;
+
+        if (isSim) {
+            const rawTrades = await redis.get(`sim:trades:${tgId}`);
+            trades = rawTrades ? JSON.parse(rawTrades) : [];
+            // 🟢 Reads the enforced session spend key
+            currentSpend = parseFloat(await redis.get(`autosnipe:session_spend:sim:${tgId}`) || await redis.get(`sim:session_spend:${tgId}`) || '0');
+            if (maxBudget === 0) {
+                maxBudget = parseFloat(await redis.get(`sim:max_budget:${tgId}`) || '0');
+            }
+        } else {
+            if (!user) return res.status(404).json({ error: 'User not found' });
+            trades = await prisma.trade.findMany({
+                where: { userId: user.id, status: 'CONFIRMED' },
+                orderBy: { createdAt: 'desc' }
+            });
+            // 🟢 Reads the enforced session spend key for Live
+            currentSpend = parseFloat(await redis.get(`autosnipe:session_spend:live:${tgId}`) || '0');
+        }
+
+        // 🟢 Dynamic aggregation over all strategies
+        trades.forEach(t => {
+            if (!t.isBuy) {
+                let s = t.strategy || 'Manual / Direct';
+                if (s === 'MANUAL') s = 'Manual / Direct';
+                if (s === 'SNIPER') s = 'Sniper Engine';
+                if (s === 'COPY_TRADE') s = 'Copy Trade';
+                if (s === 'DCA') s = 'DCA Engine';
+                if (s === 'LIMIT') s = 'Limit Order';
+
+                if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
+                stratStats[s].pnl += (t.realizedPnlSol || 0);
+                stratStats[s].volume += (t.amountInSol || 0);
+            }
+        });
+
+        const universalStats = computeUniversalStats(trades);
+        const slippageValues = trades.map((t: any) => t.slippagePercent || 0).filter((v: number) => v > 0);
+        const avgSlippage = slippageValues.length > 0 ? (slippageValues.reduce((a: number, b: number) => a + b, 0) / slippageValues.length) : 0.85;
+
+        const pnlArray = trades.filter((t: any) => !t.isBuy && t.realizedPnlSol !== null).map((t: any) => t.realizedPnlSol || 0).sort((a: number, b: number) => a - b);
+        let cvar = 0;
+        if (pnlArray.length > 0) {
+            const count = Math.max(1, Math.floor(pnlArray.length * 0.05));
+            const tail = pnlArray.slice(0, count);
+            cvar = tail.reduce((a: number, b: number) => a + b, 0) / tail.length;
+        }
+
+        res.json({
+            totalTradesCount: universalStats.totalTrades,
+            avgSlippage,
+            cvar,
+            maxBudget,
+            currentSpend,
+            stratStats
+        });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 
 // 🟢 GAP 2 FIX: Serves the raw binary PNG of the PnL card from Redis cache
@@ -6615,140 +6682,8 @@ app.get('/g/:guildCode', async (req, res) => {
 });
 
 
-// 🟢 FIXED: /api/stats-window with 100% Live & Sim Parity
-app.post('/api/stats-window', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        const isSim = await isSimulationActive(telegramId);
 
-        if (isSim) {
-            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                if (f.manual24hCount !== undefined && f.auto24hCount !== undefined) {
-                    return res.json({
-                        manual: { count: f.manual24hCount, pnl: f.manual24hPnl || 0 },
-                        auto: { count: f.auto24hCount, pnl: f.auto24hPnl || 0 }
-                    });
-                }
-            }
-
-            const now = Date.now();
-            const oneDayAgo = now - 86400000;
-            const rawTrades = await redis.get(`sim:trades:${telegramId}`);
-            const simTrades = rawTrades ? JSON.parse(rawTrades) : [];
-            const recentTrades = simTrades.filter((t: any) => new Date(t.createdAt).getTime() > oneDayAgo && !t.isBuy);
-
-            const manualTrades = recentTrades.filter((t: any) => t.strategy === 'Manual / Direct' || t.strategy === 'MANUAL');
-            const autoTrades = recentTrades.filter((t: any) => t.strategy !== 'Manual / Direct' && t.strategy !== 'MANUAL');
-
-            return res.json({
-                manual: { count: manualTrades.length, pnl: manualTrades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0) },
-                auto: { count: autoTrades.length, pnl: autoTrades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0) }
-            });
-        } else {
-            const user = await prisma.user.findUnique({ where: { telegramId } });
-            if (!user) return res.json({ manual: { count: 0, pnl: 0 }, auto: { count: 0, pnl: 0 } });
-
-            const oneDayAgo = new Date(Date.now() - 86400000);
-            const liveRecent = await prisma.trade.findMany({
-                where: { userId: user.id, isBuy: false, status: 'CONFIRMED', createdAt: { gte: oneDayAgo } },
-                select: { strategy: true, realizedPnlSol: true }
-            });
-
-            const manualTrades = liveRecent.filter(t => t.strategy === 'MANUAL' || t.strategy === 'Manual / Direct');
-            const autoTrades = liveRecent.filter(t => t.strategy !== 'MANUAL' && t.strategy !== 'Manual / Direct');
-
-            return res.json({
-                manual: { count: manualTrades.length, pnl: manualTrades.reduce((s, t) => s + (t.realizedPnlSol || 0), 0) },
-                auto: { count: autoTrades.length, pnl: autoTrades.reduce((s, t) => s + (t.realizedPnlSol || 0), 0) }
-            });
-        }
-    } catch (e) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// 🟢 FIXED: /api/institutional-stats with accurate budget, TCA, CVaR, & Sharpe
-app.post('/api/institutional-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const tgId = extractTelegramId(req.body.initData);
-        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
-
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        const isSim = await isSimulationActive(tgId);
-
-        let trades: any[] = [];
-        let maxBudget = 0;
-        let currentSpend = 0;
-        const stratStats: Record<string, { pnl: number, volume: number }> = {};
-
-        if (isSim) {
-            const rawTrades = await redis.get(`sim:trades:${tgId}`);
-            trades = rawTrades ? JSON.parse(rawTrades) : [];
-            maxBudget = parseFloat(await redis.get(`sim:max_budget:${tgId}`) || '0');
-            currentSpend = parseFloat(await redis.get(`sim:session_spend:${tgId}`) || '0');
-
-            const forgedRaw = await redis.get(`sim:forged:${tgId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                if (f.strat1Name) stratStats[f.strat1Name] = { pnl: f.strat1Pnl || 0, volume: 0 };
-                if (f.strat2Name) stratStats[f.strat2Name] = { pnl: f.strat2Pnl || 0, volume: 0 };
-            }
-        } else {
-            const user = await prisma.user.findUnique({
-                where: { telegramId: tgId },
-                include: { autoSnipeConfig: true }
-            });
-            if (!user) return res.status(404).json({ error: 'User not found' });
-
-            trades = await prisma.trade.findMany({
-                where: { userId: user.id, status: 'CONFIRMED' },
-                orderBy: { createdAt: 'desc' }
-            });
-
-            maxBudget = user.autoSnipeConfig?.maxBudgetSol || 0;
-            currentSpend = user.autoSnipeConfig?.totalSpentSol || 0;
-        }
-
-        trades.forEach(t => {
-            if (!t.isBuy) {
-                const s = t.strategy || 'MANUAL';
-                if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
-                stratStats[s].pnl += (t.realizedPnlSol || 0);
-                stratStats[s].volume += (t.amountInSol || 0);
-            }
-        });
-
-        const universalStats = computeUniversalStats(trades);
-        const slippageValues = trades.map((t: any) => t.slippagePercent || 0).filter((v: number) => v > 0);
-        const avgSlippage = slippageValues.length > 0 ? (slippageValues.reduce((a: number, b: number) => a + b, 0) / slippageValues.length) : 0.00;
-
-        const pnlArray = trades.filter((t: any) => !t.isBuy && t.realizedPnlSol !== null).map((t: any) => t.realizedPnlSol || 0).sort((a: number, b: number) => a - b);
-        let cvar = 0;
-        if (pnlArray.length > 0) {
-            const count = Math.max(1, Math.floor(pnlArray.length * 0.05));
-            const tail = pnlArray.slice(0, count);
-            cvar = tail.reduce((a: number, b: number) => a + b, 0) / tail.length;
-        }
-
-        res.json({
-            totalTradesCount: universalStats.totalTrades,
-            avgSlippage,
-            cvar,
-            maxBudget,
-            currentSpend,
-            stratStats
-        });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
 
 // 🟢 FIXED: /api/risk-score with Sim Mode Redis evaluation
 app.post('/api/risk-score', async (req, res) => {
@@ -6862,82 +6797,7 @@ app.post('/api/performance', async (req, res) => {
     }
 });
 
-// 🟢 FIXED: /api/institutional-stats (Includes live TCA, CVaR, & Strategy Attribution)
-app.post('/api/institutional-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const tgId = extractTelegramId(req.body.initData);
-        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
 
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        const isSim = await isSimulationActive(tgId);
-
-        let trades: any[] = [];
-        let maxBudget = 0;
-        let currentSpend = 0;
-        const stratStats: Record<string, { pnl: number, volume: number }> = {};
-
-        if (isSim) {
-            const rawTrades = await redis.get(`sim:trades:${tgId}`);
-            trades = rawTrades ? JSON.parse(rawTrades) : [];
-            maxBudget = parseFloat(await redis.get(`sim:max_budget:${tgId}`) || '0');
-            currentSpend = parseFloat(await redis.get(`sim:session_spend:${tgId}`) || '0');
-
-            const forgedRaw = await redis.get(`sim:forged:${tgId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                if (f.strat1Name) stratStats[f.strat1Name] = { pnl: f.strat1Pnl || 0, volume: 0 };
-                if (f.strat2Name) stratStats[f.strat2Name] = { pnl: f.strat2Pnl || 0, volume: 0 };
-            }
-        } else {
-            const user = await prisma.user.findUnique({
-                where: { telegramId: tgId },
-                include: { autoSnipeConfig: true }
-            });
-            if (!user) return res.status(404).json({ error: 'User not found' });
-
-            trades = await prisma.trade.findMany({
-                where: { userId: user.id, status: 'CONFIRMED' },
-                orderBy: { createdAt: 'desc' }
-            });
-
-            maxBudget = user.autoSnipeConfig?.maxBudgetSol || 0;
-            currentSpend = user.autoSnipeConfig?.totalSpentSol || 0;
-        }
-
-        trades.forEach(t => {
-            if (!t.isBuy) {
-                const s = t.strategy || 'MANUAL';
-                if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
-                stratStats[s].pnl += (t.realizedPnlSol || 0);
-                stratStats[s].volume += (t.amountInSol || 0);
-            }
-        });
-
-        const universalStats = computeUniversalStats(trades);
-        const slippageValues = trades.map((t: any) => t.slippagePercent || 0).filter((v: number) => v > 0);
-        const avgSlippage = slippageValues.length > 0 ? (slippageValues.reduce((a: number, b: number) => a + b, 0) / slippageValues.length) : 0.00;
-
-        const pnlArray = trades.filter((t: any) => !t.isBuy && t.realizedPnlSol !== null).map((t: any) => t.realizedPnlSol || 0).sort((a: number, b: number) => a - b);
-        let cvar = 0;
-        if (pnlArray.length > 0) {
-            const count = Math.max(1, Math.floor(pnlArray.length * 0.05));
-            const tail = pnlArray.slice(0, count);
-            cvar = tail.reduce((a: number, b: number) => a + b, 0) / tail.length;
-        }
-
-        res.json({
-            totalTradesCount: universalStats.totalTrades,
-            avgSlippage,
-            cvar,
-            maxBudget,
-            currentSpend,
-            stratStats
-        });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
 
 
 // 🟢 FIXED: /simedit command with CREDITS support and 4 Strategies
@@ -6979,40 +6839,47 @@ bot.command('simedit', async (ctx) => {
 
 
 
-// Replace /api/stats-window endpoint in src/index.ts
+// src/index.ts - Replace /api/stats-window
 app.post('/api/stats-window', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = extractTelegramId(req.body.initData);
         if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-        const { getStatsForWindow, isSimulationActive } = await import('./services/simulation.service.js');
-        
+        const { isSimulationActive } = await import('./services/simulation.service.js');
         const isSim = await isSimulationActive(telegramId);
+
         if (isSim) {
+            // 🟢 Live rolling 24h calculation for simulation (never frozen by static overrides)
             const now = Date.now();
             const oneDayAgo = now - 86400000;
             const rawTrades = await redis.get(`sim:trades:${telegramId}`);
             const simTrades = rawTrades ? JSON.parse(rawTrades) : [];
-            
-            // 🟢 FIX: Filter strictly by exact Date.now() 24h trailing window
             const recentTrades = simTrades.filter((t: any) => new Date(t.createdAt).getTime() > oneDayAgo && !t.isBuy);
-            
-            const manualTrades = recentTrades.filter((t: any) => t.strategy === 'Manual / Direct');
-            const autoTrades = recentTrades.filter((t: any) => t.strategy !== 'Manual / Direct');
-            
-            const manualPnl = manualTrades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0);
-            const autoPnl = autoTrades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0);
-            
+
+            const manualTrades = recentTrades.filter((t: any) => t.strategy === 'Manual / Direct' || t.strategy === 'MANUAL');
+            const autoTrades = recentTrades.filter((t: any) => t.strategy !== 'Manual / Direct' && t.strategy !== 'MANUAL');
+
             return res.json({
-                manual: { count: manualTrades.length, pnl: manualPnl },
-                auto: { count: autoTrades.length, pnl: autoPnl }
+                manual: { count: manualTrades.length, pnl: manualTrades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0) },
+                auto: { count: autoTrades.length, pnl: autoTrades.reduce((s: number, t: any) => s + (t.realizedPnlSol || 0), 0) }
             });
-        } else { // 🟢 FIX: Added missing 'else'
-            const liveStats = await getStatsForWindow(telegramId, 'live', 86400);
+        } else {
+            const user = await prisma.user.findUnique({ where: { telegramId } });
+            if (!user) return res.json({ manual: { count: 0, pnl: 0 }, auto: { count: 0, pnl: 0 } });
+
+            const oneDayAgo = new Date(Date.now() - 86400000);
+            const liveRecent = await prisma.trade.findMany({
+                where: { userId: user.id, isBuy: false, status: 'CONFIRMED', createdAt: { gte: oneDayAgo } },
+                select: { strategy: true, realizedPnlSol: true }
+            });
+
+            const manualTrades = liveRecent.filter(t => t.strategy === 'MANUAL' || t.strategy === 'Manual / Direct');
+            const autoTrades = liveRecent.filter(t => t.strategy !== 'MANUAL' && t.strategy !== 'Manual / Direct');
+
             return res.json({
-                manual: { count: liveStats.tradeCount, pnl: liveStats.totalPnl },
-                auto: { count: 0, pnl: 0 }
+                manual: { count: manualTrades.length, pnl: manualTrades.reduce((s, t) => s + (t.realizedPnlSol || 0), 0) },
+                auto: { count: autoTrades.length, pnl: autoTrades.reduce((s, t) => s + (t.realizedPnlSol || 0), 0) }
             });
         }
     } catch (e) {
@@ -7020,7 +6887,6 @@ app.post('/api/stats-window', async (req, res) => {
     }
 });
 
-// Replace /api/analytics/hourly endpoint in src/index.ts
 
 // 📤 Export Trades (CSV Web)
 app.post('/api/trades/export', async (req, res) => {
@@ -7080,47 +6946,6 @@ bot.action('toggle_sim_mode', async (ctx) => {
     await sendOrEditSettings(ctx, tgId, true);
 });
 
-app.post('/api/analytics', async (req, res) => {
-    const initData = req.body.initData;
-    if (!initData) return res.status(401).json({ error: "No initData" });
-    const tgId = extractTelegramId(initData);
-    if (!tgId) return res.status(401).json({ error: "Invalid initData" });
-
-    try {
-        const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-        if (!user) return res.json({ trades: [], stats: null });
-
-        const trades = await prisma.trade.findMany({
-            where: { userId: user.id },
-            orderBy: { createdAt: 'desc' },
-            take: 50
-        });
-
-        const mappedTrades = trades.map((t: any) => ({
-            createdAt: t.createdAt,
-            isBuy: t.isBuy,
-            amountInSol: t.amountInSol,
-            tokenAddress: t.tokenAddress,
-            strategy: t.strategy,
-            profitPercent: t.profitPercent || 0,
-            realizedPnlSol: t.realizedPnlSol || 0
-        }));
-
-        const { getAdvancedStats } = await import('./services/analytics.service.js');
-        const stats = await getAdvancedStats(tgId);
-        
-        // 🟢 SEND CREDITS IN LIVE MODE
-        res.json({ 
-            trades: mappedTrades, 
-            stats: {
-                ...stats,
-                credits: user.creditBalance || 0
-            } 
-        });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
 
 
 

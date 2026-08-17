@@ -147,7 +147,9 @@ export async function syncCopyTradeListeners(bot: any) {
                                                     follower.autoTrailingDropPercent,
                                                     sizeToTrade,
                                                     entryPrice,
-                                                    follower.autoTakeProfitPercent || undefined
+                                                    follower.autoTakeProfitPercent || undefined,
+                                                    undefined,
+                                                    'Copy Trade' // 🟢 Pass 'Copy Trade'
                                                 );
                                             } catch (guardErr) {}
                                             try { 

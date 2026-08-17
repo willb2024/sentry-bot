@@ -148,9 +148,11 @@ export async function processDcaOrders(bot: any) {
                             order.trailingPercent || 20.0,
                             order.amountSol,
                             initialPriceNative,
-                            order.takeProfitPercent || undefined
+                            order.takeProfitPercent || undefined,
+                            undefined,
+                            'DCA Engine' // 🟢 Pass 'DCA Engine'
                         );
-
+                        
                         try {
                             const tpText = order.takeProfitPercent ? `+${order.takeProfitPercent}% TP` : '';
                             await bot.telegram.sendMessage(

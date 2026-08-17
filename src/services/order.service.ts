@@ -22,7 +22,8 @@ export interface TrailingOrder {
     entryPrice: number;           
     takeProfitPercent?: number; 
     maxHoldMinutes?: number; 
-    createdAt?: number;      
+    createdAt?: number;
+    strategy?: string; // 🟢 Preserve strategy across exit lifecycle
 }
 
 export async function syncGuardsFromDb() {
@@ -116,13 +117,15 @@ export async function updateEntryPrice(orderId: string, entryPrice: number) {
 export async function addTrailingStopToMemory(
     telegramId: string, tokenAddress: string, trailingPercent: number, 
     amountInSol: number, currentPrice: number, takeProfitPercent?: number,
-    maxHoldMinutes?: number 
+    maxHoldMinutes?: number,
+    strategy: string = 'Manual / Direct' // 🟢 Accept strategy tag
 ): Promise<string> {
     const orderId = crypto.randomUUID();
     const order: TrailingOrder = { 
         id: orderId, telegramId, tokenAddress, trailingPercent, 
         highestSeenPrice: currentPrice, amountInSol, entryPrice: currentPrice, takeProfitPercent,
-        maxHoldMinutes, createdAt: Date.now()
+        maxHoldMinutes, createdAt: Date.now(),
+        strategy // 🟢 Stored in Redis RAM
     };
 
     await redis.set(`order:trail:${orderId}`, JSON.stringify(order));
@@ -154,7 +157,6 @@ export async function addTrailingStopToMemory(
         } catch (e) {}
     }, 0); 
 
-    console.log(`🛡️ [REDIS] Guard Active | CA: ${tokenAddress.substring(0,6)}`);
     return orderId;
 }
 

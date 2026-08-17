@@ -175,6 +175,7 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     return 0;
 }
 
+// In src/services/grpc.service.ts -> triggerInstantExit:
 async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: boolean; signature?: string; message?: string }> {
     try {
         const cachedPayload = await redis.get(`presigned_exit_multi:${guard.id}`);
@@ -204,7 +205,8 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
     } catch (e) {}
 
     const { executeExit } = await import('./engine.service.js');
-    return await executeExit(guard.telegramId, guard.tokenAddress, 100);
+    // 🟢 Pass guard.strategy so exit inherits the correct strategy
+    return await executeExit(guard.telegramId, guard.tokenAddress, 100, false, guard.strategy || 'Manual / Direct');
 }
 
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
@@ -699,9 +701,11 @@ export async function triggerAutoSnipes(
                     }
 
                     const { addTrailingStopToMemory } = await import('./order.service.js');
+
                     await addTrailingStopToMemory(
                         liveConfig.user.telegramId, mintCa, liveConfig.autoTrailingDropPercent,
-                        snipeAmount, entryPrice || 0.00001, liveConfig.autoTakeProfitPercent || undefined
+                        snipeAmount, entryPrice || 0.00001, liveConfig.autoTakeProfitPercent || undefined,
+                        undefined, 'Sniper Engine' // 🟢 Pass 'Sniper Engine'
                     );
 
                     const updatedSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
