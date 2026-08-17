@@ -343,6 +343,7 @@ app.post('/api/sim-trades', async (req, res) => {
 
 
 // Replace /api/sim-stats in src/index.ts
+// src/index.ts
 app.post('/api/sim-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -369,28 +370,47 @@ app.post('/api/sim-stats', async (req, res) => {
 
         const balance = await getSimBalance(tgId);
         const startingBalance = await getSimStartingBalance(tgId);
-        const volume = await getSimVolume(tgId);
+        let volume = await getSimVolume(tgId);
         const positionsRaw = await redis.get(`sim:positions:${tgId}`);
         const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
         const tradesRaw = await redis.get(`sim:trades:${tgId}`);
         const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
         const firstTradeAt = await getSimFirstTradeAt(tgId);
-        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '500');
+        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '4298');
 
-        // Dynamic metrics calculation
+        // Dynamic metrics calculation across the live trades array
+        const { computeUniversalStats } = await import('./utils/math.utils.js');
         const stats = computeUniversalStats(trades);
+
+        let totalPnlSol = stats.totalPnLSol;
+        let totalVolumeSol = stats.totalVolumeSol || volume;
+        let wins = stats.wins;
+        let losses = stats.losses;
+        let winRate = stats.winRate;
+
+        // Apply forged base if starting from fresh simedit configuration
+        const forgedRaw = await redis.get(`sim:forged:${tgId}`);
+        if (forgedRaw) {
+            try {
+                const f = JSON.parse(forgedRaw);
+                if (f.stratStats) {
+                    const forgedPnl = Object.values(f.stratStats as Record<string, { pnl: number }>).reduce((sum, s) => sum + (s.pnl || 0), 0);
+                    if (totalPnlSol === 0) totalPnlSol = forgedPnl;
+                }
+            } catch (_) {}
+        }
 
         res.json({
             isActive: true,
-            balance,
+            balance: parseFloat(balance).toFixed(4),
             startingBalance,
-            volume: stats.totalVolumeSol || volume,
-            wins: stats.wins,
-            losses: stats.losses,
-            winRate: stats.winRate,
+            volume: totalVolumeSol,
+            wins,
+            losses,
+            winRate,
             totalTrades: stats.totalTrades || trades.length,
-            totalInvestedSol: stats.totalVolumeSol,
-            totalPnlSol: stats.totalPnLSol,
+            totalInvestedSol: stats.totalInvestedSol || totalVolumeSol,
+            totalPnlSol,
             firstTradeAt,
             credits,
             positions,
@@ -5615,7 +5635,7 @@ if (isSimEdit) {
         const spend = parseFloat(parsedData['SPEND'] || '48');
         const days = parseInt(parsedData['DAYS'] || '83');
         const risk = parseInt(parsedData['RISK_SCORE'] || '26');
-        const slippage = parseFloat((parsedData['SLIPPAGE'] || '0.12').replace('%', '')) || 0.12;
+        const slippage = parseFloat((parsedData['SLIPPAGE'] || '0.85').replace('%', '')) || 0.85;
 
         // Parse 24H Activities
         const manualParts = (parsedData['MANUAL_24H'] || '0 | 0').split('|').map(s => parseFloat(s.trim()));
@@ -5625,7 +5645,7 @@ if (isSimEdit) {
         const auto24hCount = autoParts[0] || 16;
         const auto24hPnl = autoParts[1] || 5.3929;
 
-        // Dynamic Strategy Parser (Sniper, Manual, DCA, Copy Trade, etc.)
+        // Parse Strategies
         const stratStats: Record<string, { pnl: number, volume: number }> = {};
         let totalStratPnl = 0;
 
@@ -5644,7 +5664,7 @@ if (isSimEdit) {
         const hourlyChart = (parsedData['HOURLY_CHART'] || '').split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
         const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
-        // 🟢 1. FORCE SIMULATION MODE ACTIVE IN REDIS
+        // 🟢 1. EXPLICITLY ACTIVATE SIMULATION MODE IN REDIS
         await redis.set(`sim:active:${telegramId}`, 'true');
         await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
         await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
@@ -5654,7 +5674,7 @@ if (isSimEdit) {
         await redis.set(`sim:credits:${telegramId}`, credits.toString());
         await redis.del(`sim_credits_warn:${telegramId}`);
 
-        // 🟢 2. SAVE REDIS FORGED OVERRIDES & COUNTERS
+        // 🟢 2. PERSIST FORGED OVERRIDES & REAL-TIME STATS
         const forgedPayload = {
             risk,
             manual24hCount,
@@ -5678,28 +5698,28 @@ if (isSimEdit) {
         await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toFixed(4));
         await redis.set(`sim:stats:totalPnlSol:${telegramId}`, totalStratPnl.toFixed(4));
 
-        // 🟢 3. GENERATE SYNTHETIC TRADES WITH STANDARDIZED STRATEGY NAMES
+        // 🟢 3. GENERATE INITIAL 2,487 TRADES
         const avgTradeSize = volume / totalTrades;
         const now = Date.now();
         const syntheticTrades = [];
 
         const sampleMints = [
+            '8fS1CEAPoM4TzVU4EoHEpgzq1VV7AbicfhtW4xC9iMCe',
             'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
             'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
             'CzLSujWBLFsSjncfkh59rQDqvJgCSwUiW3De5Y87dUXZ',
-            '2qEHjAscRwFa9TrCFddz5BEJwue5VT3Ce2EUPUzypump',
-            'ED5nyyWEzpPPiWimP8vYm7sD7TD3LAt3Q3gRTWHzPJBY'
+            '2qEHjAscRwFa9TrCFddz5BEJwue5VT3Ce2EUPUzypump'
         ];
 
         const getWeightedStrategy = () => {
             const rand = Math.random() * 12.1;
-            if (rand < 10.0) return 'Sniper Engine';   // ~82.6%
-            if (rand < 11.0) return 'Manual / Direct'; // ~8.3%
-            if (rand < 11.6) return 'DCA Engine';      // ~5.0%
-            return 'Copy Trade';                       // ~4.1%
+            if (rand < 10.0) return 'Sniper Engine';
+            if (rand < 11.0) return 'Manual / Direct';
+            if (rand < 11.6) return 'DCA Engine';
+            return 'Copy Trade';
         };
 
-        // 24H Auto-Engine Trades (16 items)
+        // 16 Auto-Engine Trades (24h Activity)
         for (let i = 0; i < 16; i++) {
             const isWin = i < 11;
             const pnlPct = isWin ? +(12 + Math.random() * 20) : -(4 + Math.random() * 8);
@@ -5717,7 +5737,7 @@ if (isSimEdit) {
             });
         }
 
-        // Remaining Wins pool
+        // Remaining Wins
         const remainingWins = wins - 11;
         const winPnlPool = totalStratPnl - auto24hPnl;
         const avgWinPnl = winPnlPool / Math.max(1, remainingWins);
@@ -5739,7 +5759,7 @@ if (isSimEdit) {
             });
         }
 
-        // Remaining Losses pool
+        // Remaining Losses
         const remainingLosses = losses - 5;
         for (let i = 0; i < remainingLosses; i++) {
             const pnlPercent = -(5 + Math.random() * 18);
@@ -5762,7 +5782,7 @@ if (isSimEdit) {
         syntheticTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         await redis.set(`sim:trades:${telegramId}`, JSON.stringify(syntheticTrades));
 
-        // 🟢 4. PERSIST TO POSTGRESQL (CHUNKED BATCHES)
+        // 🟢 4. PERSIST TO DATABASE
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
             await prisma.simState.upsert({
@@ -5793,11 +5813,12 @@ if (isSimEdit) {
         }
 
         const { cachedSolUsdPrice } = await import('./services/grpc.service.js');
+        const solUsdRate = cachedSolUsdPrice || 156.93;
         let stratSummary = Object.entries(stratStats).map(([name, s]) => `• ${name}: <b>+${s.pnl.toFixed(4)} SOL</b>`).join('\n');
 
         return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
             `✅ <b>SIMULATION FORGE SYNCHRONIZED</b>\n\n` +
-            `• Net Worth: <b>${balance.toFixed(4)} SOL ($${(balance * (cachedSolUsdPrice || 156.93)).toLocaleString(undefined, {minimumFractionDigits: 2})})</b>\n` +
+            `• Net Worth: <b>${balance.toFixed(4)} SOL ($${(balance * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})})</b>\n` +
             `• AI Caller Credits: <b>${credits.toLocaleString()} Credits</b>\n` +
             `• Total Trades: <b>${totalTrades.toLocaleString()} (${wins}W / ${losses}L — ${((wins/totalTrades)*100).toFixed(1)}%)</b>\n` +
             `• Volume: <b>${volume.toFixed(4)} SOL</b>\n` +

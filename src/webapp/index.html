@@ -495,6 +495,7 @@
 
 <div id="toast"><i class="fa-solid fa-check text-jupGreen mr-2"></i> <span id="toast-msg">Copied!</span></div>
 
+
 <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
@@ -625,79 +626,83 @@
         Chart.defaults.color = '#64748b';
         Chart.defaults.font.family = "'Inter', sans-serif";
         
-        const pnlCtx = document.getElementById('pnlHistoryChart').getContext('2d');
-        const gradGreen = pnlCtx.createLinearGradient(0, 0, 0, 300);
-        gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.35)'); 
-        gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
-        
-        const gradRed = pnlCtx.createLinearGradient(0, 0, 0, 300);
-        gradRed.addColorStop(0, 'rgba(239, 68, 68, 0.35)'); 
-        gradRed.addColorStop(1, 'rgba(239, 68, 68, 0.0)');
+        const pnlCanvas = document.getElementById('pnlHistoryChart');
+        if (pnlCanvas) {
+            const pnlCtx = pnlCanvas.getContext('2d');
+            const gradGreen = pnlCtx.createLinearGradient(0, 0, 0, 300);
+            gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.35)'); 
+            gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+            
+            const gradRed = pnlCtx.createLinearGradient(0, 0, 0, 300);
+            gradRed.addColorStop(0, 'rgba(239, 68, 68, 0.35)'); 
+            gradRed.addColorStop(1, 'rgba(239, 68, 68, 0.0)');
 
-        if (pnlChart) pnlChart.destroy();
-        pnlChart = new Chart(pnlCtx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [
-                    { label: 'Profit (SOL)', data: profitData, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.3, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 },
-                    { label: 'Loss (SOL)', data: lossData, borderColor: '#ef4444', backgroundColor: gradRed, fill: true, tension: 0.3, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }
-                ]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-                plugins: { 
-                    legend: { display: false },
-                    tooltip: { backgroundColor: '#1e293b', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
+            if (pnlChart) pnlChart.destroy();
+            pnlChart = new Chart(pnlCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Profit (SOL)', data: profitData, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.3, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 },
+                        { label: 'Loss (SOL)', data: lossData, borderColor: '#ef4444', backgroundColor: gradRed, fill: true, tension: 0.3, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }
+                    ]
                 },
-                scales: {
-                    x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                    y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
+                options: {
+                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                    plugins: { 
+                        legend: { display: false },
+                        tooltip: { backgroundColor: '#1e293b', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
+                    }
                 }
-            }
-        });
+            });
+        }
 
-        // 🟢 Doughnut chart color-coded to the 10 : 1 : 0.6 : 0.5 ratio
-        const allocCtx = document.getElementById('allocationChart').getContext('2d');
-        if (allocChart) allocChart.destroy();
-        
-        const hasData = allocLabels && allocLabels.length > 0 && allocData && allocData.length > 0 && allocData.some(v => v > 0);
-        const chartLabels = hasData ? allocLabels : ['Sniper Engine', 'Manual / Direct', 'DCA Engine', 'Copy Trade'];
-        const chartData = hasData ? allocData : [979.6932, 97.9693, 58.7816, 48.9847];
-        const chartColors = ['#10b981', '#f59e0b', '#8b5cf6', '#3b82f6'];
+        const allocCanvas = document.getElementById('allocationChart');
+        if (allocCanvas) {
+            const allocCtx = allocCanvas.getContext('2d');
+            if (allocChart) allocChart.destroy();
+            
+            const hasData = allocLabels && allocLabels.length > 0 && allocData && allocData.length > 0 && allocData.some(v => v > 0);
+            const chartLabels = hasData ? allocLabels : ['Sniper Engine', 'Manual / Direct', 'DCA Engine', 'Copy Trade'];
+            const chartData = hasData ? allocData : [979.6932, 97.9693, 58.7816, 48.9847];
+            const chartColors = ['#10b981', '#f59e0b', '#8b5cf6', '#3b82f6'];
 
-        allocChart = new Chart(allocCtx, {
-            type: 'doughnut',
-            data: {
-                labels: chartLabels,
-                datasets: [{
-                    data: chartData,
-                    backgroundColor: chartColors.slice(0, chartLabels.length),
-                    borderWidth: 0,
-                    hoverOffset: 5
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { 
-                    legend: {
-                        position: 'right',
-                        labels: { color: '#cbd5e1', boxWidth: 10, usePointStyle: true, font: { size: 11 }, padding: 15 }
-                    }, 
-                    tooltip: {
-                        backgroundColor: '#1e293b',
-                        padding: 10,
-                        cornerRadius: 8
-                    } 
+            allocChart = new Chart(allocCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: chartLabels,
+                    datasets: [{
+                        data: chartData,
+                        backgroundColor: chartColors.slice(0, chartLabels.length),
+                        borderWidth: 0,
+                        hoverOffset: 5
+                    }]
                 },
-                cutout: '75%',
-                animation: { animateScale: false }
-            }
-        });
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { 
+                        legend: {
+                            position: 'right',
+                            labels: { color: '#cbd5e1', boxWidth: 10, usePointStyle: true, font: { size: 11 }, padding: 15 }
+                        }, 
+                        tooltip: {
+                            backgroundColor: '#1e293b',
+                            padding: 10,
+                            cornerRadius: 8
+                        } 
+                    },
+                    cutout: '75%',
+                    animation: { animateScale: false }
+                }
+            });
+        }
     }
 
-    // 🟢 Renders trade confirmations for both Live and Simulation modes
     function renderTradeTicker(trades) {
         const tickerContainer = document.getElementById('live-trade-ticker');
         if (!tickerContainer) return;
@@ -729,19 +734,20 @@
         tickerContainer.innerHTML = tickerHtml;
     }
 
-    // 🟢 Renders active positions in both Live and Simulation modes without hiding
     function renderPositions(positions) {
         const container = document.getElementById('positions-container');
         const section = document.getElementById('verified-holdings-section');
         
         if (!positions || positions.length === 0) {
             if (section) section.style.display = 'none';
-            container.innerHTML = `
-                <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                    <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                    <div class="text-sm font-semibold">No Active Deployments</div>
-                    <span class="text-xs font-mono mt-1">Awaiting target.</span>
-                </div>`;
+            if (container) {
+                container.innerHTML = `
+                    <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                        <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
+                        <div class="text-sm font-semibold">No Active Deployments</div>
+                        <span class="text-xs font-mono mt-1">Awaiting target.</span>
+                    </div>`;
+            }
             return;
         }
 
@@ -749,52 +755,54 @@
         const countEl = document.getElementById('positions-count');
         if (countEl) countEl.innerText = `${positions.length} OPEN`;
 
-        container.innerHTML = positions.map((p) => {
-            const entry = p.entryPrice || 0;
-            let pnlVal = 0;
-            if (entry > 0) pnlVal = (((p.priceUsd - entry) / entry) * 100);
-            else if (p.profitPercent) pnlVal = p.profitPercent;
-            
-            const isGain = pnlVal >= 0;
-            const pnlClass = isGain ? 'text-jupGreen' : 'text-neonRed';
-            const pnlIcon = isGain ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down';
-            const pnlStr = pnlVal !== 0 ? `${isGain ? '+' : ''}${pnlVal.toFixed(2)}%` : 'ACTIVE';
+        if (container) {
+            container.innerHTML = positions.map((p) => {
+                const entry = p.entryPrice || 0;
+                let pnlVal = 0;
+                if (entry > 0) pnlVal = (((p.priceUsd - entry) / entry) * 100);
+                else if (p.profitPercent) pnlVal = p.profitPercent;
+                
+                const isGain = pnlVal >= 0;
+                const pnlClass = isGain ? 'text-jupGreen' : 'text-neonRed';
+                const pnlIcon = isGain ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down';
+                const pnlStr = pnlVal !== 0 ? `${isGain ? '+' : ''}${pnlVal.toFixed(2)}%` : 'ACTIVE';
 
-            return `
-                <div class="card-flat overflow-hidden">
-                    <div onclick="toggleDrawer('${p.mint}')" class="p-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-colors">
-                        <div class="flex items-center gap-4">
-                            <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
-                                $${p.symbol.substring(0,4)}
+                return `
+                    <div class="card-flat overflow-hidden">
+                        <div onclick="toggleDrawer('${p.mint}')" class="p-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-colors">
+                            <div class="flex items-center gap-4">
+                                <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
+                                    $${p.symbol.substring(0,4)}
+                                </div>
+                                <div>
+                                    <h4 class="font-bold text-[15px] text-white">${p.symbol}</h4>
+                                    <span class="text-[11px] text-gray-500 font-mono">${formatNumber(p.amount)} TKN</span>
+                                </div>
                             </div>
-                            <div>
-                                <h4 class="font-bold text-[15px] text-white">${p.symbol}</h4>
-                                <span class="text-[11px] text-gray-500 font-mono">${formatNumber(p.amount)} TKN</span>
+                            <div class="text-right">
+                                <span class="font-bold text-lg text-white">$${p.valueUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                                <div class="text-[12px] font-semibold ${pnlClass} mt-0.5">
+                                    <i class="fa-solid ${pnlIcon} mr-1"></i>${pnlStr}
+                                </div>
                             </div>
                         </div>
-                        <div class="text-right">
-                            <span class="font-bold text-lg text-white">$${p.valueUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                            <div class="text-[12px] font-semibold ${pnlClass} mt-0.5">
-                                <i class="fa-solid ${pnlIcon} mr-1"></i>${pnlStr}
+
+                        <div id="drawer-${p.mint}" class="hidden px-4 pb-4 pt-1 bg-[#0a0d14] border-t border-white/5">
+                            <div class="grid grid-cols-2 gap-2 text-gray-400 mt-3 mb-3">
+                                <div class="bg-[#121826] p-2.5 rounded border border-white/5 text-[10px] uppercase">Price <div class="text-white font-mono mt-1 text-[12px]">$${p.priceUsd.toFixed(6)}</div></div>
+                                <div class="bg-[#121826] p-2.5 rounded border border-white/5 text-[10px] uppercase">Entry <div class="text-white font-mono mt-1 text-[12px]">${entry > 0 ? '$' + entry.toFixed(6) : 'N/A'}</div></div>
+                                <div class="bg-[#121826] p-2.5 rounded border border-white/5 text-[10px] uppercase">MCap <div class="text-white font-mono mt-1 text-[12px]">${p.mcap ? '$'+p.mcap : 'Live'}</div></div>
+                                <div class="bg-[#121826] p-2.5 rounded border border-white/5 text-[10px] uppercase">Vol <div class="text-white font-mono mt-1 text-[12px]">${p.volume24h ? '$'+p.volume24h : 'Live'}</div></div>
                             </div>
+                            <button onclick="copyCA('${p.mint}')" class="w-full bg-[#121826] p-2.5 rounded border border-white/5 hover:border-neonBlue text-left flex justify-between items-center transition-colors">
+                                <span class="text-[10px] text-gray-500 font-mono truncate w-4/5">CA: ${p.mint}</span>
+                                <i class="fa-regular fa-copy text-neonBlue"></i>
+                            </button>
                         </div>
                     </div>
-
-                    <div id="drawer-${p.mint}" class="hidden px-4 pb-4 pt-1 bg-[#0a0d14] border-t border-white/5">
-                        <div class="grid grid-cols-2 gap-2 text-gray-400 mt-3 mb-3">
-                            <div class="bg-[#121826] p-2.5 rounded border border-white/5 text-[10px] uppercase">Price <div class="text-white font-mono mt-1 text-[12px]">$${p.priceUsd.toFixed(6)}</div></div>
-                            <div class="bg-[#121826] p-2.5 rounded border border-white/5 text-[10px] uppercase">Entry <div class="text-white font-mono mt-1 text-[12px]">${entry > 0 ? '$' + entry.toFixed(6) : 'N/A'}</div></div>
-                            <div class="bg-[#121826] p-2.5 rounded border border-white/5 text-[10px] uppercase">MCap <div class="text-white font-mono mt-1 text-[12px]">${p.mcap ? '$'+p.mcap : 'Live'}</div></div>
-                            <div class="bg-[#121826] p-2.5 rounded border border-white/5 text-[10px] uppercase">Vol <div class="text-white font-mono mt-1 text-[12px]">${p.volume24h ? '$'+p.volume24h : 'Live'}</div></div>
-                        </div>
-                        <button onclick="copyCA('${p.mint}')" class="w-full bg-[#121826] p-2.5 rounded border border-white/5 hover:border-neonBlue text-left flex justify-between items-center transition-colors">
-                            <span class="text-[10px] text-gray-500 font-mono truncate w-4/5">CA: ${p.mint}</span>
-                            <i class="fa-regular fa-copy text-neonBlue"></i>
-                        </button>
-                    </div>
-                </div>
-            `;
-        }).join('');
+                `;
+            }).join('');
+        }
     }
 
     function renderLeaderboard() {
@@ -805,12 +813,14 @@
             document.getElementById('lb-title').innerText = "Join a Guild";
             document.getElementById('lb-desc').innerText = "Trade via Sentry to start earning GLP and climb the ranks.";
             document.getElementById('lb-badge').innerText = "NO ACTIVE GUILD";
-            container.innerHTML = `
-                <div class="text-center py-10 text-gray-500 flex flex-col items-center">
-                    <i class="fa-solid fa-users-slash text-3xl mb-3 opacity-50"></i>
-                    <div class="text-sm font-semibold">You are not in a Guild</div>
-                    <span class="text-xs font-mono mt-1">Use a KOL's invite link to join one.</span>
-                </div>`;
+            if (container) {
+                container.innerHTML = `
+                    <div class="text-center py-10 text-gray-500 flex flex-col items-center">
+                        <i class="fa-solid fa-users-slash text-3xl mb-3 opacity-50"></i>
+                        <div class="text-sm font-semibold">You are not in a Guild</div>
+                        <span class="text-xs font-mono mt-1">Use a KOL's invite link to join one.</span>
+                    </div>`;
+            }
             return;
         }
 
@@ -819,31 +829,33 @@
         document.getElementById('lb-badge').innerText = `GUILD CODE: ${data.guild.code}`;
 
         if (!data.members || data.members.length === 0) {
-            container.innerHTML = `<div class="text-center text-gray-500 py-4">No trading data yet. Be the first to rank!</div>`;
+            if (container) container.innerHTML = `<div class="text-center text-gray-500 py-4">No trading data yet. Be the first to rank!</div>`;
             return;
         }
 
-        container.innerHTML = data.members.map((row, i) => {
-            const medal = i === 0 ? '<span class="text-2xl">🥇</span>' : i === 1 ? '<span class="text-2xl">🥈</span>' : i === 2 ? '<span class="text-2xl">🥉</span>' : `<span class="text-gray-500 text-lg">#${i+1}</span>`;
-            const airdropTag = row.airdropsReceived > 0 ? `<div class="text-[10px] text-jupGreen bg-jupGreen/10 border border-jupGreen/20 px-2 py-0.5 rounded ml-2 inline-block"><i class="fa-solid fa-gift"></i> ${row.airdropsReceived.toFixed(2)} SOL</div>` : '';
-            
-            return `
-            <div class="flex justify-between items-center bg-[#1a2235] p-4 rounded-xl border border-white/5 transition-transform hover:scale-[1.01]">
-                <div class="flex items-center gap-3 sm:gap-4">
-                    <div class="w-8 text-center font-bold">${medal}</div>
-                    <div>
-                        <div class="font-bold text-white text-sm sm:text-base">@${row.username} ${airdropTag}</div>
-                        <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue" onclick="copyCA('${row.walletAddress}')">
-                            ${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
+        if (container) {
+            container.innerHTML = data.members.map((row, i) => {
+                const medal = i === 0 ? '<span class="text-2xl">🥇</span>' : i === 1 ? '<span class="text-2xl">🥈</span>' : i === 2 ? '<span class="text-2xl">🥉</span>' : `<span class="text-gray-500 text-lg">#${i+1}</span>`;
+                const airdropTag = row.airdropsReceived > 0 ? `<div class="text-[10px] text-jupGreen bg-jupGreen/10 border border-jupGreen/20 px-2 py-0.5 rounded ml-2 inline-block"><i class="fa-solid fa-gift"></i> ${row.airdropsReceived.toFixed(2)} SOL</div>` : '';
+                
+                return `
+                <div class="flex justify-between items-center bg-[#1a2235] p-4 rounded-xl border border-white/5 transition-transform hover:scale-[1.01]">
+                    <div class="flex items-center gap-3 sm:gap-4">
+                        <div class="w-8 text-center font-bold">${medal}</div>
+                        <div>
+                            <div class="font-bold text-white text-sm sm:text-base">@${row.username} ${airdropTag}</div>
+                            <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue" onclick="copyCA('${row.walletAddress}')">
+                                ${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="text-right">
-                    <div class="font-bold text-emerald-400 text-sm sm:text-base">${row.glp.toLocaleString()} GLP</div>
-                    <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${row.volumeSol.toFixed(2)} SOL Vol</div>
-                </div>
-            </div>`;
-        }).join('');
+                    <div class="text-right">
+                        <div class="font-bold text-emerald-400 text-sm sm:text-base">${row.glp.toLocaleString()} GLP</div>
+                        <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${row.volumeSol.toFixed(2)} SOL Vol</div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
     }
 
     function renderAffiliates() {
@@ -883,13 +895,15 @@
         
         const container = document.getElementById('recruits-container');
         if (!data.recruitList || data.recruitList.length === 0) {
-            container.innerHTML = `
-                <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                    <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                    <div class="text-sm font-semibold">No recruits yet</div>
-                    <span class="text-xs font-mono mt-1">Share your link to start earning.</span>
-                </div>`;
-        } else {
+            if (container) {
+                container.innerHTML = `
+                    <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                        <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
+                        <div class="text-sm font-semibold">No recruits yet</div>
+                        <span class="text-xs font-mono mt-1">Share your link to start earning.</span>
+                    </div>`;
+            }
+        } else if (container) {
             container.innerHTML = data.recruitList.map(r => {
                 const isActive = r.lastActiveDaysAgo < 7;
                 const dotColor = isActive ? 'bg-jupGreen' : 'bg-gray-600';
@@ -918,39 +932,42 @@
             }).join('');
         }
         
-        const affCtx = document.getElementById('affiliateChart').getContext('2d');
-        const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
-        gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.35)'); 
-        gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+        const affCanvas = document.getElementById('affiliateChart');
+        if (affCanvas) {
+            const affCtx = affCanvas.getContext('2d');
+            const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
+            gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.35)'); 
+            gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
 
-        if (affChart) affChart.destroy();
-        
-        const labels = Array.from({length: 30}, (_, i) => {
-            const d = new Date();
-            d.setDate(d.getDate() - (29 - i));
-            return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
-        });
+            if (affChart) affChart.destroy();
+            
+            const labels = Array.from({length: 30}, (_, i) => {
+                const d = new Date();
+                d.setDate(d.getDate() - (29 - i));
+                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+            });
 
-        affChart = new Chart(affCtx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [
-                    { label: 'SOL Earned', data: data.dailyEarnings, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.3, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }
-                ]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-                plugins: { 
-                    legend: { display: false },
-                    tooltip: { backgroundColor: '#1e293b', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
+            affChart = new Chart(affCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'SOL Earned', data: data.dailyEarnings, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.3, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }
+                    ]
                 },
-                scales: {
-                    x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                    y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
+                options: {
+                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                    plugins: { 
+                        legend: { display: false },
+                        tooltip: { backgroundColor: '#1e293b', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
+                    }
                 }
-            }
-        });
+            });
+        }
 
         const last7dEarnings = data.dailyEarnings.slice(23).reduce((a, b) => a + b, 0);
         const dailyAvg = last7dEarnings / 7;
@@ -1067,10 +1084,7 @@
             if (simRes.ok) {
                 const simStats = await simRes.json();
                 
-                if (!simStats.isActive) {
-                    resetDashboardToZero();
-                    isSimModeActive = false;
-                } else {
+                if (simStats.isActive) {
                     isSimModeActive = true; 
                     const solPriceRes = await fetch('/api/sol-price', {
                         method: 'POST', 
@@ -1090,7 +1104,7 @@
                     const totalPnlSol = simStats.totalPnlSol || 0;
                     const totalInvestedSol = simStats.totalInvestedSol || 0;
                     const totalVolumeSol = simStats.volume || 0;
-                    const totalTrades = simStats.totalTrades || 0;
+                    const totalTrades = simStats.totalTrades || (wins + losses);
                     const credits = simStats.credits !== undefined ? simStats.credits : 4298;
 
                     // 3. Derived Metrics
@@ -1106,7 +1120,7 @@
                         tradingDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
                     }
 
-                    // 5. Update DOM
+                    // 5. Update DOM Elements
                     document.getElementById('stat-trading-days').innerText = tradingDays;
                     document.getElementById('stat-credits').innerText = credits.toLocaleString();
                     document.getElementById('header-credits').innerText = `${credits.toLocaleString()} Credits`;
@@ -1125,7 +1139,7 @@
                     const totalTradesEl = document.getElementById('total-trades-count');
                     if (totalTradesEl) totalTradesEl.innerText = totalTrades.toLocaleString();
 
-                    // 6. Positions
+                    // 6. Map and Render Live Positions
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint, symbol: p.symbol, amount: p.amount,
                         priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
@@ -1133,127 +1147,91 @@
                         entryPrice: p.entryPriceUsd || p.entryPrice
                     }));
 
-                    // 7. Render Ticker & Positions
+                    // 7. Render Bloomberg Live Execution Feed
                     userTrades = simStats.trades || [];
                     renderTradeTicker(userTrades);
 
-                    const chartData = aggregatePnlData(currentFilter);
-                    initCharts(chartData.labels, chartData.profitData, chartData.lossData, null, null);
+                    try {
+                        const chartData = aggregatePnlData(currentFilter);
+                        initCharts(chartData.labels, chartData.profitData, chartData.lossData, null, null);
+                    } catch (_) {}
+
                     renderPositions(simPositions);
                     setFilter(currentFilter);
                     
-                    setTimeout(fetchLiveData, 4000);
-                    return; 
+                    setTimeout(fetchLiveData, 3000);
+                    return;
                 }
-            } else { 
-                isSimModeActive = false; 
             }
-        } catch (_) { 
-            isSimModeActive = false; 
+        } catch (simErr) {
+            console.warn("Simulation check failed, falling back to Live Mode:", simErr);
         }
 
         // Live Mainnet Mode
-        fetch('/api/positions', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ initData: tg.initData || "" }) 
-        })
-        .then(r => r.ok ? r.json() : []).catch(() => [])
-        .then(positions => {
-            return fetch('/api/analytics', { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ initData: tg.initData || "" }) 
-            })
-            .then(res => res.ok ? res.json() : { trades: [], stats: null })
-            .catch(() => ({ trades: [], stats: null }))
-            .then(async data => {
-                let liveTrades = [];
-                let liveStats = {};
-                
-                if (Array.isArray(data)) {
-                    liveTrades = data; 
-                } else if (data && data.trades) {
-                    liveTrades = data.trades;
-                    liveStats = data.stats || {};
-                }
-                
-                userTrades = liveTrades;
-                renderTradeTicker(liveTrades);
-
-                const posArray = positions || [];
-
-                const solRes = await fetch('/api/sol-price', { 
+        isSimModeActive = false;
+        try {
+            const [positionsRes, analyticsRes, solRes] = await Promise.all([
+                fetch('/api/positions', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ initData: tg.initData || "" }) 
+                }).then(r => r.ok ? r.json() : []).catch(() => []),
+                fetch('/api/analytics', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ initData: tg.initData || "" }) 
+                }).then(res => res.ok ? res.json() : { trades: [], stats: null }).catch(() => ({ trades: [], stats: null })),
+                fetch('/api/sol-price', { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' }, 
                     body: JSON.stringify({ initData: tg.initData }) 
-                }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 }));
-                const currentSolPrice = solRes.price || 156.93;
-                
-                let totalValueUsd = 0;
-                posArray.forEach(p => { 
-                    totalValueUsd += p.valueUsd || 0; 
-                });
+                }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 }))
+            ]);
 
-                const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
+            const currentSolPrice = solRes.price || 156.93;
+            const liveTrades = Array.isArray(analyticsRes) ? analyticsRes : (analyticsRes.trades || []);
+            const liveStats = analyticsRes.stats || {};
+            const posArray = positionsRes || [];
 
-                let wins = liveStats.wins || 0;
-                let losses = liveStats.losses || 0;
-                let totalVolumeSol = liveStats.totalVolume || 0;
-                let totalInvestedSol = liveStats.totalInvestedSol || 0;
-                let totalRealizedPnlSol = liveStats.totalPnlSol || 0; 
-                let liveCredits = liveStats.credits !== undefined ? liveStats.credits : 0;
+            userTrades = liveTrades;
+            renderTradeTicker(liveTrades);
 
-                document.getElementById('stat-credits').innerText = liveCredits.toLocaleString();
-                document.getElementById('header-credits').innerText = `${liveCredits.toLocaleString()} Credits`;
-
-                const totalClosed = wins + losses;
-                const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
-                const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
-                const finalPnlPercent = totalInvestedSol > 0 ? ((totalRealizedPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
-
-                populateDashboard({
-                    networth: totalValueUsd, 
-                    networthSol: networthSol, 
-                    pnlPercent: finalPnlPercent, 
-                    pnlUsd: realizedPnlUsd, 
-                    winrate: winRate, 
-                    winLossText: `${wins} Wins / ${losses} Losses`, 
-                    volume: `${totalVolumeSol.toFixed(2)} SOL`
-                }, null, null, posArray);
+            let totalValueUsd = 0;
+            posArray.forEach(p => { 
+                totalValueUsd += p.valueUsd || 0; 
             });
-        })
-        .catch(() => {
-            populateDashboard({ 
-                networth: 0, 
-                networthSol: "0.00 SOL", 
-                pnlPercent: "0.00", 
-                pnlUsd: 0, 
-                winrate: "0.0", 
-                winLossText: "0 Wins / 0 Losses", 
-                volume: "0.00 SOL" 
-            }, ['Offline'], [100], []);
-        });
 
-        fetch('/api/my-leaderboard', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ initData: tg.initData || "" }) 
-        })
-        .then(r => r.ok ? r.json() : { guild: null, members: [] }).then(data => { 
-            liveLeaderboardData = data; 
-            if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) renderLeaderboard(); 
-        }).catch(() => {});
+            const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
 
-        fetch('/api/affiliate-stats', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ initData: tg.initData || "" }) 
-        })
-        .then(r => r.ok ? r.json() : null).then(data => { 
-            if (data) liveAffiliateData = data; 
-            if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) renderAffiliates(); 
-        }).catch(() => {});
+            let wins = liveStats.wins || 0;
+            let losses = liveStats.losses || 0;
+            let totalVolumeSol = liveStats.totalVolume || 0;
+            let totalInvestedSol = liveStats.totalInvestedSol || 0;
+            let totalRealizedPnlSol = liveStats.totalPnlSol || 0; 
+            let liveCredits = liveStats.credits !== undefined ? liveStats.credits : 0;
+
+            document.getElementById('stat-credits').innerText = liveCredits.toLocaleString();
+            document.getElementById('header-credits').innerText = `${liveCredits.toLocaleString()} Credits`;
+
+            const totalClosed = wins + losses;
+            const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
+            const realizedPnlUsd = totalRealizedPnlSol * currentSolPrice;
+            const finalPnlPercent = totalInvestedSol > 0 ? ((totalRealizedPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
+
+            populateDashboard({
+                networth: totalValueUsd, 
+                networthSol: networthSol, 
+                pnlPercent: finalPnlPercent, 
+                pnlUsd: realizedPnlUsd, 
+                winrate: winRate, 
+                winLossText: `${wins} Wins / ${losses} Losses`, 
+                volume: `${totalVolumeSol.toFixed(2)} SOL`
+            }, null, null, posArray);
+        } catch (_) {
+            resetDashboardToZero();
+        }
+
+        setTimeout(fetchLiveData, 3000);
     }
 
     async function exportTrades() {
@@ -1289,7 +1267,7 @@
             });
             if (res.ok) {
                 const stats = await res.json();
-                document.getElementById('sharpe-ratio').innerText = (stats.sharpeRatio || 42.88).toFixed(2);
+                document.getElementById('sharpe-ratio').innerText = (stats.sharpeRatio || 52.56).toFixed(2);
             }
         } catch (_) {}
     }
@@ -1303,43 +1281,46 @@
             });
             if (res.ok) {
                 const data = await res.json();
-                const ctx = document.getElementById('hourlyChart').getContext('2d');
-                if (window.hourlyChartInst) window.hourlyChartInst.destroy();
-                window.hourlyChartInst = new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: data.map(d => d.hour + ':00'),
-                        datasets: [
-                            { 
-                                label: 'PnL (SOL)', 
-                                data: data.map(d => d.totalPnlSol), 
-                                backgroundColor: data.map(d => d.totalPnlSol >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'), 
-                                borderWidth: 0, 
-                                yAxisID: 'y' 
-                            },
-                            { 
-                                label: 'Win Rate %', 
-                                data: data.map(d => d.winRate), 
-                                type: 'line', 
-                                borderColor: '#3b82f6', 
-                                borderWidth: 2, 
-                                pointRadius: 1, 
-                                fill: false, 
-                                yAxisID: 'y1' 
-                            }
-                        ]
-                    },
-                    options: { 
-                        responsive: true, 
-                        maintainAspectRatio: false, 
-                        plugins: { legend: { display: false } }, 
-                        scales: { 
-                            x: { ticks: { color: '#64748b' }, grid: { display: false } }, 
-                            y: { display: false }, 
-                            y1: { display: false } 
-                        } 
-                    }
-                });
+                const hourlyCanvas = document.getElementById('hourlyChart');
+                if (hourlyCanvas) {
+                    const ctx = hourlyCanvas.getContext('2d');
+                    if (window.hourlyChartInst) window.hourlyChartInst.destroy();
+                    window.hourlyChartInst = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: data.map(d => d.hour + ':00'),
+                            datasets: [
+                                { 
+                                    label: 'PnL (SOL)', 
+                                    data: data.map(d => d.totalPnlSol), 
+                                    backgroundColor: data.map(d => d.totalPnlSol >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'), 
+                                    borderWidth: 0, 
+                                    yAxisID: 'y' 
+                                },
+                                { 
+                                    label: 'Win Rate %', 
+                                    data: data.map(d => d.winRate), 
+                                    type: 'line', 
+                                    borderColor: '#3b82f6', 
+                                    borderWidth: 2, 
+                                    pointRadius: 1, 
+                                    fill: false, 
+                                    yAxisID: 'y1' 
+                                }
+                            ]
+                        },
+                        options: { 
+                            responsive: true, 
+                            maintainAspectRatio: false, 
+                            plugins: { legend: { display: false } }, 
+                            scales: { 
+                                x: { ticks: { color: '#64748b' }, grid: { display: false } }, 
+                                y: { display: false }, 
+                                y1: { display: false } 
+                            } 
+                        }
+                    });
+                }
             }
         } catch (_) {}
     }
@@ -1369,7 +1350,6 @@
         } catch (_) {}
     }
 
-    // 🟢 Dynamic Strategy Attribution: Lists all 4 strategies with exact colors and values
     async function fetchEnterpriseMetrics() {
         try {
             const riskRes = await fetch('/api/risk-score', { 
@@ -1424,7 +1404,6 @@
         } catch (_) {}
     }
 
-    // 🟢 Strategy Attribution Yield Doughnut Chart: Enforces the 10 : 1 : 0.6 : 0.5 ratio
     async function fetchInstitutionalStats() {
         try {
             const res = await fetch('/api/institutional-stats', {
@@ -1435,19 +1414,16 @@
             if (!res.ok) return;
             const data = await res.json();
 
-            // 1. TCA & CVaR Updates
             const tcaEl = document.getElementById('tca-slippage');
             const cvarEl = document.getElementById('cvar-value');
-            if (tcaEl) tcaEl.innerText = data.avgSlippage !== undefined ? data.avgSlippage.toFixed(2) + '%' : '0.12%';
-            if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '-1.0253 SOL';
+            if (tcaEl) tcaEl.innerText = data.avgSlippage !== undefined ? data.avgSlippage.toFixed(2) + '%' : '0.85%';
+            if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '-0.6748 SOL';
 
-            // 2. Total Trades Count Update
             const totalTradesEl = document.getElementById('total-trades-count');
             if (totalTradesEl && data.totalTradesCount !== undefined) {
                 totalTradesEl.innerText = data.totalTradesCount.toLocaleString();
             }
 
-            // 3. Exposure Budget Gauge
             const spend = data.currentSpend || 48;
             const budget = data.maxBudget || 389;
             const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 0;
@@ -1463,12 +1439,11 @@
                 }
             }
 
-            // 4. Color-Coded Strategy Mapping
             const colorMapping = {
-                'Sniper Engine': '#10b981',   // Green (Dominant ~83%)
-                'Manual / Direct': '#f59e0b', // Yellow (~8%)
-                'DCA Engine': '#8b5cf6',      // Purple (~5%)
-                'Copy Trade': '#3b82f6'       // Blue (~4%)
+                'Sniper Engine': '#10b981',
+                'Manual / Direct': '#f59e0b',
+                'DCA Engine': '#8b5cf6',
+                'Copy Trade': '#3b82f6'
             };
 
             const stratLabels = [];
@@ -1517,5 +1492,6 @@
     setInterval(fetchHourlyPerformance, 15000);
     setInterval(fetchInstitutionalStats, 5000);
 </script>
+
 </body>
 </html>

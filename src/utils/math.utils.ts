@@ -1,3 +1,4 @@
+// src/utils/math.utils.ts
 export interface TradeRecord {
     isBuy: boolean;
     amountInSol: number;
@@ -13,6 +14,7 @@ export interface ComputedStats {
     winRate: number;
     totalVolumeSol: number;
     totalPnLSol: number;
+    totalInvestedSol: number; // 🟢 Added to interface
     netProfitPercent: number;
 }
 
@@ -49,27 +51,7 @@ export function computeUniversalStats(trades: TradeRecord[]): ComputedStats {
         winRate: parseFloat(winRate.toFixed(1)),
         totalVolumeSol: parseFloat(totalVolumeSol.toFixed(4)),
         totalPnLSol: parseFloat(totalPnLSol.toFixed(4)),
+        totalInvestedSol: parseFloat(totalInvestedSol.toFixed(4)), // 🟢 Returned in object
         netProfitPercent: parseFloat(netProfitPercent.toFixed(2))
     };
 }
-
-
-// src/utils/math.utils.ts
-export interface TradeRecord {
-    isBuy: boolean;
-    amountInSol: number;
-    realizedPnlSol?: number | null;
-    profitPercent?: number | null;
-    slippagePercent?: number | null;
-}
-
-export interface ComputedStats {
-    totalTrades: number;
-    wins: number;
-    losses: number;
-    winRate: number;
-    totalVolumeSol: number;
-    totalPnLSol: number;
-    netProfitPercent: number;
-}
-
