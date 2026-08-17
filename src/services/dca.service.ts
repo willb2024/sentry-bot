@@ -113,7 +113,7 @@ export async function processDcaOrders(bot: any) {
                     undefined,
                     0,
                     undefined,
-                    'DCA Engine' // 🟢 Exact match for dashboard aggregation
+                    'DCA Engine'// 🟢 Exact match for dashboard aggregation
                 ).then(async (result) => {
                     const activeAlloc = parseFloat(await redis.get(allocKey) || '0');
                     await redis.set(allocKey, Math.max(0, activeAlloc - intendedSpend).toString(), 'EX', 120);

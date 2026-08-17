@@ -4924,30 +4924,32 @@ async function deleteKeysPattern(pattern: string) {
 }
 
 
-
-// =========================================================
-// ⚡ TEXT INTERCEPTOR & INTERACTIVE WIZARDS
-// =========================================================
-
+// src/index.ts
 async function handleCancel(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (user) {
-        // 🟢 1. Halt Live Automations
+        // 🟢 1. Halt Live Auto-Sniper
         await prisma.autoSnipeConfig.updateMany({ where: { userId: user.id }, data: { isActive: false } });
+
+        // 🟢 2. Halt Live DCA Schedules & Pending Limit Orders
         await prisma.activeOrder.updateMany({ where: { userId: user.id, isActive: true }, data: { isActive: false } });
+
+        // 🟢 3. Halt Live Copy Trades
         await prisma.copyTradeConfig.updateMany({ where: { userId: user.id }, data: { isActive: false } });
-        
-        // 🟢 2. Halt Simulation Automations
-        await redis.set(`sim:autosnipe:${telegramId}`, 'false');
-        
-        // 🟢 3. Clear In-Memory Trailing Guards
+        syncCopyTradeListeners(bot);
+
+        // 🟢 4. Clear Trailing Guards in Memory & Database
         await cancelAllUserGuards(telegramId);
-        
-        // 🟢 4. Deactivate AI Caller
+
+        // 🟢 5. Halt Simulation Auto-Sniper
+        await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+
+        // 🟢 6. Deactivate AI Caller Scanning Loop
         const { setUserCallerFilters } = await import('./services/caller.service.js');
         await setUserCallerFilters(telegramId, { isActive: false });
     }
 
+    // 🟢 7. Clear all wizard/prompt session state keys in Redis
     const keysToClear = [
         `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`,
         `state:limit:${telegramId}`, `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`,
@@ -4968,10 +4970,12 @@ async function handleCancel(telegramId: string) {
         `guild_setup:${telegramId}`, `state:autosnipe_base_risk:${telegramId}`, `state:autosnipe_max_multiplier:${telegramId}`,
         `state:autosnipe_exponent:${telegramId}`
     ];
+
     for (let i = 0; i < keysToClear.length; i += 100) {
         await redis.del(...keysToClear.slice(i, i + 100));
     }
 }
+
 
 // =========================================================
 // ⚡ COMPLETE MASTER TEXT INTERCEPTOR (ALL 40 STATE KEYS)
@@ -5621,7 +5625,7 @@ if (isSimEdit) {
         const auto24hCount = autoParts[0] || 16;
         const auto24hPnl = autoParts[1] || 5.3929;
 
-        // 🟢 DYNAMIC STRATEGY PARSER: Supports STRAT1, STRAT2, STRAT3, STRAT4, etc.
+        // Dynamic Strategy Parser (Sniper, Manual, DCA, Copy Trade, etc.)
         const stratStats: Record<string, { pnl: number, volume: number }> = {};
         let totalStratPnl = 0;
 
@@ -5640,14 +5644,24 @@ if (isSimEdit) {
         const hourlyChart = (parsedData['HOURLY_CHART'] || '').split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
         const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
-        // 🟢 SAVE TO REDIS
+        // 🟢 1. FORCE SIMULATION MODE ACTIVE IN REDIS
+        await redis.set(`sim:active:${telegramId}`, 'true');
+        await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
+        await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
+        await redis.set(`sim:first_trade_at:${telegramId}`, firstTradeAt);
+        await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
+        await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
+        await redis.set(`sim:credits:${telegramId}`, credits.toString());
+        await redis.del(`sim_credits_warn:${telegramId}`);
+
+        // 🟢 2. SAVE REDIS FORGED OVERRIDES & COUNTERS
         const forgedPayload = {
             risk,
             manual24hCount,
             manual24hPnl,
             auto24hCount,
             auto24hPnl,
-            stratStats, // Stores all strategies (Sniper, Manual, DCA, Copy Trade, etc.)
+            stratStats,
             hourlyChart,
             firstTradeAt,
             slippage,
@@ -5656,18 +5670,15 @@ if (isSimEdit) {
         };
         await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
 
-        // 🟢 SET CREDITS & UNBLOCK AI CALLER
-        await redis.set(`sim:credits:${telegramId}`, credits.toString());
-        await redis.del(`sim_credits_warn:${telegramId}`);
-
-        await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
-        await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
-        await redis.set(`sim:first_trade_at:${telegramId}`, firstTradeAt);
-        await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
-        await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
-
-        // Generate 2,487 trades distributed across strategies
         const totalTrades = wins + losses;
+        await redis.set(`sim:volume:${telegramId}`, volume.toFixed(4));
+        await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
+        await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
+        await redis.set(`sim:stats:totalTrades:${telegramId}`, totalTrades.toString());
+        await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toFixed(4));
+        await redis.set(`sim:stats:totalPnlSol:${telegramId}`, totalStratPnl.toFixed(4));
+
+        // 🟢 3. GENERATE SYNTHETIC TRADES WITH STANDARDIZED STRATEGY NAMES
         const avgTradeSize = volume / totalTrades;
         const now = Date.now();
         const syntheticTrades = [];
@@ -5680,7 +5691,6 @@ if (isSimEdit) {
             'ED5nyyWEzpPPiWimP8vYm7sD7TD3LAt3Q3gRTWHzPJBY'
         ];
 
-        // 🟢 PROBABILISTIC STRATEGY DISTRIBUTION (10 : 1 : 0.6 : 0.5)
         const getWeightedStrategy = () => {
             const rand = Math.random() * 12.1;
             if (rand < 10.0) return 'Sniper Engine';   // ~82.6%
@@ -5689,7 +5699,7 @@ if (isSimEdit) {
             return 'Copy Trade';                       // ~4.1%
         };
 
-        // 1. 24H Activity (16 Auto-Engine Trades)
+        // 24H Auto-Engine Trades (16 items)
         for (let i = 0; i < 16; i++) {
             const isWin = i < 11;
             const pnlPct = isWin ? +(12 + Math.random() * 20) : -(4 + Math.random() * 8);
@@ -5707,7 +5717,7 @@ if (isSimEdit) {
             });
         }
 
-        // 2. Wins pool
+        // Remaining Wins pool
         const remainingWins = wins - 11;
         const winPnlPool = totalStratPnl - auto24hPnl;
         const avgWinPnl = winPnlPool / Math.max(1, remainingWins);
@@ -5729,7 +5739,7 @@ if (isSimEdit) {
             });
         }
 
-        // 3. Losses pool
+        // Remaining Losses pool
         const remainingLosses = losses - 5;
         for (let i = 0; i < remainingLosses; i++) {
             const pnlPercent = -(5 + Math.random() * 18);
@@ -5750,15 +5760,9 @@ if (isSimEdit) {
         }
 
         syntheticTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
         await redis.set(`sim:trades:${telegramId}`, JSON.stringify(syntheticTrades));
-        await redis.set(`sim:volume:${telegramId}`, volume.toFixed(4));
-        await redis.set(`sim:stats:wins:${telegramId}`, wins.toString());
-        await redis.set(`sim:stats:losses:${telegramId}`, losses.toString());
-        await redis.set(`sim:stats:totalTrades:${telegramId}`, totalTrades.toString());
-        await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toFixed(4));
-        await redis.set(`sim:stats:totalPnlSol:${telegramId}`, totalStratPnl.toFixed(4));
 
+        // 🟢 4. PERSIST TO POSTGRESQL (CHUNKED BATCHES)
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
             await prisma.simState.upsert({
@@ -5766,6 +5770,26 @@ if (isSimEdit) {
                 update: { balance, startingBalance: balance, volume, credits, active: true },
                 create: { userId: user.id, balance, startingBalance: balance, volume, credits, active: true }
             });
+
+            await prisma.simTrade.deleteMany({ where: { userId: user.id } });
+            
+            const dbTrades = syntheticTrades.slice(0, 2500).map((t: any) => ({
+                userId: user.id,
+                tokenAddress: t.mint,
+                isBuy: t.isBuy,
+                amountInSol: t.amountInSol,
+                profitPercent: t.profitPercent || 0,
+                realizedPnlSol: t.realizedPnlSol || 0,
+                createdAt: new Date(t.createdAt)
+            }));
+
+            const BATCH_SIZE = 100;
+            for (let i = 0; i < dbTrades.length; i += BATCH_SIZE) {
+                await prisma.simTrade.createMany({
+                    data: dbTrades.slice(i, i + BATCH_SIZE),
+                    skipDuplicates: true
+                });
+            }
         }
 
         const { cachedSolUsdPrice } = await import('./services/grpc.service.js');

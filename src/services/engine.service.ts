@@ -1037,19 +1037,7 @@ export async function processLimitOrders(bot: any) {
         if (price === 0) continue; 
 
         if (price <= (order.targetPriceUsd || 0)) {
-            const result = await executeSnipe(
-                order.user.telegramId,
-                order.tokenAddress,
-                order.amountSol,
-                'buy',
-                undefined,
-                false,
-                undefined,
-                undefined,
-                0,
-                undefined,
-                'Limit Order'
-            );
+            const result = await executeSnipe(order.user.telegramId, order.tokenAddress, order.amountSol, 'buy', undefined, false, undefined, undefined, 0, undefined, 'Limit Order');
             
             if (result.success) {
                 await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
