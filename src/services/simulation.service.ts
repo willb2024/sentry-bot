@@ -12,6 +12,7 @@ import { connection } from '../lib/connection.js';
 import { PublicKey } from '@solana/web3.js';
 import axios from 'axios';
 import { addTrailingStopToMemory } from './order.service.js';
+import { awardGuildPoints } from './guild.service.js';
 
 const activeSimLoops = new Set<string>();
 
@@ -31,7 +32,7 @@ export interface SimPosition {
     strategy: string;
     createdAt: number;
     score?: number;
-    winTrajectory?: boolean;  // Calibrated outcome path
+    winTrajectory?: boolean;
     ticksRemaining?: number;
 }
 
@@ -83,13 +84,11 @@ export function calculateDynamicSize(
     
     let size = (config.baseRiskUnitSol || 0.02) + (convictionMultiplier * ((config.baseRiskUnitSol || 0.02) * (config.maxRiskMultiplier || 5.0)));
 
-    // Liquidity Cap: Max 2% of pool liquidity in SOL
     if (liqUsd > 0 && solPrice > 0) {
         const maxLiqInSol = (liqUsd * 0.02) / solPrice;
         size = Math.min(size, maxLiqInSol);
     }
 
-    // Budget Cap
     const totalSpent = config.totalSpentSol || 0;
     const remaining = (config.maxBudgetSol || Infinity) - totalSpent;
     size = Math.min(size, remaining);
@@ -306,7 +305,11 @@ export async function startSimulationGuardResolver(bot: any) {
                 const remainingPositions: SimPosition[] = [];
 
                 for (const pos of positions) {
-                    pos.ticksRemaining = (pos.ticksRemaining || 4) - 1;
+                    if (pos.ticksRemaining === undefined || pos.ticksRemaining === null) {
+                        pos.ticksRemaining = 0;
+                    } else {
+                        pos.ticksRemaining -= 1;
+                    }
 
                     let targetPnl = 0;
                     if (pos.winTrajectory) {
@@ -371,7 +374,6 @@ export async function startSimulationGuardResolver(bot: any) {
     }, 2000);
 }
 
-// ─── POSITION & PRICE WATCHERS ──────────────────────────
 export async function updateSimPositions(telegramId: string): Promise<void> {
     const posKey = `sim:positions:${telegramId}`;
     const raw = await redis.get(posKey);
@@ -442,6 +444,10 @@ export async function simExecuteSnipe(
     const posKey = `sim:positions:${telegramId}`;
     const existing: SimPosition[] = JSON.parse(await redis.get(posKey) || '[]');
     
+    // Calibrate realistic outcome trajectory based on AI Score:
+    // Score >= 75 -> 68% Win Rate
+    // Score >= 55 -> 58% Win Rate
+    // Score < 55  -> 38% Win Rate
     let winProbability = 0.38;
     if (score >= 75) winProbability = 0.68;
     else if (score >= 55) winProbability = 0.58;
@@ -464,7 +470,7 @@ export async function simExecuteSnipe(
         strategy,
         score,
         winTrajectory,
-        ticksRemaining: 4,
+        ticksRemaining: 4, // Exits in ~8 seconds
         createdAt: Date.now()
     };
 
@@ -473,6 +479,10 @@ export async function simExecuteSnipe(
 
     await recordSimTrade(telegramId, true, amountSol, 0, strategy, tokenAddress, 0.12);
     await recordStatsEvent(telegramId, 'sim', 0);
+    
+    // 🟢 Awards Guild Points in simulation
+    await awardGuildPoints(telegramId, amountSol).catch(() => {});
+    
     await saveSimulationState(telegramId);
 
     return { 
@@ -519,6 +529,10 @@ export async function simExecuteExit(
     const realizedPnlSol = netReturnSol - soldSol;
     await recordSimTrade(telegramId, false, soldSol, pnlPercent, strategy, tokenAddress, 0.12);
     await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
+
+    // 🟢 Awards Guild Points on simulated exits
+    await awardGuildPoints(telegramId, soldSol).catch(() => {});
+
     await saveSimulationState(telegramId);
 
     return { 
@@ -564,6 +578,7 @@ export async function generateSimCallerAlert(
 
         const scoreRes = computeTokenScore(stats);
         
+        // Strict threshold check: score >= minScore
         if (scoreRes.score >= (filters.minScore || 55)) {
             return {
                 mint: realToken.mint,
@@ -673,6 +688,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any) {
         const scoreRes = computeTokenScore(stats);
         let score = scoreRes.score;
 
+        // Strict filter: score >= minScore
         if (config.minScore > 0 && score < config.minScore) {
             await new Promise(r => setTimeout(r, 1000));
             continue;

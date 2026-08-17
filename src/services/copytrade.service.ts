@@ -8,6 +8,7 @@ import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js
 import { redis } from '../lib/redis.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { isSimulationActive } from './simulation.service.js';
 
 dotenv.config();
 
@@ -57,7 +58,16 @@ export async function syncCopyTradeListeners(bot: any) {
             where: { isActive: true },
             include: { user: true }
         });
-        const targetWallets = [...new Set(activeConfigs.map(c => c.targetWallet))];
+
+        // 🟢 FIX: Filter out users who are in SIMULATION MODE to protect live funds
+        const filteredConfigs = [];
+        for (const config of activeConfigs) {
+            if (!(await isSimulationActive(config.user.telegramId))) {
+                filteredConfigs.push(config);
+            }
+        }
+
+        const targetWallets = [...new Set(filteredConfigs.map(c => c.targetWallet))];
 
         for (const [walletStr, subId] of activeWsListeners.entries()) {
             if (!targetWallets.includes(walletStr)) {
@@ -122,11 +132,11 @@ export async function syncCopyTradeListeners(bot: any) {
                                 const entryPrice = await fetchLiveEntryPrice(targetTokenMint);
 
                                 for (const follower of freshConfigs) {
+                                    if (await isSimulationActive(follower.user.telegramId)) continue;
                                     const f: any = follower; 
                                     if (f.copyBuys === false) continue;
                                     const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
 
-                                    // 🟢 FIX: Set strategy to 'COPY_TRADE'
                                     executeSnipe(
                                         follower.user.telegramId,
                                         targetTokenMint,
@@ -138,7 +148,7 @@ export async function syncCopyTradeListeners(bot: any) {
                                         f.slippagePercent || undefined,
                                         0,
                                         undefined,
-                                        'COPY_TRADE'
+                                        'Copy Trade'
                                     ).then(async (res) => {
                                         if (res.success) {
                                             try {
@@ -164,16 +174,16 @@ export async function syncCopyTradeListeners(bot: any) {
                             } 
                             else if (tradeType === 'sell' && sellPercentage >= 1) {
                                 for (const follower of freshConfigs) {
+                                    if (await isSimulationActive(follower.user.telegramId)) continue;
                                     const f: any = follower; 
                                     if (f.copySells === false) continue;
 
-                                    // 🟢 FIX: Set strategy to 'COPY_TRADE'
                                     executeExit(
                                         follower.user.telegramId,
                                         targetTokenMint,
                                         sellPercentage,
                                         false,
-                                        'COPY_TRADE'
+                                        'Copy Trade'
                                     ).then(async (res) => {
                                         if (res.success) {
                                             try { 

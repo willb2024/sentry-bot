@@ -273,10 +273,33 @@ app.post('/api/analytics', async (req, res) => {
     if (!tgId) return res.status(401).json({ error: "Invalid initData" });
 
     try {
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+
+        if (isSim) {
+            const rawTrades = await redis.get(`sim:trades:${tgId}`);
+            const trades = rawTrades ? JSON.parse(rawTrades) : [];
+            const { computeUniversalStats } = await import('./utils/math.utils.js');
+            const stats = computeUniversalStats(trades);
+            const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0');
+
+            return res.json({
+                trades: trades.slice(0, 50).map((t: any) => ({
+                    createdAt: t.createdAt,
+                    isBuy: t.isBuy,
+                    amountInSol: t.amountInSol,
+                    tokenAddress: t.mint || t.tokenAddress,
+                    strategy: t.strategy,
+                    profitPercent: t.profitPercent || 0,
+                    realizedPnlSol: t.realizedPnlSol || 0
+                })),
+                stats: { ...stats, credits }
+            });
+        }
+
         const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
         if (!user) return res.json({ trades: [], stats: null });
 
-        // Fetch ONLY the latest 50 trades for the ledger
         const trades = await prisma.trade.findMany({
             where: { userId: user.id },
             orderBy: { createdAt: 'desc' },
@@ -284,21 +307,25 @@ app.post('/api/analytics', async (req, res) => {
         });
 
         const mappedTrades = trades.map((t: any) => ({
-            createdAt: t.createdAt, 
-            isBuy: t.isBuy, 
+            createdAt: t.createdAt,
+            isBuy: t.isBuy,
             amountInSol: t.amountInSol,
-            tokenAddress: t.tokenAddress,     // 🟢 FIX: Pass the CA to the Ticker
-            strategy: t.strategy,             // 🟢 FIX: Pass the Strategy to 24h Stats
-            profitPercent: t.profitPercent || 0, 
+            tokenAddress: t.tokenAddress,
+            strategy: t.strategy,
+            profitPercent: t.profitPercent || 0,
             realizedPnlSol: t.realizedPnlSol || 0
         }));
 
         const { getAdvancedStats } = await import('./services/analytics.service.js');
         const stats = await getAdvancedStats(tgId);
         
-        // 🟢 FIX: Return the Object format the WebApp expects
-        res.json({ trades: mappedTrades, stats });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+        res.json({ 
+            trades: mappedTrades, 
+            stats: { ...stats, credits: user.creditBalance || 0 } 
+        });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.post('/api/sim-trades', async (req, res) => {
@@ -1233,29 +1260,7 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
     else await ctx.replyWithHTML(text, ui);
 }
 
-bot.action('action_create_guild_prompt', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-    const { isSimulationActive } = await import('./services/simulation.service.js');
-    const isSim = await isSimulationActive(tgId);
-    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
-    
-    const msg = `🏰 <b>SENTRY GUILDS: BUILD A LOYAL COMMUNITY</b>\n\n` +
-                `<b>What is a Guild?</b>\n` +
-                `A Guild is your own private, on-chain loyalty engine inside Sentry. It transforms your passive audience into an organized, volume-generating army.\n\n` +
-                `<b>Why build a Guild?</b>\n` +
-                `Stop giving whitelist spots or airdrops to fake Twitter accounts and bots. A Sentry Guild automatically tracks the <i>actual on-chain SOL volume</i> of every member who joins via your invite link.\n\n` +
-                `You get a verified, rank-ordered leaderboard of the people actually buying your bags, allowing you to reward your truest, most loyal supporters.\n\n` +
-                `<b>The Ultimate Perk (50% Rev-Share):</b>\n` +
-                `By bringing your community to Sentry, you earn <b>50% of the platform fees</b> on every single trade your members make, forever. Your loyal community becomes a passive income stream.\n\n` +
-                `💳 <b>Activation Fee:</b> ${feeDisplay}\n\n` +
-                `<i>Launch your Guild today to start tracking volume.</i>`;
-    
-    await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
-        [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
-        [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
-    ]));
-});
+
 
 
 // 🟢 BATCH SNIPE COMMAND
@@ -1313,76 +1318,9 @@ bot.command('batch', async (ctx) => {
 
 
 
-bot.action('action_start_guild_wizard', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
-
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { ownedGuild: true } });
-    if (user?.ownedGuild) {
-        return ctx.replyWithHTML("🔴 <b>Limit Reached:</b> You already own a Guild.");
-    }
-
-    const { isSimulationActive } = await import('./services/simulation.service.js');
-    const isSim = await isSimulationActive(tgId);
-    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
-
-    await redis.hset(`guild_setup:${tgId}`, { step: 1 });
-    await redis.expire(`guild_setup:${tgId}`, 600);
-    
-    await safeEditMessageText(ctx, 
-        `🏰 <b>GUILD SETUP [Step 1/2]</b>\n\n` +
-        `Let's build your empire.\n\n` +
-        `What is the <b>Name</b> of your community?\n` +
-        `<i>(e.g., Alpha Wolves Community)</i>\n\n` +
-        `💳 <b>Activation Fee:</b> ${feeDisplay}\n\n` +
-        `Reply to this message with your desired name.`,
-        Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel Setup', 'action_abort_guild_setup')]])
-    );
-});
 
 
-bot.command('createguild', async (ctx) => {
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { ownedGuild: true } });
-    if (user?.ownedGuild) return ctx.reply("🔴 You already own a Guild.");
 
-    const { isSimulationActive } = await import('./services/simulation.service.js');
-    const isSim = await isSimulationActive(tgId);
-    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
-
-    const text = (ctx.message as any).text.replace('/createguild', '').trim();
-    
-    if (text) {
-        const parts = text.split('|').map((p: string) => p.trim());
-        if (parts.length === 3) {
-            const [name, desc, reward] = parts;
-            if (name.length < 3 || name.length > 30) return ctx.reply("⚠️ Name must be between 3 and 30 characters.");
-            
-            const loader = await ctx.reply("<i>⏳ Initializing Guild Database...</i>", { parse_mode: 'HTML' });
-            const { createGuild } = await import('./services/guild.service.js');
-            const res = await createGuild(tgId, name, desc, reward);
-            
-            if (res.success) {
-                return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
-                    `✅ <b>GUILD SUCCESSFULLY CREATED!</b>\n\nInvite Code: <code>${res.guildCode}</code>\n\n🔗 <b>Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=guild_${res.guildCode}</code>`, 
-                    { parse_mode: 'HTML' });
-            } else {
-                return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Creation Failed:</b> ${res.message}`, { parse_mode: 'HTML' });
-            }
-        }
-    }
-
-    await redis.hset(`guild_setup:${tgId}`, { step: 1 });
-    await redis.expire(`guild_setup:${tgId}`, 600);
-    await ctx.replyWithHTML(
-        `🏰 <b>GUILD SETUP [Step 1/2]</b>\n\n` +
-        `What is the name of your community?\n` +
-        `<i>(e.g., Alpha Wolves Community)</i>\n\n` +
-        `💳 <b>Cost:</b> ${feeDisplay}\n\n` +
-        `Reply to this message with the name. (Type /cancel to abort)`
-    );
-});
 
 
 
@@ -1441,54 +1379,7 @@ bot.action(/^select_active_guild_(.+)$/, async (ctx) => {
     bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'menu_switch_guilds' } } as any);
 });
 
-bot.action('action_manage_guild', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
 
-    const user = await prisma.user.findUnique({ 
-        where: { telegramId: tgId }, 
-        include: { ownedGuild: { include: { members: { include: { user: true } } } } } 
-    });
-    
-    if (!user) return;
-
-    if (!user.ownedGuild) {
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        const isSim = await isSimulationActive(tgId);
-        const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
-
-        const createMsg = 
-            `🏰 <b>SENTRY GUILDS: COMMAND YOUR COMMUNITY</b>\n\n` +
-            `<b>What is a Sentry Guild?</b>\n` +
-            `A Sentry Guild is your private, on-chain loyalty and monetization engine. It transforms your passive audience into a highly coordinated trading powerhouse under your brand.\n\n` +
-            `<b>Why You Need It:</b>\n` +
-            `• <b>Filter Fake Bots:</b> Track <i>actual on-chain volume</i> to reward real supporters.\n` +
-            `• <b>Live Leaderboard:</b> Sentry calculates live member rankings for automated airdrops.\n` +
-            `• <b>Passive Revenue:</b> Earn <b>50% of our platform fee</b> on every trade executed by members.\n\n` +
-            `💳 <b>Cost:</b> ${feeDisplay}\n\n` +
-            `Use the command below to launch your Guild:\n` +
-            `<code>/createguild [Name] | [Description] | [Reward]</code>`;
-        
-        return safeEditMessageText(ctx, createMsg, Markup.inlineKeyboard([
-            [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
-            [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
-        ]));
-    }
-
-    const guild = user.ownedGuild;
-    const totalMembers = guild.members.length;
-    const totalVol = guild.members.reduce((sum: number, m: any) => sum + m.totalVolumeSol, 0);
-
-    const text = `🏰 <b>GUILD MANAGEMENT PANEL</b>\n\n• <b>Community Name:</b> <code>${guild.name}</code>\n• <b>Guild Code:</b> <code>${guild.guildCode}</code>\n• <b>Reward Program:</b> <i>"${guild.rewardDescription || 'No active reward'}"</i>\n\n📈 <b>Global Stats:</b>\n  ├ Members Registered: <b>${totalMembers}</b>\n  └ Total Volume: <b>${totalVol.toFixed(2)} SOL</b>\n\n🔗 <b>Your Exclusive Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=guild_${guild.guildCode}</code>\n\n<i>(When members click this, they auto-join your community and you receive 50% of their platform fees as an affiliate permanently!)</i>`;
-
-    await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
-        [Markup.button.callback('🏆 Tiered Drop (Top 10)', `tiered_drop_${guild.id}`)],
-        [Markup.button.callback('👤 Pay Individual Member', `indiv_drop_${guild.id}`)],
-        [Markup.button.callback('✏️ Edit Name', `edit_g_name_${guild.id}`), Markup.button.callback('🎁 Edit Reward', `edit_g_reward_${guild.id}`)],
-        [Markup.button.callback('📥 Export Wallets (CSV)', `export_guild_${guild.id}`)],
-        [Markup.button.callback('⬅️ Back to Guilds', 'action_guild_menu')]
-    ]));
-});
 
 bot.action(/^tiered_drop_(.+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -4054,7 +3945,6 @@ bot.action(/^buy_credits_(starter|growth|pro|whale)$/, async (ctx) => {
     const { isSimulationActive } = await import('./services/simulation.service.js');
     const pack = CREDIT_PACKS[packKey as keyof typeof CREDIT_PACKS];
 
-    // 🟢 SIMULATION FREE TOP-UP
     if (await isSimulationActive(tgId)) {
         const cur = parseInt(await redis.get(`sim:credits:${tgId}`) || '0');
         const newBal = cur + pack.credits;
@@ -4324,6 +4214,10 @@ bot.hears(/^\/(scan|xray|info) (.+)/i, async (ctx) => {
 // =========================================================
 // 📤 SECURED WITHDRAWAL COMMAND
 // =========================================================
+
+
+
+// ─── WITHDRAWAL COMMAND HANDLER ────────────────────────
 bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
@@ -4390,6 +4284,95 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
 
     await executeWithdrawalProcess(user, targetAddress, requestedAmount, isMax, telegramId, ctx, withdrawLockKey);
 });
+
+// ─── SINGLE FUNCTION DEFINITION (DO NOT DUPLICATE BELOW) ───
+async function executeWithdrawalProcess(
+    user: any, 
+    targetAddress: string, 
+    requestedAmount: number, 
+    isMax: boolean, 
+    telegramId: string, 
+    ctx: any, 
+    withdrawLockKey: string
+) {
+    const targetPubkey = new PublicKey(targetAddress);
+    const loader = await ctx.replyWithHTML(`<i>⏳ Building consolidated multi-wallet transfer...</i>`);
+
+    try {
+        const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
+        if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
+        if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
+        if (user.activeWallets >= 4 && user.vault4 && user.pk4) wallets.push({ pub: user.vault4, pk: user.pk4 });
+        if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5 });
+
+        let totalSentAmount = 0; 
+        let remainingLamportsToWithdraw = isMax ? Number.MAX_SAFE_INTEGER : Math.floor(requestedAmount * LAMPORTS_PER_SOL);
+        
+        const instructions = [];
+        const signers: Keypair[] = [];
+
+        for (const w of wallets) {
+            if (remainingLamportsToWithdraw <= 0) break;
+            if (!w.pub || !w.pk) continue;
+            
+            const vaultPubkey = new PublicKey(w.pub);
+            const liveBalance = await connection.getBalance(vaultPubkey);
+            const gasBuffer = 50000; // 0.00005 SOL preservation buffer
+
+            let lamportsToWithdraw = isMax ? liveBalance - gasBuffer : Math.min(remainingLamportsToWithdraw, liveBalance - gasBuffer);
+            if (lamportsToWithdraw <= 0) continue; 
+
+            const rawPk = decryptKey(w.pk);
+            if (!rawPk) continue;
+            
+            try {
+                const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
+                instructions.push(SystemProgram.transfer({
+                    fromPubkey: vaultPubkey, toPubkey: targetPubkey, lamports: lamportsToWithdraw
+                }));
+                signers.push(keypair);
+                
+                if (!isMax) remainingLamportsToWithdraw -= lamportsToWithdraw;
+                totalSentAmount += (lamportsToWithdraw / LAMPORTS_PER_SOL);
+            } catch (e) {}
+        }
+
+        if (instructions.length === 0) {
+            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Insufficient balance across your active wallets.`);
+        }
+
+        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+        const messageV0 = new TransactionMessage({
+            payerKey: signers[0].publicKey, recentBlockhash: blockhash, instructions
+        }).compileToV0Message();
+        
+        const vTx = new VersionedTransaction(messageV0);
+        vTx.sign(signers);
+        
+        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+        
+        let isConfirmed = false;
+        for (let i = 0; i < 15; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            if (status?.value && !status.value.err) { isConfirmed = true; break; }
+        }
+
+        if (isConfirmed) {
+            await redis.del(`balance_cache:${telegramId}`); 
+            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
+                `🟢 <b>WITHDRAWAL INITIATED</b>\n\n<b>Total Swept:</b> ~<code>${totalSentAmount.toFixed(4)} SOL</code>\n<b>Destination:</b> <code>${targetPubkey.toBase58()}</code>\n\n🔗 <a href="https://solscan.io/tx/${sig}">View Latest Receipt on Solscan</a>`, 
+                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
+            );
+        } else {
+            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Transaction dropped by the network.`);
+        }
+    } catch (e: any) { 
+        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Error:</b> ${e.message}`); 
+    } finally {
+        await redis.del(withdrawLockKey);
+    }
+}
 
 // =========================================================
 // 👀 WATCHLIST COMMAND
@@ -4513,86 +4496,7 @@ export function startLimitOrderWatcher(bot: any) {
 
 // ------------------ BATCHED WITHDRAWALS ------------------
 // Replace your existing executeWithdrawalProcess with this optimized version
-async function executeWithdrawalProcess(user: any, targetAddress: string, requestedAmount: number, isMax: boolean, telegramId: string, ctx: any, withdrawLockKey: string) {
-    const targetPubkey = new PublicKey(targetAddress);
-    const loader = await ctx.replyWithHTML(`<i>⏳ Building consolidated multi-wallet transfer...</i>`);
 
-    try {
-        const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
-        if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
-        if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
-        if (user.activeWallets >= 4 && user.vault4 && user.pk4) wallets.push({ pub: user.vault4, pk: user.pk4 });
-        if (user.activeWallets >= 5 && user.vault5 && user.pk5) wallets.push({ pub: user.vault5, pk: user.pk5 });
-
-        let totalSentAmount = 0; 
-        let remainingLamportsToWithdraw = isMax ? Number.MAX_SAFE_INTEGER : Math.floor(requestedAmount * LAMPORTS_PER_SOL);
-        
-        const instructions = [];
-        const signers: Keypair[] = [];
-
-        // 🟢 Gather all transfers into ONE transaction
-        for (const w of wallets) {
-            if (remainingLamportsToWithdraw <= 0) break;
-            if (!w.pub || !w.pk) continue;
-            
-            const vaultPubkey = new PublicKey(w.pub);
-            const liveBalance = await connection.getBalance(vaultPubkey);
-            const gasBuffer = 10000; 
-
-            let lamportsToWithdraw = isMax ? liveBalance - gasBuffer : Math.min(remainingLamportsToWithdraw, liveBalance - gasBuffer);
-            if (lamportsToWithdraw <= 0) continue; 
-
-            const rawPk = decryptKey(w.pk);
-            if (!rawPk) continue;
-            
-            try {
-                const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
-                instructions.push(SystemProgram.transfer({
-                    fromPubkey: vaultPubkey, toPubkey: targetPubkey, lamports: lamportsToWithdraw
-                }));
-                signers.push(keypair);
-                
-                if (!isMax) remainingLamportsToWithdraw -= lamportsToWithdraw;
-                totalSentAmount += (lamportsToWithdraw / LAMPORTS_PER_SOL);
-            } catch (e) {}
-        }
-
-        if (instructions.length === 0) {
-            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Insufficient balance across your active wallets.`);
-        }
-
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const messageV0 = new TransactionMessage({
-            payerKey: signers[0].publicKey, recentBlockhash: blockhash, instructions
-        }).compileToV0Message();
-        
-        const vTx = new VersionedTransaction(messageV0);
-        vTx.sign(signers); // Sign with all gathered keypairs
-        
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-        
-        let isConfirmed = false;
-        for (let i = 0; i < 15; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) { isConfirmed = true; break; }
-        }
-
-        if (isConfirmed) {
-            await redis.del(`balance_cache:${telegramId}`); 
-            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
-                `🟢 <b>WITHDRAWAL INITIATED</b>\n\n<b>Total Swept:</b> ~<code>${totalSentAmount.toFixed(4)} SOL</code>\n<b>Destination:</b> <code>${targetPubkey.toBase58()}</code>\n\n🔗 <a href="https://solscan.io/tx/${sig}">View Latest Receipt on Solscan</a>`, 
-                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-            );
-        } else {
-            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Transaction dropped by the network.`);
-        }
-    } catch (e: any) { 
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Error:</b> ${e.message}`); 
-    } finally {
-        await redis.del(withdrawLockKey);
-    }
-}
 
 // =========================================================
 // 🎁 ADMIN COMMAND: GIVE FREE VIP & DEV SUITE TO KOLS
@@ -6240,6 +6144,151 @@ bot.action('action_set_pin', async (ctx) => {
     await ctx.replyWithHTML(`🔒 <b>SET WITHDRAWAL PIN</b>\n\nProtect your funds from Telegram session hijacking.\n\nReply with a <b>4 to 6 digit number</b> to set your PIN.\n<i>(If you ever forget this, you will need to contact support to manually verify ownership).</i>\n\n<i>Type /cancel to abort.</i>`);
 });
 
+
+
+bot.action('action_create_guild_prompt', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
+    
+    const msg = `🏰 <b>SENTRY GUILDS: BUILD A LOYAL COMMUNITY</b>\n\n` +
+                `<b>What is a Guild?</b>\n` +
+                `A Guild is your own private, on-chain loyalty engine inside Sentry. It transforms your passive audience into an organized, volume-generating army.\n\n` +
+                `<b>Why build a Guild?</b>\n` +
+                `Stop giving whitelist spots or airdrops to fake Twitter accounts and bots. A Sentry Guild automatically tracks the <i>actual on-chain SOL volume</i> of every member who joins via your invite link.\n\n` +
+                `You get a verified, rank-ordered leaderboard of the people actually buying your bags, allowing you to reward your truest, most loyal supporters.\n\n` +
+                `<b>The Ultimate Perk (50% Rev-Share):</b>\n` +
+                `By bringing your community to Sentry, you earn <b>50% of the platform fees</b> on every single trade your members make, forever. Your loyal community becomes a passive income stream.\n\n` +
+                `💳 <b>Activation Fee:</b> ${feeDisplay}\n\n` +
+                `<i>Launch your Guild today to start tracking volume.</i>`;
+    
+    await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
+        [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
+        [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
+    ]));
+});
+
+bot.action('action_manage_guild', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+
+    const user = await prisma.user.findUnique({ 
+        where: { telegramId: tgId }, 
+        include: { ownedGuild: { include: { members: { include: { user: true } } } } } 
+    });
+    
+    if (!user) return;
+
+    if (!user.ownedGuild) {
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+        const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
+
+        const createMsg = 
+            `🏰 <b>SENTRY GUILDS: COMMAND YOUR COMMUNITY</b>\n\n` +
+            `<b>What is a Sentry Guild?</b>\n` +
+            `A Sentry Guild is your private, on-chain loyalty and monetization engine. It transforms your passive audience into a highly coordinated trading powerhouse under your brand.\n\n` +
+            `<b>Why You Need It:</b>\n` +
+            `• <b>Filter Fake Bots:</b> Track <i>actual on-chain volume</i> to reward real supporters.\n` +
+            `• <b>Live Leaderboard:</b> Sentry calculates live member rankings for automated airdrops.\n` +
+            `• <b>Passive Revenue:</b> Earn <b>50% of our platform fee</b> on every trade executed by members.\n\n` +
+            `💳 <b>Cost:</b> ${feeDisplay}\n\n` +
+            `Use the command below to launch your Guild:\n` +
+            `<code>/createguild [Name] | [Description] | [Reward]</code>`;
+        
+        return safeEditMessageText(ctx, createMsg, Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 Start Guild Setup Wizard', 'action_start_guild_wizard')],
+            [Markup.button.callback('⬅️ Back', 'action_guild_menu')]
+        ]));
+    }
+
+    const guild = user.ownedGuild;
+    const totalMembers = guild.members.length;
+    const totalVol = guild.members.reduce((sum: number, m: any) => sum + m.totalVolumeSol, 0);
+
+    const text = `🏰 <b>GUILD MANAGEMENT PANEL</b>\n\n• <b>Community Name:</b> <code>${guild.name}</code>\n• <b>Guild Code:</b> <code>${guild.guildCode}</code>\n• <b>Reward Program:</b> <i>"${guild.rewardDescription || 'No active reward'}"</i>\n\n📈 <b>Global Stats:</b>\n  ├ Members Registered: <b>${totalMembers}</b>\n  └ Total Volume: <b>${totalVol.toFixed(2)} SOL</b>\n\n🔗 <b>Your Exclusive Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=guild_${guild.guildCode}</code>\n\n<i>(When members click this, they auto-join your community and you receive 50% of their platform fees as an affiliate permanently!)</i>`;
+
+    await safeEditMessageText(ctx, text, Markup.inlineKeyboard([
+        [Markup.button.callback('🏆 Tiered Drop (Top 10)', `tiered_drop_${guild.id}`)],
+        [Markup.button.callback('👤 Pay Individual Member', `indiv_drop_${guild.id}`)],
+        [Markup.button.callback('✏️ Edit Name', `edit_g_name_${guild.id}`), Markup.button.callback('🎁 Edit Reward', `edit_g_reward_${guild.id}`)],
+        [Markup.button.callback('📥 Export Wallets (CSV)', `export_guild_${guild.id}`)],
+        [Markup.button.callback('⬅️ Back to Guilds', 'action_guild_menu')]
+    ]));
+});
+
+bot.command('createguild', async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { ownedGuild: true } });
+    if (user?.ownedGuild) return ctx.reply("🔴 You already own a Guild.");
+
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
+
+    const text = (ctx.message as any).text.replace('/createguild', '').trim();
+    
+    if (text) {
+        const parts = text.split('|').map((p: string) => p.trim());
+        if (parts.length === 3) {
+            const [name, desc, reward] = parts;
+            if (name.length < 3 || name.length > 30) return ctx.reply("⚠️ Name must be between 3 and 30 characters.");
+            
+            const loader = await ctx.reply("<i>⏳ Initializing Guild Database...</i>", { parse_mode: 'HTML' });
+            const { createGuild } = await import('./services/guild.service.js');
+            const res = await createGuild(tgId, name, desc, reward);
+            
+            if (res.success) {
+                return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
+                    `✅ <b>GUILD SUCCESSFULLY CREATED!</b>\n\nInvite Code: <code>${res.guildCode}</code>\n\n🔗 <b>Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=guild_${res.guildCode}</code>`, 
+                    { parse_mode: 'HTML' });
+            } else {
+                return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Creation Failed:</b> ${res.message}`, { parse_mode: 'HTML' });
+            }
+        }
+    }
+
+    await redis.hset(`guild_setup:${tgId}`, { step: 1 });
+    await redis.expire(`guild_setup:${tgId}`, 600);
+    await ctx.replyWithHTML(
+        `🏰 <b>GUILD SETUP [Step 1/2]</b>\n\n` +
+        `What is the name of your community?\n` +
+        `<i>(e.g., Alpha Wolves Community)</i>\n\n` +
+        `💳 <b>Cost:</b> ${feeDisplay}\n\n` +
+        `Reply to this message with the name. (Type /cancel to abort)`
+    );
+});
+
+bot.action('action_start_guild_wizard', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { ownedGuild: true } });
+    if (user?.ownedGuild) {
+        return ctx.replyWithHTML("🔴 <b>Limit Reached:</b> You already own a Guild.");
+    }
+
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    const feeDisplay = isSim ? "0.0 SOL (Simulation Mode — Free)" : "0.2 SOL (one-time activation fee)";
+
+    await redis.hset(`guild_setup:${tgId}`, { step: 1 });
+    await redis.expire(`guild_setup:${tgId}`, 600);
+    
+    await safeEditMessageText(ctx, 
+        `🏰 <b>GUILD SETUP [Step 1/2]</b>\n\n` +
+        `Let's build your empire.\n\n` +
+        `What is the <b>Name</b> of your community?\n` +
+        `<i>(e.g., Alpha Wolves Community)</i>\n\n` +
+        `💳 <b>Activation Fee:</b> ${feeDisplay}\n\n` +
+        `Reply to this message with your desired name.`,
+        Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel Setup', 'action_abort_guild_setup')]])
+    );
+});
+
 bot.action('action_confirm_guild_pay', async (ctx) => {
     const tgId = ctx.from?.id.toString()!;
     try { await ctx.answerCbQuery("⏳ Initializing Guild Database..."); } catch(e){}
@@ -7108,7 +7157,6 @@ async function bootEcosystem() {
     await warmDnsCache();
     await syncGuardsFromDb(); 
     
-    // 🟢 FIX: Handle port collisions so the bot doesn't crash silently
     try {
         app.listen(3001, () => console.log('🟢 WebApp API Server listening on port 3001'))
            .on('error', (e: any) => {
@@ -7130,8 +7178,6 @@ async function bootEcosystem() {
         } catch (e) {}
     }, 60000);
 
-  
-
     console.log("⏳ Pinging Telegram Servers...");
     try {
         const keys = await redis.keys('active_bumper:*');
@@ -7140,30 +7186,33 @@ async function bootEcosystem() {
         const info = await bot.telegram.getMe();
         console.log(`🟢 [4/5] HFT BOT ONLINE -> @${info.username}`);
         
-        // 🟢 FIX: Trap the launch promise to keep the process alive even if Telegram API is dropping connections
-        bot.launch({ dropPendingUpdates: true }).catch((e) => {
-            console.error("🔴 [FATAL] Telegram Bot Launch Failed (Check Token or Connection):", e.message);
-        });
-        
-        console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
+        const launchBot = async (retries = 5) => {
+            try {
+                await bot.launch({ dropPendingUpdates: true });
+                console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
+            } catch (e: any) {
+                console.error(`🔴 Telegram Bot Launch Attempt Failed (${retries} retries left):`, e.message);
+                if (retries > 0) {
+                    setTimeout(() => launchBot(retries - 1), 5000);
+                }
+            }
+        };
+        launchBot();
 
         igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err.message));
         
-       
         startCopyTradeWatcher(bot); 
         startDepositWatcher(bot); 
         startCoinCaller(bot); 
 
-// 🟢 NEW: Starts the fast simulation position and TP/SL resolver
-const { startSimulationGuardResolver } = await import('./services/simulation.service.js');
-startSimulationGuardResolver(bot);
+        // 🟢 Starts the High-Frequency Simulation TP/SL Guard Resolver
+        const { startSimulationGuardResolver } = await import('./services/simulation.service.js');
+        startSimulationGuardResolver(bot);
 
-        // 🟢 FIX: Schedule recurring BullMQ jobs instead of setInterval
         console.log('⏳ Booting BullMQ Background Task Queues...');
-        await dcaQueue.add('dca-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } }); // Every 5s
-        await guardQueue.add('guard-check', { bot }, { repeat: { pattern: '*/1 * * * * *' } }); // Every 1s
-        await limitQueue.add('limit-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } }); // Every 5s
-    
+        await dcaQueue.add('dca-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } });
+        await guardQueue.add('guard-check', { bot }, { repeat: { pattern: '*/1 * * * * *' } });
+        await limitQueue.add('limit-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } });
 
         cron.schedule('0 8 * * 1', async () => {
             console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
@@ -7209,7 +7258,6 @@ startSimulationGuardResolver(bot);
 
     } catch (err: any) {
         console.error("🔴 TELEGRAM BOOT FAILED:", err.message);
-        // Let it continue running other background services instead of exiting
     }
 
     const { startCallerEvaluator, scheduleTraining } = await import('./services/caller.service.js');

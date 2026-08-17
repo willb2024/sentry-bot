@@ -44,13 +44,18 @@ export async function getUserPositions(telegramId: string) {
                 const allAccounts = [...splAccounts.value, ...token2022Accounts.value];
 
                 allAccounts.forEach(account => {
-                    const info = account.account.data.parsed.info;
-                    const amt = info.tokenAmount.uiAmount;
-                    if (amt > 0) {
+                    const info = account.account.data.parsed?.info;
+                    if (!info) return;
+                    const amt = info.tokenAmount?.uiAmount;
+                    if (amt && amt > 0) {
                         if (aggregatedPositions[info.mint]) {
                             aggregatedPositions[info.mint].amount += amt; 
                         } else {
-                            aggregatedPositions[info.mint] = { mint: info.mint, amount: amt, decimals: info.tokenAmount.decimals };
+                            aggregatedPositions[info.mint] = { 
+                                mint: info.mint, 
+                                amount: amt, 
+                                decimals: info.tokenAmount.decimals 
+                            };
                         }
                     }
                 });
@@ -64,29 +69,45 @@ export async function getUserPositions(telegramId: string) {
 
         const uniqueMints = rawPositions.map(p => p.mint);
         
-        // Use metadata cache
         const metadataResults = await Promise.all(uniqueMints.map(mint => getTokenMetadata(mint)));
-        
         const tokenMetadata: Record<string, any> = {};
         uniqueMints.forEach((mint, index) => {
             tokenMetadata[mint] = metadataResults[index];
         });
 
-        const mappedPositions = rawPositions.map(p => {
+        // 🟢 FIX: Map positions with actual entryPriceUsd from trade ledger
+        const mappedPositions = [];
+        for (const p of rawPositions) {
             const meta = tokenMetadata[p.mint] || { priceUsd: 0, symbol: "UNKNOWN", name: "Unknown Token" };
-            return {
+            
+            let entryPriceUsd = 0;
+            try {
+                const lastBuy = await prisma.trade.findFirst({
+                    where: { userId: user.id, tokenAddress: p.mint, isBuy: true, status: 'CONFIRMED' },
+                    orderBy: { createdAt: 'desc' }
+                });
+                if (lastBuy && (lastBuy as any).executedPriceUsd && (lastBuy as any).executedPriceUsd > 0) {
+                    entryPriceUsd = (lastBuy as any).executedPriceUsd;
+                }
+            } catch (_) {}
+
+            mappedPositions.push({
                 ...p,
                 symbol: meta.symbol,
                 name: meta.name,
                 priceUsd: meta.priceUsd,
-                valueUsd: p.amount * meta.priceUsd
-            };
-        })
-        .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 
-        .sort((a, b) => b.valueUsd - a.valueUsd);
+                valueUsd: p.amount * meta.priceUsd,
+                entryPriceUsd,
+                entryPrice: entryPriceUsd
+            });
+        }
           
-        await redis.set(cacheKey, JSON.stringify(mappedPositions), 'EX', 30);
-        return mappedPositions;
+        const finalPositions = mappedPositions
+            .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 
+            .sort((a, b) => b.valueUsd - a.valueUsd);
+
+        await redis.set(cacheKey, JSON.stringify(finalPositions), 'EX', 30);
+        return finalPositions;
 
     } catch (e: any) {
         console.error("🔴 [POSITIONS] Aggregation error:", e.message);

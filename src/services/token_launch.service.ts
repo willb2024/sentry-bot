@@ -7,12 +7,12 @@ import { connection } from '../lib/connection.js';
 import { decryptKey, ensureWalletsExist } from './vault.service.js';
 import dotenv from 'dotenv';
 import axios from 'axios';
+import { isSimulationActive } from './simulation.service.js';
 
 dotenv.config();
 
 export const TOKEN_LAUNCH_PLATFORM_FEE_SOL = 0.04;
 
-// 🟢 FIX: Safe PublicKey validator
 function safePublicKey(address: string | undefined | null): PublicKey | null {
     if (!address) return null;
     try {
@@ -112,23 +112,29 @@ export async function launchTokenOnPumpFun(
     dex: 'pump' | 'raydium' = 'pump'
 ): Promise<{ success: boolean; tokenAddress?: string; signature?: string; message: string }> {
     try {
+        // 🟢 FIX: Prevent real on-chain token creation while in Simulation Mode
+        if (await isSimulationActive(telegramId)) {
+            return { 
+                success: false, 
+                message: "🚀 Launchpad is disabled in Simulation Mode. Switch to Live Mainnet to deploy an on-chain token." 
+            };
+        }
+
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
 
         if (dex === 'raydium') {
             return {
                 success: false,
-                message: "🚧 Raydium token launches are not yet available. This feature is in active development — please use Pump.fun launches for now."
+                message: "🚧 Raydium token launches are not yet available. Please use Pump.fun launches for now."
             };
         }
 
         const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
         if (!treasuryWalletStr) return { success: false, message: "TREASURY_WALLET_ADDRESS is missing in your .env file!" };
 
-        // 🟢 FIX: Wrap in safe helper
         const treasuryPubkey = safePublicKey(treasuryWalletStr.trim());
         if (!treasuryPubkey) {
-            console.error("🔴 [LAUNCH] Invalid treasury wallet address configured:", treasuryWalletStr);
             return { success: false, message: `Invalid treasury address configured: "${treasuryWalletStr}"` };
         }
 
@@ -196,7 +202,6 @@ export async function launchTokenOnPumpFun(
         const JITO_TIP_ACCOUNTS = ["96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL", "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe", "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvVkY"];
         const jitoTipAccountStr = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
 
-        // 🟢 FIX: Wrapping tip accounts safely
         const jitoTipPubkey = safePublicKey(jitoTipAccountStr);
         if (!jitoTipPubkey) return { success: false, message: "Invalid Jito Tip Account internal reference." };
 

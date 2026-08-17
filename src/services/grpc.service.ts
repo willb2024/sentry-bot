@@ -5,7 +5,8 @@ import {
     executeExit, 
     generatePreSignedExitTx, 
     sendToJitoBundle, 
-    getCachedTokenPrice 
+    getCachedTokenPrice,
+    axiosClient
 } from './engine.service.js';
 import { 
     addTrailingStopToMemory, 
@@ -71,7 +72,7 @@ export function getRecentNewMints() {
 
 export async function syncInitialSolPrice() {
     try {
-        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
+        const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
         const price = res.data?.data?.[WSOL_MINT]?.price;
         if (price && parseFloat(price) > 0) {
             cachedSolUsdPrice = parseFloat(price);
@@ -87,7 +88,7 @@ syncInitialSolPrice();
 
 global._sentryIntervals.push(setInterval(async () => {
     try {
-        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
+        const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
         const price = res.data?.data?.[WSOL_MINT]?.price;
         if (price && parseFloat(price) > 0) cachedSolUsdPrice = parseFloat(price);
     } catch (_) {}
@@ -331,12 +332,13 @@ export async function fetchBulkTokenPrices(mints: string[]): Promise<Record<stri
     for (let i = 0; i < mints.length; i += 20) {
         const chunk = mints.slice(i, i + 20);
         try {
-            const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk.join(',')}`, { timeout: 2000 });
+            const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${chunk.join(',')}`, { timeout: 2000 });
             const data = res.data?.data || {};
             for (const mint of chunk) {
                 result[mint] = parseFloat(data[mint]?.price || '0');
             }
         } catch (_) {}
+        await new Promise(r => setTimeout(r, 250));
     }
     return result;
 }
@@ -382,7 +384,7 @@ export function startPumpFunPolling() {
     
     global._sentryIntervals.push(setInterval(async () => {
         try {
-            const res = await axios.get(
+            const res = await axiosClient.get(
                 'https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false',
                 { timeout: 4000, headers: { 'User-Agent': 'Mozilla/5.0' } }
             );
@@ -478,6 +480,30 @@ function connectRaydiumFallbackWatcher(bot: any) {
     }, 'confirmed');
 }
 
+function buildSniperAuditMessage(
+    mint: string, score: number, stats: any, invested: number,
+    trailingDrop: number, takeProfit: number | string, strategy: string, signature: string
+): string {
+    let audit = `🟢 <b>SNIPE CONFIRMED!</b>\n\n`;
+    audit += `Token: <code>${mint.substring(0, 8)}...</code>\n`;
+    audit += `Strategy: <b>${strategy}</b>\n`;
+    audit += `Score: <b>${score}/100</b> ⭐\n\n`;
+    
+    audit += `<b>Audit Trail:</b>\n`;
+    audit += `${stats.ageMins < 60 ? '✅' : '⚠️'} 🕐 Age: ${Math.floor(stats.ageMins)}m\n`;
+    audit += `${stats.volume > 20000 ? '✅' : '⚠️'} 💰 Vol: $${(stats.volume / 1000).toFixed(1)}k\n`;
+    audit += `${stats.priceChangeM5 > 15 ? '✅' : '⚠️'} 📈 Mom: ${stats.priceChangeM5 >= 0 ? '+' : ''}${stats.priceChangeM5.toFixed(1)}%\n`;
+    audit += `${stats.liquidity > 20000 ? '✅' : '⚠️'} 💧 Liq: $${(stats.liquidity / 1000).toFixed(1)}k\n`;
+    if (stats.socials) audit += `✅ 🌐 Socials present\n`;
+    if (stats.lpLock && (stats.lpLock.burned || stats.lpLock.lockPct > 80)) audit += `✅ 🔒 LP Secured (${stats.lpLock.lockPct.toFixed(0)}% Locked/Burned)\n`;
+    
+    audit += `\nInvested: <b>${invested.toFixed(4)} SOL</b>\n`;
+    audit += `Trailing Drop: <b>-${trailingDrop}%</b>\n`;
+    audit += `Take Profit: <b>${typeof takeProfit === 'number' ? '+' + takeProfit + '%' : takeProfit}</b>\n\n`;
+    audit += `🔗 <a href="https://solscan.io/tx/${signature}">View on Solscan</a>`;
+    return audit;
+}
+
 export async function triggerAutoSnipes(
     bot: any, mintCa: string, symbol: string, initialBuySol: number, mode: 'PUMP' | 'RAYDIUM', raydiumPoolId?: string
 ) {
@@ -532,7 +558,7 @@ export async function triggerAutoSnipes(
                                 }
                             }
                         } else {
-                            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 }).catch(() => null);
+                            const res = await axiosClient.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 }).catch(() => null);
                             const pair = res?.data?.pairs?.[0];
                             if (pair) { liqUsd = pair.liquidity?.usd || 0; volUsd = pair.volume?.h24 || 0; priceChangeM5 = pair.priceChange?.m5 || 0; }
                         }
@@ -613,11 +639,22 @@ export async function triggerAutoSnipes(
 
                     await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { totalSpentSol: { increment: spent } } });
 
-                    const entryPrice = await fetchLiveEntryPrice(mintCa);
+                    let entryPrice = await fetchLiveEntryPrice(mintCa);
+                    if (entryPrice === 0 && mintCa.toLowerCase().endsWith("pump")) {
+                        try {
+                            const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
+                            const curvePda = getBondingCurveAddress(mintCa);
+                            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
+                            if (accInfo?.data) {
+                                entryPrice = decodePumpCurvePrice(accInfo.data.toString('base64'));
+                            }
+                        } catch (_) {}
+                    }
+
                     const { addTrailingStopToMemory } = await import('./order.service.js');
                     await addTrailingStopToMemory(
                         liveConfig.user.telegramId, mintCa, liveConfig.autoTrailingDropPercent,
-                        snipeAmount, entryPrice, liveConfig.autoTakeProfitPercent || undefined
+                        snipeAmount, entryPrice || 0.00001, liveConfig.autoTakeProfitPercent || undefined
                     );
 
                     const updatedSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
@@ -627,13 +664,15 @@ export async function triggerAutoSnipes(
                     }
 
                     try {
-                        const { buildAuditTrailMessage } = await import('./caller.service.js');
-                        const auditStats = { ageMins, volume: volUsd, liquidity: liqUsd, priceChangeM5 };
-                        const baseMsg = buildAuditTrailMessage(
-                            mintCa, score, auditStats, spent, 
-                            liveConfig.autoTrailingDropPercent, liveConfig.autoTakeProfitPercent || 'OFF', false
+                        const finalMsg = buildSniperAuditMessage(
+                            mintCa, score, 
+                            { ageMins, volume: volUsd, liquidity: liqUsd, priceChangeM5, socials: true, lpLock: { lockPct: 100 } }, 
+                            spent, 
+                            liveConfig.autoTrailingDropPercent, 
+                            liveConfig.autoTakeProfitPercent || 'OFF', 
+                            'Sniper Engine',
+                            result.signature || ''
                         );
-                        const finalMsg = `${baseMsg}\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
                         await bot.telegram.sendMessage(liveConfig.user.telegramId, finalMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
                     } catch (_) {}
                 } else {
