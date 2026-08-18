@@ -2,6 +2,15 @@
 import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
 
+export function sanitizeCsvField(value: string | null | undefined): string {
+    if (!value) return '';
+    const str = String(value).trim();
+    if (/^[=+\-@\t\r]/.test(str)) {
+        return `'${str}`;
+    }
+    return str;
+}
+
 export interface AdvancedStats {
     sharpeRatio: number;
     consistencyScore: number;
@@ -38,7 +47,6 @@ const emptyStats: AdvancedStats = {
     averageWin: 0, averageLoss: 0, profitFactor: 0, totalPnlSol: 0, totalInvestedSol: 0, totalPnl: 0, totalVolume: 0, winRate: 0, wins: 0, losses: 0 
 };
 
-// 🟢 BUG 4 FIX: Uses Prisma Aggregations instead of pulling all rows into memory
 export async function getAdvancedStats(telegramId: string): Promise<AdvancedStats> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return emptyStats;
@@ -158,10 +166,16 @@ export async function exportTradesToCsv(telegramId: string): Promise<string | nu
     for (const t of trades) {
         const type = t.isBuy ? 'BUY' : 'SELL';
         const row = [
-            t.createdAt.toISOString(), t.tokenAddress, type, t.amountInSol.toFixed(6),
-            (t.feeChargedSol || 0).toFixed(6), (t.affiliateCutSol || 0).toFixed(6),
-            (t.profitPercent || 0).toFixed(2), (t.realizedPnlSol || 0).toFixed(6),
-            t.strategy || 'MANUAL', t.txSignature || ''
+            t.createdAt.toISOString(), 
+            t.tokenAddress, 
+            type, 
+            t.amountInSol.toFixed(6),
+            (t.feeChargedSol || 0).toFixed(6), 
+            (t.affiliateCutSol || 0).toFixed(6),
+            (t.profitPercent || 0).toFixed(2), 
+            (t.realizedPnlSol || 0).toFixed(6),
+            sanitizeCsvField(t.strategy || 'MANUAL'), 
+            t.txSignature || ''
         ];
         csv += row.join(',') + '\n';
     }
@@ -172,11 +186,13 @@ export async function getCombinedTrades(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return [];
 
-    const trades = await prisma.trade.findMany({ where: { userId: user.id, status: 'CONFIRMED' } });
-    const simTrades = await prisma.simTrade.findMany({ where: { userId: user.id } });
-    
-    const combined = [...trades, ...simTrades].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    return combined;
+    const { isSimulationActive } = await import('./simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        const raw = await redis.get(`sim:trades:${telegramId}`);
+        return raw ? JSON.parse(raw) : [];
+    }
+
+    return await prisma.trade.findMany({ where: { userId: user.id, status: 'CONFIRMED' } });
 }
 
 export function computeCombinedStats(trades: any[]): AdvancedStats {
@@ -212,7 +228,6 @@ export function computeCombinedStats(trades: any[]): AdvancedStats {
     const dailyReturns = Array.from(dailyPnlMap.values());
 
     let sharpeRatio = 0;
-    // 🟢 FIX: Added conditional boundaries to completely mitigate Division by Zero and NaN
     if (dailyReturns.length >= 2) {
         const dailyMean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
         const dailyStd = Math.sqrt(dailyReturns.reduce((sum, r) => sum + (r - dailyMean) ** 2, 0) / dailyReturns.length);
@@ -284,7 +299,6 @@ export async function getCombinedHourlyPerformance(telegramId: string) {
     let trades: any[] = [];
 
     if (isSim) {
-        // 🟢 FIX: Reads the actual live simulation trades array directly
         const simTradesRaw = await redis.get(`sim:trades:${telegramId}`);
         trades = simTradesRaw ? JSON.parse(simTradesRaw) : [];
     } else {
@@ -293,12 +307,11 @@ export async function getCombinedHourlyPerformance(telegramId: string) {
         trades = await prisma.trade.findMany({ where: { userId: user.id } });
     }
 
-    // Aggregate strictly by the last 24 hours (UTC) from live trades
     const hourlyMap: Map<number, { count: number; wins: number; pnl: number }> = new Map();
     for (let h = 0; h < 24; h++) hourlyMap.set(h, { count: 0, wins: 0, pnl: 0 });
 
     for (const t of trades) {
-        if (t.isBuy) continue; // Only sells generate PnL
+        if (t.isBuy) continue;
         const hour = new Date(t.createdAt).getUTCHours();
         const entry = hourlyMap.get(hour)!;
         entry.count += 1;
@@ -307,7 +320,7 @@ export async function getCombinedHourlyPerformance(telegramId: string) {
         if (pnl > 0) entry.wins += 1;
     }
 
-    const result = [];
+    const result: HourlyStats[] = [];
     for (let h = 0; h < 24; h++) {
         const data = hourlyMap.get(h)!;
         result.push({
@@ -318,7 +331,6 @@ export async function getCombinedHourlyPerformance(telegramId: string) {
     }
     return result;
 }
-
 
 export interface CVaRMetric {
     cvarSol: number;

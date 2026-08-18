@@ -41,8 +41,9 @@ let lastPriorityFeeFetch = 0;
 
 dns.setDefaultResultOrder('ipv4first');
 
-const dohCache: Record<string, string> = {
-    'dns.google': '8.8.8.8'
+// 🟢 DoH cache with in-memory TTL expiration
+const dohCache: Record<string, { ip: string; expiresAt: number }> = {
+    'dns.google': { ip: '8.8.8.8', expiresAt: Infinity }
 };
 
 const CRITICAL_DOMAINS = [
@@ -53,9 +54,14 @@ const CRITICAL_DOMAINS = [
 
 function resolveViaDoh(hostname: string): Promise<string | null> {
     return new Promise(async (resolve) => {
-        if (dohCache[hostname]) return resolve(dohCache[hostname]);
+        const cached = dohCache[hostname];
+        if (cached && Date.now() < cached.expiresAt) return resolve(cached.ip);
+
         const cachedIp = await redis.get(`doh_cache:${hostname}`);
-        if (cachedIp) return resolve(cachedIp);
+        if (cachedIp) {
+            dohCache[hostname] = { ip: cachedIp, expiresAt: Date.now() + 3600_000 };
+            return resolve(cachedIp);
+        }
 
         const req = https.request({
             hostname: '8.8.8.8',
@@ -73,8 +79,8 @@ function resolveViaDoh(hostname: string): Promise<string | null> {
                 try {
                     const parsed = JSON.parse(data);
                     const ip = parsed?.Answer?.find((a: any) => a.type === 1)?.data;
-                    if (ip) {
-                        dohCache[hostname] = ip;
+                    if (ip && typeof ip === 'string') {
+                        dohCache[hostname] = { ip, expiresAt: Date.now() + 3600_000 };
                         await redis.set(`doh_cache:${hostname}`, ip, 'EX', 3600); 
                         return resolve(ip);
                     }
@@ -89,7 +95,8 @@ function resolveViaDoh(hostname: string): Promise<string | null> {
 }
 
 const secureDoHLookup = (hostname: string, options: any, callback: any) => {
-    if (dohCache[hostname]) return callback(null, dohCache[hostname], 4);
+    const cached = dohCache[hostname];
+    if (cached && Date.now() < cached.expiresAt) return callback(null, cached.ip, 4);
     resolveViaDoh(hostname).then((ip) => {
         if (ip) return callback(null, ip, 4);
         dns.lookup(hostname, options, callback);
@@ -673,7 +680,8 @@ export async function executeSnipe(
             if (tcaReport.confirmed) {
                 walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
                 
-                (async () => {
+                // 🟢 Await trade persistence & reward cuts cleanly to prevent state loss
+                try {
                     const feeCharged = amountSol * feeRate;
                     const feeChargedLamports = BigInt(Math.round((amountSol * 1_000_000_000) * feeRate));
                     let affiliateCutLamports = 0n;
@@ -710,7 +718,10 @@ export async function executeSnipe(
                     fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol, signature: txSig, strategy }).catch(()=>{});
                     const { recordStatsEvent } = await import('./simulation.service.js');
                     await recordStatsEvent(user.telegramId, 'live', 0).catch(()=>{});
-                })();
+                } catch (err: any) {
+                    logger.error('Buy post-processing failed', { error: err.message, txSig });
+                    await redis.rpush('failed_trade_recovery', JSON.stringify({ telegramId, targetCA, txSig, amountSol, side: 'buy' }));
+                }
 
                 return { success: true, index, signature: txSig, volumeSpent: amountSol };
             } else {
@@ -847,7 +858,7 @@ export async function executeExit(
             if (tcaReport.confirmed) {
                 walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
                 
-                (async () => {
+                try {
                     let actualSolReceived = tcaReport.executedPriceSol > 0 ? tcaReport.executedPriceSol : dynamicFeeBase;
                     
                     const feeCharged = volumeToRecord * feeRate;
@@ -905,7 +916,10 @@ export async function executeExit(
                             try { await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, { chat_id: telegramId, text: captionHtml, parse_mode: 'HTML', link_preview_options: { is_disabled: true } }); } catch (_) {}
                         }
                     }
-                })();
+                } catch (err: any) {
+                    logger.error('Sell post-processing failed', { error: err.message, txSig });
+                    await redis.rpush('failed_trade_recovery', JSON.stringify({ telegramId, targetCA, txSig, percentage: sellPercentage, side: 'sell' }));
+                }
 
                 return { success: true, index, signature: txSig, feeBase: dynamicFeeBase };
             } else {
@@ -1037,7 +1051,24 @@ export async function processLimitOrders(bot: any) {
         if (price === 0) continue; 
 
         if (price <= (order.targetPriceUsd || 0)) {
-            const result = await executeSnipe(order.user.telegramId, order.tokenAddress, order.amountSol, 'buy', undefined, false, undefined, undefined, 0, undefined, 'Limit Order');
+            // 🟢 Mutex to prevent duplicate fill across workers
+            const fillLockKey = `lock:limit_fill:${order.id}`;
+            const acquired = await redis.set(fillLockKey, '1', 'EX', 30, 'NX');
+            if (!acquired) continue;
+
+            const result = await executeSnipe(
+                order.user.telegramId,
+                order.tokenAddress,
+                order.amountSol,
+                'buy',
+                undefined,
+                false,
+                undefined,
+                undefined,
+                0,
+                undefined,
+                'Limit Order'
+            );
             
             if (result.success) {
                 await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
@@ -1050,7 +1081,9 @@ export async function processLimitOrders(bot: any) {
                         order.trailingPercent,
                         order.amountSol,
                         price,
-                        order.takeProfitPercent || undefined
+                        order.takeProfitPercent || undefined,
+                        undefined,
+                        'Limit Order'
                     );
                 }
 

@@ -41,9 +41,10 @@ export async function processDcaOrders(bot: any) {
 
         if (timeSinceLastBuy >= intervalMs) {
             const lockKey = `lock:dca_exec:${order.id}`;
+            const lockTtl = Math.min(intervalMs - 5000, 55000); // 🟢 Always release before next cycle
             let lock;
             try {
-                lock = await redlock.acquire([lockKey], Math.max(60000, intervalMs - 5000));
+                lock = await redlock.acquire([lockKey], Math.max(10000, lockTtl));
             } catch (e) { 
                 continue; 
             }

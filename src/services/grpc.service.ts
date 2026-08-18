@@ -128,15 +128,20 @@ global._sentryIntervals.push(setInterval(async () => {
     }));
 }, 5_000));
 
-export function releaseGuardSubscription(tokenAddress: string) {
+// In src/services/grpc.service.ts -> releaseGuardSubscription:
+export async function releaseGuardSubscription(tokenAddress: string) {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
     try {
-        const curvePda = getBondingCurveAddress(tokenAddress); 
-        if (!cachedActiveGuards.some(g => g.tokenAddress === tokenAddress) && !cachedLimitOrders.some(l => l.tokenAddress === tokenAddress)) {
+        const curvePda = getBondingCurveAddress(tokenAddress);
+        const remainingKeys = await redis.keys(`token_guards:*:${tokenAddress}`).catch(() => []);
+        const stillActive = cachedLimitOrders.some(l => l.tokenAddress === tokenAddress) || remainingKeys.length > 0;
+        
+        if (!stillActive) {
             const subId = activeSubscriptions.get(curvePda);
             if (subId !== undefined) {
                 try { connection.removeAccountChangeListener(subId); } catch(e){}
                 activeSubscriptions.delete(curvePda);
+                console.log(`🔵 [GUARD FEED] Cleaned up subscription for ${tokenAddress.substring(0,8)}...`);
             }
         }
     } catch (_) {}
@@ -225,6 +230,10 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         if (guard.entryPrice === 0 && currentPriceNative > 0) {
             guard.entryPrice = currentPriceNative;
             await updateEntryPrice(guard.id, currentPriceNative).catch(() => {});
+            
+            // 🟢 Patch the shared in-memory cache immediately
+            const idx = cachedActiveGuards.findIndex(g => g.id === guard.id);
+            if (idx !== -1) cachedActiveGuards[idx].entryPrice = currentPriceNative;
         }
         const entryPrice = guard.entryPrice || currentPriceNative;
         if (entryPrice <= 0 || currentPriceNative <= 0) return;

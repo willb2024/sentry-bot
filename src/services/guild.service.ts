@@ -11,8 +11,17 @@ import { isSimulationActive } from './simulation.service.js';
 
 dotenv.config();
 
+export function sanitizeCsvField(value: string | null | undefined): string {
+    if (!value) return '';
+    const str = String(value).trim();
+    if (/^[=+\-@\t\r]/.test(str)) {
+        return `'${str}`;
+    }
+    return str;
+}
+
 const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
-const PRICE_SOL = 0.2; // 0.2 SOL activation fee (free in simulation)
+const PRICE_SOL = 0.2;
 
 export async function createGuild(
     telegramId: string, 
@@ -39,7 +48,7 @@ export async function createGuild(
                     name,
                     description,
                     rewardDescription,
-                    feePaidSol: 0 // Free in simulation mode
+                    feePaidSol: 0
                 }
             });
             return { success: true, message: "Guild successfully established (Simulation).", guildCode };
@@ -131,18 +140,20 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
 
         const points = (volumeSol / 0.1) * 10;
 
-        for (const membership of memberships) {
-            await prisma.guildMembership.update({
-                where: { id: membership.id },
+        await prisma.$transaction(
+            memberships.map(m => prisma.guildMembership.update({
+                where: { id: m.id },
                 data: {
                     loyaltyPoints: { increment: points },
                     totalVolumeSol: { increment: volumeSol },
                     lastActiveAt: new Date()
                 }
-            });
+            }))
+        );
 
-            await redis.zincrby(`guild_lb:${membership.guildId}`, points, user.id);
-        }
+        const pipeline = redis.pipeline();
+        memberships.forEach(m => pipeline.zincrby(`guild_lb:${m.guildId}`, points, user.id));
+        await pipeline.exec();
     } catch (e) {}
 }
 
@@ -185,7 +196,7 @@ export async function exportLeaderboard(telegramId: string, guildId: string): Pr
         let csv = `rank,telegram_username,wallet_address,glp,volume_sol\n`;
         
         lb.forEach(row => {
-            csv += `${row.rank},@${row.username},${row.walletAddress},${row.glp.toFixed(2)},${row.volumeSol.toFixed(4)}\n`;
+            csv += `${row.rank},@${sanitizeCsvField(row.username)},${row.walletAddress},${row.glp.toFixed(2)},${row.volumeSol.toFixed(4)}\n`;
         });
 
         return csv;

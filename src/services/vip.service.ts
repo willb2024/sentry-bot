@@ -131,9 +131,6 @@ export async function getPlatformFeeRate(telegramId: string): Promise<number> {
 
     return 0.01; 
 }
-
-
-
 export function formatVipStatus(status: { isVip: boolean; tier: VipTierKey | null; expiresAt: Date | null; daysRemaining: number; }): string {
     if (!status.isVip || !status.tier) {
         return (

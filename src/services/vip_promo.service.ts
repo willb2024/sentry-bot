@@ -1,6 +1,7 @@
 // src/services/vip_promo.service.ts
 import { redis } from '../lib/redis.js';
-import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton
+import { prisma } from '../lib/prisma.js';
+import { logger } from '../lib/logger.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -127,6 +128,7 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
     const isActive = await redis.get('vip_promo:active');
     if (isActive !== 'true') return { granted: false, slotsRemaining: 0, reason: 'PROMO_INACTIVE' };
 
+    // 🟢 Declared in outer scope so finally block always has access
     const lockKey = `vip_promo:claiming:${telegramId}`;
     const isLocked = await redis.set(lockKey, 'LOCKED', 'EX', 10, 'NX');
     if (!isLocked) return { granted: false, slotsRemaining: await getSlotsRemaining(), reason: 'ALREADY_CLAIMED_TODAY' };
@@ -154,44 +156,50 @@ export async function checkAndGrantDailyVip(telegramId: string, referralCode: st
         const today = new Date().toISOString().split('T')[0];
         const { maxSlots } = await getPromoConfig();
 
-        // 🟢 FIX: Atomic slot claiming with Redis Lua scripts to eliminate race conditions
-       // In checkAndGrantDailyVip in src/services/vip_promo.service.ts
-const luaScript = `
-local current = redis.call('incr', KEYS[1])
-redis.call('expire', KEYS[1], 90000) -- 🟢 FIX 11: Refresh expiry on every increment
-if current > tonumber(ARGV[1]) then
-    redis.call('decr', KEYS[1])
-    return 0
-else
-    return current
-end
-`;
+        const luaScript = `
+        local current = redis.call('incr', KEYS[1])
+        redis.call('expire', KEYS[1], 90000)
+        if current > tonumber(ARGV[1]) then
+            redis.call('decr', KEYS[1])
+            return 0
+        else
+            return current
+        end
+        `;
         const currentCount = await redis.eval(luaScript, 1, `vip_promo:date:${today}`, maxSlots.toString()) as number;
 
         if (currentCount === 0) {
             return { granted: false, slotsRemaining: 0, reason: 'SLOTS_FULL' };
         }
 
-        await redis.set(`vip_promo:claimed:${telegramId}`, '1', 'EX', 86400);
+        try {
+            await redis.set(`vip_promo:claimed:${telegramId}`, '1', 'EX', 86400);
 
-        await prisma.user.update({
-            where: { telegramId },
-            data: {
-                isVip: true,
-                vipExpiresAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000), 
-                vipSource: 'PROMO',
-                wasEverPromoGranted: true
-            }
-        });
+            await prisma.user.update({
+                where: { telegramId },
+                data: {
+                    isVip: true,
+                    vipExpiresAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000), 
+                    vipSource: 'PROMO',
+                    wasEverPromoGranted: true
+                }
+            });
 
-        await prisma.dailyVipPromo.upsert({
-            where: { date: today },
-            update: { slotsUsed: { increment: 1 } },
-            create: { date: today, slotsUsed: 1, maxSlots: 10, isActive: true }
-        }).catch(() => {});
+            await prisma.dailyVipPromo.upsert({
+                where: { date: today },
+                update: { slotsUsed: { increment: 1 } },
+                create: { date: today, slotsUsed: 1, maxSlots: 10, isActive: true }
+            }).catch(() => {});
 
-        const slotsRemaining = Math.max(0, maxSlots - currentCount);
-        return { granted: true, slotsRemaining, reason: 'SUCCESS' };
+            const slotsRemaining = Math.max(0, maxSlots - currentCount);
+            return { granted: true, slotsRemaining, reason: 'SUCCESS' };
+        } catch (dbErr: any) {
+            // 🟢 Refund slot count if database persistence fails
+            await redis.decr(`vip_promo:date:${today}`);
+            await redis.del(`vip_promo:claimed:${telegramId}`);
+            logger.error('VIP promo grant failed mid-transaction, slot refunded', { telegramId, error: dbErr.message });
+            return { granted: false, slotsRemaining: await getSlotsRemaining() };
+        }
     } finally {
         await redis.del(lockKey);
     }

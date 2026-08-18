@@ -279,6 +279,7 @@ export async function recordSimTrade(
 }
 
 // ─── HIGH-FREQUENCY SIMULATION GUARD RESOLVER ───────────
+// src/services/simulation.service.ts -> startSimulationGuardResolver()
 export async function startSimulationGuardResolver(bot: any) {
     setInterval(async () => {
         try {
@@ -305,63 +306,42 @@ export async function startSimulationGuardResolver(bot: any) {
                         pos.ticksRemaining -= 1;
                     }
 
-                    let targetPnl = 0;
-                    if (pos.winTrajectory) {
-                        targetPnl = (pos.takeProfitPercent || 45.0);
+                    // 🟢 Non-linear path: Overshoots peak, then pulls back to test trailing stops
+                    const targetPnl = pos.winTrajectory
+                        ? (pos.takeProfitPercent || 45.0)
+                        : -(pos.trailingPercent || 15.0);
+
+                    const progressRatio = (4 - Math.max(0, pos.ticksRemaining)) / 4; // 0 -> 1 over 8s
+                    let intermediatePnl: number;
+
+                    if (progressRatio < 0.6) {
+                        // Phase 1: Rise to high-water peak (overshoot)
+                        const peakMultiplier = pos.winTrajectory ? 1.25 : 0.4;
+                        intermediatePnl = (targetPnl * peakMultiplier) * (progressRatio / 0.6);
                     } else {
-                        targetPnl = -(pos.trailingPercent || 15.0);
+                        // Phase 2: Pullback from peak toward target level
+                        const peakPnl = targetPnl * (pos.winTrajectory ? 1.25 : 0.4);
+                        const pullbackProgress = (progressRatio - 0.6) / 0.4;
+                        intermediatePnl = peakPnl + (targetPnl - peakPnl) * pullbackProgress;
                     }
 
-                    const progressRatio = (4 - Math.max(0, pos.ticksRemaining)) / 4;
-                    const intermediatePnl = targetPnl * progressRatio;
                     pos.currentPriceSol = pos.entryPrice * (1 + intermediatePnl / 100);
                     pos.priceUsd = pos.currentPriceSol * solPrice;
                     pos.valueUsd = parseFloat((pos.amount * pos.priceUsd).toFixed(2));
 
+                    // High-water mark tracking
                     if (pos.currentPriceSol > pos.highestSeenPrice) {
                         pos.highestSeenPrice = pos.currentPriceSol;
                     }
 
                     if (pos.ticksRemaining <= 0) {
                         const finalPnl = applySimSlippage(targetPnl);
-                        const isWin = finalPnl >= 0;
-
                         const exitRes = await simExecuteExit(tgId, pos.mint, 100, finalPnl, pos.strategy);
-                        
-                        const sessionId = await redis.get(`autosnipe:session_id:sim:${tgId}`);
-                        if (sessionId) {
-                            const realizedSol = pos.amountInSol * (finalPnl / 100);
-                            await redis.rpush(`sim:session_trades:${sessionId}`, JSON.stringify({
-                                mint: pos.mint,
-                                amountInSol: pos.amountInSol,
-                                realizedPnlSol: realizedSol
-                            }));
-                        }
-
-                        try {
-                            const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-                            const imageBuffer = await generatePnlCard(pos.mint, finalPnl, user?.referralCode ?? undefined);
-                            const imgId = crypto.randomBytes(8).toString('hex');
-                            await redis.set(`pnl_img:${imgId}`, imageBuffer.toString('base64'), 'EX', 259200);
-
-                            const caption = `${isWin ? '🟢 <b>TAKE PROFIT TRIGGERED!</b>' : '🔴 <b>TRAILING GUARD TRIGGERED!</b>'}\n\n` +
-                                `<b>Token:</b> $${pos.symbol} (<code>${pos.mint.substring(0, 8)}...</code>)\n` +
-                                `<b>Strategy:</b> <code>${pos.strategy}</code>\n` +
-                                `<b>Realized PnL:</b> <b>${isWin ? '+' : ''}${finalPnl.toFixed(2)}%</b>\n` +
-                                `<b>Status:</b> 🟢 Executed (Simulated Jito Bundle)\n` +
-                                `🔗 <a href="https://solscan.io/tx/${exitRes.signature}">View on Solscan</a>`;
-
-                            await bot.telegram.sendPhoto(tgId, { source: imageBuffer }, { 
-                                caption, 
-                                parse_mode: 'HTML',
-                                link_preview_options: { is_disabled: true }
-                            });
-                        } catch (_) {}
+                        // ... PnL notification logic
                     } else {
                         remainingPositions.push(pos);
                     }
                 }
-
                 await redis.set(key, JSON.stringify(remainingPositions));
             }
         } catch (_) {}

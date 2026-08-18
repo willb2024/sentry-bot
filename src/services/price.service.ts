@@ -219,8 +219,8 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
 
         await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
         return isUnsafe;
-    } catch (_) {
+    }  catch (_) {
         await redis.set(key, 'uncertain', 'EX', 45).catch(() => {});
-        return false; 
+        return true; // 🟢 FIX: Fail-closed on error — unknown tokens are treated as risky
     }
 }

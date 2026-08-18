@@ -90,24 +90,35 @@ export async function executeRentSweep(telegramId: string): Promise<{
             return { success: false, reclaimedSol: 0, message: "No empty token accounts found to reclaim." };
         }
 
-        // Limit to 18 accounts per sweep transaction
-        const targets = emptyAccounts.slice(0, 18);
+        const MAX_TX_BYTES = 1200;
+        const targets: typeof emptyAccounts = [];
         const instructions = [];
 
-        for (const target of targets) {
+        for (const target of emptyAccounts) {
             const targetPubkey = safePublicKey(target.pubkey);
             const programIdPubkey = safePublicKey(target.programId);
             if (!targetPubkey || !programIdPubkey) continue;
 
-            instructions.push(
-                createCloseAccountInstruction(
-                    targetPubkey,
-                    vaultPubkey,
-                    vaultPubkey,
-                    [],
-                    programIdPubkey
-                )
+            const candidateIx = createCloseAccountInstruction(
+                targetPubkey,
+                vaultPubkey,
+                vaultPubkey,
+                [],
+                programIdPubkey
             );
+
+            const trialInstructions = [...instructions, candidateIx];
+            const probeMsg = new TransactionMessage({
+                payerKey: vaultPubkey,
+                recentBlockhash: '11111111111111111111111111111111',
+                instructions: trialInstructions
+            }).compileToV0Message();
+
+            const probeSize = new VersionedTransaction(probeMsg).serialize().length;
+            if (probeSize > MAX_TX_BYTES) break;
+
+            instructions.push(candidateIx);
+            targets.push(target);
         }
 
         if (instructions.length === 0) {

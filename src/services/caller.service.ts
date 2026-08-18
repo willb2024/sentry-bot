@@ -118,7 +118,7 @@ async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10
         await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
         return result;
     } catch (_) {
-        const result = { isRug: true, top10Pct: 0, uncertain: true };
+        const result = { isRug: true, top10Pct: 0, uncertain: true }; // 🟢 Fail-closed on error
         await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); 
         return result;
     }
@@ -235,7 +235,7 @@ export async function trainCallerModel() {
     try {
         const predictions = await prisma.callerPrediction.findMany({
             where: { finalized: true, peakPct: { not: null } },
-            orderBy: { alertedAt: 'asc' }
+            orderBy: { alertedAt: 'asc' } // 🟢 Chronologically ordered
         });
 
         if (predictions.length < 60) {
@@ -257,25 +257,19 @@ export async function trainCallerModel() {
             y.push(Math.log(Math.max(0, p.peakPct!) + 1));
         }
 
-        const indices = Array.from({ length: rawX.length }, (_, i) => i);
-        for (let i = indices.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [indices[i], indices[j]] = [indices[j], indices[i]];
-        }
-        const splitAt = Math.floor(indices.length * 0.8);
-        const trainIdx = indices.slice(0, splitAt);
-        const valIdx = indices.slice(splitAt);
-
-        const trainX = trainIdx.map(i => rawX[i]);
-        const trainY = trainIdx.map(i => y[i]);
-        const valX = valIdx.map(i => rawX[i]);
-        const valY = valIdx.map(i => y[i]);
+        // 🟢 Chronological 80/20 train/validation split (Prevents temporal leakage)
+        const splitAt = Math.floor(rawX.length * 0.8);
+        const trainX = rawX.slice(0, splitAt);
+        const trainY = y.slice(0, splitAt);
+        const valX = rawX.slice(splitAt);
+        const valY = y.slice(splitAt);
 
         const norm = computeNormalization(trainX);
         const trainXNorm = trainX.map(row => normalizeRow(row, norm));
         const valXNorm = valX.map(row => normalizeRow(row, norm));
 
-        const { coefficients, intercept } = solveRidgeRegression(trainXNorm, trainY, 0.1);
+        const adaptiveLambda = trainX.length < 150 ? 0.5 : trainX.length < 500 ? 0.25 : 0.1;
+        const { coefficients, intercept } = solveRidgeRegression(trainXNorm, trainY, adaptiveLambda);
 
         const valMean = valY.reduce((a, b) => a + b, 0) / valY.length;
         let ssTot = 0, ssRes = 0;
@@ -286,20 +280,18 @@ export async function trainCallerModel() {
         }
         const valR2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
 
-        const featureNames = ['score', 'age', 'log_liquidity', 'log_volume', 'momentum', 'socials', 'rug', 'lock_pct', 'velocity'];
-        console.log(`🧠 [CALLER ML] Trained on ${trainX.length} samples, validated on ${valX.length}. Out-of-sample R² = ${valR2.toFixed(3)}`);
-
         const MIN_VAL_R2 = 0.15;
         const isUsable = valR2 >= MIN_VAL_R2;
 
-        await redis.set('caller_model_weights', JSON.stringify({
-            version: 1, trainedAt: Date.now(), coefficients, featureNames, intercept,
+        await redis.set('caller_model_weights_staging', JSON.stringify({
+            version: 1, trainedAt: Date.now(), coefficients, featureNames: ['score', 'age', 'log_liquidity', 'log_volume', 'momentum', 'socials', 'rug', 'lock_pct', 'velocity'], intercept,
             normalization: norm, metrics: { valR2, trainSampleCount: trainX.length, valSampleCount: valX.length, isUsable }
         }));
+        await redis.rename('caller_model_weights_staging', 'caller_model_weights'); // 🟢 Atomic staging swap
 
-        if (!isUsable) console.warn(`⚠️ [CALLER ML] Model validation R² (${valR2.toFixed(3)}) below threshold (${MIN_VAL_R2}). Marked unusable — falling back to heuristic scoring.`);
-    } catch (e) {
-        console.error(`🔴 [CALLER ML] Training Failed:`, e);
+        console.log(`🧠 [CALLER ML] Trained on ${trainX.length} samples, validated on ${valX.length}. Out-of-sample R² = ${valR2.toFixed(3)}`);
+    } catch (e: any) {
+        console.error(`🔴 [CALLER ML] Training Failed:`, e.message);
     }
 }
 
@@ -371,6 +363,11 @@ export async function storePredictionData(token: any, projection: any, alertKey:
 }
 
 export async function getCalibratedProjection(token: any) {
+    // 🟢 Hard gate on rugs: no rosy projections for malicious contracts
+    if (token.isRug) {
+        return { target: '0% (BLOCKED)', timeframe: 'N/A', volatility: 'RUG FLAGGED', sampleSize: 0, rawLow: 0, rawHigh: 0, rawTimeMins: 0 };
+    }
+
     const features = extractFeatures(token);
     
     try {
@@ -528,10 +525,11 @@ export function buildAuditTrailMessage(
 }
 
 export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { matches: any[]; isRelaxed: boolean } {
+    const ABSOLUTE_MIN_LIQUIDITY_USD = 1000; 
     const steps = [
         filters,
-        { ...filters, minScore: Math.max(20, filters.minScore - 10), maxAgeMins: filters.maxAgeMins * 1.25, minLiquidity: filters.minLiquidity * 0.75, minVolume24h: filters.minVolume24h * 0.75 },
-        { ...filters, minScore: Math.max(15, filters.minScore - 20), maxAgeMins: filters.maxAgeMins * 1.6,  minLiquidity: filters.minLiquidity * 0.4,  minVolume24h: filters.minVolume24h * 0.4  },
+        { ...filters, minScore: Math.max(20, filters.minScore - 10), maxAgeMins: filters.maxAgeMins * 1.25, minLiquidity: Math.max(ABSOLUTE_MIN_LIQUIDITY_USD, filters.minLiquidity * 0.75), minVolume24h: filters.minVolume24h * 0.75 },
+        { ...filters, minScore: Math.max(15, filters.minScore - 20), maxAgeMins: filters.maxAgeMins * 1.6,  minLiquidity: Math.max(ABSOLUTE_MIN_LIQUIDITY_USD, filters.minLiquidity * 0.4),  minVolume24h: filters.minVolume24h * 0.4  },
     ];
     for (let i = 0; i < steps.length; i++) {
         const f = steps[i];
@@ -550,6 +548,17 @@ export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { m
 }
 
 export function computeTokenScore(stats: TokenStats & { sentiment?: number }): { score: number; reasons: string[] } {
+    // 🟢 1. HARD SAFETY GATES FIRST
+    if (stats.isRug) {
+        return { score: 0, reasons: [`🚨 Rug risk flagged — HARD BLOCK`] };
+    }
+    if (stats.sellability && !stats.sellability.sellable) {
+        return { score: 0, reasons: [`🚨 UNSELLABLE (Honeypot/High Tax >15%)`] };
+    }
+    if (stats.devRep?.isKnownRugger) {
+        return { score: 0, reasons: [`🚨 Serial Rugger Wallet Detected — HARD BLOCK`] };
+    }
+
     let score = 0;
     const reasons: string[] = [];
 
@@ -589,47 +598,32 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
         reasons.push(`📈 Positive sentiment +${bonus}`);
     }
 
-    if (stats.isRug) { score -= 100; reasons.push(`🚨 Rug risk flagged`); }
-    if (stats.uncertain) { score -= 5; reasons.push(`⚠️ Rug check inconclusive (Timeout)`); }
-
-    if (stats.sourceQuality === 'onchain-only') {
-        reasons.push(`⛓️ Unindexed (early, unverified)`);
-    }
-
-    if (stats.sellability && !stats.sellability.sellable) {
-        return { score: 0, reasons: [`🚨 UNSELLABLE (Honeypot/High Tax >15%)`] };
-    }
-
-    if (stats.devRep) {
-        if (stats.devRep.isKnownRugger) {
-            return { score: 0, reasons: [`🚨 Serial Rugger Wallet Detected`] };
-        } else if (stats.devRep.launchCount > 5) {
-            score += 10;
-            reasons.push(`🏗️ Established Builder (${stats.devRep.launchCount} launches)`);
-        }
-    }
-
     if (stats.lpLock) {
         if (stats.lpLock.burned || stats.lpLock.lockPct > 80) {
             score += 15;
             reasons.push(`🔒 LP Secured (${stats.lpLock.lockPct.toFixed(0)}% Locked/Burned)`);
-        } else if (stats.ageMins > 10 && stats.lpLock.lockPct === 0 && !stats.isRug) {
+        } else if (stats.ageMins > 10 && stats.lpLock.lockPct === 0) {
             score -= 20;
-            reasons.push(`⚠️ Mature token with 0% LP Lock (Rug Setup)`);
+            reasons.push(`⚠️ Mature token with 0% LP Lock`);
         }
     }
 
     if (stats.velocity) {
         if (stats.velocity.growthRate > 50) {
             score += 15;
-            reasons.push(`🔥 High Organic Velocity (+${stats.velocity.growthRate.toFixed(0)}% holders in 5m)`);
+            reasons.push(`🔥 High Organic Velocity (+${stats.velocity.growthRate.toFixed(0)}% in 5m)`);
         } else if (stats.velocity.growthRate <= 0 && stats.priceChangeM5 > 5) {
             score -= 15;
-            reasons.push(`🤖 Wash Buy Warning (Price rising but flat unique buyers)`);
+            reasons.push(`🤖 Wash Buy Warning (Flat unique buyers)`);
         }
     }
 
-    return { score: Math.max(0, score), reasons };
+    if (stats.uncertain && score >= 75) {
+        score = 65;
+        reasons.push(`⚠️ Score capped: security check inconclusive`);
+    }
+
+    return { score: Math.max(0, Math.min(100, score)), reasons };
 }
 
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
@@ -674,18 +668,25 @@ async function fetchRecentNewMints() {
 
             const missingChunks = chunkArray(missing, 100);
             for (const mintChunk of missingChunks) {
-                const pdaChunk = mintChunk.map(m => {
-                    const pubKey = safePublicKey(getBondingCurveAddress(m));
-                    return pubKey ? pubKey : new PublicKey(getBondingCurveAddress(m));
-                });
-                
-                const validPdaChunk = pdaChunk.filter(p => p !== null);
+                const validMintChunk: string[] = [];
+                const pdaChunk: PublicKey[] = [];
 
-                const accInfos = await connection.getMultipleAccountsInfo(validPdaChunk).catch(() => null);
+                for (const m of mintChunk) {
+                    const curveAddr = getBondingCurveAddress(m);
+                    const pubKey = safePublicKey(curveAddr);
+                    if (pubKey) {
+                        pdaChunk.push(pubKey);
+                        validMintChunk.push(m);
+                    }
+                }
+
+                if (pdaChunk.length === 0) continue;
+
+                const accInfos = await connection.getMultipleAccountsInfo(pdaChunk).catch(() => null);
                 if (accInfos) {
                     accInfos.forEach((accInfo, idx) => {
                         if (!accInfo?.data) return;
-                        const mint = mintChunk[idx];
+                        const mint = validMintChunk[idx];
                         const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
                         const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
                         const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
@@ -799,15 +800,19 @@ async function fetchFreshRaydiumPairs() {
     }
 }
 
+let globalScoringLock = false;
+
 export async function scoreTokens() {
+    if (globalScoringLock) {
+        const cached = await redis.get('caller:hot_scored_tokens');
+        if (cached) return JSON.parse(cached);
+    }
+    globalScoringLock = true;
+
     try {
-        // 🟢 REST FALLBACK: Hydrate queue if buffer is cold
         const recentMints = getRecentNewMints();
         if (recentMints.length === 0) {
-            const freshRest = await fetchFreshViaRest();
-            if (freshRest.length > 0) {
-                console.log(`🌐 [CALLER] Hydrated ${freshRest.length} fresh pairs via REST fallback.`);
-            }
+            await fetchFreshViaRest();
         }
 
         const [newMints, pumpFallback, restFallback, boosted, raydiumPairs] = await Promise.all([
@@ -835,14 +840,20 @@ export async function scoreTokens() {
         if (needsFix.length > 0) {
             const chunks = chunkArray(needsFix, 100);
             for (const chunk of chunks) {
-                const pdas = chunk.map(p => {
-                    const pubKey = safePublicKey(getBondingCurveAddress(p.mint));
-                    return pubKey ? pubKey : new PublicKey(getBondingCurveAddress(p.mint));
-                });
-                
-                const validPdaChunk = pdas.filter(p => p !== null);
+                const validChunk: any[] = [];
+                const pdas: PublicKey[] = [];
 
-                const accInfos = await connection.getMultipleAccountsInfo(validPdaChunk).catch(() => null);
+                for (const p of chunk) {
+                    const pubKey = safePublicKey(getBondingCurveAddress(p.mint));
+                    if (pubKey) {
+                        pdas.push(pubKey);
+                        validChunk.push(p);
+                    }
+                }
+
+                if (pdas.length === 0) continue;
+
+                const accInfos = await connection.getMultipleAccountsInfo(pdas).catch(() => null);
                 if (accInfos) {
                     accInfos.forEach((acc, idx) => {
                         if (acc?.data) {
@@ -852,9 +863,9 @@ export async function scoreTokens() {
                                 const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
                                 const liqUsd = virtualSolReserves * cachedSolUsdPrice;
                                 const volUsd = realSolReserves * cachedSolUsdPrice * 2; 
-                                if (chunk[idx].liquidity === 0) chunk[idx].liquidity = liqUsd;
-                                if (chunk[idx].volume === 0) chunk[idx].volume = volUsd;
-                                if (chunk[idx].price === 0) chunk[idx].price = decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice;
+                                if (validChunk[idx].liquidity === 0) validChunk[idx].liquidity = liqUsd;
+                                if (validChunk[idx].volume === 0) validChunk[idx].volume = volUsd;
+                                if (validChunk[idx].price === 0) validChunk[idx].price = decodePumpCurvePrice(buf.toString('base64')) * cachedSolUsdPrice;
                             }
                         }
                     });
@@ -916,19 +927,21 @@ export async function scoreTokens() {
                 
                 let finalCalculatedScore = Math.max(0, concentrationAdjustedScore);
 
-                try {
-                    const weightsRaw = await redis.get('caller_model_weights');
-                    if (weightsRaw) {
-                        const weights = JSON.parse(weightsRaw);
-                        if (weights.metrics?.isUsable !== false) {
-                            const mlScore = await getModelScore(t.pair.mint, t.stats);
-                            if (mlScore !== null) {
-                                finalCalculatedScore = (mlScore * 0.6) + (finalCalculatedScore * 0.4);
-                                finalScoreRes.reasons.push(`🤖 ML Confident: ${mlScore.toFixed(0)}%`);
+                if (!t.isRug && finalCalculatedScore > 0) {
+                    try {
+                        const weightsRaw = await redis.get('caller_model_weights');
+                        if (weightsRaw) {
+                            const weights = JSON.parse(weightsRaw);
+                            if (weights.metrics?.isUsable !== false) {
+                                const mlScore = await getModelScore(t.pair.mint, t.stats);
+                                if (mlScore !== null) {
+                                    finalCalculatedScore = (mlScore * 0.6) + (finalCalculatedScore * 0.4);
+                                    finalScoreRes.reasons.push(`🤖 ML Confident: ${mlScore.toFixed(0)}%`);
+                                }
                             }
                         }
-                    }
-                } catch (_) {}
+                    } catch (_) {}
+                }
 
                 return { 
                     ...t.pair, 
@@ -953,6 +966,8 @@ export async function scoreTokens() {
     } catch (e: any) {
         console.error("🔴 [CALLER] Engine Error:", e.message);
         return [];
+    } finally {
+        globalScoringLock = false;
     }
 }
 
@@ -1030,7 +1045,7 @@ let isScoring = false;
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Live loop (15s) & Sim loop (5s) active.");
 
-    // ─── 1. SIMULATION POLLING LOOP (5s) ────────────────────
+    // 1. SIMULATION POLLING LOOP (5s)
     setInterval(async () => {
         try {
             const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
@@ -1085,16 +1100,15 @@ export async function startCoinCaller(bot: any) {
         } catch (_) {}
     }, 5000); 
 
+    // 2. SIMULATED COPY-TRADE LOOP (5s)
+    setInterval(async () => {
+        try {
+            const { processSimCopyTrades } = await import('./simulation.service.js');
+            await processSimCopyTrades(bot);
+        } catch (_) {}
+    }, 5000);
 
-    // ─── 3. SIMULATED COPY-TRADE LOOP (5s) ──────────────────
-setInterval(async () => {
-    try {
-        const { processSimCopyTrades } = await import('./simulation.service.js');
-        await processSimCopyTrades(bot);
-    } catch (_) {}
-}, 5000);
-
-    // ─── 2. LIVE MAINNET POLLING LOOP (15s) ──────────────────
+    // 3. LIVE MAINNET POLLING LOOP (15s)
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;

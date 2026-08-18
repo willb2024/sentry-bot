@@ -79,9 +79,9 @@ export async function uploadMetadataToIpfs(name: string, symbol: string, descrip
     }
 }
 
-export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keypair, matched: boolean }> {
+// src/services/token_launch.service.ts
+export async function mineVanityKeypair(prefix: string, maxIterations = 50000): Promise<{ keypair: Keypair, matched: boolean }> {
     if (!prefix || prefix.toUpperCase() === 'NO') return { keypair: Keypair.generate(), matched: true };
-    
     const search = prefix.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 4);
     if (search.length === 0) return { keypair: Keypair.generate(), matched: true };
 
@@ -90,14 +90,14 @@ export async function mineVanityKeypair(prefix: string): Promise<{ keypair: Keyp
 
     return new Promise((resolve) => {
         function mineChunk() {
-            for (let i = 0; i < 5000; i++) {
+            for (let i = 0; i < 500; i++) { // 🟢 Micro-chunks ensure event loop never starves
                 if (keypair.publicKey.toBase58().toLowerCase().startsWith(search)) {
                     return resolve({ keypair, matched: true });
                 }
                 keypair = Keypair.generate();
             }
-            iterations += 5000;
-            if (iterations >= 50000) {
+            iterations += 500;
+            if (iterations >= maxIterations) {
                 return resolve({ keypair, matched: false }); 
             }
             setImmediate(mineChunk);

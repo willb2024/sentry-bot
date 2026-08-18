@@ -76,31 +76,33 @@ export async function getUserPositions(telegramId: string) {
         });
 
         // 🟢 FIX: Map positions with actual entryPriceUsd from trade ledger
-        const mappedPositions = [];
-        for (const p of rawPositions) {
-            const meta = tokenMetadata[p.mint] || { priceUsd: 0, symbol: "UNKNOWN", name: "Unknown Token" };
-            
-            let entryPriceUsd = 0;
-            try {
-                const lastBuy = await prisma.trade.findFirst({
-                    where: { userId: user.id, tokenAddress: p.mint, isBuy: true, status: 'CONFIRMED' },
-                    orderBy: { createdAt: 'desc' }
-                });
-                if (lastBuy && (lastBuy as any).executedPriceUsd && (lastBuy as any).executedPriceUsd > 0) {
-                    entryPriceUsd = (lastBuy as any).executedPriceUsd;
-                }
-            } catch (_) {}
+       // In src/services/position.service.ts -> getUserPositions:
+// Replace the sequential `for (const p of rawPositions)` loop with:
 
-            mappedPositions.push({
-                ...p,
-                symbol: meta.symbol,
-                name: meta.name,
-                priceUsd: meta.priceUsd,
-                valueUsd: p.amount * meta.priceUsd,
-                entryPriceUsd,
-                entryPrice: entryPriceUsd
-            });
+const mappedPositions = await Promise.all(rawPositions.map(async (p) => {
+    const meta = tokenMetadata[p.mint] || { priceUsd: 0, symbol: "UNKNOWN", name: "Unknown Token" };
+    let entryPriceUsd = 0;
+
+    try {
+        const lastBuy = await prisma.trade.findFirst({
+            where: { userId: user.id, tokenAddress: p.mint, isBuy: true, status: 'CONFIRMED' },
+            orderBy: { createdAt: 'desc' }
+        });
+        if (lastBuy && (lastBuy as any).executedPriceUsd && (lastBuy as any).executedPriceUsd > 0) {
+            entryPriceUsd = (lastBuy as any).executedPriceUsd;
         }
+    } catch (_) {}
+
+    return {
+        ...p,
+        symbol: meta.symbol,
+        name: meta.name,
+        priceUsd: meta.priceUsd,
+        valueUsd: p.amount * meta.priceUsd,
+        entryPriceUsd,
+        entryPrice: entryPriceUsd
+    };
+}));
           
         const finalPositions = mappedPositions
             .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 

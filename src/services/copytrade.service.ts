@@ -6,6 +6,7 @@ import { executeSnipe, executeExit, getCachedTokenPrice } from './engine.service
 import { addTrailingStopToMemory } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
 import { redis } from '../lib/redis.js';
+import { logger } from '../lib/logger.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { isSimulationActive } from './simulation.service.js';
@@ -59,7 +60,6 @@ export async function syncCopyTradeListeners(bot: any) {
             include: { user: true }
         });
 
-        // 🟢 FIX: Filter out users who are in SIMULATION MODE to protect live funds
         const filteredConfigs = [];
         for (const config of activeConfigs) {
             if (!(await isSimulationActive(config.user.telegramId))) {
@@ -87,6 +87,11 @@ export async function syncCopyTradeListeners(bot: any) {
 
                     const subId = connection.onLogs(pubKey, async (logs) => {
                         if (logs.err) return;
+
+                        // 🟢 Cheap pre-filter: only fetch full parsed tx if logs contain DEX/swap activity
+                        const relevantPrograms = ['pump', 'Raydium', 'whirlpool', 'Meteora', 'Jupiter', '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'];
+                        const isRelevant = logs.logs.some(l => relevantPrograms.some(p => l.toLowerCase().includes(p.toLowerCase())));
+                        if (!isRelevant) return;
 
                         const signature = logs.signature;
                         const txDetails = await connection.getParsedTransaction(signature, {
@@ -137,8 +142,19 @@ export async function syncCopyTradeListeners(bot: any) {
                                     if (f.copyBuys === false) continue;
                                     const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
 
-                                    executeSnipe(follower.user.telegramId, targetTokenMint, sizeToTrade, 'buy', undefined, false, undefined, f.slippagePercent || undefined, 0, undefined, 'Copy Trade'// 🟢 Exact match
-                                    ).then(async (res) =>{
+                                    executeSnipe(
+                                        follower.user.telegramId,
+                                        targetTokenMint,
+                                        sizeToTrade,
+                                        'buy',
+                                        undefined,
+                                        false,
+                                        undefined,
+                                        f.slippagePercent || undefined,
+                                        0,
+                                        undefined,
+                                        'Copy Trade'
+                                    ).then(async (res) => {
                                         if (res.success) {
                                             try {
                                                 await addTrailingStopToMemory(
@@ -149,7 +165,7 @@ export async function syncCopyTradeListeners(bot: any) {
                                                     entryPrice,
                                                     follower.autoTakeProfitPercent || undefined,
                                                     undefined,
-                                                    'Copy Trade' // 🟢 Pass 'Copy Trade'
+                                                    'Copy Trade'
                                                 );
                                             } catch (guardErr) {}
                                             try { 
@@ -160,7 +176,9 @@ export async function syncCopyTradeListeners(bot: any) {
                                                 ); 
                                             } catch (_) {}
                                         }
-                                    }).catch(() => {});
+                                    }).catch((err) => {
+                                        logger.error('Copy-trade buy execution threw unexpectedly', { error: err.message, wallet: walletStr, telegramId: follower.user.telegramId });
+                                    });
                                 }
                             } 
                             else if (tradeType === 'sell' && sellPercentage >= 1) {
@@ -169,7 +187,12 @@ export async function syncCopyTradeListeners(bot: any) {
                                     const f: any = follower; 
                                     if (f.copySells === false) continue;
 
-                                    executeExit(follower.user.telegramId, targetTokenMint, sellPercentage, false, 'Copy Trade' // 🟢 Exact match
+                                    executeExit(
+                                        follower.user.telegramId,
+                                        targetTokenMint,
+                                        sellPercentage,
+                                        false,
+                                        'Copy Trade'
                                     ).then(async (res) => {
                                         if (res.success) {
                                             try { 

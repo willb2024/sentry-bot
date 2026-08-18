@@ -6,6 +6,7 @@ import { computeUniversalStats } from './utils/math.utils.js';
 import { getBondingCurveAddress, decodePumpCurvePrice, checkTokenRugRisk } from './services/price.service.js';
 import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
+
 import { dcaQueue, guardQueue, limitQueue } from './queues/index.js';
 import { checkRedisHealth } from './lib/redis.js';
 import cors from 'cors';
@@ -64,7 +65,8 @@ if (!BOT_TOKEN) { console.error("🔴 FATAL: BOT_TOKEN is missing in .env!"); pr
 if (!process.env.TREASURY_WALLET_ADDRESS) { console.error("🔴 FATAL: TREASURY_WALLET_ADDRESS is missing in .env! All trades will run fee-free."); process.exit(1); }
 const bot = new Telegraf(BOT_TOKEN);
 
-
+import { setBotInstance } from './lib/bot-instance.js';
+setBotInstance(bot);
 
 
 dotenv.config();
@@ -267,10 +269,11 @@ async function measureRpcLatency(): Promise<number> {
 
 
 app.post('/api/analytics', async (req, res) => {
-    const initData = req.body.initData;
-    if (!initData) return res.status(401).json({ error: "No initData" });
-    const tgId = extractTelegramId(initData);
+    if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+    const tgId = extractTelegramId(req.body.initData);
     if (!tgId) return res.status(401).json({ error: "Invalid initData" });
+
+
 
     try {
         const { isSimulationActive } = await import('./services/simulation.service.js');
@@ -1710,199 +1713,213 @@ bot.command('clearwatch', async (ctx) => {
 // =========================================================
 // 📖 THE COMPLETE SENTRY OPERATIONS MANUAL (HOW TO TRADE)
 // =========================================================
+// src/index.ts
 export const TRADE_GUIDE_PAGES: string[] = [
     // PAGE 1: VAULT INITIALIZATION & ARCHITECTURE
-    `📖 <b>HOW TO TRADE: VAULT ARCHITECTURE &amp; FUNDING</b> <i>(1/16)</i>\n\n` +
+    `📖 <b>HOW TO TRADE: VAULT ARCHITECTURE &amp; FUNDING</b> <i>(1/18)</i>\n\n` +
     `<i>Sentry is a non-custodial, high-frequency execution environment. Your keys are generated locally and encrypted using authenticated AES-256-GCM encryption with Scrypt key derivation.</i>\n\n` +
-    `<b>CORE ARCHITECTURE &amp; INITIALIZATION:</b>\n` +
-    `1. <b>Cryptographic Key Generation:</b> Tap <b>Vault &amp; Keys</b>. Sentry generates an isolated Solana keypair (W1) in memory. The private key is encrypted before touching disk.\n` +
-    `2. <b>Funding Your Node:</b> Copy your W1 public address and transfer SOL from Phantom, Solflare, or a CEX (Binance, Coinbase).\n` +
+    `<b>CORE INITIALIZATION WORKFLOW:</b>\n` +
+    `1. <b>Initialize Terminal:</b> Send <code>/start</code>. Sentry generates an isolated Solana keypair (W1) in memory.\n` +
+    `2. <b>Funding Your Node:</b> Copy your primary W1 deposit address and transfer SOL from Phantom, Solflare, or a centralized exchange.\n` +
     `3. <b>Zero-RPC WebSocket Deposit Watcher:</b> Sentry runs an active account listener. The millisecond your deposit confirms on-chain, your balance updates without manual refreshing.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You open Phantom and transfer <code>2.5 SOL</code> to your Sentry W1 address <code>7xKX...9qZ</code>. Within 400ms of Solana slot finality, Sentry pings you: <i>"👛 Deposit Confirmed! Received +2.5000 SOL."</i> You are now armed to snipe with sub-millisecond execution.`,
+    `Transfer <code>2.0 SOL</code> to your Sentry W1 address. Within 400ms of Solana block finality, Sentry pings you: <i>"👛 Deposit Confirmed! Received +2.0000 SOL."</i> You are now armed to snipe with sub-millisecond execution.`,
 
-    // PAGE 2: DASHBOARD METRICS & REAL-TIME AGGREGATION
-    `📖 <b>HOW TO TRADE: DASHBOARD METRICS &amp; ACCOUNTING</b> <i>(2/16)</i>\n\n` +
-    `<i>Your dashboard provides real-time quantitative portfolio telemetry calculated across closed trades and live balance feeds.</i>\n\n` +
-    `<b>METRIC DEFINITIONS:</b>\n` +
-    `• <b>💰 Net Worth:</b> Total liquid SOL balance across all active vaults plus real-time mark-to-market valuation of all open SPL tokens.\n` +
-    `• <b>📈 Realized PnL:</b> Net SOL and percentage profit/loss calculated strictly from confirmed sell executions after validator tips and platform fees.\n` +
-    `• <b>🎯 Win Rate:</b> Statistical ratio: <code>(Winning Sells ÷ Total Closed Trades) × 100</code>.\n` +
-    `• <b>⚡ Trade Volume:</b> Gross cumulative SOL routed across all buy and sell instructions.\n` +
-    `• <b>📅 Total Trading Days:</b> Continuous historical timeline anchored to your first recorded on-chain transaction.\n\n` +
+    // PAGE 2: TOKEN X-RAY SECURITY AUDIT SCANNER
+    `📖 <b>HOW TO TRADE: TOKEN X-RAY AUDIT SCANNER</b> <i>(2/18)</i>\n\n` +
+    `<i>Audit any Solana smart contract on-chain before risking your capital.</i>\n\n` +
+    `<b>COMMAND SYNTAX:</b>\n` +
+    `• <code>/scan [TOKEN_CA]</code>\n` +
+    `• <i>Aliases:</i> <code>/xray [TOKEN_CA]</code> or <code>/info [TOKEN_CA]</code>\n\n` +
+    `<b>SECURITY VECTORS ANALYZED:</b>\n` +
+    `• <b>Freeze &amp; Mint Authority:</b> Detects active honeypot switches and supply inflation traps.\n` +
+    `• <b>Token-2022 Tax Extensions:</b> Scans bytecode for hidden transfer fee penalties.\n` +
+    `• <b>Holder Concentration:</b> Flags tokens where the top 10 holders own &gt;40% of supply.\n` +
+    `• <b>Pool Age &amp; Liquidity:</b> Mark-to-market FDV, USD liquidity depth, and 5m/1h momentum.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You enter a position with <code>1.0 SOL</code> on $BONK. Price moves up +50%, and Sentry auto-exits for <code>1.5 SOL</code>. Your Realized PnL updates to <code>+0.5000 SOL (+50.0%)</code>, your Win Rate registers 1 Win / 0 Losses (100%), and Net Worth reflects the newly settled balance immediately.`,
+    `Paste <code>/scan DezXAZ8z...</code> to receive an instant X-Ray report showing liquidity, rug risk score, and a 1-tap Snipe button.`,
 
-    // PAGE 3: INSTITUTIONAL QUANTITATIVE ANALYTICS (FIXED HTML ESCAPING)
-    `📖 <b>HOW TO TRADE: INSTITUTIONAL ANALYTICS</b> <i>(3/16)</i>\n\n` +
-    `<i>Sentry incorporates Wall Street Transaction Cost Analysis (TCA) and statistical risk modeling into your WebApp.</i>\n\n` +
-    `<b>QUANTITATIVE INDICATORS:</b>\n` +
-    `• <b>Avg Slippage (TCA):</b> Measures execution price variance against expected quote price. Low TCA (under 1.0%) proves clean fills free from front-running.\n` +
-    `• <b>CVaR (5% Tail Risk):</b> Conditional Value at Risk measures the Expected Shortfall in your worst 5% historical drawdown events to prevent liquidation over-exposure.\n` +
-    `• <b>Sharpe Ratio:</b> Annualized risk-adjusted return relative to daily standard deviation: <code>(Mean Daily Return ÷ Std Dev) × √365</code>.\n` +
-    `• <b>Portfolio Risk Score (0-100%):</b> Analyzes liquidity depth, dev concentration, and token-2022 transfer fee tax traps on all held assets.\n\n` +
+    // PAGE 3: AI COIN CALLER & ML PRICE PROJECTIONS
+    `📖 <b>HOW TO TRADE: AI COIN CALLER &amp; PROJECTIONS</b> <i>(3/18)</i>\n\n` +
+    `<i>The AI Coin Caller evaluates raw mempool transitions using a Ridge Regression ML model.</i>\n\n` +
+    `<b>COMMANDS:</b>\n` +
+    `• <code>/caller</code> — Open scanner settings and filter controls.\n` +
+    `• <code>/callerstats</code> — View the transparent 24h–72h win-rate audit of past calls.\n` +
+    `• <code>/projectionstats</code> — Check machine learning target price prediction accuracy.\n\n` +
+    `<b>WHAT THE SCORE (0–100) MEANS:</b>\n` +
+    `• <b>0–39 (Too Early):</b> Minimal signal; keep on radar.\n` +
+    `• <b>40–59 (Speculative):</b> Early volume breakout; small sizing.\n` +
+    `• <b>60–74 (Developing):</b> Multiple confirmation signals (LP lock, volume velocity).\n` +
+    `• <b>75–100 (High Conviction):</b> Institutional-grade setup with Jito MEV protection.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You review your TCA card: it reads <code>0.18%</code>. On a 10 SOL trade, you lost only 0.018 SOL to execution spread—compared to standard public DEX swaps that regularly lose 3% to 8% to sandwich bots.`,
+    `Send <code>/caller</code>, set <b>Min Score: 65</b> and <b>Max Age: 30m</b>, and tap <b>Scan Mainnet Now</b> to stream audited breakout tokens directly to your chat.`,
 
-    // PAGE 4: LIVE BLOOMBERG FEED & POSITION DRAWERS
-    `📖 <b>HOW TO TRADE: EXECUTION FEED &amp; POSITION MANAGEMENT</b> <i>(4/16)</i>\n\n` +
-    `<i>Monitor block-level trade settlement and manage active inventory from the WebApp.</i>\n\n` +
-    `<b>INTERACTIVE COMPONENTS:</b>\n` +
-    `• <b>Live Execution Feed:</b> A Bloomberg-style terminal stream displaying the last 10 block confirmations with timestamp, contract address, side (BUY/SELL), volume, and net PnL.\n` +
-    `• <b>Flow Analytics Engine:</b> Switchable interactive charting (1H, 1D, 7D, 30D, 1Y) tracking cumulative daily profit vs. drawdown.\n` +
-    `• <b>Verified Holdings Drawer:</b> Tap any open position to view entry price, live market cap, 24h volume, and instant partial exits (25%, 50%, 100%).\n\n` +
+    // PAGE 4: CONCURRENT BATCH SNIPING
+    `📖 <b>HOW TO TRADE: CONCURRENT BATCH SNIPING</b> <i>(4/18)</i>\n\n` +
+    `<i>Snipe multiple token contract addresses simultaneously across parallel validator channels.</i>\n\n` +
+    `<b>COMMAND SYNTAX:</b>\n` +
+    `<code>/batch</code>\n` +
+    `<code>[CONTRACT_ADDRESS_1], [AMOUNT_SOL_OR_$USD]</code>\n` +
+    `<code>[CONTRACT_ADDRESS_2], [AMOUNT_SOL_OR_$USD]</code>\n` +
+    `<code>[CONTRACT_ADDRESS_3], [AMOUNT_SOL_OR_$USD]</code>\n\n` +
+    `<b>EXECUTION SPECIFICATIONS:</b>\n` +
+    `• Builds and signs distinct transactions concurrently.\n` +
+    `• Bundles entries with private Jito validator tips to eliminate sandwich exploitation.\n` +
+    `• Returns a consolidated execution summary with individual Solscan receipts.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `A token you hold surges +200%. Open your WebApp, tap the token drawer, and click <b>50%</b>. Sentry constructs, signs, and routes a partial exit in a single Jito bundle—securing your initial capital while leaving 50% as a risk-free moonbag.`,
+    `Send:\n<code>/batch\nDezXAZ...pump, 0.1\nEKpQGS...pump, $25\nCzLSu...pump, 0.05</code>\nSentry broadcasts all three purchases in the same block.`,
 
-    // PAGE 5: CRYPTOGRAPHIC VAULT SECURITY & KEY EXPORT
-    `📖 <b>HOW TO TRADE: KEY SECURITY &amp; MANAGEMENT</b> <i>(5/16)</i>\n\n` +
-    `<i>Complete sovereign ownership of your private keys with zero server-side exposure.</i>\n\n` +
-    `<b>KEY MANAGEMENT PROTOCOLS:</b>\n` +
-    `1. <b>Ephemeral Key Export:</b> Go to <b>Vault &amp; Keys</b> → tap <b>Export Keys</b>. Sentry displays your Base58 private keys with a strict <b>60-second auto-delete timer</b>.\n` +
-    `2. <b>External Key Import:</b> Tap <b>Import Key</b> and paste any existing Solana private key to trade existing wallets with Sentry's sub-millisecond execution stack.\n` +
-    `3. <b>Multi-Node Delegation:</b> Sentry can derive and manage up to 5 sub-wallets under your master profile for concurrent multi-lane execution.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You want to check your token balances inside Solflare. You tap <b>Export Keys</b>, copy your W1 Base58 string, and paste it into Solflare. After 60 seconds, the Telegram key message disappears completely from your chat history.`,
+    // PAGE 5: HIGH-WATER TRAILING STOPS & ANTI-RUG DEFENSE
+    `📖 <b>HOW TO TRADE: TRAILING GUARDS &amp; ANTI-RUG</b> <i>(5/18)</i>\n\n` +
+    `<i>Protect profits with high-water peak tracking and mempool front-running defense.</i>\n\n` +
+    `<b>HOW PEAK TRACKING WORKS:</b>\n` +
+    `1. You buy a token at <b>$1.00</b> with a <b>-15% Trailing Drop</b> and <b>+45% Take Profit</b>.\n` +
+    `2. Price surges to <b>$2.00</b>. Sentry raises your floor to <code>$1.70</code> (15% below the peak).\n` +
+    `3. If price retraces to $1.70, Sentry triggers an instant Jito exit, locking in <b>+70% net profit</b>.\n` +
+    `4. If price hits $2.45 (+45% TP), Sentry auto-sells 100% of the position immediately.\n\n` +
+    `<b>YELLOWSTONE MEMPOOL ANTI-RUG SHIELD:</b>\n` +
+    `Sentry monitors raw validator gossip. If a developer broadcasts a <code>RemoveLiquidity</code> or <code>Withdraw</code> transaction, Sentry intercepts it and lands your exit <b>before the rug pull confirms</b>.`,
 
-    // PAGE 6: MULTI-WALLET "WHALE MODE" (BLOCK-0 BUNDLING)
-    `📖 <b>HOW TO TRADE: MULTI-WALLET WHALE MODE</b> <i>(6/16)</i>\n\n` +
-    `<i>Pump.fun and Raydium enforce per-wallet max buy limits at launch. Whale Mode bypasses these limits completely.</i>\n\n` +
-    `<b>WHALE MODE DEPLOYMENT:</b>\n` +
-    `1. Navigate to <b>Vault &amp; Keys</b> and select <b>2, 3, 4, or 5 Wallets</b>.\n` +
-    `2. Deposit SOL into each individual sub-wallet address (W1 through W5).\n` +
-    `3. When a buy triggers, Sentry packages distinct transactions from all active wallets into a single Jito bundle.\n` +
-    `4. <b>Result:</b> All sub-wallets buy simultaneously in the exact same millisecond within Block-0 without getting flagged by anti-whale caps.\n` +
-    `5. <b>Consolidation Sweep:</b> Tap <b>Sweep All Sub-Wallets to W1</b> to transfer all SOL back into your main wallet with a single tap.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `A hyped launch restricts buys to 0.5 SOL per wallet. You activate 4 wallets with 0.5 SOL each. Sentry fires 4 concurrent transactions in 1 Jito bundle—securing 2.0 SOL total allocation on the opening block.`,
+    // PAGE 6: TWAP / DCA & LIMIT ORDERS
+    `📖 <b>HOW TO TRADE: TWAP / DCA &amp; LIMIT ORDERS</b> <i>(6/18)</i>\n\n` +
+    `<i>Accumulate positions algorithmically without moving shallow liquidity pools.</i>\n\n` +
+    `<b>DCA / TWAP ACCUMULATION:</b>\n` +
+    `• <b>Command:</b> <code>/dca [CA] [INTERVAL_MINS] [AMOUNT_SOL_OR_$USD] [DROP_%] [TP_%] [MAX_BUDGET]</code>\n` +
+    `• <i>Example:</i> <code>/dca JUPyiw... 30 0.2 15 50 2.0</code> (Buys 0.2 SOL every 30 mins up to 2.0 SOL total).\n\n` +
+    `<b>DIP-BUYING LIMIT ORDERS:</b>\n` +
+    `• <b>Command:</b> <code>/limit [CA] [TARGET_PRICE_USD] [AMOUNT_SOL_OR_$USD]</code>\n` +
+    `• <i>Example:</i> <code>/limit DezXAZ... 0.0025 $50</code>\n` +
+    `• Executes automatically when market price drops to your target valuation.`,
 
-    // PAGE 7: WITHDRAWAL PIN & SESSION HIJACK PROTECTION
-    `📖 <b>HOW TO TRADE: WITHDRAWAL PIN &amp; HARDENING</b> <i>(7/16)</i>\n\n` +
-    `<i>Protect your capital against Telegram account takeovers, unauthorized desktop sessions, and phone theft.</i>\n\n` +
-    `<b>SECURITY SPECIFICATIONS:</b>\n` +
-    `1. Go to <b>Vault &amp; Keys</b> → tap <b>Set Withdrawal PIN</b>.\n` +
-    `2. Choose a 4-to-6 digit secret code. Sentry stores it using one-way <code>scrypt</code> hashing with random salting.\n` +
-    `3. Every manual withdrawal command (<code>/withdraw</code>) requires this PIN before transaction assembly.\n` +
-    `4. <b>Automated Lockout Circuit:</b> Entering an incorrect PIN 3 times triggers an immediate <b>60-minute hardware lock</b> on all outgoing transfers.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `Someone gains access to your open Telegram session and types <code>/withdraw [ADDRESS] ALL</code>. Sentry intercepts the command and demands the PIN. Three failed attempts instantly locks down all withdrawal operations.`,
-
-    // PAGE 8: ZERO-LATENCY WEBSOCKET COPY TRADING
-    `📖 <b>HOW TO TRADE: COPY TRADING &amp; BOT FILTERING</b> <i>(8/16)</i>\n\n` +
+    // PAGE 7: ZERO-LATENCY COPY TRADING
+    `📖 <b>HOW TO TRADE: WEBSOCKET COPY TRADING</b> <i>(7/18)</i>\n\n` +
     `<i>Mirror high-win-rate whale wallets with zero-RPC WebSocket event listeners.</i>\n\n` +
     `<b>COPY-TRADE MECHANICS:</b>\n` +
     `1. Go to <b>Copy Trade</b> → tap <b>Add Custom Wallet</b>.\n` +
-    `2. Syntax: <code>[WALLET_ADDRESS] [AMOUNT_SOL] [STOP_LOSS_%] [TAKE_PROFIT_%]</code>.\n` +
+    `2. Parameters: <code>[WALLET_ADDRESS] [AMOUNT_SOL] [STOP_LOSS_%] [TAKE_PROFIT_%]</code>.\n` +
     `3. Sentry binds an <code>onLogs</code> listener to the target address on confirmed commitment.\n` +
-    `4. When the whale executes a buy, Sentry parses the token mint and sends your buy via private Jito bundles within ~400ms.\n` +
-    `5. <b>Helius Bot Auditing:</b> Sentry analyzes the whale's last 20 transactions. If the address is an MEV bot with sub-second flip times, Sentry warns you to prevent sandwich losses.\n\n` +
+    `4. When the whale buys, Sentry mirrors the purchase in the same block and arms your trailing stop.\n` +
+    `5. If the whale sells 50% of their tokens, Sentry executes a 50% proportional exit automatically.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You add a smart-money wallet with parameters: <code>0.2 SOL, -15% SL, +50% TP</code>. The target whale buys $POPCAT. Sentry mirrors the 0.2 SOL purchase in the same block and arms a -15% trailing stop automatically.`,
+    `Add an insider address from the <b>Alpha Directory</b> with parameters: <code>0.25 SOL, -15% SL, +50% TP</code>. Sentry copies their exact moves.`,
 
-    // PAGE 9: PAY-PER-RESULT AI CALLER CREDITS
-    `📖 <b>HOW TO TRADE: PAY-PER-RESULT CREDITS</b> <i>(9/16)</i>\n\n` +
-    `<i>Sentry uses a pay-per-result billing model for automated AI scans and alerts.</i>\n\n` +
-    `<b>BILLING RULES &amp; LIFECYCLE:</b>\n` +
-    `• Credits are deducted <b>only when a verified token match clears all safety filters</b> and is delivered to your chat.\n` +
-    `• Empty scans, duds, and honeypot-filtered coins cost <b>0 credits</b>.\n` +
-    `• <b>Credit Tiers:</b> Starter (150 creds / $30), Growth (280 creds / $50), Pro (450 creds / $75), Whale (2,000 creds / $100).\n` +
-    `• Purchase packs directly via <b>Buy Credits</b> using your on-chain SOL balance.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `Your AI Scanner evaluates 80 newly launched tokens in the background. 79 tokens fail the honeypot and liquidity audits (Cost: 0 Credits). 1 token scores 88/100 and alerts your chat. Exactly 1 credit is deducted.`,
+    // PAGE 8: MULTI-WALLET WHALE MODE (BLOCK-0)
+    `📖 <b>HOW TO TRADE: MULTI-WALLET WHALE MODE</b> <i>(8/18)</i>\n\n` +
+    `<i>Bypass per-wallet max buy caps on fresh Pump.fun and Raydium launches.</i>\n\n` +
+    `<b>WHALE MODE DEPLOYMENT:</b>\n` +
+    `1. Go to <b>Vault &amp; Keys</b> and activate <b>2, 3, 4, or 5 Wallets</b>.\n` +
+    `2. Fund each sub-wallet address (W1 through W5) with SOL.\n` +
+    `3. When an Auto-Snipe or buy triggers, Sentry constructs parallel transactions across all active wallets.\n` +
+    `4. <b>Block-0 Bundling:</b> All wallets buy simultaneously within the exact same millisecond in a single Jito bundle.\n` +
+    `5. Tap <b>Sweep All Sub-Wallets to W1</b> to transfer all SOL back to your main wallet with 1 tap.`,
 
-    // PAGE 10: AFFILIATE REV-SHARE & RECRUIT NETWORKS
-    `📖 <b>HOW TO TRADE: AFFILIATE REV-SHARE HUB</b> <i>(10/16)</i>\n\n` +
-    `<i>Monetize your trading group or alpha community with up to 70% rev-share paid in real-time SOL.</i>\n\n` +
-    `<b>COMMISSION STRUCTURE:</b>\n` +
-    `• 🥉 <b>Bronze Tier:</b> 50% Platform Fee Share (Default).\n` +
-    `• 🥈 <b>Silver Tier (500 SOL Volume / 5M Pts):</b> 60% Platform Fee Share.\n` +
-    `• 🥇 <b>Gold Tier (2,500 SOL Volume / 25M Pts):</b> 70% Platform Fee Share.\n` +
-    `• <b>Credit Commission:</b> Flat <b>40% payout</b> in SOL on all credit pack purchases made by your recruits.\n` +
-    `• <b>Recruit Perk:</b> Users who join via your link get a <b>permanent 10% fee reduction</b>.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You share your invite link in your trading group. 30 members trade an aggregate volume of 500 SOL. Sentry accrues up to 2.5–3.5 SOL directly into your pending affiliate rewards balance.`,
+    // PAGE 9: VAULT SECURITY & WITHDRAWAL HARDENING
+    `📖 <b>HOW TO TRADE: KEY SECURITY &amp; PIN HARDENING</b> <i>(9/18)</i>\n\n` +
+    `<i>Complete sovereign ownership with zero server-side private key exposure.</i>\n\n` +
+    `<b>SECURITY PROTOCOLS:</b>\n` +
+    `• <b>Set Withdrawal PIN:</b> Tap <b>Set Withdrawal PIN</b> to establish a 4–6 digit secret code hashed via <code>scrypt</code>.\n` +
+    `• <b>Anti-Hijack Lockout:</b> Entering an incorrect PIN 3 times triggers an automatic <b>60-minute hardware lock</b> on all transfers.\n` +
+    `• <b>Ephemeral Key Export:</b> Tap <b>Export Keys</b> to view your Base58 keys with an automatic <b>60-second self-destruct timer</b>.\n` +
+    `• <b>External Key Import:</b> Import existing Phantom/Solflare keys via <b>Import Key</b>.`,
 
-    // PAGE 11: INSTANT AFFILIATE YIELD SETTLEMENT
-    `📖 <b>HOW TO TRADE: CLAIMING AFFILIATE PAYOUTS</b> <i>(11/16)</i>\n\n` +
-    `<i>Automated hot-wallet treasury distribution with instant on-chain SOL settlement.</i>\n\n` +
-    `<b>CLAIM SPECIFICATIONS:</b>\n` +
-    `1. Go to <b>Affiliates</b> → tap <b>Claim Payout</b>.\n` +
-    `2. Minimum threshold: <b>0.10 SOL</b>.\n` +
-    `3. Sentry's automated treasury signs and broadcasts a direct SOL transfer to your Primary Vault (W1).\n` +
-    `4. <b>Treasury Circuit Breakers:</b> Enforces a 50 SOL daily platform payout limit with automated multi-sig alerts on single claims exceeding 5 SOL.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `Your affiliate rewards balance reaches <code>1.8500 SOL</code>. You tap <b>Claim Payout</b>. Within 3 seconds, a transaction lands in your W1 vault with a Solscan transaction signature provided in chat.`,
+    // PAGE 10: DASHBOARD ACCOUNTING & PORTFOLIO VALUATION
+    `📖 <b>HOW TO TRADE: DASHBOARD ACCOUNTING</b> <i>(10/18)</i>\n\n` +
+    `<i>Monitor real-time quantitative mark-to-market valuations and trade performance.</i>\n\n` +
+    `<b>COMMANDS:</b>\n` +
+    `• <code>/pnl</code> — Instant portfolio breakdown of all held assets in USD.\n` +
+    `• <code>/stats</code> — View overall trading win rate, net SOL profit, and closed trades.\n` +
+    `• <code>/positions</code> — Open holdings drawer and access the Rent Sweeper.\n\n` +
+    `<b>METRIC DEFINITIONS:</b>\n` +
+    `• <b>💰 Net Worth:</b> Total liquid SOL across vaults W1–W5 plus live mark-to-market SPL token values.\n` +
+    `• <b>📈 Realized PnL:</b> Net profit/loss calculated strictly from confirmed sell executions after fees.\n` +
+    `• <b>🎯 Win Rate:</b> <code>(Winning Sells ÷ Total Closed Trades) × 100</code>.`,
 
-    // PAGE 12: CAPITAL WITHDRAWALS & GAS MANAGEMENT
-    `📖 <b>HOW TO TRADE: WITHDRAWALS &amp; GAS BUFFERS</b> <i>(12/16)</i>\n\n` +
-    `<i>Withdraw your capital to cold storage or external wallets anytime.</i>\n\n` +
-    `<b>WITHDRAWAL SYNTAX &amp; LOGIC:</b>\n` +
-    `• Standard: <code>/withdraw [DESTINATION_ADDRESS] [AMOUNT_SOL_OR_$USD]</code>\n` +
-    `• Full Sweep: <code>/withdraw [DESTINATION_ADDRESS] ALL</code>\n` +
-    `• <b>Gas Preservation Buffer:</b> Sentry retains <b>0.00005 SOL</b> to cover transaction fee computation.\n` +
-    `• <b>Consolidated Multi-Wallet Sweep:</b> <code>/withdraw ALL</code> automatically sweeps sub-wallets W1–W5 into a single combined transfer.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You want to move your trading profits to cold storage. You send <code>/withdraw 8rP... ALL</code>. Sentry gathers the balances across your active sub-wallets, leaves the gas buffer, and sends 12.4500 SOL to your cold wallet in one transaction.`,
+    // PAGE 11: INSTITUTIONAL QUANTITATIVE ANALYTICS
+    `📖 <b>HOW TO TRADE: INSTITUTIONAL ANALYTICS</b> <i>(11/18)</i>\n\n` +
+    `<i>Wall Street Transaction Cost Analysis (TCA) and statistical risk modeling inside your WebApp.</i>\n\n` +
+    `<b>QUANTITATIVE INDICATORS:</b>\n` +
+    `• <b>Avg Slippage (TCA):</b> Variance between quote price and actual on-chain fill price. Low TCA (&lt;1.0%) proves sandwich-free fills.\n` +
+    `• <b>CVaR (5% Tail Risk):</b> Conditional Value at Risk measures Expected Shortfall in your worst 5% historical drawdowns.\n` +
+    `• <b>Sharpe Ratio:</b> Annualized risk-adjusted return relative to daily standard deviation: <code>(Mean Return ÷ Std Dev) × √365</code>.\n` +
+    `• <b>Portfolio Risk Score (0–100%):</b> Measures holder concentration, token taxes, and liquidity depth across held bags.`,
 
-    // PAGE 13: TOKEN ACCOUNT (ATA) RENT RECOVERY ENGINE
-    `📖 <b>HOW TO TRADE: RENT SWEEPER ENGINE</b> <i>(13/16)</i>\n\n` +
-    `<i>Reclaim SOL trapped in empty Associated Token Accounts (ATAs) from closed positions.</i>\n\n` +
+    // PAGE 12: TOKEN ACCOUNT (ATA) RENT SWEEPER
+    `📖 <b>HOW TO TRADE: RENT SWEEPER ENGINE</b> <i>(12/18)</i>\n\n` +
+    `<i>Reclaim SOL locked in empty Associated Token Accounts (ATAs) from closed trades.</i>\n\n` +
     `<b>RENT RECLAMATION MECHANICS:</b>\n` +
-    `1. Solana requires <b>0.002039 SOL</b> in rent-exemption to initialize an ATA for any token you buy.\n` +
-    `2. After selling 100% of a token, the empty account remains open on-chain, tying up your SOL.\n` +
-    `3. Open <b>Positions</b>. If empty accounts are detected, Sentry displays: <code>🧹 Sweep Empty Accounts (+X.XXXX SOL)</code>.\n` +
-    `4. Tap the button: Sentry closes up to 18 empty token accounts in a single Jito bundle, returning the reclaimed SOL directly to your balance.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You executed 25 trades this week. Sentry detects 25 empty ATAs holding ~0.051 SOL in trapped rent. You tap Sweep: 0.051 SOL is reclaimed and returned to your spendable balance immediately.`,
+    `1. Solana requires <b>0.002039 SOL</b> in rent-exemption to initialize a token account.\n` +
+    `2. After selling 100% of a token, the empty account remains on-chain, trapping your SOL.\n` +
+    `3. Send <code>/positions</code> or open the Positions drawer.\n` +
+    `4. If empty accounts exist, tap <b>🧹 Sweep Empty Accounts (+X.XXXX SOL)</b>.\n` +
+    `5. Sentry closes up to 18 accounts in a single Jito bundle, returning reclaimed SOL instantly to your wallet.`,
 
-    // PAGE 14: SENTRY GUILDS (B2B COMMUNITY LOYALTY)
-    `📖 <b>HOW TO TRADE: SENTRY GUILDS</b> <i>(14/16)</i>\n\n` +
-    `<i>Transform your trading group into an on-chain loyalty engine with real-time volume leaderboards.</i>\n\n` +
-    `<b>GUILD INFRASTRUCTURE:</b>\n` +
-    `• <b>Guild Loyalty Points (GLP):</b> Members earn <b>10 GLP for every 0.1 SOL traded</b> on Sentry.\n` +
-    `• <b>Creating a Guild:</b> Send <code>/createguild [Name] | [Description] | [Reward]</code> to launch a branded leaderboard.\n` +
-    `• <b>50% Permanent Rev-Share:</b> Guild owners earn 50% of all trading fees generated by members.\n` +
-    `• <b>Automated Bulk Airdrops:</b> Distribute SOL to top traders via Flat Split, Tiered (Top 3 / Next 7 / Top 50), or Individual Rank payouts.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You create <code>GUILD-ALPHA-01</code>. Your 50 community members join using your link. As they trade, the live leaderboard tracks their GLP. At the end of the week, you run a Tiered Airdrop to reward your top 3 volume contributors with SOL rewards.`,
+    // PAGE 13: PAY-PER-RESULT AI CALLER CREDITS
+    `📖 <b>HOW TO TRADE: PAY-PER-RESULT CREDITS</b> <i>(13/18)</i>\n\n` +
+    `<i>Credits are deducted strictly when high-conviction breakout tokens are delivered.</i>\n\n` +
+    `<b>BILLING RULES:</b>\n` +
+    `• Deducted <b>only when a verified token match clears all safety filters</b> and is delivered to chat.\n` +
+    `• Empty scans, honeypots, and rug-filtered coins cost <b>0 credits</b>.\n` +
+    `• <b>Command:</b> <code>/credits</code> to view usage history and purchase credit packs.\n` +
+    `• <b>Packs:</b> Starter (150 / $30), Growth (280 / $50), Pro (450 / $75), Whale (2,000 / $100).`,
 
-    // PAGE 15: DEFENSIVE BLOCK-0 TOKEN LAUNCHPAD
-    `📖 <b>HOW TO TRADE: BLOCK-0 TOKEN LAUNCHPAD</b> <i>(15/16)</i>\n\n` +
+    // PAGE 14: VIP MEMBERSHIPS & 0% FEE ROUTING
+    `📖 <b>HOW TO TRADE: VIP STATUS &amp; 0% FEES</b> <i>(14/18)</i>\n\n` +
+    `<i>Eliminate platform trading fees and unlock maximum validator execution priority.</i>\n\n` +
+    `<b>COMMAND SYNTAX:</b>\n` +
+    `• <code>/vipstatus</code> — View active VIP plan, days remaining, and benefits.\n\n` +
+    `<b>VIP TIERS:</b>\n` +
+    `• 🟡 <b>Trial VIP (7D / 0.05 SOL):</b> 0% fees, Turbo Jito priority, leaderboard badge.\n` +
+    `• 🟢 <b>Standard VIP (30D / 0.15 SOL):</b> 0% fees + Alpha Directory access.\n` +
+    `• 🔵 <b>Pro VIP (90D / 0.49 SOL):</b> Everything + Dev Suite unlocked.\n` +
+    `• 💎 <b>Lifetime VIP (0.99 SOL):</b> 0% trading fees forever + permanent VIP status.`,
+
+    // PAGE 15: SENTRY GUILDS (B2B COMMUNITY LOYALTY)
+    `📖 <b>HOW TO TRADE: SENTRY GUILDS</b> <i>(15/18)</i>\n\n` +
+    `<i>Transform your trading group into an on-chain loyalty engine with real-time leaderboards.</i>\n\n` +
+    `<b>COMMANDS:</b>\n` +
+    `• <code>/createguild [Name] | [Description] | [Reward]</code> — Launch a branded guild.\n` +
+    `• <code>/join [GUILD_CODE]</code> — Join an active KOL trading guild.\n` +
+    `• <code>/guild</code> — View active guild ranking, GLP points, and top 3 members.\n\n` +
+    `<b>GUILD REWARDS &amp; AIRDROPS:</b>\n` +
+    `• Members earn <b>10 Guild Loyalty Points (GLP) for every 0.1 SOL traded</b>.\n` +
+    `• Guild owners earn <b>50% permanent platform fee rev-share</b> on all member trades.\n` +
+    `• Distribute SOL rewards to top members via Flat Split, Tiered Drops, or Individual Rank payouts.`,
+
+    // PAGE 16: PARTNER AFFILIATE REV-SHARE
+    `📖 <b>HOW TO TRADE: PARTNER REV-SHARE HUB</b> <i>(16/18)</i>\n\n` +
+    `<i>Earn up to 70% commission on trading fees and 40% on credit purchases.</i>\n\n` +
+    `<b>COMMISSION TIERS:</b>\n` +
+    `• 🥉 <b>Bronze:</b> 50% Platform Fee Share (Default).\n` +
+    `• 🥈 <b>Silver:</b> 60% Platform Fee Share (500 SOL volume / 5M points).\n` +
+    `• 🥇 <b>Gold:</b> 70% Platform Fee Share (2,500 SOL volume / 25M points).\n` +
+    `• <b>Credit Commission:</b> Flat <b>40% payout in SOL</b> on all recruit credit pack purchases.\n` +
+    `• <b>Instant Settlement:</b> Tap <b>Claim Payout</b> in Affiliates to claim earnings directly to W1.`,
+
+    // PAGE 17: DEFENSIVE BLOCK-0 TOKEN LAUNCHPAD
+    `📖 <b>HOW TO TRADE: BLOCK-0 TOKEN LAUNCHPAD</b> <i>(17/18)</i>\n\n` +
     `<i>Deploy Pump.fun tokens defensively with un-snipeable stealth dev buys in Block-0.</i>\n\n` +
     `<b>LAUNCHPAD WORKFLOW:</b>\n` +
     `1. Tap <b>Launch Token</b> → <b>Start Token Wizard</b>.\n` +
-    `2. Set Token Name, Symbol, Description, and upload logo artwork (pinned to IPFS automatically).\n` +
-    `3. <b>Vanity Mining:</b> Sentry mines custom contract prefixes (e.g., <code>MOON...pump</code>).\n` +
-    `4. <b>Multi-Wallet Stealth Allocation:</b> Split your dev buy across up to 4 sub-wallets.\n` +
-    `5. <b>Block-0 Bundling:</b> Token creation, IPFS metadata, dev buys across 4 wallets, and validator tips are packaged into a single Jito bundle, shielding your launch from sniper bots.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You deploy $ALPHA with a 1.0 SOL dev buy split across 3 sub-wallets. Sentry mines the vanity address, bundles creation + 3 buy transactions into Block-0 via Jito, and arms a -20% stop loss on your allocation automatically.`,
+    `2. Configure Name, Symbol, Description, and upload artwork (pinned to IPFS automatically).\n` +
+    `3. <b>Vanity Mining:</b> Mines custom contract prefixes (e.g., <code>MOON...pump</code>).\n` +
+    `4. <b>Multi-Wallet Dev Allocation:</b> Split your initial dev buy across up to 4 sub-wallets.\n` +
+    `5. <b>Block-0 Bundling:</b> Token creation, metadata, dev buys across 4 wallets, and validator tips are bundled atomically, shielding your launch from sniper bots.`,
 
-    // PAGE 16: WATCHLISTS, LAUNCH CALENDARS & TAX EXPORTS
-    `📖 <b>HOW TO TRADE: UTILITIES &amp; COMPLIANCE</b> <i>(16/16)</i>\n\n` +
-    `<i>Integrated trader utilities for market monitoring and tax accounting.</i>\n\n` +
+    // PAGE 18: WATCHLISTS, CALENDARS, TAX EXPORTS & SUPPORT
+    `📖 <b>HOW TO TRADE: TRADER UTILITIES &amp; SUPPORT</b> <i>(18/18)</i>\n\n` +
+    `<i>Integrated utilities for monitoring, compliance, and developer support.</i>\n\n` +
     `<b>UTILITY TOOLSET:</b>\n` +
-    `• <b>Persistent Watchlist:</b> Send <code>/watch [CA] [TARGET_PRICE_USD]</code>. View real-time PnL and alert triggers with <code>/watchlist</code>.\n` +
-    `• <b>Launch Calendar:</b> Send <code>/calendar</code> to view verified launches under 2 hours old that meet minimum liquidity and volume filters.\n` +
-    `• <b>CSV Tax Ledger:</b> Send <code>/exporttrades</code> or tap Export CSV in the WebApp to download full transaction histories including fees, PnL, and Solscan signatures.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `You spot a token at $0.005. You send <code>/watch [CA] 0.010</code>. When price crosses $0.010, Sentry sends an alert with a 1-tap Buy button. At tax season, you run <code>/exporttrades</code> to generate your complete trade history for accountants.`
+    `• <b>Watchlist:</b> <code>/watch [CA] [TARGET_PRICE_USD]</code> | <code>/watchlist</code> | <code>/unwatch [CA]</code> | <code>/clearwatch</code>\n` +
+    `• <b>Launch Calendar:</b> <code>/calendar</code> — Scans verified launches &lt;2 hours old with &gt;$5k volume.\n` +
+    `• <b>Tax Ledger:</b> <code>/exporttrades</code> — Download complete CSV transaction ledger with signatures and PnL.\n` +
+    `• <b>System Health:</b> <code>/health</code> — Check core HFT engine uptime and RPC telemetry.\n` +
+    `• <b>Support Desk:</b> <code>/support [message]</code> — Message core engineering directly.\n` +
+    `• <b>Emergency Kill-Switch:</b> <code>/cancel</code> — Instantly halts all active tasks, prompts, and snipers.`
 ];
 
 
@@ -4516,74 +4533,7 @@ export async function refreshLimitOrders() {
     }
 }
 
-export function startLimitOrderWatcher(bot: any) {
-    console.log("⏳ [LIMIT WATCHER] Monitoring limit orders every 5 seconds.");
-    refreshLimitOrders();
-    setInterval(refreshLimitOrders, 5000);
 
-    setInterval(async () => {
-        if (isLimitChecking || cachedLimitOrders.length === 0) return;
-        isLimitChecking = true;
-
-        try {
-            for (const order of cachedLimitOrders) {
-                const fresh = await prisma.activeOrder.findUnique({ where: { id: order.id } });
-                if (!fresh || !fresh.isActive) {
-                    cachedLimitOrders = cachedLimitOrders.filter(o => o.id !== order.id);
-                    continue;
-                }
-
-                let price = await getCachedTokenPrice(order.tokenAddress);
-                if (price === 0) {
-                    try {
-                        const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${order.tokenAddress}`, { timeout: 2000 });
-                        price = parseFloat(res.data?.pairs?.[0]?.priceUsd || "0");
-                    } catch (_) {}
-                }
-                if (price === 0) continue; 
-
-                // 🟢 LIMIT MET: Execute Snipe
-                if (price <= order.targetPriceUsd!) {
-                    const result = await executeSnipe(order.user.telegramId, order.tokenAddress, order.amountSol);
-                    
-                    if (result.success) {
-                        await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
-                        cachedLimitOrders = cachedLimitOrders.filter(o => o.id !== order.id);
-
-                        if (order.trailingPercent) {
-                            await addTrailingStopToMemory(
-                                order.user.telegramId, order.tokenAddress, order.trailingPercent,
-                                order.amountSol, price, order.takeProfitPercent || undefined
-                            );
-                        }
-
-                        try {
-                            await bot.telegram.sendMessage(
-                                order.user.telegramId,
-                                `🟢 <b>LIMIT ORDER FILLED!</b>\n\nToken: <code>${order.tokenAddress.substring(0,8)}...</code>\nTarget: $${order.targetPriceUsd}\nFilled at: $${price}\nAmount: ${order.amountSol} SOL\n\n🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
-                                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-                            );
-                        } catch (_) {}
-                    } else {
-                        await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
-                        cachedLimitOrders = cachedLimitOrders.filter(o => o.id !== order.id);
-                        try {
-                            await bot.telegram.sendMessage(
-                                order.user.telegramId,
-                                `🔴 <b>LIMIT ORDER FAILED</b>\n\nToken: <code>${order.tokenAddress.substring(0,8)}...</code>\nReason: ${result.message}\n<i>Order has been deactivated.</i>`,
-                                { parse_mode: 'HTML' }
-                            );
-                        } catch (_) {}
-                    }
-                }
-            }
-        } catch (e) {
-            console.error('🔴 [LIMIT WATCHER] Error:', e);
-        } finally {
-            isLimitChecking = false;
-        }
-    }, 5000);
-}
 
 // ------------------ BATCHED WITHDRAWALS ------------------
 // Replace your existing executeWithdrawalProcess with this optimized version
@@ -6554,7 +6504,11 @@ app.post('/api/my-leaderboard', async (req, res) => {
 // 🔗 COMBINED (LIVE + SIM) API ENDPOINTS
 // =========================================================
 
-app.post('/api/combined-trades', async (req, res) => {
+app.post('/api/combined-advanced-stats', async (req, res) => {
+    if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+    const telegramId = extractTelegramId(req.body.initData);
+    if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = extractTelegramId(req.body.initData);
@@ -6572,7 +6526,7 @@ app.post('/api/combined-trades', async (req, res) => {
             : '0.00';
 
         res.json({
-            trades: trades.map(t => ({
+            trades: trades.map((t: any) => ({
                 createdAt: t.createdAt,
                 isBuy: t.isBuy,
                 amountInSol: t.amountInSol,
@@ -6609,6 +6563,11 @@ app.post('/api/combined-trades', async (req, res) => {
   });
   
   app.post('/api/combined-hourly', async (req, res) => {
+    if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+    const telegramId = extractTelegramId(req.body.initData);
+    if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+
     try {
       if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
       const telegramId = extractTelegramId(req.body.initData);
@@ -6890,6 +6849,8 @@ app.post('/api/stats-window', async (req, res) => {
 
 // 📤 Export Trades (CSV Web)
 app.post('/api/trades/export', async (req, res) => {
+
+
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = extractTelegramId(req.body.initData);
@@ -7080,14 +7041,17 @@ async function bootEcosystem() {
 
     setInterval(async () => { await sweepExpiredVips(); }, 10 * 60 * 1000);
 
-    setInterval(async () => {
-        try {
-            const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
-            for (let i = 0; i < guilds.length; i++) {
-                setTimeout(async () => { await updateRankCache(guilds[i].id); }, i * 1500); 
-            }
-        } catch (e) {}
-    }, 60000);
+   // In src/index.ts -> inside bootEcosystem():
+setInterval(async () => {
+    try {
+        const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
+        const CONCURRENCY = 5;
+        for (let i = 0; i < guilds.length; i += CONCURRENCY) {
+            const batch = guilds.slice(i, i + CONCURRENCY);
+            await Promise.allSettled(batch.map(g => updateRankCache(g.id))); // 🟢 Parallel execution
+        }
+    } catch (e) {}
+}, 20000); // 🟢 Refreshes every 20s
 
     console.log("⏳ Pinging Telegram Servers...");
     try {
@@ -7116,6 +7080,10 @@ async function bootEcosystem() {
         startDepositWatcher(bot); 
         startCoinCaller(bot); 
 
+        await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/1 * * * * *' } });
+await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+
         // 🟢 Starts the High-Frequency Simulation TP/SL Guard Resolver
 
         const { startSimulationGuardResolver, recoverSimAutoSnipeLoops } = await import('./services/simulation.service.js');
@@ -7128,11 +7096,18 @@ async function bootEcosystem() {
         await limitQueue.add('limit-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } });
 
         cron.schedule('0 8 * * 1', async () => {
+            const weekKey = `lock:cron:weekly_report:${new Date().toISOString().split('T')[0]}`;
+            const acquired = await redis.set(weekKey, '1', 'EX', 86400 * 2, 'NX');
+            if (!acquired) return; // 🟢 Only one instance runs the dispatch
+        
             console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
             await sendWeeklyReportsToAll(bot);
         }, { timezone: 'UTC' });
 
         cron.schedule('0 9 * * *', async () => {
+            const dayKey = `lock:cron:vip_expiry:${new Date().toISOString().split('T')[0]}`;
+            const acquired = await redis.set(dayKey, '1', 'EX', 86400, 'NX');
+            if (!acquired) return;
             const expiringUsers = await prisma.user.findMany({
                 where: {
                     isVip: true,

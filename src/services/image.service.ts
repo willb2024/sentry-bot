@@ -201,3 +201,13 @@ export async function generatePriceAlertChart(
     const res = await axios.get(url, { responseType: 'arraybuffer' });
     return Buffer.from(res.data);
 }
+
+// In src/services/image.service.ts:
+export function sanitizeTokenDisplayText(raw: string, maxLen: number = 10): string {
+    if (!raw) return 'UNKNOWN';
+    const cleaned = raw.replace(/[\u0000-\u001F\u200B-\u200F\u202A-\u202E]/g, '').trim();
+    return cleaned.length > maxLen ? cleaned.substring(0, maxLen) + '…' : (cleaned || 'UNKNOWN');
+}
+
+// In generatePnlCard / generateLaunchCard:
+// Use sanitizeTokenDisplayText(tokenAddress) or sanitizeTokenDisplayText(symbol) when drawing text to canvas.

@@ -1,4 +1,15 @@
 // src/utils/math.utils.ts
+
+
+export function sanitizeCsvField(value: string | null | undefined): string {
+    if (!value) return '';
+    const str = String(value).trim();
+    if (/^[=+\-@\t\r]/.test(str)) {
+        return `'${str}`; // 🟢 Prepend single quote to neutralize formula triggers
+    }
+    return str;
+}
+
 export interface TradeRecord {
     isBuy: boolean;
     amountInSol: number;
@@ -17,6 +28,9 @@ export interface ComputedStats {
     totalInvestedSol: number; // 🟢 Added to interface
     netProfitPercent: number;
 }
+
+
+
 
 export function computeUniversalStats(trades: TradeRecord[]): ComputedStats {
     let wins = 0;

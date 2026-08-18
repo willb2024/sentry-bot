@@ -18,6 +18,7 @@ export async function getCreditBalance(telegramId: string): Promise<number> {
     return user?.creditBalance || 0;
 }
 
+// src/services/credits.service.ts
 export async function consumeCredit(
     telegramId: string,
     type: 'CONSUME_SCAN' | 'CONSUME_CALLER' | 'CONSUME_SNIPER_SCORE',
@@ -26,24 +27,26 @@ export async function consumeCredit(
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return { success: false, remaining: 0 };
 
-    if (user.creditBalance <= 0) return { success: false, remaining: 0 };
-
-    const updated = await prisma.user.update({
-        where: { id: user.id },
+    // 🟢 Atomic conditional update prevents race conditions
+    const updateResult = await prisma.user.updateMany({
+        where: { id: user.id, creditBalance: { gt: 0 } },
         data: { creditBalance: { decrement: 1 } }
     });
+
+    if (updateResult.count === 0) return { success: false, remaining: 0 };
+
+    const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { creditBalance: true } });
 
     await prisma.creditTransaction.create({
         data: {
             userId: user.id, type, amount: -1,
-            balanceAfter: updated.creditBalance, tokenMint
+            balanceAfter: updated!.creditBalance, tokenMint
         }
     });
 
-    return { success: true, remaining: updated.creditBalance };
+    return { success: true, remaining: updated!.creditBalance };
 }
 
-// 🟢 NEW: Auto-Sniper Credit Consumption with Automatic Fallback
 export async function consumeSniperCredit(
     telegramId: string,
     tokenMint: string
@@ -51,26 +54,28 @@ export async function consumeSniperCredit(
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return { success: false, remaining: 0, fallback: true };
 
-    if (user.creditBalance <= 0) {
+    const updateResult = await prisma.user.updateMany({
+        where: { id: user.id, creditBalance: { gt: 0 } },
+        data: { creditBalance: { decrement: 1 } }
+    });
+
+    if (updateResult.count === 0) {
         return { success: false, remaining: 0, fallback: true };
     }
 
-    const updated = await prisma.user.update({
-        where: { id: user.id },
-        data: { creditBalance: { decrement: 1 } }
-    });
+    const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { creditBalance: true } });
 
     await prisma.creditTransaction.create({
         data: {
             userId: user.id,
             type: 'CONSUME_SNIPER_SCORE',
             amount: -1,
-            balanceAfter: updated.creditBalance,
+            balanceAfter: updated!.creditBalance,
             tokenMint
         }
     });
 
-    return { success: true, remaining: updated.creditBalance, fallback: false };
+    return { success: true, remaining: updated!.creditBalance, fallback: false };
 }
 
 export async function addCredits(
