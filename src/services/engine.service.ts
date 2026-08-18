@@ -745,8 +745,10 @@ export async function executeSnipe(
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); 
 
         return {
-            success: true, signature: firstSignature, volumeSpent: totalVolume,
-            message: `🟢 Trade Submitted & Confirmed (${successful.length}/${wallets.length}).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}`
+            success: true, 
+            signature: firstSignature, 
+            volumeSpent: totalVolume,
+            message: `🟢 Trade Confirmed (${successful.length}/${wallets.length} Wallets).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}`
         };
     } catch (error: any) { return { success: false, message: `🔴 Execution Fault: ${error.message}` }; }
 }
@@ -939,7 +941,11 @@ export async function executeExit(
         const breakdown = walletReport.filter(r => !r.includes("Empty")).join(" | ");
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10);
         
-        return { success: true, signature: (successful[0] as any).value.signature, message: `🟢 Exit Submitted & Confirmed (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}` };
+        return { 
+            success: true, 
+            signature: (successful[0] as any).value.signature, 
+            message: `🟢 Exit Confirmed (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}` 
+        };
     } catch (error: any) { return { success: false, message: `🔴 Error: ${error.message}` }; }
 }
 

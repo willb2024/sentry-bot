@@ -494,6 +494,10 @@ function connectRaydiumFallbackWatcher(bot: any) {
 // src/services/grpc.service.ts
 
 // 🟢 Accepts audit reasons array directly to format rich notifications
+
+
+// src/services/grpc.service.ts
+
 function buildSniperAuditMessage(
     mint: string, 
     score: number, 
@@ -503,9 +507,10 @@ function buildSniperAuditMessage(
     trailingDrop: number, 
     takeProfit: number | string, 
     strategy: string, 
-    signature: string
+    signature: string,
+    entryPriceUsd?: number
 ): string {
-    let audit = `🟢 <b>SNIPE CONFIRMED!${strategy === 'Sniper Engine' ? ' (AUTO)' : ''}</b>\n\n`;
+    let audit = `🟢 <b>SNIPE CONFIRMED!</b>\n\n`;
     audit += `Token: <code>${mint.substring(0, 8)}...</code>\n`;
     audit += `Strategy: <b>${strategy}</b>\n`;
     audit += `Score: <b>${score}/100</b> ⭐\n\n`;
@@ -522,9 +527,13 @@ function buildSniperAuditMessage(
         if (stats.lpLock && (stats.lpLock.burned || stats.lpLock.lockPct > 80)) audit += `✅ 🔒 LP Secured (${stats.lpLock.lockPct.toFixed(0)}% Locked/Burned)\n`;
     }
     
-    audit += `\nInvested: <b>${invested.toFixed(4)} SOL</b>\n`;
-    audit += `Trailing Drop: <b>-${trailingDrop}%</b>\n`;
-    audit += `Take Profit: <b>${typeof takeProfit === 'number' ? '+' + takeProfit + '%' : takeProfit}</b>\n\n`;
+    if (entryPriceUsd && entryPriceUsd > 0) {
+        audit += `\n💵 <b>Entry Price:</b> <code>$${entryPriceUsd.toFixed(6)}</code>\n`;
+    }
+    audit += `💰 <b>Invested:</b> <b>${invested.toFixed(4)} SOL</b>\n`;
+    audit += `🛡️ <b>Trailing Drop:</b> <b>-${trailingDrop}%</b>\n`;
+    audit += `🎯 <b>Take Profit:</b> <b>${typeof takeProfit === 'number' ? '+' + takeProfit + '%' : takeProfit}</b>\n\n`;
+    audit += `Status: 🟢 Confirmed\n`;
     audit += `🔗 <a href="https://solscan.io/tx/${signature}">View on Solscan</a>`;
     return audit;
 }
