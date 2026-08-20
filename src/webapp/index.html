@@ -11,12 +11,11 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     
     <script>
-        // 🟢 Global fetch interceptor to handle 24h Telegram auth token expiry gracefully
         const originalFetch = window.fetch;
         window.fetch = async function(...args) {
             try {
                 const res = await originalFetch.apply(this, args);
-                if (res.status === 403) {
+                if (res.status === 403 || res.status === 401) {
                     if (window.Telegram?.WebApp) window.Telegram.WebApp.ready();
                     location.reload();
                 }
@@ -147,12 +146,12 @@
         <!-- 🟢 Header AI Caller Credit Pill -->
         <div class="flex items-center gap-2 bg-[#121826] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner">
             <i class="fa-solid fa-bolt text-neonPurple text-xs"></i>
-            <span class="text-xs font-mono font-bold text-white" id="header-credits">4,298 Credits</span>
+            <span class="text-xs font-mono font-bold text-white" id="header-credits">0 Credits</span>
         </div>
     </header>
 
     <!-- Navigation Tabs -->
-    <div class="flex justify-center mb-4">
+    <div class="flex justify-center mb-4 px-2">
         <div class="bg-[#121826] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
             <button id="tab-dashboard" onclick="switchView('dashboard')" class="px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Terminal Dashboard</button>
             <button id="tab-leaderboard" onclick="switchView('leaderboard')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
@@ -167,7 +166,7 @@
         <section class="xl:col-span-2 space-y-6">
             
             <div class="grid grid-cols-2 gap-3 sm:gap-4">
-                <div class="card-flat p-5">
+                <div class="card-flat p-5 relative">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-wallet text-gray-500"></i> Net Worth</span>
                     <div class="mt-3">
                         <span class="text-3xl sm:text-4xl font-bold text-white" id="stat-networth">$0.00</span>
@@ -200,7 +199,19 @@
                 </div>
             </div>
 
-            <!-- 🟢 Total Trading Days & AI Caller Credits Row -->
+            <!-- 🟢 NEW: Liquid Cash vs Deployed Positions -->
+            <div class="card-flat p-4 flex justify-between items-center bg-white/[0.02]">
+                <div>
+                    <span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Liquid Cash</span>
+                    <div class="text-base sm:text-lg font-bold text-white font-mono mt-0.5" id="stat-cash">$0.00</div>
+                </div>
+                <div class="text-right">
+                    <span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Deployed in Positions</span>
+                    <div class="text-base sm:text-lg font-bold text-neonPurple font-mono mt-0.5" id="stat-deployed">$0.00</div>
+                </div>
+            </div>
+
+            <!-- Total Trading Days & AI Caller Credits Row -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div class="card-flat p-4 flex items-center justify-between">
                     <div class="flex items-center gap-3">
@@ -209,7 +220,7 @@
                         </div>
                         <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider">Total Trading Days</span>
                     </div>
-                    <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">83</span>
+                    <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">0</span>
                 </div>
 
                 <div class="card-flat p-4 flex items-center justify-between">
@@ -222,7 +233,7 @@
                             <span class="text-[10px] text-gray-500 font-mono">Pay-Per-Result</span>
                         </div>
                     </div>
-                    <span class="text-xl font-bold text-neonPurple font-mono" id="stat-credits">4,298</span>
+                    <span class="text-xl font-bold text-neonPurple font-mono" id="stat-credits">0</span>
                 </div>
             </div>
 
@@ -237,44 +248,57 @@
                         <span class="text-[10px] text-gray-500 font-mono">Real-Time Aggregates</span>
                     </div>
                 </div>
-                <div class="flex gap-2 sm:gap-4 text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
-                    <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Manual: 0 trades (+0.0000 SOL)</span>
-                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto-Engine: 16 trades (+5.3929 SOL)</span>
+                <div class="flex gap-2 sm:gap-4 text-[11px] sm:text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
+                    <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Manual: 0 trades (+0.00 SOL)</span>
+                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto: 0 trades (+0.00 SOL)</span>
                 </div>
             </div>
 
-            <!-- EXPOSURE LIMITS / RISK BUDGET GAUGE -->
-            <div class="card-flat p-4 mb-4 bg-[#0a0d14]">
+            <!-- 🟢 EXPOSURE LIMITS / RISK BUDGET GAUGE -->
+            <div class="card-flat p-4 mb-2 bg-[#0a0d14]">
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-gray-500"></i> Exposure Limit (Session Budget)</span>
-                    <span class="text-xs font-mono text-gray-400" id="risk-budget-text">48.00 / 389.00 SOL (12.3%)</span>
+                    <span class="text-xs font-mono text-gray-400" id="risk-budget-text">0.00 / 0.00 SOL (0%)</span>
                 </div>
                 <div class="w-full bg-[#1e293b] rounded-full h-2 mt-1 border border-white/5 overflow-hidden">
-                    <div id="risk-budget-bar" class="bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" style="width: 12.3%"></div>
+                    <div id="risk-budget-bar" class="bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" style="width: 0%"></div>
                 </div>
+                <!-- Remaining Budget -->
+                <div class="flex justify-between items-center mt-2.5 pt-2 border-t border-white/5">
+                    <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Remaining Budget</span>
+                    <span class="text-xs font-bold font-mono text-jupGreen" id="risk-budget-remaining">-- SOL</span>
+                </div>
+            </div>
+
+            <!-- 🟢 SIZING CAP WARNING BANNER -->
+            <div class="card-flat p-3 flex items-center justify-between border border-yellow-500/30 bg-yellow-500/10" id="sizing-cap-card" style="display:none;">
+                <span class="text-[11px] text-yellow-400 font-bold flex items-center gap-2">
+                    <i class="fa-solid fa-triangle-exclamation"></i> Sizing Capped by Risk Controls
+                </span>
+                <span class="text-xs font-bold text-yellow-400 font-mono" id="sizing-cap-count">0 times</span>
             </div>
 
             <!-- WALL STREET STATS ROW -->
-            <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.02] border border-white/5 mb-6 shadow-inner">
+            <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.02] border border-white/5 mb-6 mt-4 shadow-inner">
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Avg Slippage (TCA)</span>
-                    <div class="text-xl font-bold text-white font-mono mt-1" id="tca-slippage">0.12%</div>
+                    <div class="text-xl font-bold text-white font-mono mt-1" id="tca-slippage">0.00%</div>
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold cursor-help" title="Expected Shortfall of bottom 5% trades">CVaR (5% Tail Risk)</span>
-                    <div class="text-xl font-bold text-neonRed font-mono mt-1" id="cvar-value">-1.0253 SOL</div>
+                    <div class="text-xl font-bold text-neonRed font-mono mt-1" id="cvar-value">-0.00 SOL</div>
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Total Trades</span>
-                    <div class="text-xl font-bold text-jupGreen font-mono mt-1 truncate" id="total-trades-count">2,487</div>
+                    <div class="text-xl font-bold text-jupGreen font-mono mt-1 truncate" id="total-trades-count">0</div>
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Sharpe Ratio</span>
-                    <div class="text-xl font-bold text-neonBlue font-mono mt-1" id="sharpe-ratio">42.88</div>
+                    <div class="text-xl font-bold text-neonBlue font-mono mt-1" id="sharpe-ratio">0.00</div>
                 </div>
             </div>
 
-            <!-- LIVE TRADE TICKER (BLOOMBERG STYLE) -->
+            <!-- 🟢 LIVE TRADE TICKER (BLOOMBERG STYLE) WITH AI SCORE -->
             <div class="card-flat p-3 mb-6 bg-[#0a0d14] border border-white/5 overflow-hidden shadow-lg relative">
                 <div class="absolute top-0 right-0 w-32 h-full bg-gradient-to-l from-[#0a0d14] to-transparent pointer-events-none"></div>
                 <div class="flex items-center gap-3 text-[10px] text-gray-400 uppercase tracking-widest mb-2 border-b border-white/5 pb-2">
@@ -292,15 +316,15 @@
                 <div class="card-flat p-5">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-shield-halved text-gray-500"></i> Portfolio Risk Score</span>
-                        <span class="text-xl font-bold text-white font-mono" id="risk-score">26%</span>
+                        <span class="text-xl font-bold text-white font-mono" id="risk-score">0%</span>
                     </div>
                     <div class="mt-2 h-2 w-full bg-gray-800 rounded-full overflow-hidden border border-white/5">
-                        <div id="risk-bar" class="h-full bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed transition-all duration-1000" style="width:26%"></div>
+                        <div id="risk-bar" class="h-full bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed transition-all duration-1000" style="width:0%"></div>
                     </div>
-                    <p class="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest" id="risk-label">Assessment: Safe Risk</p>
+                    <p class="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest" id="risk-label">Assessment: Awaiting Scan...</p>
                 </div>
 
-                <!-- 🟢 All 4 Active Strategies (Color-Coded) -->
+                <!-- Active Strategies (Color-Coded) -->
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2 mb-3">
                         <i class="fa-solid fa-chess-knight text-gray-500"></i> Active Strategies
@@ -311,35 +335,21 @@
                                 <span class="h-2 w-2 rounded-full bg-jupGreen"></span>
                                 <span class="text-xs text-white font-bold">Sniper Engine</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-sniper">+979.6932 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-sniper">+0.0000 SOL</span>
                         </div>
                         <div class="flex justify-between items-center bg-[#0a0d14] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-yellow-500"></span>
                                 <span class="text-xs text-white font-bold">Manual / Direct</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-manual">+97.9693 SOL</span>
-                        </div>
-                        <div class="flex justify-between items-center bg-[#0a0d14] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-neonPurple"></span>
-                                <span class="text-xs text-white font-bold">DCA Engine</span>
-                            </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-dca">+58.7816 SOL</span>
-                        </div>
-                        <div class="flex justify-between items-center bg-[#0a0d14] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-neonBlue"></span>
-                                <span class="text-xs text-white font-bold">Copy Trade</span>
-                            </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-copy">+48.9847 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-manual">+0.0000 SOL</span>
                         </div>
                     </div>
                 </div>
             </div>
 
             <!-- Holdings -->
-            <div id="verified-holdings-section" class="space-y-3">
+            <div id="verified-holdings-section" class="space-y-3 mt-6">
                 <div class="flex items-center justify-between px-1 pt-2 pb-2">
                     <h3 class="text-sm text-gray-300 font-semibold tracking-wide">VERIFIED HOLDINGS</h3>
                     <span class="text-[10px] text-neonBlue bg-neonBlue/10 border border-neonBlue/20 px-3 py-1 rounded-full font-mono" id="positions-count">0 OPEN</span>
@@ -351,6 +361,7 @@
 
         <!-- Right Column: Graphs -->
         <section class="space-y-6">
+            <!-- PnL Chart -->
             <div class="card-flat p-5">
                 <div class="flex items-center justify-between mb-6">
                     <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">FLOW ANALYTICS</h3>
@@ -367,6 +378,7 @@
                 </div>
             </div>
 
+            <!-- Allocation Chart -->
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">STRATEGY ATTRIBUTION YIELD</h3>
                 <div class="h-56 flex items-center justify-center relative">
@@ -494,7 +506,6 @@
 </div>
 
 <div id="toast"><i class="fa-solid fa-check text-jupGreen mr-2"></i> <span id="toast-msg">Copied!</span></div>
-
 
 <script>
     const tg = window.Telegram.WebApp;
@@ -703,6 +714,7 @@
         }
     }
 
+    // 🟢 Renders trade confirmations with AI Score support
     function renderTradeTicker(trades) {
         const tickerContainer = document.getElementById('live-trade-ticker');
         if (!tickerContainer) return;
@@ -720,20 +732,25 @@
             const pnlVal = t.profitPercent;
             const pnlStr = !t.isBuy ? (pnlVal !== undefined && pnlVal !== null ? (pnlVal >= 0 ? `+${pnlVal.toFixed(1)}%` : `${pnlVal.toFixed(1)}%`) : '--') : '--';
             const pnlColor = pnlVal >= 0 ? 'text-jupGreen' : 'text-neonRed';
+            
+            // 🟢 Display AI score if available
+            const scoreStr = t.aiScore != null ? `<span class="text-neonPurple font-bold">${t.aiScore}⭐</span>` : '<span class="text-gray-600">--</span>';
 
             tickerHtml += `
                 <div class="flex justify-between items-center py-1.5 border-b border-white/5 last:border-0 hover:bg-white/[0.03] px-2 rounded transition-colors cursor-default">
-                    <span class="text-gray-500 w-16">${new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
-                    <span class="text-white font-bold w-24 truncate font-mono">${displayAddr}</span>
-                    <span style="color:${color}" class="font-bold w-12 text-center font-mono">${type}</span>
-                    <span class="text-gray-300 w-20 text-right font-mono">${t.amountInSol ? t.amountInSol.toFixed(3) : '0.000'} SOL</span>
-                    <span class="font-bold w-16 text-right font-mono ${pnlColor}">${pnlStr}</span>
+                    <span class="text-gray-500 w-14 text-[10px]">${new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                    <span class="text-white font-bold w-20 truncate font-mono">${displayAddr}</span>
+                    <span style="color:${color}" class="font-bold w-10 text-center font-mono">${type}</span>
+                    <span class="text-gray-300 w-16 text-right font-mono">${t.amountInSol ? t.amountInSol.toFixed(3) : '0.000'}</span>
+                    <span class="font-mono w-10 text-right text-[11px]">${scoreStr}</span>
+                    <span class="font-bold w-14 text-right font-mono ${pnlColor}">${pnlStr}</span>
                 </div>
             `;
         });
         tickerContainer.innerHTML = tickerHtml;
     }
 
+    // 🟢 Renders active positions without hiding
     function renderPositions(positions) {
         const container = document.getElementById('positions-container');
         const section = document.getElementById('verified-holdings-section');
@@ -1060,17 +1077,58 @@
         document.getElementById('positions-count').innerText = `0 OPEN`;
         document.getElementById('stats-live').innerText = `Manual: 0 trades (+0.0000 SOL)`;
         document.getElementById('stats-sim').innerText = `Auto-Engine: 0 trades (+0.0000 SOL)`;
-        document.getElementById('positions-container').innerHTML = `
-            <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                <div class="text-sm font-semibold">No Active Deployments</div>
-                <span class="text-xs font-mono mt-1">Awaiting target.</span>
-            </div>`;
+        
+        const posContainer = document.getElementById('positions-container');
+        if (posContainer) {
+            posContainer.innerHTML = `
+                <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                    <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
+                    <div class="text-sm font-semibold">No Active Deployments</div>
+                    <span class="text-xs font-mono mt-1">Awaiting target.</span>
+                </div>`;
+        }
         
         userTrades = [];
         if (pnlChart) pnlChart.destroy();
         if (allocChart) allocChart.destroy();
         initCharts([], [], [], [], []);
+    }
+
+    // 🟢 NEW: Pollers for Cash/Deployed breakdown and Sizing Cap warning
+    async function fetchNetworthBreakdown() {
+        try {
+            const res = await fetch('/api/networth-breakdown', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
+            });
+            if (!res.ok) return;
+            const d = await res.json();
+            const cashEl = document.getElementById('stat-cash');
+            const depEl = document.getElementById('stat-deployed');
+            if (cashEl) cashEl.innerText = '$' + (d.cashUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            if (depEl) depEl.innerText = '$' + (d.positionsValueUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        } catch (_) {}
+    }
+
+    async function fetchSizingCapCount() {
+        try {
+            const res = await fetch('/api/sizing-cap-count', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
+            });
+            if (!res.ok) return;
+            const { count } = await res.json();
+            const card = document.getElementById('sizing-cap-card');
+            const el = document.getElementById('sizing-cap-count');
+            if (count > 0 && card && el) {
+                card.style.display = 'flex';
+                el.innerText = `${count} time${count !== 1 ? 's' : ''}`;
+            } else if (card) {
+                card.style.display = 'none';
+            }
+        } catch (_) {}
     }
 
     async function fetchLiveData() {
@@ -1093,26 +1151,28 @@
                     }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 }));
                     const liveSolPrice = solPriceRes.price || 156.93;
 
-                    // 1. Calculate Net Worth
-                    const simBalanceSol = parseFloat(simStats.balance) || 0;
-                    const networthUsd = simBalanceSol * liveSolPrice; 
-                    const networthSol = simBalanceSol.toFixed(4) + " SOL";
+                    // 1. Calculate Net Worth: Liquid SOL Cash + Total Value of Open Positions
+                    const simCashSol = parseFloat(simStats.balance) || 0;
+                    const positionsValueUsd = simStats.positionsValueUsd || 0;
+                    const cashValueUsd = simCashSol * liveSolPrice;
+                    const networthUsd = cashValueUsd + positionsValueUsd;
+                    const networthSol = (networthUsd / liveSolPrice).toFixed(4) + " SOL";
 
-                    // 2. Extract Data
+                    // 2. Metrics
                     const wins = simStats.wins || 0;
                     const losses = simStats.losses || 0;
                     const totalPnlSol = simStats.totalPnlSol || 0;
-                    const totalInvestedSol = simStats.totalInvestedSol || 0;
                     const totalVolumeSol = simStats.volume || 0;
                     const totalTrades = simStats.totalTrades || (wins + losses);
                     const credits = simStats.credits !== undefined ? simStats.credits : 4298;
 
-                    // 3. Derived Metrics
-                    const pnlPercent = totalInvestedSol > 0 ? ((totalPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
+                    // 3. Account ROI %
+                    const startingBalSol = parseFloat(simStats.startingBalance) || simCashSol || 1;
+                    const pnlPercent = startingBalSol > 0 ? ((totalPnlSol / startingBalSol) * 100).toFixed(2) : "0.00";
                     const pnlUsd = totalPnlSol * liveSolPrice;
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
 
-                    // 4. Calculate Trading Days
+                    // 4. Trading Days
                     let tradingDays = 1;
                     if (simStats.firstTradeAt) {
                         const oldest = new Date(simStats.firstTradeAt);
@@ -1120,7 +1180,7 @@
                         tradingDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
                     }
 
-                    // 5. Update DOM Elements
+                    // 5. Update UI Elements
                     document.getElementById('stat-trading-days').innerText = tradingDays;
                     document.getElementById('stat-credits').innerText = credits.toLocaleString();
                     document.getElementById('header-credits').innerText = `${credits.toLocaleString()} Credits`;
@@ -1139,7 +1199,7 @@
                     const totalTradesEl = document.getElementById('total-trades-count');
                     if (totalTradesEl) totalTradesEl.innerText = totalTrades.toLocaleString();
 
-                    // 6. Map and Render Live Positions
+                    // 6. Positions
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint, symbol: p.symbol, amount: p.amount,
                         priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
@@ -1147,7 +1207,6 @@
                         entryPrice: p.entryPriceUsd || p.entryPrice
                     }));
 
-                    // 7. Render Bloomberg Live Execution Feed
                     userTrades = simStats.trades || [];
                     renderTradeTicker(userTrades);
 
@@ -1167,28 +1226,18 @@
             console.warn("Simulation check failed, falling back to Live Mode:", simErr);
         }
 
-        // Live Mainnet Mode
+        // Live Mainnet Mode (Includes Live Wallet Cash + Open Positions)
         isSimModeActive = false;
         try {
-            const [positionsRes, analyticsRes, solRes] = await Promise.all([
-                fetch('/api/positions', { 
-                    method: 'POST', 
-                    headers: { 'Content-Type': 'application/json' }, 
-                    body: JSON.stringify({ initData: tg.initData || "" }) 
-                }).then(r => r.ok ? r.json() : []).catch(() => []),
-                fetch('/api/analytics', { 
-                    method: 'POST', 
-                    headers: { 'Content-Type': 'application/json' }, 
-                    body: JSON.stringify({ initData: tg.initData || "" }) 
-                }).then(res => res.ok ? res.json() : { trades: [], stats: null }).catch(() => ({ trades: [], stats: null })),
-                fetch('/api/sol-price', { 
-                    method: 'POST', 
-                    headers: { 'Content-Type': 'application/json' }, 
-                    body: JSON.stringify({ initData: tg.initData }) 
-                }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 }))
+            const [positionsRes, analyticsRes, solRes, balanceRes] = await Promise.all([
+                fetch('/api/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) }).then(r => r.ok ? r.json() : []).catch(() => []),
+                fetch('/api/analytics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) }).then(res => res.ok ? res.json() : { trades: [], stats: null }).catch(() => ({ trades: [], stats: null })),
+                fetch('/api/sol-price', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData }) }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 })),
+                fetch('/api/wallet-balance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData }) }).then(r => r.ok ? r.json() : { balanceSol: 0 }).catch(() => ({ balanceSol: 0 }))
             ]);
 
             const currentSolPrice = solRes.price || 156.93;
+            const walletCashSol = balanceRes.balanceSol || 0;
             const liveTrades = Array.isArray(analyticsRes) ? analyticsRes : (analyticsRes.trades || []);
             const liveStats = analyticsRes.stats || {};
             const posArray = positionsRes || [];
@@ -1196,12 +1245,12 @@
             userTrades = liveTrades;
             renderTradeTicker(liveTrades);
 
-            let totalValueUsd = 0;
-            posArray.forEach(p => { 
-                totalValueUsd += p.valueUsd || 0; 
-            });
+            let totalPositionsUsd = 0;
+            posArray.forEach(p => { totalPositionsUsd += p.valueUsd || 0; });
 
-            const networthSol = (totalValueUsd / currentSolPrice).toFixed(3) + " SOL";
+            // Live Net Worth = Idle Wallet Cash + Value of all Held Token Bags
+            const totalNetworthUsd = (walletCashSol * currentSolPrice) + totalPositionsUsd;
+            const networthSol = (totalNetworthUsd / currentSolPrice).toFixed(4) + " SOL";
 
             let wins = liveStats.wins || 0;
             let losses = liveStats.losses || 0;
@@ -1219,7 +1268,7 @@
             const finalPnlPercent = totalInvestedSol > 0 ? ((totalRealizedPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
 
             populateDashboard({
-                networth: totalValueUsd, 
+                networth: totalNetworthUsd, 
                 networthSol: networthSol, 
                 pnlPercent: finalPnlPercent, 
                 pnlUsd: realizedPnlUsd, 
@@ -1424,19 +1473,22 @@
                 totalTradesEl.innerText = data.totalTradesCount.toLocaleString();
             }
 
-            const spend = data.currentSpend || 48;
-            const budget = data.maxBudget || 389;
+            const spend = data.currentSpend || 0;
+            const budget = data.maxBudget || 0;
             const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 0;
+            const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
+
             const gauge = document.getElementById('risk-budget-bar');
             const gaugeText = document.getElementById('risk-budget-text');
+            const remainingEl = document.getElementById('risk-budget-remaining');
+
             if (gauge) gauge.style.width = pct + '%';
             if (gaugeText) {
-                if (budget > 0) {
-                    gaugeText.innerText = `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)`;
-                } else {
-                    gaugeText.innerText = `No Cap (∞)`;
-                    if (gauge) gauge.style.width = '0%';
-                }
+                gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
+            }
+            if (remainingEl) {
+                remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '∞';
+                remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
             }
 
             const colorMapping = {
@@ -1479,6 +1531,8 @@
     }
 
     // INITIALIZATION & RECURRING POLLERS
+    fetchNetworthBreakdown();
+    fetchSizingCapCount();
     fetchLiveData();
     fetchAdvancedStats();
     fetchHourlyPerformance();
@@ -1486,12 +1540,13 @@
     fetchEnterpriseMetrics();
     fetchInstitutionalStats(); 
 
+    setInterval(fetchNetworthBreakdown, 4000);
+    setInterval(fetchSizingCapCount, 8000);
     setInterval(fetchStatsWindow, 3000);
     setInterval(fetchEnterpriseMetrics, 15000);
     setInterval(fetchAdvancedStats, 15000);
     setInterval(fetchHourlyPerformance, 15000);
     setInterval(fetchInstitutionalStats, 5000);
 </script>
-
 </body>
 </html>

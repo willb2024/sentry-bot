@@ -63,12 +63,13 @@ export function applySimSlippage(targetPnl: number): number {
     return parseFloat((targetPnl + absoluteDeviation).toFixed(2));
 }
 
-// ─── DYNAMIC SIZING ENGINE ──────────────────────────────
+// ─── DYNAMIC SIZING ENGINE (WITH HARD SAFETY CAP) ────────
 export function calculateDynamicSize(
     config: any,
     score: number,
     liqUsd: number,
-    solPrice: number
+    solPrice: number,
+    currentBalanceSol?: number
 ): number {
     if (!config?.enableDynamicScaling) return config?.amountSol || 0.05;
     
@@ -76,18 +77,39 @@ export function calculateDynamicSize(
     const exponent = config.scaleExponent || 2.0;
     const convictionMultiplier = Math.pow(normalizedScore, exponent);
     
-    let size = (config.baseRiskUnitSol || 0.02) + (convictionMultiplier * ((config.baseRiskUnitSol || 0.02) * (config.maxRiskMultiplier || 5.0)));
+    const baseRisk = config.baseRiskUnitSol || 0.02;
+    const maxMult = config.maxRiskMultiplier || 5.0;
+    let computedSize = baseRisk + (convictionMultiplier * (baseRisk * maxMult));
 
+    // 🟢 Never risk more than 5% of total balance per trade
+    if (currentBalanceSol && currentBalanceSol > 0) {
+        computedSize = Math.min(computedSize, currentBalanceSol * 0.05);
+    }
+
+    // 🟢 Hard per-trade safety ceiling (Max 2.0 SOL)
+    computedSize = Math.min(computedSize, 2.0);
+
+    // 🟢 Liquidity cap (Never buy more than 2% of pool liquidity)
     if (liqUsd > 0 && solPrice > 0) {
         const maxLiqInSol = (liqUsd * 0.02) / solPrice;
-        size = Math.min(size, maxLiqInSol);
+        computedSize = Math.min(computedSize, maxLiqInSol);
     }
 
     const totalSpent = config.totalSpentSol || 0;
     const remaining = (config.maxBudgetSol || Infinity) - totalSpent;
-    size = Math.min(size, remaining);
+    computedSize = Math.min(computedSize, remaining);
+
+    // 🟢 Increment Sizing Capped Counter in Redis
+    if (computedSize >= 2.0 || (currentBalanceSol && computedSize >= currentBalanceSol * 0.05)) {
+        const userIdentifier = config.telegramId || config.userId || config.user?.telegramId;
+        if (userIdentifier) {
+            redis.incr(`sizing_cap_count:${userIdentifier}`)
+                 .then(() => redis.expire(`sizing_cap_count:${userIdentifier}`, 86400))
+                 .catch(() => {});
+        }
+    }
     
-    return Math.max(parseFloat(size.toFixed(4)), 0.005);
+    return Math.max(parseFloat(computedSize.toFixed(4)), 0.005);
 }
 
 // ─── COUNTERS & ANCHORS ─────────────────────────────────
@@ -123,18 +145,18 @@ export async function setSimFirstTradeAt(telegramId: string, dateStr: string): P
     await redis.set(`sim:first_trade_at:${telegramId}`, dateStr);
 }
 
-// ─── SESSION BUDGET ─────────────────────────────────────
+// ─── SINGLE SOURCE OF TRUTH SESSION SPEND ───────────────
 export async function getSessionSpend(telegramId: string, mode: 'live' | 'sim'): Promise<number> {
-    const val = await redis.get(`autosnipe:session_spend:${mode}:${telegramId}`);
+    const key = `autosnipe:session_spend:${mode}:${telegramId}`;
+    const val = await redis.get(key);
     return val ? parseFloat(val) : 0;
 }
 
 export async function addSessionSpend(telegramId: string, amount: number, mode: 'live' | 'sim'): Promise<number> {
-    const current = await getSessionSpend(telegramId, mode);
-    const updated = current + amount;
-    await redis.set(`autosnipe:session_spend:${mode}:${telegramId}`, updated.toString(), 'EX', 86400);
-    await redis.set(`sim:session_spend:${telegramId}`, updated.toString(), 'EX', 86400);
-    return updated;
+    const key = `autosnipe:session_spend:${mode}:${telegramId}`;
+    const newTotal = await redis.incrbyfloat(key, amount);
+    await redis.expire(key, 86400);
+    return parseFloat(newTotal as any);
 }
 
 export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, mode: 'live' | 'sim', sessionId: string | null) {
@@ -244,7 +266,8 @@ export async function recordSimTrade(
     profitPercent: number = 0, 
     strategy: string = 'Sniper Engine', 
     mint: string = 'simulated',
-    slippagePercent: number = 0.12
+    slippagePercent: number = 0.12,
+    aiScore?: number
 ) {
     const key = `sim:trades:${telegramId}`;
     const existing = JSON.parse(await redis.get(key) || '[]');
@@ -258,7 +281,8 @@ export async function recordSimTrade(
         realizedPnlSol, 
         strategy, 
         mint,
-        slippagePercent 
+        slippagePercent,
+        aiScore: aiScore ?? null
     });
     
     const trimmed = existing.slice(0, 5000);
@@ -306,6 +330,7 @@ export async function startSimulationGuardResolver(bot: any) {
                         pos.ticksRemaining -= 1;
                     }
 
+                    // 🟢 Non-linear price trajectory (rise/overshoot -> pullback)
                     const targetPnl = pos.winTrajectory
                         ? (pos.takeProfitPercent || 40.0)
                         : -(pos.trailingPercent || 10.0);
@@ -363,7 +388,7 @@ export async function startSimulationGuardResolver(bot: any) {
                             await bot.telegram.sendPhoto(tgId, { source: imageBuffer }, { 
                                 caption, 
                                 parse_mode: 'HTML',
-                                link_preview_options: { is_disabled: true }
+                                link_preview_options: { is_disabled: true } 
                             });
                         } catch (_) {}
                     } else {
@@ -458,14 +483,14 @@ export async function simExecuteSnipe(
     const priceSol = 0.000005 + (Math.random() * 0.000002);
     const priceUsd = priceSol * solPrice;
 
-    const newBal = Math.max(0, currentBal - amountSol - 0.001).toFixed(4);
-    await redis.set(`sim:balance:${telegramId}`, newBal);
+    // 🟢 Deduct balance atomically via Redis
+    await redis.incrbyfloat(`sim:balance:${telegramId}`, -(amountSol + 0.001));
 
     const tokenAmount = Math.floor(amountSol / priceSol);
     const posKey = `sim:positions:${telegramId}`;
     const existing: SimPosition[] = JSON.parse(await redis.get(posKey) || '[]');
     
-    // 🟢 Organic score strictly between 58 and 84
+    // 🟢 Score clamped into 58–84 range
     const clampedScore = Math.min(84, Math.max(58, score));
     let winProbability = 0.42;
     if (clampedScore >= 75) winProbability = 0.68;
@@ -496,10 +521,11 @@ export async function simExecuteSnipe(
     existing.push(newPosition);
     await redis.set(posKey, JSON.stringify(existing));
 
-    await recordSimTrade(telegramId, true, amountSol, 0, strategy, tokenAddress, 0.12);
+    await recordSimTrade(telegramId, true, amountSol, 0, strategy, tokenAddress, 0.12, clampedScore);
     await recordStatsEvent(telegramId, 'sim', 0);
     await awardGuildPoints(telegramId, amountSol).catch(() => {});
     await saveSimulationState(telegramId);
+    await redis.del(`balance_cache:${telegramId}`).catch(() => {});
 
     const auditStats = {
         ageMins: Math.floor(Math.random() * 35) + 2,
@@ -552,8 +578,9 @@ export async function simExecuteExit(
     const jitoTip = 0.001;
 
     const netReturnSol = Math.max(0, rawReturn - platformFee - jitoTip);
-    const currentBal = parseFloat(await getSimBalance(telegramId));
-    await redis.set(`sim:balance:${telegramId}`, (currentBal + netReturnSol).toFixed(4));
+
+    // 🟢 Atomic increment prevents balance race-condition overwrites
+    await redis.incrbyfloat(`sim:balance:${telegramId}`, netReturnSol);
 
     if (percent >= 100) {
         positions.splice(posIndex, 1);
@@ -567,9 +594,9 @@ export async function simExecuteExit(
     const realizedPnlSol = netReturnSol - soldSol;
     await recordSimTrade(telegramId, false, soldSol, pnlPercent, strategy, tokenAddress, 0.12);
     await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
-
     await awardGuildPoints(telegramId, soldSol).catch(() => {});
     await saveSimulationState(telegramId);
+    await redis.del(`balance_cache:${telegramId}`).catch(() => {});
 
     return { 
         success: true, 
@@ -614,7 +641,7 @@ export async function generateSimCallerAlert(
 
         const scoreRes = computeTokenScore(stats);
         
-        // 🟢 Score strictly between 58 and 84
+        // 🟢 Score strictly within 58 and 84
         const simScore = Math.floor(Math.random() * (84 - 58 + 1)) + 58;
 
         if (simScore >= (filters.minScore || 55)) {
@@ -772,7 +799,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
 
         const scoreRes = computeTokenScore(stats);
         
-        // 🟢 Score strictly between 58 and 84
+        // 🟢 Score strictly bounded between 58 and 84
         let score = scoreRes.score;
         if (score <= 0 || score > 84 || score < 58) {
             score = Math.floor(Math.random() * (84 - 58 + 1)) + 58;
@@ -790,7 +817,9 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
         if (activeNow !== 'true' || genNow !== genId) break;
 
         const solPrice = cachedSolUsdPrice || 156.93;
-        const snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice);
+        const currentBal = parseFloat(await getSimBalance(telegramId));
+        // 🟢 Pass balance to enforce 5% cap & 2.0 SOL ceiling
+        const snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice, currentBal);
 
         const currentSpend = await getSessionSpend(telegramId, 'sim');
         const intendedSpend = snipeAmount * (user?.activeWallets || 1);
@@ -883,8 +912,8 @@ export async function setSimulationMode(telegramId: string, active: boolean): Pr
             update: { active: true, balance: startBal, startingBalance: startBal },
             create: { userId: user.id, active: true, balance: startBal, startingBalance: startBal }
         });
-    } catch (e: any) {
-        console.error(`[SIM] State persistence failure for ${telegramId}:`, e.message);
+    } catch (e) {
+        console.error(`[SIM] State persistence failure for ${telegramId}:`, e);
     }
 
     await redis.set(`sim:active:${telegramId}`, 'true');
@@ -918,6 +947,7 @@ export async function saveSimulationState(telegramId: string) {
     const positionsRaw = await redis.get(`sim:positions:${telegramId}`);
     const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
 
+    // 🟢 Batch database operations into chunks of 100 to prevent timeouts
     const BATCH_SIZE = 100;
     const mappedTrades = trades.slice(0, 2500).map((t: any) => ({
         userId: user.id,

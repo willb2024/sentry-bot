@@ -588,12 +588,13 @@ export async function executeSnipe(
     overrideSlippage?: number,
     antiMevDelayMs: number = 0,
     customRpcUrl?: string,
-    strategy: string = 'Manual / Direct'
+    strategy: string = 'Manual / Direct',
+    aiScore?: number
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
-        return await simExecuteSnipe(telegramId, targetCA, amountSol, strategy);
+        return await simExecuteSnipe(telegramId, targetCA, amountSol, strategy, aiScore ?? 75);
     }
     
     if (antiMevDelayMs > 0) await new Promise(r => setTimeout(r, antiMevDelayMs));
@@ -716,8 +717,8 @@ export async function executeSnipe(
                     const feeCharged = amountSol * feeRate;
                     const feeChargedLamports = BigInt(Math.round((amountSol * 1_000_000_000) * feeRate));
 
-                    // 🟢 Parallel affiliate and guild cut processing
-                    const [affiliateCutLamports, guildOwnerCutLamports] = await Promise.all([
+                    // 🟢 Parallel Fee Splits: Affiliate + Guild Owner + Social Copy Leader (20%)
+                    const [affiliateCutLamports, guildOwnerCutLamports, leaderCutLamports] = await Promise.all([
                         (async () => {
                             if (!user.referredById) return 0n;
                             const dynamicRate = await getDynamicAffiliateRate(user.referredById);
@@ -744,6 +745,23 @@ export async function executeSnipe(
                                 }
                             } catch (_) {}
                             return 0n;
+                        })(),
+                        (async () => {
+                            try {
+                                const followRelation = await prisma.copyTradeFollow.findFirst({
+                                    where: { followerId: user.id, isActive: true },
+                                    include: { leader: true }
+                                });
+                                if (followRelation?.leaderId && strategy === 'Copy Trade') {
+                                    const leaderCut = (feeChargedLamports * 20n) / 100n;
+                                    prisma.user.update({
+                                        where: { id: followRelation.leaderId },
+                                        data: { pendingRewardsSol: { increment: Number(leaderCut) / 1_000_000_000 } }
+                                    }).catch(() => {});
+                                    return leaderCut;
+                                }
+                            } catch (_) {}
+                            return 0n;
                         })()
                     ]);
 
@@ -755,13 +773,14 @@ export async function executeSnipe(
                             userId: user.id, tokenAddress: targetCA, isBuy: true, amountInSol: amountSol,
                             feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
                             txSignature: txSig, status: 'CONFIRMED', strategy: strategy,
+                            aiScore: aiScore ?? null,
                             expectedPriceUsd: tcaReport.expectedPriceSol,
                             executedPriceUsd: tcaReport.executedPriceSol,
                             slippagePercent: tcaReport.slippagePercent
                         } as any
                     }).catch(() => {});
 
-                    fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol, signature: txSig, strategy }).catch(() => {});
+                    fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol, signature: txSig, strategy, aiScore }).catch(() => {});
                     const { recordStatsEvent } = await import('./simulation.service.js');
                     recordStatsEvent(user.telegramId, 'live', 0).catch(() => {});
                 } catch (err: any) {
@@ -912,8 +931,8 @@ export async function executeExit(
                     const feeCharged = volumeToRecord * feeRate;
                     const feeChargedLamports = BigInt(Math.round((volumeToRecord * 1_000_000_000) * feeRate));
 
-                    // 🟢 Parallel affiliate and guild cut processing
-                    const [affiliateCutLamports, guildOwnerCutLamports] = await Promise.all([
+                    // 🟢 Parallel Fee Splits
+                    const [affiliateCutLamports, guildOwnerCutLamports, leaderCutLamports] = await Promise.all([
                         (async () => {
                             if (!user.referredById) return 0n;
                             const dynamicRate = await getDynamicAffiliateRate(user.referredById);
@@ -937,6 +956,23 @@ export async function executeExit(
                                         data: { pendingRewardsSol: { increment: Number(cut) / 1_000_000_000 } } 
                                     }).catch(() => {});
                                     return cut;
+                                }
+                            } catch (_) {}
+                            return 0n;
+                        })(),
+                        (async () => {
+                            try {
+                                const followRelation = await prisma.copyTradeFollow.findFirst({
+                                    where: { followerId: user.id, isActive: true },
+                                    include: { leader: true }
+                                });
+                                if (followRelation?.leaderId && strategy === 'Copy Trade') {
+                                    const leaderCut = (feeChargedLamports * 20n) / 100n;
+                                    prisma.user.update({
+                                        where: { id: followRelation.leaderId },
+                                        data: { pendingRewardsSol: { increment: Number(leaderCut) / 1_000_000_000 } }
+                                    }).catch(() => {});
+                                    return leaderCut;
                                 }
                             } catch (_) {}
                             return 0n;
@@ -1003,7 +1039,7 @@ export async function executeExit(
         }
 
         const breakdown = walletReport.filter(r => !r.includes("Empty")).join(" | ");
-        await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10);
+        await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); 
         
         return { 
             success: true, 

@@ -3,8 +3,6 @@ import Client from '@triton-one/yellowstone-grpc';
 import { 
     executeSnipe, 
     executeExit, 
-    generatePreSignedExitTx, 
-    sendToJitoBundle, 
     getCachedTokenPrice,
     axiosClient
 } from './engine.service.js';
@@ -106,7 +104,7 @@ global._sentryIntervals.push(setInterval(async () => {
 let cachedActiveGuards: TrailingOrder[] = [];
 let cachedLimitOrders: any[] = [];
 
-// 🟢 500ms active guard cache refresh
+// 🟢 500ms active guard cache refresh for ultra-low latency response
 global._sentryIntervals.push(setInterval(async () => {
     try {
         cachedActiveGuards = await getAllActiveGuards();
@@ -117,10 +115,20 @@ global._sentryIntervals.push(setInterval(async () => {
     } catch (_) {}
 }, 500));
 
+
+function safePublicKey(address: string | undefined | null): PublicKey | null {
+    if (!address) return null;
+    try {
+        return new PublicKey(address);
+    } catch {
+        return null;
+    }
+}
+
 // 🟢 1000ms presign refresh interval with 4s TTL
 global._sentryIntervals.push(setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
-        if ((guard as any).isProcessing) return;
+        if ((guard as any).isProcessing) return; // Skip if currently executing an exit
         try {
             const { generatePreSignedExitTxMulti } = await import('./engine.service.js');
             const payloads = await generatePreSignedExitTxMulti(guard.telegramId, guard.tokenAddress);
@@ -158,6 +166,7 @@ export async function releaseGuardSubscription(tokenAddress: string) {
             if (subId !== undefined) {
                 try { connection.removeAccountChangeListener(subId); } catch(e){}
                 activeSubscriptions.delete(curvePda);
+                console.log(`🔵 [GUARD FEED] Cleaned up subscription for ${tokenAddress.substring(0,8)}...`);
             }
         }
     } catch (_) {}
@@ -225,6 +234,7 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
     } catch (e) {}
 
     const { executeExit } = await import('./engine.service.js');
+    // 🟢 Pass guard.strategy so exit inherits the correct strategy tag (prevents 'Manual / Direct' overwrite)
     return await executeExit(guard.telegramId, guard.tokenAddress, 100, false, guard.strategy || 'Manual / Direct');
 }
 
@@ -241,6 +251,8 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         if (guard.entryPrice === 0 && currentPriceNative > 0) {
             guard.entryPrice = currentPriceNative;
             await updateEntryPrice(guard.id, currentPriceNative).catch(() => {});
+            
+            // 🟢 Patch the shared in-memory cache immediately
             const idx = cachedActiveGuards.findIndex(g => g.id === guard.id);
             if (idx !== -1) cachedActiveGuards[idx].entryPrice = currentPriceNative;
         }
@@ -258,8 +270,10 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                     await triggerInstantExit(guard);
                 }
                 
+                // 🟢 Background post-exit bookkeeping after exit is submitted
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
+                    await redis.del(`balance_cache:${guard.telegramId}`);
                     try {
                         await bot.telegram.sendMessage(
                             guard.telegramId, 
@@ -569,7 +583,6 @@ export async function triggerAutoSnipes(
         const delayMs = (sniper.snipeDelaySeconds ?? 0) * 1000;
         setTimeout(async () => {
             try {
-                // 🟢 Acquire lock first before any scoring/credit work
                 const sniperLockKey = `lock:autosnipe:${sniper.id}:${mintCa}`;
                 const isSnipeLocked = await redis.set(sniperLockKey, '1', 'EX', 86400, 'NX');
                 if (!isSnipeLocked) return;
@@ -655,15 +668,42 @@ export async function triggerAutoSnipes(
                             let velocity: any = { growthRate: 0, uniqueBuyers5m: 0 };
                             let sellability: any = { sellable: true, estimatedTaxPct: 0 };
 
+                            // 🟢 500ms Hard-Cap Race for Deep Audit
                             if (liveConfig.useDeepScoring) {
-                                [isRug, hasMev, devRep, lpLock, velocity, sellability] = await Promise.all([
+                                const HARD_CAP_MS = 500;
+                                const deepCheckPromise = Promise.all([
                                     checkTokenRugRisk(mintCa).catch(() => true),
-                                    checkRecentMevActivity(mintCa).catch(() => true),
-                                    getDevReputation(creatorWallet).catch(() => ({ launchCount: 0, avgRugScore: 0, isKnownRugger: false })),
+                                    getDevReputation(creatorWallet).catch(() => ({ isKnownRugger: true, launchCount: 0, avgRugScore: 0 })),
+                                    checkRecentMevActivity(mintCa).catch(() => true)
+                                ]);
+                                const timeoutPromise = new Promise<'TIMEOUT'>(resolve => setTimeout(() => resolve('TIMEOUT'), HARD_CAP_MS));
+            
+                                const deepResult = await Promise.race([deepCheckPromise, timeoutPromise]);
+            
+                                if (deepResult === 'TIMEOUT') {
+                                    console.warn(`⚠️ [DEEP-AUDIT TIMEOUT] Skipping snipe on ${mintCa}`);
+                                    await redis.del(sniperLockKey);
+                                    return;
+                                }
+            
+                                const [isRugRes, devRepRes, hasMevRes] = deepResult as [boolean, any, boolean];
+                                if (isRugRes || devRepRes?.isKnownRugger) {
+                                    await redis.del(sniperLockKey);
+                                    return;
+                                }
+                                
+                                isRug = isRugRes;
+                                devRep = devRepRes;
+                                hasMev = hasMevRes;
+                                
+                                const subChecks = await Promise.all([
                                     checkLpLockStatus(mintCa).catch(() => ({ locked: false, burned: false, lockPct: 0 })),
                                     trackHolderVelocity(mintCa).catch(() => ({ growthRate: 0, uniqueBuyers5m: 0 })),
                                     mode === 'PUMP' ? Promise.resolve({ sellable: true, estimatedTaxPct: 0 }) : simulateSellability(mintCa).catch(() => ({ sellable: true, estimatedTaxPct: 0 }))
                                 ]);
+                                lpLock = subChecks[0];
+                                velocity = subChecks[1];
+                                sellability = subChecks[2];
                             }
 
                             const sentiment = await getSentimentScore(symbol);
@@ -691,7 +731,14 @@ export async function triggerAutoSnipes(
 
                 let snipeAmount = liveConfig.amountSol;
                 if (liveConfig.enableDynamicScaling) {
-                    snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice);
+                    let liveBal: number | undefined = undefined;
+                    if (sniper.user.vaultAddress) {
+                        const vaultPub = safePublicKey(sniper.user.vaultAddress);
+                        if (vaultPub) {
+                            liveBal = (await connection.getBalance(vaultPub).catch(() => 0)) / 1_000_000_000;
+                        }
+                    }
+                    snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice, liveBal);
                 }
 
                 const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
@@ -714,7 +761,8 @@ export async function triggerAutoSnipes(
                 const executionSlippage = liveConfig.useDeepScoring ? (liveConfig.user.slippagePercent + 5) : undefined;
                 const result = await executeSnipe(
                     liveConfig.user.telegramId, mintCa, snipeAmount, 'buy', 
-                    undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'Sniper Engine'
+                    undefined, false, raydiumPoolId, executionSlippage, 0, undefined, 'Sniper Engine',
+                    score
                 );
 
                 if (result.success) {
