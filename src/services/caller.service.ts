@@ -316,21 +316,26 @@ export async function getModelScore(mint: string, stats: any): Promise<number | 
     return null;
 }
 
+
+
 export async function scheduleTraining() {
     let lastTrainedCount = 0;
+    // 🟢 Retrain every 12 hours, if at least 20 new samples exist
     setInterval(async () => {
         try {
-            const currentCount = await prisma.callerPrediction.count({ where: { finalized: true, peakPct: { not: null } } });
+            const currentCount = await prisma.callerPrediction.count({ 
+                where: { finalized: true, peakPct: { not: null } } 
+            });
             const newSamples = currentCount - lastTrainedCount;
             if (newSamples >= 20) {
-                console.log(`🧠 [CALLER ML] ${newSamples} new finalized predictions since last train — retraining.`);
+                console.log(`🧠 [CALLER ML] ${newSamples} new finalized predictions. Retraining...`);
                 await trainCallerModel();
                 lastTrainedCount = currentCount;
             }
         } catch (e) {
             console.error('🔴 [CALLER ML] Scheduled training check failed:', e);
         }
-    }, 24 * 60 * 60 * 1000); 
+    }, 12 * 60 * 60 * 1000); // 🟢 Changed from 24 hours to 12 hours
 }
 
 export async function storePredictionData(token: any, projection: any, alertKey: string) {

@@ -11,6 +11,9 @@ import {
 import { prisma } from '../lib/prisma.js'; 
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
+import { redlock } from '../lib/redlock.js';
+import { getBotInstance } from '../lib/bot-instance.js';
+import { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } from './simulation.service.js';
 import axios from 'axios';
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
@@ -615,15 +618,11 @@ export async function executeSnipe(
         let selectedSlippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
         if (user.enableAdaptiveSlippage && overrideSlippage === undefined) {
             const volatileSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
-            if (volatileSlippage > selectedSlippage) {
-                selectedSlippage = volatileSlippage;
-            }
+            if (volatileSlippage > selectedSlippage) selectedSlippage = volatileSlippage;
         }
 
         let raydiumPoolIdToUse: string | undefined = raydiumPoolId;
-        if (user.enableSOR && !raydiumPoolId) {
-            raydiumPoolIdToUse = undefined; 
-        }
+        if (user.enableSOR && !raydiumPoolId) raydiumPoolIdToUse = undefined;
         
         const priorityLevel = user.priorityLevel || 'FAST';
         const customPriorityFee = user.customPriorityFee || 0.001;
@@ -640,10 +639,38 @@ export async function executeSnipe(
         let walletReport: string[] = [];
         let walletErrors: string[] = [];
         
-        // 🟢 Ultra-fast cached blockhash retrieval
         const recentBlockhash = getCachedBlockhash() || (await connection.getLatestBlockhash('processed')).blockhash;
-
         const feeRate = await getPlatformFeeRate(user.telegramId);
+
+        // 🟢 🔴 FIX: Atomic Budget Reserve via Redlock
+        const liveConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
+        const intendedSpend = amountSol * (user.activeWallets || 1);
+        const budgetLockKey = `lock:budget:${telegramId}`;
+let budgetLock;
+try {
+    budgetLock = await redlock.acquire([budgetLockKey], 5000);
+} catch (err) {
+    return { success: false, message: "Budget lock contention. Try again in a moment." };
+}
+
+try {
+    const sessionId = await redis.get(`autosnipe:session_id:live:${telegramId}`);
+    const currentSpendFinal = await getSessionSpend(telegramId, 'live');
+
+    if (liveConfig?.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
+        await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
+        
+        // 🟢 FIX: Fetch the bot instance locally since 'bot' is not passed into executeSnipe
+        const bot = getBotInstance(); 
+        await sendBudgetExhaustedSummary(bot, telegramId, 'live', sessionId);
+        
+        return { success: false, message: "⚠️ Budget exhausted. Sniper paused." };
+    }
+    // Pre-reserve budget atomically before broadcasting
+    await addSessionSpend(telegramId, intendedSpend, 'live');
+} finally {
+    if (budgetLock) await (budgetLock as any).release();
+}
 
         const executionPromises = wallets.map(async (w, index) => {
             let wBal = getLiveWalletBalance(w.publicKey.toBase58());
@@ -698,7 +725,7 @@ export async function executeSnipe(
             if (tcaReport.confirmed) {
                 walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
                 
-                // 🟢 Parallel Fee Splits & Database Persistence Backgrounded
+                // 🟢 Post-Processing (Backgrounded)
                 (async () => {
                     try {
                         const feeCharged = amountSol * feeRate;
@@ -739,7 +766,7 @@ export async function executeSnipe(
                                         include: { leader: true }
                                     });
                                     if (followRelation?.leaderId && strategy === 'Copy Trade') {
-                                        const leaderCut = (feeChargedLamports * 50n) / 100n; // 🟢 50% Leader Rev-Share
+                                        const leaderCut = (feeChargedLamports * 50n) / 100n;
                                         prisma.user.update({
                                             where: { id: followRelation.leaderId },
                                             data: { pendingRewardsSol: { increment: Number(leaderCut) / 1_000_000_000 } }
@@ -823,9 +850,7 @@ export async function executeExit(
         let selectedSlippage = sellPercentage === 100 ? 100.0 : (user.slippagePercent || 20.0);
         if ((user.enableAdaptiveSlippage ?? true) && sellPercentage !== 100) {
             const volatileSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
-            if (volatileSlippage > selectedSlippage) {
-                selectedSlippage = volatileSlippage;
-            }
+            if (volatileSlippage > selectedSlippage) selectedSlippage = volatileSlippage;
         }
         
         const priorityLevel = user.priorityLevel || 'FAST';
@@ -845,7 +870,6 @@ export async function executeExit(
         let walletErrors: string[] = [];
         
         const recentBlockhash = getCachedBlockhash() || (await connection.getLatestBlockhash('processed')).blockhash;
-        
         const balances = await Promise.all(wallets.map(w => connection.getBalance(w.publicKey).catch(() => 0)));
         const feeRate = await getPlatformFeeRate(user.telegramId);
 
@@ -912,10 +936,8 @@ export async function executeExit(
             if (tcaReport.confirmed) {
                 walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
                 
-                // 🟢 Invalidate token account balance cache so next lookup is fresh
                 await redis.del(`token_acct_balance:${w.publicKey.toBase58()}:${targetCA}`).catch(() => {});
 
-                // 🟢 Parallel Fee Splits & Database Persistence Backgrounded
                 (async () => {
                     try {
                         let actualSolReceived = tcaReport.executedPriceSol > 0 ? tcaReport.executedPriceSol : dynamicFeeBase;
@@ -958,7 +980,7 @@ export async function executeExit(
                                         include: { leader: true }
                                     });
                                     if (followRelation?.leaderId && strategy === 'Copy Trade') {
-                                        const leaderCut = (feeChargedLamports * 50n) / 100n; // 🟢 50% Leader Rev-Share
+                                        const leaderCut = (feeChargedLamports * 50n) / 100n;
                                         prisma.user.update({
                                             where: { id: followRelation.leaderId },
                                             data: { pendingRewardsSol: { increment: Number(leaderCut) / 1_000_000_000 } }
@@ -970,7 +992,8 @@ export async function executeExit(
                             })()
                         ]);
 
-                        const realizedPnlSol = actualSolReceived - volumeToRecord;
+                        // 🔴 🔴 FIX: Realized PnL must subtract the fee
+                        const realizedPnlSol = (actualSolReceived - volumeToRecord) - feeCharged;
                         const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
                         prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(() => {});
@@ -983,8 +1006,10 @@ export async function executeExit(
                             data: {
                                 userId: user.id, tokenAddress: targetCA, isBuy: false, amountInSol: volumeToRecord,
                                 feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
-                                txSignature: txSig, status: 'CONFIRMED', profitPercent: parseFloat(profitPercent.toFixed(2)),
-                                realizedPnlSol: realizedPnlSol, strategy: strategy || 'Manual / Direct',
+                                txSignature: txSig, status: 'CONFIRMED',
+                                profitPercent: parseFloat(profitPercent.toFixed(2)), // 🔴 Fixed: net of fee
+                                realizedPnlSol: realizedPnlSol, // 🔴 Fixed: net of fee
+                                strategy: strategy || 'Manual / Direct',
                                 expectedPriceUsd: tcaReport.expectedPriceSol,
                                 executedPriceUsd: tcaReport.executedPriceSol,
                                 slippagePercent: tcaReport.slippagePercent

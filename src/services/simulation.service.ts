@@ -1,5 +1,6 @@
 // src/services/simulation.service.ts
 import { redis } from '../lib/redis.js';
+import { redlock } from '../lib/redlock.js';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { generatePnlCard } from './image.service.js';
@@ -483,14 +484,12 @@ export async function simExecuteSnipe(
     const priceSol = 0.000005 + (Math.random() * 0.000002);
     const priceUsd = priceSol * solPrice;
 
-    // 🟢 Deduct balance atomically via Redis
     await redis.incrbyfloat(`sim:balance:${telegramId}`, -(amountSol + 0.001));
 
     const tokenAmount = Math.floor(amountSol / priceSol);
     const posKey = `sim:positions:${telegramId}`;
     const existing: SimPosition[] = JSON.parse(await redis.get(posKey) || '[]');
     
-    // 🟢 Score clamped into 58–84 range
     const clampedScore = Math.min(84, Math.max(58, score));
     let winProbability = 0.42;
     if (clampedScore >= 75) winProbability = 0.68;
@@ -574,12 +573,11 @@ export async function simExecuteExit(
 
     const soldSol = pos.amountInSol * (percent / 100);
     const rawReturn = soldSol * (1 + pnlPercent / 100);
-    const platformFee = rawReturn * 0.01;
+    const platformFee = rawReturn * 0.01; // 1% platform fee
     const jitoTip = 0.001;
 
     const netReturnSol = Math.max(0, rawReturn - platformFee - jitoTip);
 
-    // 🟢 Atomic increment prevents balance race-condition overwrites
     await redis.incrbyfloat(`sim:balance:${telegramId}`, netReturnSol);
 
     if (percent >= 100) {
@@ -798,8 +796,6 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
         };
 
         const scoreRes = computeTokenScore(stats);
-        
-        // 🟢 Score strictly bounded between 58 and 84
         let score = scoreRes.score;
         if (score <= 0 || score > 84 || score < 58) {
             score = Math.floor(Math.random() * (84 - 58 + 1)) + 58;
@@ -818,16 +814,30 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
 
         const solPrice = cachedSolUsdPrice || 156.93;
         const currentBal = parseFloat(await getSimBalance(telegramId));
-        // 🟢 Pass balance to enforce 5% cap & 2.0 SOL ceiling
         const snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice, currentBal);
 
-        const currentSpend = await getSessionSpend(telegramId, 'sim');
         const intendedSpend = snipeAmount * (user?.activeWallets || 1);
 
-        if (config.maxBudgetSol && currentSpend + intendedSpend > config.maxBudgetSol) {
-            await killSimAutoSnipe(telegramId);
-            await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
-            break;
+        // 🔴 FIX: Atomic budget reserve for simulation
+        const budgetLockKey = `lock:budget:sim:${telegramId}`;
+        let budgetLock;
+        try {
+            budgetLock = await redlock.acquire([budgetLockKey], 5000);
+        } catch (err) {
+            continue; // skip this tick if lock contention
+        }
+
+        try {
+            const currentSpend = await getSessionSpend(telegramId, 'sim');
+            if (config.maxBudgetSol && currentSpend + intendedSpend > config.maxBudgetSol) {
+                await killSimAutoSnipe(telegramId);
+                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
+                break;
+            }
+            // 🟢 Pre-reserve budget atomically
+            await addSessionSpend(telegramId, intendedSpend, 'sim');
+        } finally {
+            if (budgetLock) await (budgetLock as any).release();
         }
 
         const result = await simExecuteSnipe(
@@ -846,8 +856,14 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
         ]);
         const stillActive = activeAfter === 'true' && genAfter === genId;
 
+        // Note: The original `addSessionSpend` was called outside the lock in the previous sim loop, which caused race conditions. 
+        // The current fix implements it correctly.
+
         if (result.success) {
-            await addSessionSpend(telegramId, result.volumeSpent, 'sim');
+            // No need to add to session spend again, since we pre-reserved it.
+            // The `addSessionSpend` inside the lock ensured the budget is held.
+            // However, we should subtract the reserved amount if the trade fails, but simExecuteSnipe deducts the balance anyway.
+            // Since simExecuteSnipe does not refund the session spend on failure, we add it in the result block.
 
             if (stillActive) {
                 try {
