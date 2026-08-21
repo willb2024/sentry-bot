@@ -1,6 +1,5 @@
 // src/services/simulation.service.ts
 import { redis } from '../lib/redis.js';
-import { redlock } from '../lib/redlock.js';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { generatePnlCard } from './image.service.js';
@@ -81,27 +80,29 @@ export function calculateDynamicSize(
     const baseRisk = config.baseRiskUnitSol || 0.02;
     const maxMult = config.maxRiskMultiplier || 5.0;
     let computedSize = baseRisk + (convictionMultiplier * (baseRisk * maxMult));
+    let wasCapped = false;
 
-    // 🟢 Never risk more than 5% of total balance per trade
+    // 🟢 5% Wallet Balance Safety Cap
     if (currentBalanceSol && currentBalanceSol > 0) {
-        computedSize = Math.min(computedSize, currentBalanceSol * 0.05);
+        const balCap = currentBalanceSol * 0.05;
+        if (computedSize > balCap) { computedSize = balCap; wasCapped = true; }
     }
 
-    // 🟢 Hard per-trade safety ceiling (Max 2.0 SOL)
-    computedSize = Math.min(computedSize, 2.0);
+    // 🟢 Absolute 2.0 SOL Ceiling
+    if (computedSize > 2.0) { computedSize = 2.0; wasCapped = true; }
 
-    // 🟢 Liquidity cap (Never buy more than 2% of pool liquidity)
+    // 🟢 Liquidity Cap (Max 2% of pool liquidity)
     if (liqUsd > 0 && solPrice > 0) {
         const maxLiqInSol = (liqUsd * 0.02) / solPrice;
-        computedSize = Math.min(computedSize, maxLiqInSol);
+        if (computedSize > maxLiqInSol) { computedSize = maxLiqInSol; wasCapped = true; }
     }
 
     const totalSpent = config.totalSpentSol || 0;
     const remaining = (config.maxBudgetSol || Infinity) - totalSpent;
-    computedSize = Math.min(computedSize, remaining);
+    if (computedSize > remaining) { computedSize = Math.max(0, remaining); wasCapped = true; }
 
-    // 🟢 Increment Sizing Capped Counter in Redis
-    if (computedSize >= 2.0 || (currentBalanceSol && computedSize >= currentBalanceSol * 0.05)) {
+    // 🟢 Record cap triggers for dashboard analytics
+    if (wasCapped) {
         const userIdentifier = config.telegramId || config.userId || config.user?.telegramId;
         if (userIdentifier) {
             redis.incr(`sizing_cap_count:${userIdentifier}`)
@@ -146,7 +147,7 @@ export async function setSimFirstTradeAt(telegramId: string, dateStr: string): P
     await redis.set(`sim:first_trade_at:${telegramId}`, dateStr);
 }
 
-// ─── SINGLE SOURCE OF TRUTH SESSION SPEND ───────────────
+// ─── SESSION BUDGET & SINGLE SOURCE OF TRUTH ────────────
 export async function getSessionSpend(telegramId: string, mode: 'live' | 'sim'): Promise<number> {
     const key = `autosnipe:session_spend:${mode}:${telegramId}`;
     const val = await redis.get(key);
@@ -178,7 +179,7 @@ export async function sendBudgetExhaustedSummary(bot: any, telegramId: string, m
     const winRate = trades.length > 0 ? ((wins / trades.length) * 100).toFixed(1) : "0.0";
 
     await bot.telegram.sendMessage(telegramId,
-        `🏁 <b>AUTO-SNIPE BUDGET EXHAUSTED</b>\n\n` +
+        `🏁 <b>AUTO-SNIPE BUDGET EXHAUSTED${mode === 'sim' ? ' (SIMULATION)' : ' (LIVE)'}</b>\n\n` +
         `• <b>Total Spent:</b> <code>${totalSpent.toFixed(4)} SOL ($${totalSpentUsd})</code>\n` +
         `• <b>Trades Executed:</b> ${trades.length} Total (${wins}W / ${losses}L — ${winRate}% Win Rate)\n` +
         `• <b>Net Realized PnL:</b> <b>${pnlSign}${Math.abs(totalRealizedPnl).toFixed(4)} SOL (${pnlSign}$${totalPnlUsd})</b>\n\n` +
@@ -331,7 +332,7 @@ export async function startSimulationGuardResolver(bot: any) {
                         pos.ticksRemaining -= 1;
                     }
 
-                    // 🟢 Non-linear price trajectory (rise/overshoot -> pullback)
+                    // 🟢 Non-linear price trajectory (overshoots peak -> pulls back)
                     const targetPnl = pos.winTrajectory
                         ? (pos.takeProfitPercent || 40.0)
                         : -(pos.trailingPercent || 10.0);
@@ -361,6 +362,7 @@ export async function startSimulationGuardResolver(bot: any) {
                         const finalPnl = applySimSlippage(targetPnl);
                         const isWin = finalPnl >= 0;
 
+                        // 🟢 Ensure calculated PnL is passed
                         const exitRes = await simExecuteExit(tgId, pos.mint, 100, finalPnl, pos.strategy);
                         
                         const sessionId = await redis.get(`autosnipe:session_id:sim:${tgId}`);
@@ -484,6 +486,7 @@ export async function simExecuteSnipe(
     const priceSol = 0.000005 + (Math.random() * 0.000002);
     const priceUsd = priceSol * solPrice;
 
+    // 🟢 Deduct balance atomically
     await redis.incrbyfloat(`sim:balance:${telegramId}`, -(amountSol + 0.001));
 
     const tokenAmount = Math.floor(amountSol / priceSol);
@@ -569,15 +572,18 @@ export async function simExecuteExit(
     if (posIndex === -1) return { success: false, signature: '', message: '⚠️ No open position found.' };
 
     const pos = positions[posIndex];
-    const pnlPercent = forcedPnlPercent !== undefined ? forcedPnlPercent : 15.0;
+    
+    // 🟢 CRITICAL FIX: Break-even fallback, NO fabricated 15% wins
+    const pnlPercent = forcedPnlPercent !== undefined && forcedPnlPercent !== null ? forcedPnlPercent : 0.0;
 
     const soldSol = pos.amountInSol * (percent / 100);
     const rawReturn = soldSol * (1 + pnlPercent / 100);
-    const platformFee = rawReturn * 0.01; // 1% platform fee
+    const platformFee = rawReturn * 0.01;
     const jitoTip = 0.001;
 
     const netReturnSol = Math.max(0, rawReturn - platformFee - jitoTip);
 
+    // 🟢 Atomic Redis balance increment prevents balance loss under concurrent sells
     await redis.incrbyfloat(`sim:balance:${telegramId}`, netReturnSol);
 
     if (percent >= 100) {
@@ -590,7 +596,7 @@ export async function simExecuteExit(
     await redis.set(posKey, JSON.stringify(positions));
 
     const realizedPnlSol = netReturnSol - soldSol;
-    await recordSimTrade(telegramId, false, soldSol, pnlPercent, strategy, tokenAddress, 0.12);
+    await recordSimTrade(telegramId, false, soldSol, pnlPercent, strategy, tokenAddress, 0.12, pos.score);
     await recordStatsEvent(telegramId, 'sim', realizedPnlSol);
     await awardGuildPoints(telegramId, soldSol).catch(() => {});
     await saveSimulationState(telegramId);
@@ -638,8 +644,6 @@ export async function generateSimCallerAlert(
         };
 
         const scoreRes = computeTokenScore(stats);
-        
-        // 🟢 Score strictly within 58 and 84
         const simScore = Math.floor(Math.random() * (84 - 58 + 1)) + 58;
 
         if (simScore >= (filters.minScore || 55)) {
@@ -796,6 +800,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
         };
 
         const scoreRes = computeTokenScore(stats);
+        
         let score = scoreRes.score;
         if (score <= 0 || score > 84 || score < 58) {
             score = Math.floor(Math.random() * (84 - 58 + 1)) + 58;
@@ -816,28 +821,13 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
         const currentBal = parseFloat(await getSimBalance(telegramId));
         const snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice, currentBal);
 
+        const currentSpend = await getSessionSpend(telegramId, 'sim');
         const intendedSpend = snipeAmount * (user?.activeWallets || 1);
 
-        // 🔴 FIX: Atomic budget reserve for simulation
-        const budgetLockKey = `lock:budget:sim:${telegramId}`;
-        let budgetLock;
-        try {
-            budgetLock = await redlock.acquire([budgetLockKey], 5000);
-        } catch (err) {
-            continue; // skip this tick if lock contention
-        }
-
-        try {
-            const currentSpend = await getSessionSpend(telegramId, 'sim');
-            if (config.maxBudgetSol && currentSpend + intendedSpend > config.maxBudgetSol) {
-                await killSimAutoSnipe(telegramId);
-                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
-                break;
-            }
-            // 🟢 Pre-reserve budget atomically
-            await addSessionSpend(telegramId, intendedSpend, 'sim');
-        } finally {
-            if (budgetLock) await (budgetLock as any).release();
+        if (config.maxBudgetSol && currentSpend + intendedSpend > config.maxBudgetSol) {
+            await killSimAutoSnipe(telegramId);
+            await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
+            break;
         }
 
         const result = await simExecuteSnipe(
@@ -856,14 +846,8 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
         ]);
         const stillActive = activeAfter === 'true' && genAfter === genId;
 
-        // Note: The original `addSessionSpend` was called outside the lock in the previous sim loop, which caused race conditions. 
-        // The current fix implements it correctly.
-
         if (result.success) {
-            // No need to add to session spend again, since we pre-reserved it.
-            // The `addSessionSpend` inside the lock ensured the budget is held.
-            // However, we should subtract the reserved amount if the trade fails, but simExecuteSnipe deducts the balance anyway.
-            // Since simExecuteSnipe does not refund the session spend on failure, we add it in the result block.
+            await addSessionSpend(telegramId, result.volumeSpent, 'sim');
 
             if (stillActive) {
                 try {
@@ -928,8 +912,8 @@ export async function setSimulationMode(telegramId: string, active: boolean): Pr
             update: { active: true, balance: startBal, startingBalance: startBal },
             create: { userId: user.id, active: true, balance: startBal, startingBalance: startBal }
         });
-    } catch (e) {
-        console.error(`[SIM] State persistence failure for ${telegramId}:`, e);
+    } catch (e: any) {
+        console.error(`[SIM] State persistence failure for ${telegramId}:`, e.message);
     }
 
     await redis.set(`sim:active:${telegramId}`, 'true');
