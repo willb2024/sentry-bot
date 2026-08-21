@@ -2338,6 +2338,54 @@ bot.action('btn_trade_guide', async (ctx) => {
     await safeEditMessageText(ctx, TRADE_GUIDE_PAGES[0], buildGuideKeyboard(0));
 });
 
+
+// Add into your bot action handlers in src/index.ts
+
+bot.action('action_sweep_all', async (ctx) => {
+    try { await ctx.answerCbQuery('Sweeping positions...'); } catch (_) {}
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const { isSimulationActive, simExecuteExit } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    
+    let positions: any[] = [];
+    if (isSim) {
+        positions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
+    } else {
+        const { getUserPositions } = await import('./services/position.service.js');
+        positions = (await getUserPositions(tgId)) || [];
+    }
+
+    if (!positions || positions.length === 0) {
+        return ctx.replyWithHTML('📭 <b>No open positions to sweep.</b>');
+    }
+
+    const loader = await ctx.replyWithHTML(`🧹 <b>Sweeping ${positions.length} position(s) to cash...</b>`);
+
+    let successCount = 0;
+    let failCount = 0;
+    for (const pos of positions) {
+        const mint = pos.mint || pos.tokenAddress;
+        const result = isSim
+            ? await simExecuteExit(tgId, mint, 100, undefined, pos.strategy)
+            : await executeExit(tgId, mint, 100, false, pos.strategy);
+            
+        if (result.success) successCount++;
+        else failCount++;
+        
+        await new Promise(r => setTimeout(r, 400));
+    }
+
+    await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        loader.message_id,
+        undefined,
+        `✅ <b>Sweep Complete</b>\n\nClosed: <b>${successCount}</b> | Failed: <b>${failCount}</b>\n\nUse /start or check the dashboard to review your updated balance.`,
+        { parse_mode: 'HTML' }
+    );
+});
+
 bot.action(/^trade_guide_page_(\d+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const page = parseInt(ctx.match[1], 10);
@@ -2636,9 +2684,26 @@ bot.action('trigger_caller_scan', async (ctx) => {
     try {
         const { getCalibratedProjection, getScoreBand } = await import('./services/caller.service.js');
 
+    
+
+        // Inside src/index.ts -> bot.action('trigger_caller_scan', ...)
+
         // --- 🎮 SIMULATION INTERCEPT ---
         const { isSimulationActive } = await import('./services/simulation.service.js');
         if (await isSimulationActive(tgId)) {
+            const simCredits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0', 10);
+            if (simCredits <= 0) {
+                return safeEditMessageText(ctx,
+                    `⚠️ <b>OUT OF SIMULATION CREDITS</b>\n\n` +
+                    `You have <b>0</b> credits remaining.\n` +
+                    `Use <code>/simcredits 500</code> to reload or top up below to continue scanning:`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }], [{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
+                    }
+                );
+            }
+
             await safeEditMessageText(ctx, `🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
             
             await new Promise(r => setTimeout(r, 600 + Math.random() * 500)); 
@@ -2647,32 +2712,13 @@ bot.action('trigger_caller_scan', async (ctx) => {
             const { generateSimCallerAlert } = await import('./services/simulation.service.js');
             const filters = await getUserCallerFilters(tgId);
             
-            let matchedToken = null;
-            
-            const cachedHighStr = await redis.get(`sim:high_scorer:${tgId}`);
-            if (cachedHighStr) {
-                const cachedData = JSON.parse(cachedHighStr);
-                if (cachedData.repeatsLeft > 0) {
-                    matchedToken = cachedData.token;
-                    cachedData.repeatsLeft -= 1;
-                    await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify(cachedData), 'EX', 300);
-                } else {
-                    await redis.del(`sim:high_scorer:${tgId}`);
-                }
-            }
-
-            if (!matchedToken) {
-                matchedToken = await generateSimCallerAlert(tgId, filters); 
-                if (matchedToken && matchedToken.score >= 80 && matchedToken.score <= 95) {
-                    const repeats = Math.floor(Math.random() * 2) + 1; 
-                    await redis.set(`sim:high_scorer:${tgId}`, JSON.stringify({ token: matchedToken, repeatsLeft: repeats }), 'EX', 300);
-                }
-            }
+            const matchedToken = await generateSimCallerAlert(tgId, filters); 
 
             if (matchedToken) {
+                // Deduct 1 Sim Credit on delivered match
+                await redis.set(`sim:credits:${tgId}`, Math.max(0, simCredits - 1).toString());
+
                 const projection = await getCalibratedProjection(matchedToken); 
-                
-                // 🟢 FIX 0.1 & A.1: Use shared formatter and pass isReshow!
                 const { formatCallerAlertMessage } = await import('./services/caller.service.js');
                 const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
 
@@ -2691,13 +2737,14 @@ bot.action('trigger_caller_scan', async (ctx) => {
             } else {
                 return safeEditMessageText(ctx,
                     `⏳ <b>Waiting for fresh blocks...</b>\n\n` +
-                    `The simulated pool captured fresh mints, but you have either reviewed them all or none cleared your strict filters.\n\n` +
-                    `<i>Sentry is scanning the mempool. Tap 'Scan Again' shortly!</i>\n` +
+                    `The simulated pool captured fresh mints, but none cleared your strict filters.\n\n` +
+                    `<i>(0 credits deducted for empty scans)</i>\n` +
                     `<code>Last checked: ${new Date().toLocaleTimeString()}</code>`, 
                     { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }], [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
                 );
             }
         }
+       
         // --- END SIMULATION INTERCEPT ---
 
         await safeEditMessageText(ctx, `🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
@@ -2898,11 +2945,37 @@ bot.command('caller', async (ctx) => {
 });
 
 // Button Handlers
+// Inside src/index.ts -> bot.action('toggle_caller_status', ...)
+
 bot.action('toggle_caller_status', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString()!;
+    const { getUserCallerFilters, setUserCallerFilters } = await import('./services/caller.service.js');
+    const { isSimulationActive } = await import('./services/simulation.service.js');
     const filters = await getUserCallerFilters(tgId);
-    await setUserCallerFilters(tgId, { isActive: !filters.isActive });
+    
+    const willBeActive = !filters.isActive;
+
+    if (willBeActive) {
+        let credits = 0;
+        if (await isSimulationActive(tgId)) {
+            credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0', 10);
+        } else {
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId }, select: { creditBalance: true } });
+            credits = user?.creditBalance || 0;
+        }
+
+        if (credits <= 0) {
+            return ctx.replyWithHTML(
+                `⚠️ <b>CANNOT ACTIVATE CALLER — OUT OF CREDITS</b>\n\n` +
+                `You have <b>0</b> credits remaining. Sentry pay-per-result alerts only spend when a verified match is delivered.\n\n` +
+                `Top up your balance below to activate the scanner:`,
+                Markup.inlineKeyboard([[Markup.button.callback('💳 Buy Credits', 'menu_credits')]])
+            );
+        }
+    }
+
+    await setUserCallerFilters(tgId, { isActive: willBeActive });
     await sendCallerMenu(ctx, tgId, true);
 });
 

@@ -143,9 +143,9 @@
             </div>
         </div>
 
-        <!-- 🟢 Header AI Caller Credit Pill -->
-        <div class="flex items-center gap-2 bg-[#121826] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner">
-            <i class="fa-solid fa-bolt text-neonPurple text-xs"></i>
+        <!-- Header AI Caller Credit Pill -->
+        <div onclick="openCreditsModal()" class="flex items-center gap-2 bg-[#121826] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner cursor-pointer hover:border-neonPurple/40 transition-all" id="header-credits-pill">
+            <i class="fa-solid fa-bolt text-neonPurple text-xs" id="header-credits-icon"></i>
             <span class="text-xs font-mono font-bold text-white" id="header-credits">0 Credits</span>
         </div>
     </header>
@@ -199,7 +199,7 @@
                 </div>
             </div>
 
-            <!-- 🟢 NEW: Liquid Cash vs Deployed Positions -->
+            <!-- Liquid Cash vs Deployed Positions -->
             <div class="card-flat p-4 flex justify-between items-center bg-white/[0.02]">
                 <div>
                     <span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Liquid Cash</span>
@@ -223,14 +223,14 @@
                     <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">0</span>
                 </div>
 
-                <div class="card-flat p-4 flex items-center justify-between">
+                <div class="card-flat p-4 flex items-center justify-between cursor-pointer hover:border-neonPurple/30 transition-all" onclick="openCreditsModal()">
                     <div class="flex items-center gap-3">
-                        <div class="bg-neonPurple/10 text-neonPurple h-8 w-8 rounded-lg flex items-center justify-center border border-neonPurple/20">
+                        <div class="bg-neonPurple/10 text-neonPurple h-8 w-8 rounded-lg flex items-center justify-center border border-neonPurple/20" id="stat-credits-icon-box">
                             <i class="fa-solid fa-bolt text-sm"></i>
                         </div>
                         <div>
                             <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider block">AI Caller Credits</span>
-                            <span class="text-[10px] text-gray-500 font-mono">Pay-Per-Result</span>
+                            <span class="text-[10px] text-gray-500 font-mono" id="stat-credits-sub">Pay-Per-Result • Tap to Top Up</span>
                         </div>
                     </div>
                     <span class="text-xl font-bold text-neonPurple font-mono" id="stat-credits">0</span>
@@ -254,7 +254,31 @@
                 </div>
             </div>
 
-            <!-- 🟢 EXPOSURE LIMITS / RISK BUDGET GAUGE -->
+            <!-- 🔴 OUT OF CREDITS DEPLETION WARNING BANNER -->
+            <div id="credits-depleted-banner" class="hidden bg-neonRed/10 border border-neonRed/30 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
+                <div class="flex items-center gap-3">
+                    <div class="h-9 w-9 rounded-lg bg-neonRed/20 flex items-center justify-center text-neonRed shrink-0">
+                        <i class="fa-solid fa-bolt-slash text-base animate-pulse"></i>
+                    </div>
+                    <div>
+                        <span class="text-xs text-neonRed font-bold block">AI Credits Depleted (0 Remaining)</span>
+                        <span class="text-[11px] text-gray-400">AI Coin Caller alerts and AI Sniper scoring are paused. Top up to resume automated scanning.</span>
+                    </div>
+                </div>
+                <button onclick="openCreditsModal()" class="w-full sm:w-auto px-4 py-2 bg-neonRed text-white rounded-lg text-xs font-bold font-mono transition-all hover:bg-neonRed/90 flex items-center justify-center gap-2 whitespace-nowrap shadow-md">
+                    <i class="fa-solid fa-cart-shopping"></i> Top Up Credits
+                </button>
+            </div>
+
+            <!-- 90%+ Budget Warning Banner -->
+            <div id="budget-warning-banner" class="hidden bg-red-500/10 border border-red-500/30 rounded-xl p-3.5 mb-3 flex items-center justify-between shadow-lg">
+                <span class="text-xs text-red-400 font-bold flex items-center gap-2">
+                    <i class="fa-solid fa-triangle-exclamation animate-bounce"></i> 90%+ of session budget deployed
+                </span>
+                <button onclick="document.getElementById('budget-warning-banner').style.display='none'; sessionStorage.setItem('budget_warning_dismissed','1');" class="text-xs text-gray-400 underline hover:text-white transition-colors">Dismiss</button>
+            </div>
+
+            <!-- EXPOSURE LIMITS / RISK BUDGET GAUGE -->
             <div class="card-flat p-4 mb-2 bg-[#0a0d14]">
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-gray-500"></i> Exposure Limit (Session Budget)</span>
@@ -270,7 +294,7 @@
                 </div>
             </div>
 
-            <!-- 🟢 SIZING CAP WARNING BANNER -->
+            <!-- SIZING CAP WARNING BANNER -->
             <div class="card-flat p-3 flex items-center justify-between border border-yellow-500/30 bg-yellow-500/10" id="sizing-cap-card" style="display:none;">
                 <span class="text-[11px] text-yellow-400 font-bold flex items-center gap-2">
                     <i class="fa-solid fa-triangle-exclamation"></i> Sizing Capped by Risk Controls
@@ -298,7 +322,7 @@
                 </div>
             </div>
 
-            <!-- 🟢 LIVE TRADE TICKER (BLOOMBERG STYLE) WITH AI SCORE -->
+            <!-- LIVE TRADE TICKER (BLOOMBERG STYLE) WITH AI SCORE -->
             <div class="card-flat p-3 mb-6 bg-[#0a0d14] border border-white/5 overflow-hidden shadow-lg relative">
                 <div class="absolute top-0 right-0 w-32 h-full bg-gradient-to-l from-[#0a0d14] to-transparent pointer-events-none"></div>
                 <div class="flex items-center gap-3 text-[10px] text-gray-400 uppercase tracking-widest mb-2 border-b border-white/5 pb-2">
@@ -505,6 +529,81 @@
 
 </div>
 
+<!-- CREDITS TOP-UP MODAL -->
+<div id="credits-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="bg-[#121826] border border-white/10 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+        <button onclick="closeCreditsModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white text-lg">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+
+        <div class="flex items-center gap-3 mb-4">
+            <div class="bg-neonPurple/20 text-neonPurple p-2.5 rounded-xl border border-neonPurple/30">
+                <i class="fa-solid fa-bolt text-lg"></i>
+            </div>
+            <div>
+                <h3 class="text-lg font-bold text-white">AI Caller & Sniper Credits</h3>
+                <p class="text-xs text-gray-400">Pay-per-result • Spent only on real delivered breakout alerts</p>
+            </div>
+        </div>
+
+        <div class="space-y-2.5 mb-6">
+            <div class="p-3.5 bg-[#0a0d14] border border-white/5 rounded-xl flex items-center justify-between hover:border-neonPurple/40 transition-colors">
+                <div>
+                    <div class="font-bold text-white text-sm">Starter Pack</div>
+                    <div class="text-[11px] text-gray-400 font-mono">150 Credits (~$0.14 / alert)</div>
+                </div>
+                <div class="text-right">
+                    <div class="font-bold text-jupGreen font-mono">$30 USD</div>
+                    <div class="text-[10px] text-gray-500 font-mono">~0.19 SOL</div>
+                </div>
+            </div>
+
+            <div class="p-3.5 bg-[#0a0d14] border border-neonPurple/30 rounded-xl flex items-center justify-between bg-neonPurple/5">
+                <div>
+                    <div class="font-bold text-white text-sm flex items-center gap-1.5">
+                        Growth Pack <span class="bg-neonPurple/20 text-neonPurple text-[9px] px-1.5 py-0.5 rounded font-bold uppercase">Popular</span>
+                    </div>
+                    <div class="text-[11px] text-gray-400 font-mono">280 Credits (~$0.13 / alert)</div>
+                </div>
+                <div class="text-right">
+                    <div class="font-bold text-jupGreen font-mono">$50 USD</div>
+                    <div class="text-[10px] text-gray-500 font-mono">~0.32 SOL</div>
+                </div>
+            </div>
+
+            <div class="p-3.5 bg-[#0a0d14] border border-white/5 rounded-xl flex items-center justify-between hover:border-neonPurple/40 transition-colors">
+                <div>
+                    <div class="font-bold text-white text-sm">Pro Pack</div>
+                    <div class="text-[11px] text-gray-400 font-mono">450 Credits (~$0.13 / alert)</div>
+                </div>
+                <div class="text-right">
+                    <div class="font-bold text-jupGreen font-mono">$75 USD</div>
+                    <div class="text-[10px] text-gray-500 font-mono">~0.48 SOL</div>
+                </div>
+            </div>
+
+            <div class="p-3.5 bg-[#0a0d14] border border-white/5 rounded-xl flex items-center justify-between hover:border-neonPurple/40 transition-colors">
+                <div>
+                    <div class="font-bold text-white text-sm">Whale Pack</div>
+                    <div class="text-[11px] text-gray-400 font-mono">2,000 Credits (~$0.05 / alert)</div>
+                </div>
+                <div class="text-right">
+                    <div class="font-bold text-jupGreen font-mono">$100 USD</div>
+                    <div class="text-[10px] text-gray-500 font-mono">~0.64 SOL</div>
+                </div>
+            </div>
+        </div>
+
+        <p class="text-[11px] text-gray-400 text-center mb-4">
+            To complete purchase, send <code>/credits</code> directly in your Telegram chat or tap below:
+        </p>
+
+        <button onclick="requestCreditsInBot()" class="w-full py-3 bg-neonPurple hover:bg-neonPurple/90 text-white font-bold rounded-xl text-sm transition-all shadow-lg flex items-center justify-center gap-2">
+            <i class="fa-solid fa-comments"></i> Open Credit Shop in Telegram
+        </button>
+    </div>
+</div>
+
 <div id="toast"><i class="fa-solid fa-check text-jupGreen mr-2"></i> <span id="toast-msg">Copied!</span></div>
 
 <script>
@@ -522,6 +621,120 @@
     
     let liveLeaderboardData = { guild: null, members: [] };
     let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
+
+    function openCreditsModal() {
+        const modal = document.getElementById('credits-modal');
+        if (modal) {
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    }
+
+    function closeCreditsModal() {
+        const modal = document.getElementById('credits-modal');
+        if (modal) {
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+    }
+
+    function requestCreditsInBot() {
+        closeCreditsModal();
+        if (tg && tg.close) {
+            tg.close();
+        } else {
+            showToast("Type /credits in bot to top up");
+        }
+    }
+
+    function updateCreditsDisplay(credits) {
+        const headerCredits = document.getElementById('header-credits');
+        const headerPill = document.getElementById('header-credits-pill');
+        const headerIcon = document.getElementById('header-credits-icon');
+        const statCredits = document.getElementById('stat-credits');
+        const statCreditsSub = document.getElementById('stat-credits-sub');
+        const statCreditsBox = document.getElementById('stat-credits-icon-box');
+        const depletedBanner = document.getElementById('credits-depleted-banner');
+
+        if (headerCredits) headerCredits.innerText = `${credits.toLocaleString()} Credits`;
+        if (statCredits) statCredits.innerText = credits.toLocaleString();
+
+        if (credits <= 0) {
+            if (headerPill) {
+                headerPill.className = "flex items-center gap-2 bg-neonRed/15 px-3.5 py-1.5 rounded-xl border border-neonRed/40 shadow-inner cursor-pointer animate-pulse";
+            }
+            if (headerIcon) {
+                headerIcon.className = "fa-solid fa-bolt-slash text-neonRed text-xs";
+            }
+            if (headerCredits) {
+                headerCredits.className = "text-xs font-mono font-bold text-neonRed";
+                headerCredits.innerText = "0 Credits (Depleted)";
+            }
+            if (statCredits) {
+                statCredits.className = "text-xl font-bold text-neonRed font-mono animate-pulse";
+            }
+            if (statCreditsSub) {
+                statCreditsSub.innerText = "⚠️ Depleted • Tap to Top Up";
+                statCreditsSub.className = "text-[10px] text-neonRed font-mono font-bold";
+            }
+            if (statCreditsBox) {
+                statCreditsBox.className = "bg-neonRed/20 text-neonRed h-8 w-8 rounded-lg flex items-center justify-center border border-neonRed/30";
+            }
+            if (depletedBanner) {
+                depletedBanner.classList.remove('hidden');
+                depletedBanner.style.display = 'flex';
+            }
+        } else if (credits <= 15) {
+            if (headerPill) {
+                headerPill.className = "flex items-center gap-2 bg-yellow-500/10 px-3.5 py-1.5 rounded-xl border border-yellow-500/30 shadow-inner cursor-pointer";
+            }
+            if (headerIcon) {
+                headerIcon.className = "fa-solid fa-bolt text-yellow-400 text-xs";
+            }
+            if (headerCredits) {
+                headerCredits.className = "text-xs font-mono font-bold text-yellow-400";
+            }
+            if (statCredits) {
+                statCredits.className = "text-xl font-bold text-yellow-400 font-mono";
+            }
+            if (statCreditsSub) {
+                statCreditsSub.innerText = "Running Low • Tap to Top Up";
+                statCreditsSub.className = "text-[10px] text-yellow-400 font-mono";
+            }
+            if (statCreditsBox) {
+                statCreditsBox.className = "bg-yellow-500/10 text-yellow-400 h-8 w-8 rounded-lg flex items-center justify-center border border-yellow-500/20";
+            }
+            if (depletedBanner) {
+                depletedBanner.classList.add('hidden');
+                depletedBanner.style.display = 'none';
+            }
+        } else {
+            if (headerPill) {
+                headerPill.className = "flex items-center gap-2 bg-[#121826] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner cursor-pointer hover:border-neonPurple/40 transition-all";
+            }
+            if (headerIcon) {
+                headerIcon.className = "fa-solid fa-bolt text-neonPurple text-xs";
+            }
+            if (headerCredits) {
+                headerCredits.className = "text-xs font-mono font-bold text-white";
+            }
+            if (statCredits) {
+                statCredits.className = "text-xl font-bold text-neonPurple font-mono";
+            }
+            if (statCreditsSub) {
+                statCreditsSub.innerText = "Pay-Per-Result • Tap to Top Up";
+                statCreditsSub.className = "text-[10px] text-gray-500 font-mono";
+            }
+            if (statCreditsBox) {
+                statCreditsBox.className = "bg-neonPurple/10 text-neonPurple h-8 w-8 rounded-lg flex items-center justify-center border border-neonPurple/20";
+            }
+            if (depletedBanner) {
+                depletedBanner.classList.add('hidden');
+                depletedBanner.style.display = 'none';
+            }
+        }
+    }
 
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
@@ -714,7 +927,6 @@
         }
     }
 
-    // 🟢 Renders trade confirmations with AI Score support
     function renderTradeTicker(trades) {
         const tickerContainer = document.getElementById('live-trade-ticker');
         if (!tickerContainer) return;
@@ -732,8 +944,6 @@
             const pnlVal = t.profitPercent;
             const pnlStr = !t.isBuy ? (pnlVal !== undefined && pnlVal !== null ? (pnlVal >= 0 ? `+${pnlVal.toFixed(1)}%` : `${pnlVal.toFixed(1)}%`) : '--') : '--';
             const pnlColor = pnlVal >= 0 ? 'text-jupGreen' : 'text-neonRed';
-            
-            // 🟢 Display AI score if available
             const scoreStr = t.aiScore != null ? `<span class="text-neonPurple font-bold">${t.aiScore}⭐</span>` : '<span class="text-gray-600">--</span>';
 
             tickerHtml += `
@@ -750,7 +960,6 @@
         tickerContainer.innerHTML = tickerHtml;
     }
 
-    // 🟢 Renders active positions without hiding
     function renderPositions(positions) {
         const container = document.getElementById('positions-container');
         const section = document.getElementById('verified-holdings-section');
@@ -1062,8 +1271,7 @@
         document.getElementById('stat-winrate-sub').innerText = '0 Wins / 0 Losses';
         document.getElementById('stat-volume').innerText = '0.00 SOL';
         document.getElementById('stat-trading-days').innerText = '0';
-        document.getElementById('stat-credits').innerText = '0';
-        document.getElementById('header-credits').innerText = '0 Credits';
+        updateCreditsDisplay(0);
         document.getElementById('sharpe-ratio').innerText = '--';
         document.getElementById('tca-slippage').innerText = '--%';
         document.getElementById('cvar-value').innerText = '-- SOL';
@@ -1072,8 +1280,6 @@
         document.getElementById('risk-label').innerText = 'Awaiting Scan...';
         document.getElementById('strat-pnl-sniper').innerText = '+0.0000 SOL';
         document.getElementById('strat-pnl-manual').innerText = '+0.0000 SOL';
-        document.getElementById('strat-pnl-dca').innerText = '+0.0000 SOL';
-        document.getElementById('strat-pnl-copy').innerText = '+0.0000 SOL';
         document.getElementById('positions-count').innerText = `0 OPEN`;
         document.getElementById('stats-live').innerText = `Manual: 0 trades (+0.0000 SOL)`;
         document.getElementById('stats-sim').innerText = `Auto-Engine: 0 trades (+0.0000 SOL)`;
@@ -1094,7 +1300,6 @@
         initCharts([], [], [], [], []);
     }
 
-    // 🟢 NEW: Pollers for Cash/Deployed breakdown and Sizing Cap warning
     async function fetchNetworthBreakdown() {
         try {
             const res = await fetch('/api/networth-breakdown', {
@@ -1151,28 +1356,24 @@
                     }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 }));
                     const liveSolPrice = solPriceRes.price || 156.93;
 
-                    // 1. Calculate Net Worth: Liquid SOL Cash + Total Value of Open Positions
                     const simCashSol = parseFloat(simStats.balance) || 0;
                     const positionsValueUsd = simStats.positionsValueUsd || 0;
                     const cashValueUsd = simCashSol * liveSolPrice;
                     const networthUsd = cashValueUsd + positionsValueUsd;
                     const networthSol = (networthUsd / liveSolPrice).toFixed(4) + " SOL";
 
-                    // 2. Metrics
                     const wins = simStats.wins || 0;
                     const losses = simStats.losses || 0;
                     const totalPnlSol = simStats.totalPnlSol || 0;
                     const totalVolumeSol = simStats.volume || 0;
                     const totalTrades = simStats.totalTrades || (wins + losses);
-                    const credits = simStats.credits !== undefined ? simStats.credits : 4298;
+                    const credits = simStats.credits !== undefined ? simStats.credits : 0;
 
-                    // 3. Account ROI %
                     const startingBalSol = parseFloat(simStats.startingBalance) || simCashSol || 1;
                     const pnlPercent = startingBalSol > 0 ? ((totalPnlSol / startingBalSol) * 100).toFixed(2) : "0.00";
                     const pnlUsd = totalPnlSol * liveSolPrice;
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
 
-                    // 4. Trading Days
                     let tradingDays = 1;
                     if (simStats.firstTradeAt) {
                         const oldest = new Date(simStats.firstTradeAt);
@@ -1180,10 +1381,9 @@
                         tradingDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
                     }
 
-                    // 5. Update UI Elements
                     document.getElementById('stat-trading-days').innerText = tradingDays;
-                    document.getElementById('stat-credits').innerText = credits.toLocaleString();
-                    document.getElementById('header-credits').innerText = `${credits.toLocaleString()} Credits`;
+                    updateCreditsDisplay(credits);
+                    
                     document.getElementById('stat-networth').innerText = '$' + networthUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
                     document.getElementById('stat-networth-sub').innerText = networthSol;
                     
@@ -1199,7 +1399,6 @@
                     const totalTradesEl = document.getElementById('total-trades-count');
                     if (totalTradesEl) totalTradesEl.innerText = totalTrades.toLocaleString();
 
-                    // 6. Positions
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint, symbol: p.symbol, amount: p.amount,
                         priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
@@ -1226,7 +1425,6 @@
             console.warn("Simulation check failed, falling back to Live Mode:", simErr);
         }
 
-        // Live Mainnet Mode (Includes Live Wallet Cash + Open Positions)
         isSimModeActive = false;
         try {
             const [positionsRes, analyticsRes, solRes, balanceRes] = await Promise.all([
@@ -1248,7 +1446,6 @@
             let totalPositionsUsd = 0;
             posArray.forEach(p => { totalPositionsUsd += p.valueUsd || 0; });
 
-            // Live Net Worth = Idle Wallet Cash + Value of all Held Token Bags
             const totalNetworthUsd = (walletCashSol * currentSolPrice) + totalPositionsUsd;
             const networthSol = (totalNetworthUsd / currentSolPrice).toFixed(4) + " SOL";
 
@@ -1259,8 +1456,7 @@
             let totalRealizedPnlSol = liveStats.totalPnlSol || 0; 
             let liveCredits = liveStats.credits !== undefined ? liveStats.credits : 0;
 
-            document.getElementById('stat-credits').innerText = liveCredits.toLocaleString();
-            document.getElementById('header-credits').innerText = `${liveCredits.toLocaleString()} Credits`;
+            updateCreditsDisplay(liveCredits);
 
             const totalClosed = wins + losses;
             const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
@@ -1481,14 +1677,28 @@
             const gauge = document.getElementById('risk-budget-bar');
             const gaugeText = document.getElementById('risk-budget-text');
             const remainingEl = document.getElementById('risk-budget-remaining');
+            const warningBanner = document.getElementById('budget-warning-banner');
 
             if (gauge) gauge.style.width = pct + '%';
             if (gaugeText) {
                 gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
             }
+            
             if (remainingEl) {
                 remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '∞';
-                remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
+                if (pct >= 90 && budget > 0) {
+                    remainingEl.className = 'text-xs font-bold font-mono text-neonRed animate-pulse';
+                    if (!sessionStorage.getItem('budget_warning_dismissed') && warningBanner) {
+                        warningBanner.classList.remove('hidden');
+                        warningBanner.style.display = 'flex';
+                    }
+                } else {
+                    remainingEl.className = 'text-xs font-bold font-mono text-jupGreen';
+                    if (warningBanner) {
+                        warningBanner.classList.add('hidden');
+                        warningBanner.style.display = 'none';
+                    }
+                }
             }
 
             const colorMapping = {

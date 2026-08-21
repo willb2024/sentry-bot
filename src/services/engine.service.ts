@@ -27,7 +27,7 @@ import { fireWebhook } from './webhook.service.js';
 import https from 'https';
 import { logger } from '../lib/logger.js';
 import pLimit from 'p-limit';
-import { getCachedBlockhash } from '../lib/blockhash-cache.js'; // 🟢 Pulls from shared high-speed cache
+import { getCachedBlockhash } from '../lib/blockhash-cache.js';
 
 dotenv.config();
 
@@ -45,7 +45,7 @@ let lastPriorityFeeFetch = 0;
 
 dns.setDefaultResultOrder('ipv4first');
 
-// 🟢 DoH cache with 1-hour in-memory TTL expiration
+// DoH cache with 1-hour in-memory TTL expiration
 const dohCache: Record<string, { ip: string; expiresAt: number }> = {
     'dns.google': { ip: '8.8.8.8', expiresAt: Infinity }
 };
@@ -253,23 +253,106 @@ export async function getVolatilityAdjustedSlippage(tokenMint: string, userBaseS
 
 export interface TcaExecutionReport {
     confirmed: boolean;
-    expectedPriceSol: number;
-    executedPriceSol: number;
+    expectedAmount: number;        // Total tokens (buy) or total SOL (sell) expected
+    executedAmount: number;        // Total tokens (buy) or total SOL (sell) received
+    executedPricePerToken: number; // Derived SOL price per single token
     slippagePercent: number;
     slippageBps: number;
     executionQuality: 'EXCELLENT' | 'ACCEPTABLE' | 'POOR' | 'MEV_SANDWICHED';
 }
 
-// 🟢 TCA verification: checks immediately on slot 0 without artificial sleep
+/**
+ * Shared balance-delta and price-per-token extractor for confirmed transactions
+ */
+function extractExecutionResult(
+    tx: any,
+    isBuy: boolean,
+    walletIndex: number,
+    tokenDecimals: number,
+    expectedOutAmount: number
+): TcaExecutionReport {
+    const WSOL_MINT = "So11111111111111111111111111111111111111112";
+    const preBalances = tx.meta.preTokenBalances || [];
+    const postBalances = tx.meta.postTokenBalances || [];
+
+    let actualOutAmount = 0;
+    let executedPricePerToken = 0;
+
+    if (isBuy) {
+        // Output is tokens received
+        const postToken = postBalances.find((b: any) => b.mint !== WSOL_MINT);
+        const preToken = preBalances.find((b: any) => b.accountIndex === postToken?.accountIndex);
+        const postAmt = postToken ? Number(postToken.uiTokenAmount.amount) : 0;
+        const preAmt = preToken ? Number(preToken.uiTokenAmount.amount) : 0;
+        actualOutAmount = (postAmt - preAmt) / Math.pow(10, tokenDecimals || 6);
+
+        // Compute SOL spent from wallet SOL balance delta
+        const solSpentLamports = Math.abs(Number(tx.meta.preBalances[walletIndex] || 0) - Number(tx.meta.postBalances[walletIndex] || 0));
+        const solSpent = solSpentLamports / LAMPORTS_PER_SOL;
+        executedPricePerToken = actualOutAmount > 0 ? solSpent / actualOutAmount : 0;
+    } else {
+        // Output is SOL received net of transaction fees
+        const preSol = Number(tx.meta.preBalances[walletIndex] || 0);
+        const postSol = Number(tx.meta.postBalances[walletIndex] || 0);
+        actualOutAmount = Math.max(0, (postSol - preSol) / LAMPORTS_PER_SOL);
+
+        // Tokens sold from token balance delta
+        const preToken = preBalances.find((b: any) => b.mint !== WSOL_MINT);
+        const postToken = postBalances.find((b: any) => b.accountIndex === preToken?.accountIndex);
+        const tokensSold = preToken && postToken
+            ? (Number(preToken.uiTokenAmount.amount) - Number(postToken.uiTokenAmount.amount)) / Math.pow(10, tokenDecimals || 6)
+            : 0;
+        executedPricePerToken = tokensSold > 0 ? actualOutAmount / tokensSold : 0;
+    }
+
+    if (expectedOutAmount <= 0 || actualOutAmount <= 0) {
+        return {
+            confirmed: true,
+            expectedAmount: expectedOutAmount,
+            executedAmount: actualOutAmount,
+            executedPricePerToken,
+            slippagePercent: 0,
+            slippageBps: 0,
+            executionQuality: 'ACCEPTABLE'
+        };
+    }
+
+    const slippagePercent = ((expectedOutAmount - actualOutAmount) / expectedOutAmount) * 100;
+    const slippageBps = Math.round(slippagePercent * 100);
+
+    let quality: 'EXCELLENT' | 'ACCEPTABLE' | 'POOR' | 'MEV_SANDWICHED' = 'ACCEPTABLE';
+    if (slippagePercent <= 0.5) quality = 'EXCELLENT';
+    else if (slippagePercent <= 3.0) quality = 'ACCEPTABLE';
+    else if (slippagePercent <= 10.0) quality = 'POOR';
+    else quality = 'MEV_SANDWICHED';
+
+    return {
+        confirmed: true,
+        expectedAmount: expectedOutAmount,
+        executedAmount: actualOutAmount,
+        executedPricePerToken,
+        slippagePercent: parseFloat(slippagePercent.toFixed(2)),
+        slippageBps,
+        executionQuality: quality
+    };
+}
+
 export async function verifyExecutionQuality(
     signature: string,
     expectedOutAmount: number,
     tokenDecimals: number,
     isBuy: boolean,
+    walletPubkey: PublicKey,
     maxRetries = 20
 ): Promise<TcaExecutionReport> {
     const fallbackReport: TcaExecutionReport = {
-        confirmed: false, expectedPriceSol: 0, executedPriceSol: 0, slippagePercent: 0, slippageBps: 0, executionQuality: 'ACCEPTABLE'
+        confirmed: false,
+        expectedAmount: 0,
+        executedAmount: 0,
+        executedPricePerToken: 0,
+        slippagePercent: 0,
+        slippageBps: 0,
+        executionQuality: 'ACCEPTABLE'
     };
 
     for (let i = 0; i < maxRetries; i++) {
@@ -283,49 +366,48 @@ export async function verifyExecutionQuality(
                     const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
                     if (!tx?.meta) return { ...fallbackReport, confirmed: true };
 
-                    const preBalances = tx.meta.preTokenBalances || [];
-                    const postBalances = tx.meta.postTokenBalances || [];
-                    const WSOL_MINT = "So11111111111111111111111111111111111111112";
-
-                    let actualOutAmount = 0;
-                    if (isBuy) {
-                        const postToken = postBalances.find(b => b.mint !== WSOL_MINT);
-                        const preToken = preBalances.find(b => b.accountIndex === postToken?.accountIndex);
-                        const postAmt = postToken ? Number(postToken.uiTokenAmount.amount) : 0;
-                        const preAmt = preToken ? Number(preToken.uiTokenAmount.amount) : 0;
-                        actualOutAmount = (postAmt - preAmt) / Math.pow(10, tokenDecimals || 6);
-                    } else {
-                        const preSol = Number(tx.meta.preBalances[0] || 0);
-                        const postSol = Number(tx.meta.postBalances[0] || 0);
-                        actualOutAmount = Math.max(0, (postSol - preSol) / LAMPORTS_PER_SOL);
+                    const accountKeys = tx.transaction.message.accountKeys.map((k: any) => 
+                        typeof k === 'string' ? k : k.pubkey.toBase58()
+                    );
+                    const walletIndex = accountKeys.indexOf(walletPubkey.toBase58());
+                    if (walletIndex === -1) {
+                        logger.error('Wallet not found in transaction account keys', { signature, wallet: walletPubkey.toBase58() });
+                        return { ...fallbackReport, confirmed: true };
                     }
 
-                    if (expectedOutAmount <= 0 || actualOutAmount <= 0) return { ...fallbackReport, confirmed: true };
-
-                    const slippagePercent = ((expectedOutAmount - actualOutAmount) / expectedOutAmount) * 100;
-                    const slippageBps = Math.round(slippagePercent * 100);
-
-                    let quality: 'EXCELLENT' | 'ACCEPTABLE' | 'POOR' | 'MEV_SANDWICHED' = 'ACCEPTABLE';
-                    if (slippagePercent <= 0.5) quality = 'EXCELLENT';
-                    else if (slippagePercent <= 3.0) quality = 'ACCEPTABLE';
-                    else if (slippagePercent <= 10.0) quality = 'POOR';
-                    else quality = 'MEV_SANDWICHED';
-
-                    return {
-                        confirmed: true, expectedPriceSol: expectedOutAmount, executedPriceSol: actualOutAmount,
-                        slippagePercent: parseFloat(slippagePercent.toFixed(2)), slippageBps, executionQuality: quality
-                    };
-                } catch (e) { return { ...fallbackReport, confirmed: true }; }
+                    return extractExecutionResult(tx, isBuy, walletIndex, tokenDecimals, expectedOutAmount);
+                } catch (e) { 
+                    return { ...fallbackReport, confirmed: true }; 
+                }
             }
         }
 
         // 400ms cadence matching Solana slot boundaries
         await new Promise(r => setTimeout(r, 400));
     }
+
+    // Final-chance confirmation check on timeout
+    try {
+        const finalStatus = await connection.getSignatureStatus(signature, { searchTransactionHistory: true }).catch(() => null);
+        if (finalStatus?.value && !finalStatus.value.err && 
+            (finalStatus.value.confirmationStatus === 'confirmed' || finalStatus.value.confirmationStatus === 'finalized')) {
+            const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+            if (tx?.meta) {
+                const accountKeys = tx.transaction.message.accountKeys.map((k: any) => 
+                    typeof k === 'string' ? k : k.pubkey.toBase58()
+                );
+                const walletIndex = accountKeys.indexOf(walletPubkey.toBase58());
+                if (walletIndex !== -1) {
+                    return extractExecutionResult(tx, isBuy, walletIndex, tokenDecimals, expectedOutAmount);
+                }
+            }
+        }
+    } catch (_) {}
+
     return fallbackReport;
 }
 
-// 🟢 True Concurrent 5-Region Jito Broadcast
+// True Concurrent 5-Region Jito Broadcast
 export async function sendToJitoBundle(
     swapTx: VersionedTransaction, 
     tipTx: VersionedTransaction,
@@ -351,7 +433,6 @@ export async function sendToJitoBundle(
         params: [bundledTxs]
     };
 
-    // Fire concurrently to all 5 global Jito block engines without throttling
     const promises = JITO_REGIONS.map(url =>
         axiosClient.post(url, payload, {
             headers: { 'Content-Type': 'application/json' },
@@ -459,7 +540,6 @@ async function fetchApiTransaction(
 
             const allPromises = [...quotePromises, globalJupPromise];
 
-            // 🟢 Early-exit grace window once >= 1 quote lands
             const validQuotes: DexRouteQuote[] = [];
             let firstQuoteAt = 0;
             await new Promise<void>((resolve) => {
@@ -642,35 +722,34 @@ export async function executeSnipe(
         const recentBlockhash = getCachedBlockhash() || (await connection.getLatestBlockhash('processed')).blockhash;
         const feeRate = await getPlatformFeeRate(user.telegramId);
 
-        // 🟢 🔴 FIX: Atomic Budget Reserve via Redlock
+        // Atomic Budget Reserve via Redlock
         const liveConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
         const intendedSpend = amountSol * (user.activeWallets || 1);
         const budgetLockKey = `lock:budget:${telegramId}`;
-let budgetLock;
-try {
-    budgetLock = await redlock.acquire([budgetLockKey], 5000);
-} catch (err) {
-    return { success: false, message: "Budget lock contention. Try again in a moment." };
-}
+        let budgetLock;
+        try {
+            budgetLock = await redlock.acquire([budgetLockKey], 5000);
+        } catch (err) {
+            return { success: false, message: "Budget lock contention. Try again in a moment." };
+        }
 
-try {
-    const sessionId = await redis.get(`autosnipe:session_id:live:${telegramId}`);
-    const currentSpendFinal = await getSessionSpend(telegramId, 'live');
+        try {
+            const sessionId = await redis.get(`autosnipe:session_id:live:${telegramId}`);
+            const currentSpendFinal = await getSessionSpend(telegramId, 'live');
 
-    if (liveConfig?.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
-        await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
-        
-        // 🟢 FIX: Fetch the bot instance locally since 'bot' is not passed into executeSnipe
-        const bot = getBotInstance(); 
-        await sendBudgetExhaustedSummary(bot, telegramId, 'live', sessionId);
-        
-        return { success: false, message: "⚠️ Budget exhausted. Sniper paused." };
-    }
-    // Pre-reserve budget atomically before broadcasting
-    await addSessionSpend(telegramId, intendedSpend, 'live');
-} finally {
-    if (budgetLock) await (budgetLock as any).release();
-}
+            if (liveConfig?.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
+                await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
+                
+                const bot = getBotInstance(); 
+                await sendBudgetExhaustedSummary(bot, telegramId, 'live', sessionId);
+                
+                return { success: false, message: "⚠️ Budget exhausted. Sniper paused." };
+            }
+            // Pre-reserve budget atomically before broadcasting
+            await addSessionSpend(telegramId, intendedSpend, 'live');
+        } finally {
+            if (budgetLock) await (budgetLock as any).release();
+        }
 
         const executionPromises = wallets.map(async (w, index) => {
             let wBal = getLiveWalletBalance(w.publicKey.toBase58());
@@ -720,12 +799,11 @@ try {
             if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
 
             const expectedOutput = apiRes.estimatedOutput || 0;
-            const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true);
+            const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true, w.publicKey);
             
             if (tcaReport.confirmed) {
                 walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
                 
-                // 🟢 Post-Processing (Backgrounded)
                 (async () => {
                     try {
                         const feeCharged = amountSol * feeRate;
@@ -787,8 +865,8 @@ try {
                                 feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
                                 txSignature: txSig, status: 'CONFIRMED', strategy: strategy,
                                 aiScore: aiScore ?? null,
-                                expectedPriceUsd: tcaReport.expectedPriceSol,
-                                executedPriceUsd: tcaReport.executedPriceSol,
+                                expectedPriceUsd: tcaReport.expectedAmount,
+                                executedPriceUsd: tcaReport.executedPricePerToken,
                                 slippagePercent: tcaReport.slippagePercent
                             } as any
                         }).catch(() => {});
@@ -931,7 +1009,7 @@ export async function executeExit(
             if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
 
             const expectedOutput = apiRes.estimatedOutput || 0;
-            const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, decimals, false);
+            const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, decimals, false, w.publicKey);
             
             if (tcaReport.confirmed) {
                 walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
@@ -940,7 +1018,7 @@ export async function executeExit(
 
                 (async () => {
                     try {
-                        let actualSolReceived = tcaReport.executedPriceSol > 0 ? tcaReport.executedPriceSol : dynamicFeeBase;
+                        let actualSolReceived = tcaReport.executedAmount > 0 ? tcaReport.executedAmount : dynamicFeeBase;
                         
                         const feeCharged = volumeToRecord * feeRate;
                         const feeChargedLamports = BigInt(Math.round((volumeToRecord * 1_000_000_000) * feeRate));
@@ -992,7 +1070,7 @@ export async function executeExit(
                             })()
                         ]);
 
-                        // 🔴 🔴 FIX: Realized PnL must subtract the fee
+                        // Realized PnL is net of fee: (SOL received - SOL cost basis) - platform fee
                         const realizedPnlSol = (actualSolReceived - volumeToRecord) - feeCharged;
                         const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
@@ -1007,11 +1085,11 @@ export async function executeExit(
                                 userId: user.id, tokenAddress: targetCA, isBuy: false, amountInSol: volumeToRecord,
                                 feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
                                 txSignature: txSig, status: 'CONFIRMED',
-                                profitPercent: parseFloat(profitPercent.toFixed(2)), // 🔴 Fixed: net of fee
-                                realizedPnlSol: realizedPnlSol, // 🔴 Fixed: net of fee
+                                profitPercent: parseFloat(profitPercent.toFixed(2)),
+                                realizedPnlSol: realizedPnlSol,
                                 strategy: strategy || 'Manual / Direct',
-                                expectedPriceUsd: tcaReport.expectedPriceSol,
-                                executedPriceUsd: tcaReport.executedPriceSol,
+                                expectedPriceUsd: tcaReport.expectedAmount,
+                                executedPriceUsd: tcaReport.executedPricePerToken,
                                 slippagePercent: tcaReport.slippagePercent
                             } as any
                         }).catch(() => {});
@@ -1109,7 +1187,6 @@ export async function generatePreSignedExitTxMulti(telegramId: string, targetCA:
             try {
                 const vaultPubkey = new PublicKey(w.pub);
 
-                // 🟢 3s token account balance cache to avoid hammering RPC during 1s presign cycles
                 const balanceCacheKey = `token_acct_balance:${w.pub}:${targetCA}`;
                 let rawBalance: bigint;
                 const cachedBalance = await redis.get(balanceCacheKey);
@@ -1142,7 +1219,6 @@ export async function generatePreSignedExitTxMulti(telegramId: string, targetCA:
                 const swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
                 swapTx.sign([keypair]);
 
-                // 🟢 Hardcoded TURBO for guard exits to ensure priority
                 const tipTx = await buildTipAndFeeTransaction(keypair, telegramId, 0.01, 'TURBO', 0.005, false, recentBlockhash);
                 if (!tipTx) return null;
 
@@ -1167,7 +1243,6 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
 
 const limitOrderConcurrency = pLimit(8);
 
-// 🟢 Parallelized limit order evaluation with per-order fill mutex lock
 export async function processLimitOrders(bot: any) {
     const { prisma } = await import('../lib/prisma.js');
     const freshOrders = await prisma.activeOrder.findMany({
@@ -1188,7 +1263,6 @@ export async function processLimitOrders(bot: any) {
         if (price === 0) return;
 
         if (price <= (order.targetPriceUsd || 0)) {
-            // Mutex to prevent duplicate fill across workers
             const fillLockKey = `lock:limit_fill:${order.id}`;
             const acquired = await redis.set(fillLockKey, '1', 'EX', 30, 'NX');
             if (!acquired) return;

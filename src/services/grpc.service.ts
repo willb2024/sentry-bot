@@ -19,11 +19,10 @@ import { generatePnlCard } from './image.service.js';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { prisma } from '../lib/prisma.js';
 import WebSocket from 'ws';
-import axios from 'axios';
 import dotenv from 'dotenv';
 import bs58 from 'bs58';
 import crypto from 'crypto';
-import { subscribeToMintPrice, unsubscribeFromMintPrice, getLivePriceSol } from './guard-price-feed.service.js';
+import { getLivePriceSol } from './guard-price-feed.service.js';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
@@ -104,7 +103,7 @@ global._sentryIntervals.push(setInterval(async () => {
 let cachedActiveGuards: TrailingOrder[] = [];
 let cachedLimitOrders: any[] = [];
 
-// 🟢 500ms active guard cache refresh for ultra-low latency response
+// 500ms active guard cache refresh for low-latency response
 global._sentryIntervals.push(setInterval(async () => {
     try {
         cachedActiveGuards = await getAllActiveGuards();
@@ -115,7 +114,6 @@ global._sentryIntervals.push(setInterval(async () => {
     } catch (_) {}
 }, 500));
 
-
 function safePublicKey(address: string | undefined | null): PublicKey | null {
     if (!address) return null;
     try {
@@ -125,10 +123,10 @@ function safePublicKey(address: string | undefined | null): PublicKey | null {
     }
 }
 
-// 🟢 1000ms presign refresh interval with 4s TTL
+// 1000ms presign refresh interval with 4s TTL
 global._sentryIntervals.push(setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
-        if ((guard as any).isProcessing) return; // Skip if currently executing an exit
+        if ((guard as any).isProcessing) return;
         try {
             const { generatePreSignedExitTxMulti } = await import('./engine.service.js');
             const payloads = await generatePreSignedExitTxMulti(guard.telegramId, guard.tokenAddress);
@@ -139,7 +137,6 @@ global._sentryIntervals.push(setInterval(async () => {
     }));
 }, 1000));
 
-// 🟢 Immediate cache & presign injection helpers
 export function pushGuardToCacheImmediately(guard: TrailingOrder) {
     cachedActiveGuards.push(guard);
 }
@@ -172,7 +169,7 @@ export async function releaseGuardSubscription(tokenAddress: string) {
     } catch (_) {}
 }
 
-async function fetchFreshGuard(guardId: string): Promise<TrailingOrder | null> {
+export async function fetchFreshGuard(guardId: string): Promise<TrailingOrder | null> {
     try {
         const raw = await redis.get(`order:trail:${guardId}`);
         return raw ? JSON.parse(raw) : null;
@@ -234,7 +231,6 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
     } catch (e) {}
 
     const { executeExit } = await import('./engine.service.js');
-    // 🟢 Pass guard.strategy so exit inherits the correct strategy tag (prevents 'Manual / Direct' overwrite)
     return await executeExit(guard.telegramId, guard.tokenAddress, 100, false, guard.strategy || 'Manual / Direct');
 }
 
@@ -242,7 +238,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
     const { isSimulationActive, simExecuteExit, generateSimSignature } = await import('./simulation.service.js');
     const isSim = await isSimulationActive(guardSnapshot.telegramId);
 
-    // 🟢 Fast in-memory lock without Redis network overhead
     if ((guardSnapshot as any).isProcessing) return;
     (guardSnapshot as any).isProcessing = true;
 
@@ -252,7 +247,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             guard.entryPrice = currentPriceNative;
             await updateEntryPrice(guard.id, currentPriceNative).catch(() => {});
             
-            // 🟢 Patch the shared in-memory cache immediately
             const idx = cachedActiveGuards.findIndex(g => g.id === guard.id);
             if (idx !== -1) cachedActiveGuards[idx].entryPrice = currentPriceNative;
         }
@@ -270,7 +264,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                     await triggerInstantExit(guard);
                 }
                 
-                // 🟢 Background post-exit bookkeeping after exit is submitted
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     await redis.del(`balance_cache:${guard.telegramId}`);
@@ -299,7 +292,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                     exitSig = res.signature || "";
                 }
 
-                // 🟢 Background post-exit bookkeeping after exit is submitted
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     await redis.del(`balance_cache:${guard.telegramId}`);
@@ -344,7 +336,6 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                     exitSig = res.signature || "";
                 }
 
-                // 🟢 Background post-exit bookkeeping
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     await redis.del(`balance_cache:${guard.telegramId}`);
@@ -405,7 +396,6 @@ export async function processGuardOrders(bot: any) {
             guardsByToken.get(g.tokenAddress)!.push(g);
         }
 
-        // 🟢 Only bulk-fetch prices for tokens without an active WebSocket push stream
         const tokenMints = Array.from(guardsByToken.keys()).filter(m => getLivePriceSol(m) === null);
         const prices = tokenMints.length > 0 ? await fetchBulkTokenPrices(tokenMints) : {};
 
@@ -601,6 +591,30 @@ export async function triggerAutoSnipes(
 
                 if (liveConfig.minScore > 0) {
                     try {
+                        const { consumeSniperCredit } = await import('./credits.service.js');
+                        const creditResult = await consumeSniperCredit(liveConfig.user.telegramId, mintCa);
+                        
+                        if (!creditResult.success) {
+                            const warnKey = `sniper_credits_warn:${liveConfig.user.telegramId}`;
+                            if (!(await redis.get(warnKey))) {
+                                await redis.set(warnKey, '1', 'EX', 600);
+                                await bot.telegram.sendMessage(
+                                    liveConfig.user.telegramId,
+                                    `⚠️ <b>AI AUTO-SNIPER PAUSED — OUT OF CREDITS</b>\n\n` +
+                                    `Your Auto-Sniper requires AI Token Scoring (Min Score: <b>${liveConfig.minScore}+</b>), but your credit balance is <b>0</b>.\n\n` +
+                                    `Top up your credits to continue AI-filtered auto-sniping:`,
+                                    {
+                                        parse_mode: 'HTML',
+                                        reply_markup: {
+                                            inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]]
+                                        }
+                                    }
+                                ).catch(() => {});
+                            }
+                            await redis.del(sniperLockKey);
+                            return;
+                        }
+
                         const cachedHotTokens = await redis.get('caller:hot_scored_tokens');
                         let preScoredToken: any = null;
                         if (cachedHotTokens) {
@@ -636,7 +650,6 @@ export async function triggerAutoSnipes(
                                 trackHolderVelocity, 
                                 simulateSellability 
                             } = await import('./caller.service.js');
-                            const { consumeSniperCredit } = await import('./credits.service.js');
                             const { checkTokenRugRisk, checkRecentMevActivity } = await import('./price.service.js');
 
                             const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
@@ -668,7 +681,6 @@ export async function triggerAutoSnipes(
                             let velocity: any = { growthRate: 0, uniqueBuyers5m: 0 };
                             let sellability: any = { sellable: true, estimatedTaxPct: 0 };
 
-                            // 🟢 500ms Hard-Cap Race for Deep Audit
                             if (liveConfig.useDeepScoring) {
                                 const HARD_CAP_MS = 500;
                                 const deepCheckPromise = Promise.all([
@@ -715,9 +727,7 @@ export async function triggerAutoSnipes(
 
                             if (score < liveConfig.minScore) { await redis.del(sniperLockKey); return; }
                             
-                            const creditResult = await consumeSniperCredit(liveConfig.user.telegramId, mintCa);
                             const useML = creditResult.success && !creditResult.fallback;
-
                             if (useML) {
                                 const mlScore = await getModelScore(mintCa, stats);
                                 if (mlScore !== null) score = mlScore;
@@ -741,7 +751,7 @@ export async function triggerAutoSnipes(
                     snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice, liveBal);
                 }
 
-                const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } = await import('./simulation.service.js');
+                const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary, checkAndSendBudgetWarning } = await import('./simulation.service.js');
                 const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
                 const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, 'live');
                 const intendedSpend = snipeAmount * (liveConfig.user.activeWallets || 1);
@@ -753,7 +763,6 @@ export async function triggerAutoSnipes(
                     return; 
                 }
 
-                // 🟢 Micro-polling for price readiness (150ms intervals instead of 1000ms sleep)
                 if (!isPriceReady) {
                     for (let i = 0; i < 7 && !isPriceReady; i++) await new Promise(r => setTimeout(r, 150));
                 }
@@ -797,6 +806,8 @@ export async function triggerAutoSnipes(
                     );
 
                     const updatedSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
+                    checkAndSendBudgetWarning(bot, liveConfig.user.telegramId, 'live', updatedSpend, liveConfig.maxBudgetSol).catch(() => {});
+
                     if (liveConfig.maxBudgetSol && updatedSpend >= liveConfig.maxBudgetSol) {
                         await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
                         await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);

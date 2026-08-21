@@ -1047,6 +1047,8 @@ export function startCallerEvaluator() {
 
 let isScoring = false;
 
+// src/services/caller.service.ts -> startCoinCaller
+
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Live loop (15s) & Sim loop (5s) active.");
 
@@ -1063,24 +1065,34 @@ export async function startCoinCaller(bot: any) {
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue; 
 
+                // Check Sim Credits
+                const currentCredits = parseInt(await redis.get(`sim:credits:${user.telegramId}`) || '0', 10);
+                if (currentCredits <= 0) {
+                    const warnKey = `sim_credits_warn:${user.telegramId}`;
+                    if (!(await redis.get(warnKey))) {
+                        await redis.set(warnKey, '1', 'EX', 600); // 10 min throttle
+                        try { 
+                            await bot.telegram.sendMessage(
+                                user.telegramId, 
+                                `⚠️ <b>AI CALLER PAUSED (SIMULATION) — OUT OF CREDITS</b>\n\n` +
+                                `Your AI Coin Caller has paused because your virtual credit balance is <b>0</b>.\n\n` +
+                                `Use <code>/simcredits 500</code> to reload virtual credits or top up below:`, 
+                                { 
+                                    parse_mode: 'HTML',
+                                    reply_markup: {
+                                        inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]]
+                                    }
+                                }
+                            ); 
+                        } catch(_) {}
+                    }
+                    continue;
+                }
+
                 const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
                 if (matchedToken) {
-                    const currentCredits = parseInt(await redis.get(`sim:credits:${user.telegramId}`) || '0');
-                    if (currentCredits <= 0) {
-                        const warnKey = `sim_credits_warn:${user.telegramId}`;
-                        if (!(await redis.get(warnKey))) {
-                            await redis.set(warnKey, '1', 'EX', 600);
-                            try { 
-                                await bot.telegram.sendMessage(
-                                    user.telegramId, 
-                                    `⚠️ <b>SIM CREDITS DEPLETED</b>\n\nYour AI Caller has paused. Use <code>/simcredits 500</code> to reload.`, 
-                                    { parse_mode: 'HTML' }
-                                ); 
-                            } catch(_) {}
-                        }
-                        continue;
-                    }
-                    await redis.set(`sim:credits:${user.telegramId}`, (currentCredits - 1).toString());
+                    // Deduct 1 Sim Credit
+                    await redis.set(`sim:credits:${user.telegramId}`, Math.max(0, currentCredits - 1).toString());
 
                     const projection = await getCalibratedProjection(matchedToken);
                     const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
@@ -1148,7 +1160,29 @@ export async function startCoinCaller(bot: any) {
                 if (matchedToken) {
                     const { consumeCredit } = await import('./credits.service.js');
                     const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
-                    if (!creditResult.success) continue; 
+                    
+                    if (!creditResult.success) {
+                        // 🟢 Depletion Alert for Live Mainnet
+                        const warnKey = `live_caller_credits_warn:${user.telegramId}`;
+                        if (!(await redis.get(warnKey))) {
+                            await redis.set(warnKey, '1', 'EX', 600); // 10 min throttle
+                            try {
+                                await bot.telegram.sendMessage(
+                                    user.telegramId,
+                                    `⚠️ <b>AI CALLER PAUSED — OUT OF CREDITS</b>\n\n` +
+                                    `Your AI Coin Caller found breakout tokens, but has paused scanning because your credit balance is <b>0</b>.\n\n` +
+                                    `Top up your credit balance to resume automatic mempool alerts:`,
+                                    {
+                                        parse_mode: 'HTML',
+                                        reply_markup: {
+                                            inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]]
+                                        }
+                                    }
+                                );
+                            } catch (_) {}
+                        }
+                        continue; 
+                    }
 
                     const projection = await getCalibratedProjection(matchedToken);
                     const historyData = {
