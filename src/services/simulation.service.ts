@@ -70,9 +70,17 @@ export function calculateDynamicSize(
     score: number,
     liqUsd: number,
     solPrice: number,
-    currentBalanceSol?: number
+    currentBalanceSol?: number,
+    currentSessionSpend: number = 0
 ): number {
-    if (!config?.enableDynamicScaling) return config?.amountSol || 0.05;
+    if (!config?.enableDynamicScaling) {
+        let fixedSize = config?.amountSol || 0.05;
+        if (config?.maxBudgetSol) {
+            const remaining = Math.max(0, config.maxBudgetSol - currentSessionSpend);
+            fixedSize = Math.min(fixedSize, remaining);
+        }
+        return Math.max(parseFloat(fixedSize.toFixed(4)), 0.005);
+    }
     
     const normalizedScore = Math.min(85, Math.max(55, score)) / 100;
     const exponent = config.scaleExponent || 2.0;
@@ -96,9 +104,9 @@ export function calculateDynamicSize(
         computedSize = Math.min(computedSize, maxLiqInSol);
     }
 
-    const totalSpent = config.totalSpentSol || 0;
-    const remaining = (config.maxBudgetSol || Infinity) - totalSpent;
-    computedSize = Math.min(computedSize, remaining);
+    // Clamps size to remaining session budget so it finishes the budget exactly
+    const remaining = (config.maxBudgetSol || Infinity) - currentSessionSpend;
+    computedSize = Math.min(computedSize, Math.max(0, remaining));
 
     // Track sizing capped occurrences in Redis
     if (computedSize >= 2.0 || (currentBalanceSol && computedSize >= currentBalanceSol * 0.05)) {
@@ -753,11 +761,15 @@ export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<
     await redis.set(key, newState);
     
     if (newState === 'true') {
-        const sessionId = await startNewAutoSnipeSession(telegramId, 'sim');
+        let sessionId = await redis.get(`autosnipe:session_id:sim:${telegramId}`);
+        if (!sessionId) {
+            sessionId = crypto.randomUUID();
+            await redis.set(`autosnipe:session_id:sim:${telegramId}`, sessionId, 'EX', 86400);
+        }
+        
         const genId = crypto.randomUUID();
         await redis.set(`sim:autosnipe:gen:${telegramId}`, genId, 'EX', 86400);
-        await redis.del(`sim:session_spend:${telegramId}`);
-        await redis.del(`sim:session_trades:${sessionId}`);
+        
         if (!activeSimLoops.has(telegramId)) {
             activeSimLoops.add(telegramId);
             runSimAutoSnipeLoop(telegramId, bot, genId).finally(() => activeSimLoops.delete(telegramId));
@@ -893,9 +905,30 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
 
         const solPrice = cachedSolUsdPrice || 156.93;
         const currentBal = parseFloat(await getSimBalance(telegramId));
-        const snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice, currentBal);
+        const currentSpend = await getSessionSpend(telegramId, 'sim');
 
-        const intendedSpend = snipeAmount * (user?.activeWallets || 1);
+        // Check if budget is already fully reached
+        if (config.maxBudgetSol && currentSpend >= config.maxBudgetSol) {
+            await killSimAutoSnipe(telegramId);
+            await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
+            break;
+        }
+
+        let snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice, currentBal, currentSpend);
+        let intendedSpend = snipeAmount * (user?.activeWallets || 1);
+
+        // Clamp the final trade so it fills the remaining budget precisely
+        if (config.maxBudgetSol && currentSpend + intendedSpend > config.maxBudgetSol) {
+            const remainingBudget = config.maxBudgetSol - currentSpend;
+            if (remainingBudget >= 0.005) {
+                snipeAmount = Math.max(0.005, parseFloat((remainingBudget / (user?.activeWallets || 1)).toFixed(4)));
+                intendedSpend = snipeAmount * (user?.activeWallets || 1);
+            } else {
+                await killSimAutoSnipe(telegramId);
+                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
+                break;
+            }
+        }
 
         const budgetLockKey = `lock:budget:sim:${telegramId}`;
         let budgetLock;
@@ -906,15 +939,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
         }
 
         try {
-            const currentSpend = await getSessionSpend(telegramId, 'sim');
-            if (config.maxBudgetSol && currentSpend + intendedSpend > config.maxBudgetSol) {
-                await killSimAutoSnipe(telegramId);
-                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
-                break;
-            }
             await addSessionSpend(telegramId, intendedSpend, 'sim');
-
-            // Fire budget warning check (non-blocking notification)
             const updatedSpend = await getSessionSpend(telegramId, 'sim');
             checkAndSendBudgetWarning(bot, telegramId, 'sim', updatedSpend, config.maxBudgetSol).catch(() => {});
         } finally {
