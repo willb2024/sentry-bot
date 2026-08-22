@@ -157,32 +157,59 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
     } catch (e) {}
 }
 
-export async function getLeaderboard(guildId: string, limit: number = 50) {
+
+
+// src/services/guild.service.ts
+
+export interface LeaderboardMember {
+    rank: number;
+    username: string;
+    walletAddress: string;
+    glp: number;
+    volumeSol: number;
+    airdropsReceived?: number;
+}
+
+export async function getLeaderboard(guildId: string, limit: number = 50): Promise<LeaderboardMember[]> {
     try {
         const rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, limit - 1, 'WITHSCORES');
-        const results = [];
-        
+        if (rawLb.length === 0) return [];
+
+        const userIds: string[] = [];
+        const scoreMap: Record<string, number> = {};
+
         for (let i = 0; i < rawLb.length; i += 2) {
             const userId = rawLb[i];
             const score = parseFloat(rawLb[i + 1]);
-            
-            const memberInfo = await prisma.guildMembership.findUnique({
-                where: { guildId_userId: { guildId, userId } },
-                include: { user: true }
-            });
+            userIds.push(userId);
+            scoreMap[userId] = score;
+        }
 
-            if (memberInfo) {
+        const members = await prisma.guildMembership.findMany({
+            where: { guildId, userId: { in: userIds } },
+            include: { user: true }
+        });
+
+        const memberMap = new Map(members.map(m => [m.userId, m]));
+
+        const results: LeaderboardMember[] = [];
+        userIds.forEach((userId) => {
+            const member = memberMap.get(userId);
+            if (member) {
                 results.push({
-                    rank: (i / 2) + 1,
-                    username: memberInfo.user.username || memberInfo.user.telegramId,
-                    walletAddress: memberInfo.user.vaultAddress || "Unknown",
-                    glp: score,
-                    volumeSol: memberInfo.totalVolumeSol
+                    rank: results.length + 1,
+                    username: member.user.username || member.user.telegramId,
+                    walletAddress: member.user.vaultAddress || "Unknown",
+                    glp: scoreMap[userId] || 0,
+                    volumeSol: member.totalVolumeSol,
+                    airdropsReceived: member.airdropsReceivedSol || 0
                 });
             }
-        }
+        });
+
         return results;
-    } catch (e) {
+    } catch (e: any) {
+        console.error('🔴 [GUILD] getLeaderboard failed:', e.message);
         return [];
     }
 }
@@ -196,7 +223,9 @@ export async function exportLeaderboard(telegramId: string, guildId: string): Pr
         let csv = `rank,telegram_username,wallet_address,glp,volume_sol\n`;
         
         lb.forEach(row => {
-            csv += `${row.rank},@${sanitizeCsvField(row.username)},${row.walletAddress},${row.glp.toFixed(2)},${row.volumeSol.toFixed(4)}\n`;
+            if (row) {
+                csv += `${row.rank},@${sanitizeCsvField(row.username)},${row.walletAddress},${row.glp.toFixed(2)},${row.volumeSol.toFixed(4)}\n`;
+            }
         });
 
         return csv;

@@ -294,6 +294,12 @@
                 </div>
             </div>
 
+            <!-- Max Loss Limit -->
+<div class="flex justify-between items-center mt-2.5 pt-2 border-t border-white/5">
+    <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Max Loss Limit</span>
+    <span class="text-xs font-bold font-mono text-neonRed" id="max-loss-limit">OFF (0%)</span>
+</div>
+
             <!-- SIZING CAP WARNING BANNER -->
             <div class="card-flat p-3 flex items-center justify-between border border-yellow-500/30 bg-yellow-500/10" id="sizing-cap-card" style="display:none;">
                 <span class="text-[11px] text-yellow-400 font-bold flex items-center gap-2">
@@ -926,6 +932,33 @@
             });
         }
     }
+
+
+    async function fetchSniperSettings() {
+    try {
+        const res = await fetch('/api/sniper-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: tg.initData || "" })
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const lossEl = document.getElementById('max-loss-limit');
+        if (lossEl) {
+            if (data.maxLossPercent && data.maxLossPercent > 0) {
+                lossEl.innerText = `-${data.maxLossPercent}%`;
+                lossEl.className = 'text-xs font-bold font-mono text-neonRed';
+            } else {
+                lossEl.innerText = 'OFF (0%)';
+                lossEl.className = 'text-xs font-bold font-mono text-gray-500';
+            }
+        }
+    } catch (_) {}
+}
+
+// Initial fetch and 15s interval
+fetchSniperSettings();
+setInterval(fetchSniperSettings, 15000);
 
     function renderTradeTicker(trades) {
         const tickerContainer = document.getElementById('live-trade-ticker');

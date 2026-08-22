@@ -3417,12 +3417,8 @@ bot.action('toggle_hide_wallets', async (ctx) => {
     await redis.set(`user_settings:hide_wallets:${tgId}`, current === 'true' ? 'false' : 'true');
     await sendOrEditSettings(ctx, tgId, true);
 });
-// =========================================================
-// 🎯 AUTO-SNIPER MENU CONTROLLER (PURE PUMP.FUN)
-// =========================================================
-// =========================================================
-// 🎯 TRENCH AUTO-SNIPER MENU CONTROLLER (WITH INLINE TOOL TIPS)
-// =========================================================
+
+
 async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = false) {
     const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
     if (!user) return;
@@ -3442,6 +3438,7 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     else if (config.sniperMode === "BOTH") modeDisplay = "🔥 BOTH (PUMP.FUN & RAYDIUM)";
 
     const tpDisplay = config.autoTakeProfitPercent ? `+${config.autoTakeProfitPercent}%` : `OFF`;
+    const lossLimitDisplay = config.maxLossPercent ? `-${config.maxLossPercent}%` : `OFF`;
     const mcDisplay = `$${(config.minMarketCap || 0).toLocaleString()} - $${(config.maxMarketCap || 100000).toLocaleString()}`;
     const spentSol = config.totalSpentSol || 0;
     const antiDeadObj = config.antiDeadCoin ? "🟢 ON (Active)" : "🔴 OFF (Disabled)"; 
@@ -3452,7 +3449,6 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const scalingStatus = config.enableDynamicScaling ? '🟢 ACTIVE (Conviction-Weighted)' : '🔴 INACTIVE (Static Size)';
     const curveDesc = config.scaleExponent === 1.0 ? '📈 Linear' : config.scaleExponent === 2.0 ? '🔥 Aggressive (Square)' : '🚀 Exponential';
 
-    // 🟢 ENHANCED MENU TEXT WITH CONCISE TOOL EXPLANATIONS
     const sniperText = 
         `🎯 <b>TRENCH AUTO-SNIPER ENGINE</b> 🎯\n` +
         `<i>Sentry scans raw block transitions to front-run listings with private Jito bundles.</i>\n\n` +
@@ -3471,6 +3467,9 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
 
         `• <b>Max Budget:</b> <b>${config.maxBudgetSol ? config.maxBudgetSol + ' SOL' : 'Infinite (No Limit)'}</b>\n` +
         `  └ <i>Hard session cap. Auto-stops the sniper once total spend hits this threshold.</i>\n\n` +
+
+        `• <b>Max Loss Limit:</b> <b>${lossLimitDisplay}</b>\n` +
+        `  └ <i>Circuit breaker: auto-stops sniper if portfolio drops this % from starting balance.</i>\n\n` +
 
         `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n` +
         `  └ <i>Cumulative SOL spent across all automated snipes during the active session.</i>\n\n` +
@@ -3519,6 +3518,7 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
         [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score'), Markup.button.callback(`🧠 Mode: ${config.useDeepScoring ? '🔍 Deep' : '⚡ Fast'}`, 'toggle_snipe_deep_score')],
         [Markup.button.callback(`👻 Anti-Dead: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
         [Markup.button.callback(`✏️ Static Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
+        [Markup.button.callback(`🛑 Loss Limit (${lossLimitDisplay})`, 'edit_snipe_loss_limit')],
         [Markup.button.callback(config.enableDynamicScaling ? '📊 Sizing: ON' : '📊 Sizing: OFF', 'toggle_dynamic_scaling')],
         [
             Markup.button.callback(`💵 Base: ${config.baseRiskUnitSol} SOL`, 'edit_base_risk'),
@@ -3610,39 +3610,52 @@ export async function getTotalTradeCount(telegramId: string, mode: 'live' | 'sim
     return prisma.trade.count({ where: { userId: user.id } });
 }
 
+bot.action('edit_snipe_loss_limit', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString()!;
+    await redis.set(`state:autosnipe_loss:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(
+        `🛑 <b>EDIT MAX LOSS LIMIT</b>\n\n` +
+        `Reply with the maximum percentage drop (0 to disable).\n` +
+        `<i>Example: 20 (will pause after -20% drop from session starting balance)</i>\n\n` +
+        `<i>Type /cancel to abort.</i>`
+    );
+});
+
 bot.action('toggle_autosnipe', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    // --- 🎮 SIMULATION INTERCEPT ---
     const { isSimulationActive, toggleSimAutoSnipe } = await import('./services/simulation.service.js');
     if (await isSimulationActive(tgId)) {
         await toggleSimAutoSnipe(tgId, bot);
-        await sendOrEditSniper(ctx, tgId!, true); // Smoothly refreshes the real dashboard UI
+        await sendOrEditSniper(ctx, tgId!, true);
         return;
     }
-    // --- END SIMULATION INTERCEPT ---
 
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
     if (!user || !user.autoSnipeConfig) return;
     
     const newState = !user.autoSnipeConfig.isActive;
     
-    // 🟢 FIX 4 & 7: Generate a new Session ID for Live Budget Capping tracking
     if (newState) {
         const crypto = await import('crypto');
         const sessionId = crypto.randomBytes(16).toString('hex');
         await redis.set(`autosnipe:session_id:live:${tgId}`, sessionId, 'EX', 86400);
         await redis.del(`autosnipe:session_spend:live:${tgId}`);
         await redis.del(`live:session_trades:${sessionId}`);
+
+        // 🟢 Store starting balance baseline for Live Max Loss Circuit Breaker
+        const balance = await getLiveBalance(user);
+        await redis.set(`sniper:starting_balance:${tgId}`, balance.toString(), 'EX', 86400);
     }
 
     await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { isActive: newState } });
     
     if (newState) {
         try { 
-            await ctx.telegram.sendMessage(ctx.chat!.id, `📡 <b>SNIPER ARMED & SCANNING PUMP.FUN</b>\n\nYour engine is now actively listening to the Solana Mempool. It will execute via Jito MEV.`, { parse_mode: 'HTML' }); 
+            await ctx.telegram.sendMessage(ctx.chat!.id, `📡 <b>SNIPER ARMED & SCANNING MEMPOOL</b>\n\nYour engine is now actively listening to Solana block transitions.`, { parse_mode: 'HTML' }); 
         } catch(e) {}
     }
     
@@ -5332,13 +5345,15 @@ app.post('/api/sizing-cap-count', async (req, res) => {
 
 // 🟢 3. Update /api/analytics to return aiScore on trades
 app.post('/api/analytics', async (req, res) => {
-    if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: "Unauthorized" });
+    if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
     const tgId = extractTelegramId(req.body.initData);
     if (!tgId) return res.status(401).json({ error: "Invalid initData" });
 
     try {
         const { isSimulationActive } = await import('./services/simulation.service.js');
-        if (await isSimulationActive(tgId)) {
+        const isSim = await isSimulationActive(tgId);
+
+        if (isSim) {
             const rawTrades = await redis.get(`sim:trades:${tgId}`);
             const trades = rawTrades ? JSON.parse(rawTrades) : [];
             const { computeUniversalStats } = await import('./utils/math.utils.js');
@@ -5354,7 +5369,7 @@ app.post('/api/analytics', async (req, res) => {
                     strategy: t.strategy,
                     profitPercent: t.profitPercent || 0,
                     realizedPnlSol: t.realizedPnlSol || 0,
-                    aiScore: t.aiScore ?? null // 🟢 Includes AI score
+                    aiScore: t.aiScore ?? null
                 })),
                 stats: { ...stats, credits }
             });
@@ -5377,7 +5392,7 @@ app.post('/api/analytics', async (req, res) => {
             strategy: t.strategy,
             profitPercent: t.profitPercent || 0,
             realizedPnlSol: t.realizedPnlSol || 0,
-            aiScore: (t as any).aiScore ?? null // 🟢 Includes AI score
+            aiScore: (t as any).aiScore ?? null
         }));
 
         const { getAdvancedStats } = await import('./services/analytics.service.js');
@@ -5388,7 +5403,29 @@ app.post('/api/analytics', async (req, res) => {
             stats: { ...stats, credits: user.creditBalance || 0 } 
         });
     } catch (e: any) {
+        console.error('🔴 [/api/analytics] Error:', e.message);
         res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/sniper-settings', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
+
+        const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const config = user.autoSnipeConfig;
+        res.json({
+            maxLossPercent: config?.maxLossPercent || 0,
+            maxBudgetSol: config?.maxBudgetSol || 0,
+            isActive: config?.isActive || false
+        });
+    } catch (e: any) {
+        console.error('🔴 [SNIPER-SETTINGS] Error:', e.message);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
@@ -5512,6 +5549,23 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
+
+    const isSnipeLoss = await redis.get(`state:autosnipe_loss:${telegramId}`);
+    if (isSnipeLoss) {
+        await redis.del(`state:autosnipe_loss:${telegramId}`);
+        const val = parseFloat(text);
+        if (isNaN(val) || val < 0 || val > 100) return ctx.reply("🔴 Invalid. Enter a number between 0 and 100 (0 = off).");
+        const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+        if (user?.autoSnipeConfig) {
+            await prisma.autoSnipeConfig.update({
+                where: { id: user.autoSnipeConfig.id },
+                data: { maxLossPercent: val > 0 ? val : null }
+            });
+        }
+        await ctx.replyWithHTML(`✅ Max Loss Limit set to <b>${val > 0 ? '-' + val + '%' : 'OFF'}</b>.`);
+        await sendOrEditSniper(ctx, telegramId, false);
+        return;
+    }
 
     // Add before the standard copytradeState handler:
 const copytradeSocialState = await redis.get(`state:copytrade_social:${telegramId}`);

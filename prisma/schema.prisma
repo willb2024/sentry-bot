@@ -256,10 +256,11 @@ model AutoSnipeConfig {
   maxMarketCap            Float    @default(100000.0)
   antiDeadCoin            Boolean  @default(false)
   maxBudgetSol            Float?   
+  maxLossPercent          Float?   // 🟢 Circuit breaker: -% drop threshold from starting balance
   totalSpentSol           Float    @default(0.0)
   snipeDelaySeconds       Int      @default(0) 
 
-  // 🟢 Conviction-Weighted Dynamic Scaling Fields
+  // Conviction-Weighted Dynamic Scaling Fields
   enableDynamicScaling    Boolean  @default(false)
   baseRiskUnitSol         Float    @default(0.02)
   maxRiskMultiplier       Float    @default(5.0)

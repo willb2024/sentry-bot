@@ -739,18 +739,6 @@ export async function triggerAutoSnipes(
                     } catch (e) { await redis.del(sniperLockKey); return; }
                 }
 
-                const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary, checkAndSendBudgetWarning } = await import('./simulation.service.js');
-                const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
-                const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, 'live');
-
-                // If budget is already reached, pause sniper
-                if (liveConfig.maxBudgetSol && currentSpendFinal >= liveConfig.maxBudgetSol) {
-                    await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
-                    await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
-                    await redis.del(sniperLockKey);
-                    return; 
-                }
-
                 let snipeAmount = liveConfig.amountSol;
                 if (liveConfig.enableDynamicScaling) {
                     let liveBal: number | undefined = undefined;
@@ -760,23 +748,19 @@ export async function triggerAutoSnipes(
                             liveBal = (await connection.getBalance(vaultPub).catch(() => 0)) / 1_000_000_000;
                         }
                     }
-                    snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice, liveBal, currentSpendFinal);
+                    snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice, liveBal);
                 }
 
-                let intendedSpend = snipeAmount * (liveConfig.user.activeWallets || 1);
+                const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary, checkAndSendBudgetWarning } = await import('./simulation.service.js');
+                const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
+                const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, 'live');
+                const intendedSpend = snipeAmount * (liveConfig.user.activeWallets || 1);
 
-                // Clamp final trade to exact remaining budget
                 if (liveConfig.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
-                    const remainingBudget = liveConfig.maxBudgetSol - currentSpendFinal;
-                    if (remainingBudget >= 0.005) {
-                        snipeAmount = Math.max(0.005, parseFloat((remainingBudget / (liveConfig.user.activeWallets || 1)).toFixed(4)));
-                        intendedSpend = snipeAmount * (liveConfig.user.activeWallets || 1);
-                    } else {
-                        await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
-                        await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
-                        await redis.del(sniperLockKey);
-                        return;
-                    }
+                    await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
+                    await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
+                    await redis.del(sniperLockKey);
+                    return; 
                 }
 
                 if (!isPriceReady) {

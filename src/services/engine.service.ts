@@ -722,8 +722,29 @@ export async function executeSnipe(
         const recentBlockhash = getCachedBlockhash() || (await connection.getLatestBlockhash('processed')).blockhash;
         const feeRate = await getPlatformFeeRate(user.telegramId);
 
-        // Atomic Budget Reserve via Redlock
+        // 🛑 Live Max Loss Circuit Breaker Check
         const liveConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
+        if (liveConfig?.maxLossPercent && liveConfig.maxLossPercent > 0) {
+            const lossCheck = await isLiveLossLimitHit(telegramId, liveConfig, user);
+            if (lossCheck.hit) {
+                await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
+                const bot = getBotInstance();
+                try {
+                    await bot.telegram.sendMessage(
+                        telegramId,
+                        `🛑 <b>MAX LOSS LIMIT REACHED</b>\n\n` +
+                        `Your live portfolio dropped <b>${lossCheck.lossPercent.toFixed(1)}%</b> from session baseline (Limit: -${liveConfig.maxLossPercent}%).\n\n` +
+                        `Auto-Sniper paused to protect your funds.`,
+                        { parse_mode: 'HTML' }
+                    );
+                } catch (e: any) {
+                    console.error("🔴 [SNIPER] Failed to send loss limit alert:", e.message);
+                }
+                return { success: false, message: "🛑 Max loss limit reached. Sniper paused." };
+            }
+        }
+
+        // Atomic Budget Reserve via Redlock
         const intendedSpend = amountSol * (user.activeWallets || 1);
         const budgetLockKey = `lock:budget:${telegramId}`;
         let budgetLock;
@@ -745,10 +766,9 @@ export async function executeSnipe(
                 
                 return { success: false, message: "⚠️ Budget exhausted. Sniper paused." };
             }
-            // Pre-reserve budget atomically before broadcasting
             await addSessionSpend(telegramId, intendedSpend, 'live');
         } finally {
-            if (budgetLock) await (budgetLock as any).release();
+            if (budgetLock) await (budgetLock as any).release().catch(() => {});
         }
 
         const executionPromises = wallets.map(async (w, index) => {
@@ -905,7 +925,10 @@ export async function executeSnipe(
             success: true, signature: firstSignature, volumeSpent: totalVolume,
             message: `🟢 Trade Confirmed (${successful.length}/${wallets.length} Wallets).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}`
         };
-    } catch (error: any) { return { success: false, message: `🔴 Execution Fault: ${error.message}` }; }
+    } catch (error: any) { 
+        console.error('🔴 [SNIPE] Unhandled execution error:', error.message);
+        return { success: false, message: `🔴 Execution Fault: ${error.message}` }; 
+    }
 }
 
 export async function executeExit(
@@ -1070,7 +1093,6 @@ export async function executeExit(
                             })()
                         ]);
 
-                        // Realized PnL is net of fee: (SOL received - SOL cost basis) - platform fee
                         const realizedPnlSol = (actualSolReceived - volumeToRecord) - feeCharged;
                         const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
@@ -1138,7 +1160,10 @@ export async function executeExit(
             signature: (successful[0] as any).value.signature, 
             message: `🟢 Exit Confirmed (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}` 
         };
-    } catch (error: any) { return { success: false, message: `🔴 Error: ${error.message}` }; }
+    } catch (error: any) { 
+        console.error('🔴 [EXIT] Execution error:', error.message);
+        return { success: false, message: `🔴 Error: ${error.message}` }; 
+    }
 }
 
 export async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
@@ -1317,4 +1342,29 @@ export async function processLimitOrders(bot: any) {
             }
         }
     })));
+}
+
+export async function isLiveLossLimitHit(
+    telegramId: string,
+    config: any,
+    user: any
+): Promise<{ hit: boolean; lossPercent: number }> {
+    if (!config?.maxLossPercent || config.maxLossPercent <= 0) return { hit: false, lossPercent: 0 };
+
+    const startingBalance = parseFloat(await redis.get(`sniper:starting_balance:${telegramId}`) || '0');
+    if (startingBalance <= 0) return { hit: false, lossPercent: 0 };
+
+    const { getUserPositions } = await import('./position.service.js');
+    const { cachedSolUsdPrice } = await import('./grpc.service.js');
+    const positions = await getUserPositions(telegramId);
+    const positionsValueUsd = (positions || []).reduce((sum: number, p: any) => sum + (p.valueUsd || 0), 0);
+    const solPrice = cachedSolUsdPrice || 156.93;
+    const cashBalance = user.vaultAddress ? (getLiveWalletBalance(user.vaultAddress) ?? 0) : 0;
+    const currentEquitySol = cashBalance + (positionsValueUsd / solPrice);
+    const lossPercent = ((startingBalance - currentEquitySol) / startingBalance) * 100;
+
+    return {
+        hit: lossPercent >= config.maxLossPercent,
+        lossPercent
+    };
 }
