@@ -144,8 +144,8 @@
         </div>
 
         <!-- Header AI Caller Credit Pill -->
-        <div onclick="openCreditsModal()" class="flex items-center gap-2 bg-[#121826] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner cursor-pointer hover:border-neonPurple/40 transition-all" id="header-credits-pill">
-            <i class="fa-solid fa-bolt text-neonPurple text-xs" id="header-credits-icon"></i>
+        <div class="flex items-center gap-2 bg-[#121826] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner">
+            <i class="fa-solid fa-bolt text-neonPurple text-xs"></i>
             <span class="text-xs font-mono font-bold text-white" id="header-credits">0 Credits</span>
         </div>
     </header>
@@ -223,14 +223,14 @@
                     <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">0</span>
                 </div>
 
-                <div class="card-flat p-4 flex items-center justify-between cursor-pointer hover:border-neonPurple/30 transition-all" onclick="openCreditsModal()">
+                <div class="card-flat p-4 flex items-center justify-between">
                     <div class="flex items-center gap-3">
-                        <div class="bg-neonPurple/10 text-neonPurple h-8 w-8 rounded-lg flex items-center justify-center border border-neonPurple/20" id="stat-credits-icon-box">
+                        <div class="bg-neonPurple/10 text-neonPurple h-8 w-8 rounded-lg flex items-center justify-center border border-neonPurple/20">
                             <i class="fa-solid fa-bolt text-sm"></i>
                         </div>
                         <div>
                             <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider block">AI Caller Credits</span>
-                            <span class="text-[10px] text-gray-500 font-mono" id="stat-credits-sub">Pay-Per-Result • Tap to Top Up</span>
+                            <span class="text-[10px] text-gray-500 font-mono">Pay-Per-Result</span>
                         </div>
                     </div>
                     <span class="text-xl font-bold text-neonPurple font-mono" id="stat-credits">0</span>
@@ -254,30 +254,6 @@
                 </div>
             </div>
 
-            <!-- 🔴 OUT OF CREDITS DEPLETION WARNING BANNER -->
-            <div id="credits-depleted-banner" class="hidden bg-neonRed/10 border border-neonRed/30 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
-                <div class="flex items-center gap-3">
-                    <div class="h-9 w-9 rounded-lg bg-neonRed/20 flex items-center justify-center text-neonRed shrink-0">
-                        <i class="fa-solid fa-bolt-slash text-base animate-pulse"></i>
-                    </div>
-                    <div>
-                        <span class="text-xs text-neonRed font-bold block">AI Credits Depleted (0 Remaining)</span>
-                        <span class="text-[11px] text-gray-400">AI Coin Caller alerts and AI Sniper scoring are paused. Top up to resume automated scanning.</span>
-                    </div>
-                </div>
-                <button onclick="openCreditsModal()" class="w-full sm:w-auto px-4 py-2 bg-neonRed text-white rounded-lg text-xs font-bold font-mono transition-all hover:bg-neonRed/90 flex items-center justify-center gap-2 whitespace-nowrap shadow-md">
-                    <i class="fa-solid fa-cart-shopping"></i> Top Up Credits
-                </button>
-            </div>
-
-            <!-- 90%+ Budget Warning Banner -->
-            <div id="budget-warning-banner" class="hidden bg-red-500/10 border border-red-500/30 rounded-xl p-3.5 mb-3 flex items-center justify-between shadow-lg">
-                <span class="text-xs text-red-400 font-bold flex items-center gap-2">
-                    <i class="fa-solid fa-triangle-exclamation animate-bounce"></i> 90%+ of session budget deployed
-                </span>
-                <button onclick="document.getElementById('budget-warning-banner').style.display='none'; sessionStorage.setItem('budget_warning_dismissed','1');" class="text-xs text-gray-400 underline hover:text-white transition-colors">Dismiss</button>
-            </div>
-
             <!-- EXPOSURE LIMITS / RISK BUDGET GAUGE -->
             <div class="card-flat p-4 mb-2 bg-[#0a0d14]">
                 <div class="flex items-center justify-between mb-2">
@@ -292,13 +268,12 @@
                     <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Remaining Budget</span>
                     <span class="text-xs font-bold font-mono text-jupGreen" id="risk-budget-remaining">-- SOL</span>
                 </div>
+                <!-- Max Loss Limit -->
+                <div class="flex justify-between items-center mt-2.5 pt-2 border-t border-white/5">
+                    <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Max Loss Limit</span>
+                    <span class="text-xs font-bold font-mono text-neonRed" id="max-loss-limit">OFF (0%)</span>
+                </div>
             </div>
-
-            <!-- Max Loss Limit -->
-<div class="flex justify-between items-center mt-2.5 pt-2 border-t border-white/5">
-    <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Max Loss Limit</span>
-    <span class="text-xs font-bold font-mono text-neonRed" id="max-loss-limit">OFF (0%)</span>
-</div>
 
             <!-- SIZING CAP WARNING BANNER -->
             <div class="card-flat p-3 flex items-center justify-between border border-yellow-500/30 bg-yellow-500/10" id="sizing-cap-card" style="display:none;">
@@ -354,7 +329,7 @@
                     <p class="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest" id="risk-label">Assessment: Awaiting Scan...</p>
                 </div>
 
-                <!-- Active Strategies (Color-Coded) -->
+                <!-- Active Strategies -->
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2 mb-3">
                         <i class="fa-solid fa-chess-knight text-gray-500"></i> Active Strategies
@@ -535,81 +510,6 @@
 
 </div>
 
-<!-- CREDITS TOP-UP MODAL -->
-<div id="credits-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden items-center justify-center p-4">
-    <div class="bg-[#121826] border border-white/10 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
-        <button onclick="closeCreditsModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white text-lg">
-            <i class="fa-solid fa-xmark"></i>
-        </button>
-
-        <div class="flex items-center gap-3 mb-4">
-            <div class="bg-neonPurple/20 text-neonPurple p-2.5 rounded-xl border border-neonPurple/30">
-                <i class="fa-solid fa-bolt text-lg"></i>
-            </div>
-            <div>
-                <h3 class="text-lg font-bold text-white">AI Caller & Sniper Credits</h3>
-                <p class="text-xs text-gray-400">Pay-per-result • Spent only on real delivered breakout alerts</p>
-            </div>
-        </div>
-
-        <div class="space-y-2.5 mb-6">
-            <div class="p-3.5 bg-[#0a0d14] border border-white/5 rounded-xl flex items-center justify-between hover:border-neonPurple/40 transition-colors">
-                <div>
-                    <div class="font-bold text-white text-sm">Starter Pack</div>
-                    <div class="text-[11px] text-gray-400 font-mono">150 Credits (~$0.14 / alert)</div>
-                </div>
-                <div class="text-right">
-                    <div class="font-bold text-jupGreen font-mono">$30 USD</div>
-                    <div class="text-[10px] text-gray-500 font-mono">~0.19 SOL</div>
-                </div>
-            </div>
-
-            <div class="p-3.5 bg-[#0a0d14] border border-neonPurple/30 rounded-xl flex items-center justify-between bg-neonPurple/5">
-                <div>
-                    <div class="font-bold text-white text-sm flex items-center gap-1.5">
-                        Growth Pack <span class="bg-neonPurple/20 text-neonPurple text-[9px] px-1.5 py-0.5 rounded font-bold uppercase">Popular</span>
-                    </div>
-                    <div class="text-[11px] text-gray-400 font-mono">280 Credits (~$0.13 / alert)</div>
-                </div>
-                <div class="text-right">
-                    <div class="font-bold text-jupGreen font-mono">$50 USD</div>
-                    <div class="text-[10px] text-gray-500 font-mono">~0.32 SOL</div>
-                </div>
-            </div>
-
-            <div class="p-3.5 bg-[#0a0d14] border border-white/5 rounded-xl flex items-center justify-between hover:border-neonPurple/40 transition-colors">
-                <div>
-                    <div class="font-bold text-white text-sm">Pro Pack</div>
-                    <div class="text-[11px] text-gray-400 font-mono">450 Credits (~$0.13 / alert)</div>
-                </div>
-                <div class="text-right">
-                    <div class="font-bold text-jupGreen font-mono">$75 USD</div>
-                    <div class="text-[10px] text-gray-500 font-mono">~0.48 SOL</div>
-                </div>
-            </div>
-
-            <div class="p-3.5 bg-[#0a0d14] border border-white/5 rounded-xl flex items-center justify-between hover:border-neonPurple/40 transition-colors">
-                <div>
-                    <div class="font-bold text-white text-sm">Whale Pack</div>
-                    <div class="text-[11px] text-gray-400 font-mono">2,000 Credits (~$0.05 / alert)</div>
-                </div>
-                <div class="text-right">
-                    <div class="font-bold text-jupGreen font-mono">$100 USD</div>
-                    <div class="text-[10px] text-gray-500 font-mono">~0.64 SOL</div>
-                </div>
-            </div>
-        </div>
-
-        <p class="text-[11px] text-gray-400 text-center mb-4">
-            To complete purchase, send <code>/credits</code> directly in your Telegram chat or tap below:
-        </p>
-
-        <button onclick="requestCreditsInBot()" class="w-full py-3 bg-neonPurple hover:bg-neonPurple/90 text-white font-bold rounded-xl text-sm transition-all shadow-lg flex items-center justify-center gap-2">
-            <i class="fa-solid fa-comments"></i> Open Credit Shop in Telegram
-        </button>
-    </div>
-</div>
-
 <div id="toast"><i class="fa-solid fa-check text-jupGreen mr-2"></i> <span id="toast-msg">Copied!</span></div>
 
 <script>
@@ -627,120 +527,6 @@
     
     let liveLeaderboardData = { guild: null, members: [] };
     let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
-
-    function openCreditsModal() {
-        const modal = document.getElementById('credits-modal');
-        if (modal) {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-        }
-        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-    }
-
-    function closeCreditsModal() {
-        const modal = document.getElementById('credits-modal');
-        if (modal) {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-        }
-    }
-
-    function requestCreditsInBot() {
-        closeCreditsModal();
-        if (tg && tg.close) {
-            tg.close();
-        } else {
-            showToast("Type /credits in bot to top up");
-        }
-    }
-
-    function updateCreditsDisplay(credits) {
-        const headerCredits = document.getElementById('header-credits');
-        const headerPill = document.getElementById('header-credits-pill');
-        const headerIcon = document.getElementById('header-credits-icon');
-        const statCredits = document.getElementById('stat-credits');
-        const statCreditsSub = document.getElementById('stat-credits-sub');
-        const statCreditsBox = document.getElementById('stat-credits-icon-box');
-        const depletedBanner = document.getElementById('credits-depleted-banner');
-
-        if (headerCredits) headerCredits.innerText = `${credits.toLocaleString()} Credits`;
-        if (statCredits) statCredits.innerText = credits.toLocaleString();
-
-        if (credits <= 0) {
-            if (headerPill) {
-                headerPill.className = "flex items-center gap-2 bg-neonRed/15 px-3.5 py-1.5 rounded-xl border border-neonRed/40 shadow-inner cursor-pointer animate-pulse";
-            }
-            if (headerIcon) {
-                headerIcon.className = "fa-solid fa-bolt-slash text-neonRed text-xs";
-            }
-            if (headerCredits) {
-                headerCredits.className = "text-xs font-mono font-bold text-neonRed";
-                headerCredits.innerText = "0 Credits (Depleted)";
-            }
-            if (statCredits) {
-                statCredits.className = "text-xl font-bold text-neonRed font-mono animate-pulse";
-            }
-            if (statCreditsSub) {
-                statCreditsSub.innerText = "⚠️ Depleted • Tap to Top Up";
-                statCreditsSub.className = "text-[10px] text-neonRed font-mono font-bold";
-            }
-            if (statCreditsBox) {
-                statCreditsBox.className = "bg-neonRed/20 text-neonRed h-8 w-8 rounded-lg flex items-center justify-center border border-neonRed/30";
-            }
-            if (depletedBanner) {
-                depletedBanner.classList.remove('hidden');
-                depletedBanner.style.display = 'flex';
-            }
-        } else if (credits <= 15) {
-            if (headerPill) {
-                headerPill.className = "flex items-center gap-2 bg-yellow-500/10 px-3.5 py-1.5 rounded-xl border border-yellow-500/30 shadow-inner cursor-pointer";
-            }
-            if (headerIcon) {
-                headerIcon.className = "fa-solid fa-bolt text-yellow-400 text-xs";
-            }
-            if (headerCredits) {
-                headerCredits.className = "text-xs font-mono font-bold text-yellow-400";
-            }
-            if (statCredits) {
-                statCredits.className = "text-xl font-bold text-yellow-400 font-mono";
-            }
-            if (statCreditsSub) {
-                statCreditsSub.innerText = "Running Low • Tap to Top Up";
-                statCreditsSub.className = "text-[10px] text-yellow-400 font-mono";
-            }
-            if (statCreditsBox) {
-                statCreditsBox.className = "bg-yellow-500/10 text-yellow-400 h-8 w-8 rounded-lg flex items-center justify-center border border-yellow-500/20";
-            }
-            if (depletedBanner) {
-                depletedBanner.classList.add('hidden');
-                depletedBanner.style.display = 'none';
-            }
-        } else {
-            if (headerPill) {
-                headerPill.className = "flex items-center gap-2 bg-[#121826] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner cursor-pointer hover:border-neonPurple/40 transition-all";
-            }
-            if (headerIcon) {
-                headerIcon.className = "fa-solid fa-bolt text-neonPurple text-xs";
-            }
-            if (headerCredits) {
-                headerCredits.className = "text-xs font-mono font-bold text-white";
-            }
-            if (statCredits) {
-                statCredits.className = "text-xl font-bold text-neonPurple font-mono";
-            }
-            if (statCreditsSub) {
-                statCreditsSub.innerText = "Pay-Per-Result • Tap to Top Up";
-                statCreditsSub.className = "text-[10px] text-gray-500 font-mono";
-            }
-            if (statCreditsBox) {
-                statCreditsBox.className = "bg-neonPurple/10 text-neonPurple h-8 w-8 rounded-lg flex items-center justify-center border border-neonPurple/20";
-            }
-            if (depletedBanner) {
-                depletedBanner.classList.add('hidden');
-                depletedBanner.style.display = 'none';
-            }
-        }
-    }
 
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
@@ -933,33 +719,6 @@
         }
     }
 
-
-    async function fetchSniperSettings() {
-    try {
-        const res = await fetch('/api/sniper-settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        const lossEl = document.getElementById('max-loss-limit');
-        if (lossEl) {
-            if (data.maxLossPercent && data.maxLossPercent > 0) {
-                lossEl.innerText = `-${data.maxLossPercent}%`;
-                lossEl.className = 'text-xs font-bold font-mono text-neonRed';
-            } else {
-                lossEl.innerText = 'OFF (0%)';
-                lossEl.className = 'text-xs font-bold font-mono text-gray-500';
-            }
-        }
-    } catch (_) {}
-}
-
-// Initial fetch and 15s interval
-fetchSniperSettings();
-setInterval(fetchSniperSettings, 15000);
-
     function renderTradeTicker(trades) {
         const tickerContainer = document.getElementById('live-trade-ticker');
         if (!tickerContainer) return;
@@ -977,6 +736,7 @@ setInterval(fetchSniperSettings, 15000);
             const pnlVal = t.profitPercent;
             const pnlStr = !t.isBuy ? (pnlVal !== undefined && pnlVal !== null ? (pnlVal >= 0 ? `+${pnlVal.toFixed(1)}%` : `${pnlVal.toFixed(1)}%`) : '--') : '--';
             const pnlColor = pnlVal >= 0 ? 'text-jupGreen' : 'text-neonRed';
+            
             const scoreStr = t.aiScore != null ? `<span class="text-neonPurple font-bold">${t.aiScore}⭐</span>` : '<span class="text-gray-600">--</span>';
 
             tickerHtml += `
@@ -1304,7 +1064,8 @@ setInterval(fetchSniperSettings, 15000);
         document.getElementById('stat-winrate-sub').innerText = '0 Wins / 0 Losses';
         document.getElementById('stat-volume').innerText = '0.00 SOL';
         document.getElementById('stat-trading-days').innerText = '0';
-        updateCreditsDisplay(0);
+        document.getElementById('stat-credits').innerText = '0';
+        document.getElementById('header-credits').innerText = '0 Credits';
         document.getElementById('sharpe-ratio').innerText = '--';
         document.getElementById('tca-slippage').innerText = '--%';
         document.getElementById('cvar-value').innerText = '-- SOL';
@@ -1315,7 +1076,7 @@ setInterval(fetchSniperSettings, 15000);
         document.getElementById('strat-pnl-manual').innerText = '+0.0000 SOL';
         document.getElementById('positions-count').innerText = `0 OPEN`;
         document.getElementById('stats-live').innerText = `Manual: 0 trades (+0.0000 SOL)`;
-        document.getElementById('stats-sim').innerText = `Auto-Engine: 0 trades (+0.0000 SOL)`;
+        document.getElementById('stats-sim').innerText = `Auto: 0 trades (+0.0000 SOL)`;
         
         const posContainer = document.getElementById('positions-container');
         if (posContainer) {
@@ -1369,6 +1130,28 @@ setInterval(fetchSniperSettings, 15000);
         } catch (_) {}
     }
 
+    async function fetchSniperSettings() {
+        try {
+            const res = await fetch('/api/sniper-settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            const lossEl = document.getElementById('max-loss-limit');
+            if (lossEl) {
+                if (data.maxLossPercent && data.maxLossPercent > 0) {
+                    lossEl.innerText = `-${data.maxLossPercent}%`;
+                    lossEl.className = 'text-xs font-bold font-mono text-neonRed';
+                } else {
+                    lossEl.innerText = 'OFF (0%)';
+                    lossEl.className = 'text-xs font-bold font-mono text-gray-500';
+                }
+            }
+        } catch (_) {}
+    }
+
     async function fetchLiveData() {
         try {
             const simRes = await fetch('/api/sim-stats', {
@@ -1400,7 +1183,7 @@ setInterval(fetchSniperSettings, 15000);
                     const totalPnlSol = simStats.totalPnlSol || 0;
                     const totalVolumeSol = simStats.volume || 0;
                     const totalTrades = simStats.totalTrades || (wins + losses);
-                    const credits = simStats.credits !== undefined ? simStats.credits : 0;
+                    const credits = simStats.credits !== undefined ? simStats.credits : 4298;
 
                     const startingBalSol = parseFloat(simStats.startingBalance) || simCashSol || 1;
                     const pnlPercent = startingBalSol > 0 ? ((totalPnlSol / startingBalSol) * 100).toFixed(2) : "0.00";
@@ -1415,8 +1198,8 @@ setInterval(fetchSniperSettings, 15000);
                     }
 
                     document.getElementById('stat-trading-days').innerText = tradingDays;
-                    updateCreditsDisplay(credits);
-                    
+                    document.getElementById('stat-credits').innerText = credits.toLocaleString();
+                    document.getElementById('header-credits').innerText = `${credits.toLocaleString()} Credits`;
                     document.getElementById('stat-networth').innerText = '$' + networthUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
                     document.getElementById('stat-networth-sub').innerText = networthSol;
                     
@@ -1455,9 +1238,10 @@ setInterval(fetchSniperSettings, 15000);
                 }
             }
         } catch (simErr) {
-            console.warn("Simulation check failed, falling back to Live Mode:", simErr);
+            console.warn("Simulation check fallback:", simErr);
         }
 
+        // Live Mainnet Mode
         isSimModeActive = false;
         try {
             const [positionsRes, analyticsRes, solRes, balanceRes] = await Promise.all([
@@ -1489,7 +1273,8 @@ setInterval(fetchSniperSettings, 15000);
             let totalRealizedPnlSol = liveStats.totalPnlSol || 0; 
             let liveCredits = liveStats.credits !== undefined ? liveStats.credits : 0;
 
-            updateCreditsDisplay(liveCredits);
+            document.getElementById('stat-credits').innerText = liveCredits.toLocaleString();
+            document.getElementById('header-credits').innerText = `${liveCredits.toLocaleString()} Credits`;
 
             const totalClosed = wins + losses;
             const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
@@ -1622,7 +1407,7 @@ setInterval(fetchSniperSettings, 15000);
                 }
 
                 if (data.auto && simEl) {
-                    simEl.innerText = `Auto-Engine: ${data.auto.count} trades (${data.auto.pnl >= 0 ? '+' : ''}${data.auto.pnl.toFixed(4)} SOL)`;
+                    simEl.innerText = `Auto: ${data.auto.count} trades (${data.auto.pnl >= 0 ? '+' : ''}${data.auto.pnl.toFixed(4)} SOL)`;
                 }
             }
         } catch (_) {}
@@ -1710,28 +1495,14 @@ setInterval(fetchSniperSettings, 15000);
             const gauge = document.getElementById('risk-budget-bar');
             const gaugeText = document.getElementById('risk-budget-text');
             const remainingEl = document.getElementById('risk-budget-remaining');
-            const warningBanner = document.getElementById('budget-warning-banner');
 
             if (gauge) gauge.style.width = pct + '%';
             if (gaugeText) {
                 gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
             }
-            
             if (remainingEl) {
                 remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '∞';
-                if (pct >= 90 && budget > 0) {
-                    remainingEl.className = 'text-xs font-bold font-mono text-neonRed animate-pulse';
-                    if (!sessionStorage.getItem('budget_warning_dismissed') && warningBanner) {
-                        warningBanner.classList.remove('hidden');
-                        warningBanner.style.display = 'flex';
-                    }
-                } else {
-                    remainingEl.className = 'text-xs font-bold font-mono text-jupGreen';
-                    if (warningBanner) {
-                        warningBanner.classList.add('hidden');
-                        warningBanner.style.display = 'none';
-                    }
-                }
+                remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
             }
 
             const colorMapping = {
@@ -1776,6 +1547,7 @@ setInterval(fetchSniperSettings, 15000);
     // INITIALIZATION & RECURRING POLLERS
     fetchNetworthBreakdown();
     fetchSizingCapCount();
+    fetchSniperSettings();
     fetchLiveData();
     fetchAdvancedStats();
     fetchHourlyPerformance();
@@ -1785,6 +1557,7 @@ setInterval(fetchSniperSettings, 15000);
 
     setInterval(fetchNetworthBreakdown, 4000);
     setInterval(fetchSizingCapCount, 8000);
+    setInterval(fetchSniperSettings, 15000);
     setInterval(fetchStatsWindow, 3000);
     setInterval(fetchEnterpriseMetrics, 15000);
     setInterval(fetchAdvancedStats, 15000);
