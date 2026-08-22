@@ -986,7 +986,7 @@ export async function startCoinCaller(bot: any) {
     // 1. SIMULATION POLLING LOOP (5s)
     setInterval(async () => {
         try {
-            const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
+            const { isSimulationActive, generateSimCallerAlert, saveSimulationState } = await import('./simulation.service.js');
             const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
 
             for (const user of allUsers) {
@@ -1021,7 +1021,10 @@ export async function startCoinCaller(bot: any) {
 
                 const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
                 if (matchedToken) {
-                    await redis.set(`sim:credits:${user.telegramId}`, Math.max(0, currentCredits - 1).toString());
+                    // 🟢 Deduct 1 Credit and immediately sync state
+                    const updatedCredits = Math.max(0, currentCredits - 1);
+                    await redis.set(`sim:credits:${user.telegramId}`, updatedCredits.toString());
+                    await saveSimulationState(user.telegramId);
 
                     const projection = await getCalibratedProjection(matchedToken);
                     const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
@@ -1054,7 +1057,7 @@ export async function startCoinCaller(bot: any) {
         } catch (_) {}
     }, 5000);
 
-    // 3. LIVE MAINNET POLLING LOOP (30s — Optimized for reliable rate limits)
+    // 3. LIVE MAINNET POLLING LOOP (30s)
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
@@ -1087,6 +1090,7 @@ export async function startCoinCaller(bot: any) {
                 }
 
                 if (matchedToken) {
+                    // 🟢 Live Atomic Credit Consumption
                     const { consumeCredit } = await import('./credits.service.js');
                     const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
                     
@@ -1143,7 +1147,7 @@ export async function startCoinCaller(bot: any) {
                 }
             }
         } catch (e: any) {
-            console.error("🔴 [CALLER] Polling cycle error:", e.message);
+            console.error("🔴 [CALLER] Engine Error:", e.message);
         } finally {
             isScoring = false;
         }

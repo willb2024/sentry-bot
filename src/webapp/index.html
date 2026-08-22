@@ -273,6 +273,12 @@
                     <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Max Loss Limit</span>
                     <span class="text-xs font-bold font-mono text-neonRed" id="max-loss-limit">OFF (0%)</span>
                 </div>
+                <!-- Sweep to Cash Trigger Button -->
+                <div class="mt-3 pt-2 border-t border-white/5">
+                    <button onclick="triggerSweepAll()" class="w-full bg-neonRed/10 hover:bg-neonRed/20 text-neonRed border border-neonRed/20 py-2.5 rounded-lg text-xs font-bold font-mono transition-all flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-broom"></i> SWEEP ALL POSITIONS TO CASH
+                    </button>
+                </div>
             </div>
 
             <!-- SIZING CAP WARNING BANNER -->
@@ -736,7 +742,6 @@
             const pnlVal = t.profitPercent;
             const pnlStr = !t.isBuy ? (pnlVal !== undefined && pnlVal !== null ? (pnlVal >= 0 ? `+${pnlVal.toFixed(1)}%` : `${pnlVal.toFixed(1)}%`) : '--') : '--';
             const pnlColor = pnlVal >= 0 ? 'text-jupGreen' : 'text-neonRed';
-            
             const scoreStr = t.aiScore != null ? `<span class="text-neonPurple font-bold">${t.aiScore}⭐</span>` : '<span class="text-gray-600">--</span>';
 
             tickerHtml += `
@@ -1094,6 +1099,28 @@
         initCharts([], [], [], [], []);
     }
 
+    async function triggerSweepAll() {
+        if (!confirm('Are you sure you want to market-sell 100% of all open positions to cash?')) return;
+        showToast('Sweeping positions to cash...');
+        try {
+            const res = await fetch('/api/sweep', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`Swept ${data.closed} positions to cash!`);
+                fetchLiveData();
+                fetchNetworthBreakdown();
+            } else {
+                showToast('Sweep failed or no open positions');
+            }
+        } catch (_) {
+            showToast('Network error while sweeping');
+        }
+    }
+
     async function fetchNetworthBreakdown() {
         try {
             const res = await fetch('/api/networth-breakdown', {
@@ -1183,7 +1210,7 @@
                     const totalPnlSol = simStats.totalPnlSol || 0;
                     const totalVolumeSol = simStats.volume || 0;
                     const totalTrades = simStats.totalTrades || (wins + losses);
-                    const credits = simStats.credits !== undefined ? simStats.credits : 4298;
+                    const credits = simStats.credits !== undefined ? simStats.credits : 0;
 
                     const startingBalSol = parseFloat(simStats.startingBalance) || simCashSol || 1;
                     const pnlPercent = startingBalSol > 0 ? ((totalPnlSol / startingBalSol) * 100).toFixed(2) : "0.00";

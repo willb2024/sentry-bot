@@ -153,12 +153,6 @@ export async function getSessionSpend(telegramId: string, mode: 'live' | 'sim'):
     return val ? parseFloat(val) : 0;
 }
 
-export async function addSessionSpend(telegramId: string, amount: number, mode: 'live' | 'sim'): Promise<number> {
-    const key = `autosnipe:session_spend:${mode}:${telegramId}`;
-    const newTotal = await redis.incrbyfloat(key, amount);
-    await redis.expire(key, 86400);
-    return parseFloat(newTotal as any);
-}
 
 export async function startNewAutoSnipeSession(telegramId: string, mode: 'live' | 'sim'): Promise<string> {
     const sessionId = crypto.randomUUID();
@@ -692,6 +686,13 @@ export async function simExecuteExit(
     }
 }
 
+export async function addSessionSpend(telegramId: string, amount: number, mode: 'live' | 'sim'): Promise<number> {
+    const key = `autosnipe:session_spend:${mode}:${telegramId}`;
+    const newTotal = await redis.incrbyfloat(key, amount);
+    await redis.expire(key, 86400);
+    return parseFloat(newTotal as any);
+}
+
 // ─── SIMULATED AI COIN CALLER ───────────────────────────
 export async function generateSimCallerAlert(
     telegramId: string,
@@ -868,7 +869,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                 continue;
             }
 
-            // 🛑 Pre-Trade Max Loss Circuit Breaker Check
+            // 1. Pre-Trade Max Loss Circuit Breaker Check
             const lossStatus = await isSimLossLimitHit(telegramId, config);
             if (lossStatus.hit) {
                 await killSimAutoSnipe(telegramId);
@@ -876,13 +877,22 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                     await bot.telegram.sendMessage(
                         telegramId,
                         `🛑 <b>MAX LOSS LIMIT REACHED (SIMULATION)</b>\n\n` +
-                        `Your simulated portfolio has dropped <b>${lossStatus.lossPercent.toFixed(1)}%</b> (Limit: -${config.maxLossPercent}%).\n\n` +
-                        `Auto-Sniper paused to protect capital.`,
+                        `Your simulated portfolio dropped <b>${lossStatus.lossPercent.toFixed(1)}%</b> from baseline.\n` +
+                        `Auto-Sniper paused to protect remaining capital.`,
                         { parse_mode: 'HTML' }
                     );
-                } catch (e: any) {
-                    console.error("🔴 [SIM SNIPER] Failed to send loss limit alert:", e.message);
-                }
+                } catch (_) {}
+                break;
+            }
+
+            // 2. Strict Budget Remaining Check
+            const currentSpend = await getSessionSpend(telegramId, 'sim');
+            const maxBudget = config.maxBudgetSol || Infinity;
+            const remainingBudget = maxBudget - currentSpend;
+
+            if (remainingBudget <= 0) {
+                await killSimAutoSnipe(telegramId);
+                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
                 break;
             }
 
@@ -908,6 +918,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
             }
 
             if (config.minScore > 0) {
+                // Deduct Sim Credit for AI Scoring
                 const simCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
                 if (simCredits <= 0) {
                     const warnKey = `sim_sniper_credits_warn:${telegramId}`;
@@ -917,23 +928,20 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                             await bot.telegram.sendMessage(
                                 telegramId,
                                 `⚠️ <b>SIM AUTO-SNIPER PAUSED — OUT OF CREDITS</b>\n\n` +
-                                `Your Auto-Sniper requires AI Token Scoring (Min Score: <b>${config.minScore}+</b>), but your virtual credit balance is <b>0</b>.\n\n` +
+                                `Your Auto-Sniper requires AI Token Scoring (Min Score: <b>${config.minScore}+</b>), but your credit balance is <b>0</b>.\n\n` +
                                 `Use <code>/simcredits 500</code> or top up below to resume:`,
                                 {
                                     parse_mode: 'HTML',
-                                    reply_markup: {
-                                        inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]]
-                                    }
+                                    reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]] }
                                 }
                             );
-                        } catch (e: any) {
-                            console.error("🔴 [SIM SNIPER] Failed to send credit warning:", e.message);
-                        }
+                        } catch (_) {}
                     }
                     await killSimAutoSnipe(telegramId);
                     break;
                 } else {
                     await redis.set(`sim:credits:${telegramId}`, Math.max(0, simCredits - 1).toString());
+                    await saveSimulationState(telegramId);
                 }
 
                 if (score < config.minScore) {
@@ -942,16 +950,22 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                 }
             }
 
-            const [activeNow, genNow] = await Promise.all([
-                redis.get(`sim:autosnipe:${telegramId}`),
-                redis.get(`sim:autosnipe:gen:${telegramId}`)
-            ]);
-            if (activeNow !== 'true' || genNow !== genId) break;
-
             const solPrice = cachedSolUsdPrice || 156.93;
             const currentBal = parseFloat(await getSimBalance(telegramId));
-            const snipeAmount = calculateDynamicSize(config, score, stats.liquidity, solPrice, currentBal);
-            const intendedSpend = snipeAmount * (user?.activeWallets || 1);
+            const calculatedSize = calculateDynamicSize(config, score, stats.liquidity, solPrice, currentBal);
+            const activeWallets = user?.activeWallets || 1;
+            const intendedTotalSpend = calculatedSize * activeWallets;
+
+            // 3. 🟢 CLAMP SIZING TO EXACT REMAINING BUDGET CEILING
+            const clampedTotalSpend = Math.min(intendedTotalSpend, remainingBudget);
+            const actualSnipeAmountPerWallet = clampedTotalSpend / activeWallets;
+
+            // If remaining budget cannot support a minimal order (0.005 SOL), halt immediately
+            if (actualSnipeAmountPerWallet < 0.005) {
+                await killSimAutoSnipe(telegramId);
+                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
+                break;
+            }
 
             const budgetLockKey = `lock:budget:sim:${telegramId}`;
             let budgetLock;
@@ -962,18 +976,9 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
             }
 
             try {
-                const currentSpend = await getSessionSpend(telegramId, 'sim');
-                if (config.maxBudgetSol && currentSpend + intendedSpend > config.maxBudgetSol) {
-                    await killSimAutoSnipe(telegramId);
-                    await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
-                    break;
-                }
-                await addSessionSpend(telegramId, intendedSpend, 'sim');
-
+                await addSessionSpend(telegramId, clampedTotalSpend, 'sim');
                 const updatedSpend = await getSessionSpend(telegramId, 'sim');
-                checkAndSendBudgetWarning(bot, telegramId, 'sim', updatedSpend, config.maxBudgetSol).catch((e: any) => {
-                    console.error("🔴 [SIM SNIPER] Budget warning error:", e.message);
-                });
+                checkAndSendBudgetWarning(bot, telegramId, 'sim', updatedSpend, config.maxBudgetSol).catch(() => {});
             } finally {
                 if (budgetLock) await (budgetLock as any).release().catch(() => {});
             }
@@ -981,7 +986,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
             const result = await simExecuteSnipe(
                 telegramId, 
                 token.mint, 
-                snipeAmount, 
+                actualSnipeAmountPerWallet, 
                 'Sniper Engine', 
                 score, 
                 config.autoTrailingDropPercent || 10, 
@@ -1018,12 +1023,10 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                         parse_mode: 'HTML', 
                         link_preview_options: { is_disabled: true } 
                     });
-                } catch (e: any) {
-                    console.error("🔴 [SIM SNIPER] Failed to send snipe confirmation message:", e.message);
-                }
+                } catch (_) {}
             }
 
-            // 🛑 Post-Trade Loss Check
+            // Post-Trade Loss Check
             const postLossStatus = await isSimLossLimitHit(telegramId, config);
             if (postLossStatus.hit) {
                 await killSimAutoSnipe(telegramId);
@@ -1031,13 +1034,11 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                     await bot.telegram.sendMessage(
                         telegramId,
                         `🛑 <b>MAX LOSS LIMIT REACHED (SIMULATION)</b>\n\n` +
-                        `Your simulated portfolio has dropped <b>${postLossStatus.lossPercent.toFixed(1)}%</b> (Limit: -${config.maxLossPercent}%).\n\n` +
-                        `Auto-Sniper paused to protect capital.`,
+                        `Your simulated portfolio dropped <b>${postLossStatus.lossPercent.toFixed(1)}%</b>.\n` +
+                        `Auto-Sniper paused to protect remaining capital.`,
                         { parse_mode: 'HTML' }
                     );
-                } catch (e: any) {
-                    console.error("🔴 [SIM SNIPER] Failed to send post-trade loss limit alert:", e.message);
-                }
+                } catch (_) {}
                 break;
             }
 

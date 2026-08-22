@@ -2341,50 +2341,7 @@ bot.action('btn_trade_guide', async (ctx) => {
 
 // Add into your bot action handlers in src/index.ts
 
-bot.action('action_sweep_all', async (ctx) => {
-    try { await ctx.answerCbQuery('Sweeping positions...'); } catch (_) {}
-    const tgId = ctx.from?.id?.toString();
-    if (!tgId) return;
 
-    const { isSimulationActive, simExecuteExit } = await import('./services/simulation.service.js');
-    const isSim = await isSimulationActive(tgId);
-    
-    let positions: any[] = [];
-    if (isSim) {
-        positions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
-    } else {
-        const { getUserPositions } = await import('./services/position.service.js');
-        positions = (await getUserPositions(tgId)) || [];
-    }
-
-    if (!positions || positions.length === 0) {
-        return ctx.replyWithHTML('📭 <b>No open positions to sweep.</b>');
-    }
-
-    const loader = await ctx.replyWithHTML(`🧹 <b>Sweeping ${positions.length} position(s) to cash...</b>`);
-
-    let successCount = 0;
-    let failCount = 0;
-    for (const pos of positions) {
-        const mint = pos.mint || pos.tokenAddress;
-        const result = isSim
-            ? await simExecuteExit(tgId, mint, 100, undefined, pos.strategy)
-            : await executeExit(tgId, mint, 100, false, pos.strategy);
-            
-        if (result.success) successCount++;
-        else failCount++;
-        
-        await new Promise(r => setTimeout(r, 400));
-    }
-
-    await ctx.telegram.editMessageText(
-        ctx.chat!.id,
-        loader.message_id,
-        undefined,
-        `✅ <b>Sweep Complete</b>\n\nClosed: <b>${successCount}</b> | Failed: <b>${failCount}</b>\n\nUse /start or check the dashboard to review your updated balance.`,
-        { parse_mode: 'HTML' }
-    );
-});
 
 bot.action(/^trade_guide_page_(\d+)$/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3737,6 +3694,135 @@ bot.action('edit_snipe_budget', async (ctx) => {
     await ctx.replyWithHTML(`💳 <b>EDIT MAX BUDGET</b>\nReply with the Maximum amount of SOL or USD to spend overall (0 for Infinite).\n<i>Example: 2.5 or $500</i>`);
 });
 
+
+
+// Add to src/index.ts
+
+bot.command('sweep', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const { isSimulationActive, simExecuteExit } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    
+    let positions: any[] = [];
+    if (isSim) {
+        positions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
+    } else {
+        const { getUserPositions } = await import('./services/position.service.js');
+        positions = (await getUserPositions(tgId)) || [];
+    }
+
+    if (!positions || positions.length === 0) {
+        return ctx.replyWithHTML('📭 <b>No open positions to sweep.</b>');
+    }
+
+    const loader = await ctx.replyWithHTML(`🧹 <b>Sweeping ${positions.length} position(s) to cash...</b>`);
+
+    let successCount = 0;
+    let failCount = 0;
+    for (const pos of positions) {
+        const mint = pos.mint || pos.tokenAddress;
+        const result = isSim
+            ? await simExecuteExit(tgId, mint, 100, undefined, pos.strategy)
+            : await executeExit(tgId, mint, 100, false, pos.strategy);
+            
+        if (result.success) successCount++;
+        else failCount++;
+        
+        await new Promise(r => setTimeout(r, 400));
+    }
+
+    await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        loader.message_id,
+        undefined,
+        `✅ <b>Sweep Complete</b>\n\nClosed: <b>${successCount}</b> | Failed: <b>${failCount}</b>\n\nUse /start or check the WebApp dashboard to review your updated cash balance.`,
+        { parse_mode: 'HTML' }
+    );
+});
+
+bot.action('action_sweep_all', async (ctx) => {
+    try { await ctx.answerCbQuery('Sweeping all positions to cash...'); } catch (_) {}
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const { isSimulationActive, simExecuteExit } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    
+    let positions: any[] = [];
+    if (isSim) {
+        positions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
+    } else {
+        const { getUserPositions } = await import('./services/position.service.js');
+        positions = (await getUserPositions(tgId)) || [];
+    }
+
+    if (!positions || positions.length === 0) {
+        return ctx.replyWithHTML('📭 <b>No open positions to sweep.</b>');
+    }
+
+    const loader = await ctx.replyWithHTML(`🧹 <b>Sweeping ${positions.length} position(s) to cash...</b>`);
+
+    let successCount = 0;
+    let failCount = 0;
+    for (const pos of positions) {
+        const mint = pos.mint || pos.tokenAddress;
+        const result = isSim
+            ? await simExecuteExit(tgId, mint, 100, undefined, pos.strategy)
+            : await executeExit(tgId, mint, 100, false, pos.strategy);
+            
+        if (result.success) successCount++;
+        else failCount++;
+        
+        await new Promise(r => setTimeout(r, 400));
+    }
+
+    await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        loader.message_id,
+        undefined,
+        `✅ <b>Sweep Complete</b>\n\nClosed: <b>${successCount}</b> | Failed: <b>${failCount}</b>\n\nUse /start to view your updated cash balance.`,
+        { parse_mode: 'HTML' }
+    );
+});
+
+// 🟢 WebApp Fast-Sweep Endpoint
+app.post('/api/sweep', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
+
+        const { isSimulationActive, simExecuteExit } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+
+        let positions: any[] = [];
+        if (isSim) {
+            positions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
+        } else {
+            const { getUserPositions } = await import('./services/position.service.js');
+            positions = (await getUserPositions(tgId)) || [];
+        }
+
+        let successCount = 0;
+        let failCount = 0;
+        for (const pos of positions) {
+            const mint = pos.mint || pos.tokenAddress;
+            const result = isSim
+                ? await simExecuteExit(tgId, mint, 100, undefined, pos.strategy)
+                : await executeExit(tgId, mint, 100, false, pos.strategy);
+
+            if (result.success) successCount++;
+            else failCount++;
+            await new Promise(r => setTimeout(r, 250));
+        }
+
+        res.json({ success: true, closed: successCount, failed: failCount });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
 // =========================================================
 // 💼 POSITIONS & DUST SWEEPER ENGINE
 // =========================================================

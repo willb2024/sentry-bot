@@ -648,9 +648,13 @@ export async function buildTipAndFeeTransaction(
 }
 
 export async function executeSnipe(
-    telegramId: string, targetCA: string, amountSol: number,
-    side: 'buy' | 'sell' = 'buy', tokenAmount?: number,
-    isBumper: boolean = false, raydiumPoolId?: string,
+    telegramId: string, 
+    targetCA: string, 
+    amountSol: number,
+    side: 'buy' | 'sell' = 'buy', 
+    tokenAmount?: number,
+    isBumper: boolean = false, 
+    raydiumPoolId?: string,
     overrideSlippage?: number,
     antiMevDelayMs: number = 0,
     customRpcUrl?: string,
@@ -658,11 +662,13 @@ export async function executeSnipe(
     aiScore?: number
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
+    // 1. Simulation Intercept
     const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
         return await simExecuteSnipe(telegramId, targetCA, amountSol, strategy, aiScore ?? 75);
     }
     
+    // 2. Anti-MEV Delays & Sandwich Defense
     if (antiMevDelayMs > 0) await new Promise(r => setTimeout(r, antiMevDelayMs));
 
     const mevPromise = (side === 'buy' && !isBumper)
@@ -722,7 +728,7 @@ export async function executeSnipe(
         const recentBlockhash = getCachedBlockhash() || (await connection.getLatestBlockhash('processed')).blockhash;
         const feeRate = await getPlatformFeeRate(user.telegramId);
 
-        // 🛑 Live Max Loss Circuit Breaker Check
+        // 3. Live Max Loss Circuit Breaker Check
         const liveConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
         if (liveConfig?.maxLossPercent && liveConfig.maxLossPercent > 0) {
             const lossCheck = await isLiveLossLimitHit(telegramId, liveConfig, user);
@@ -744,8 +750,10 @@ export async function executeSnipe(
             }
         }
 
-        // Atomic Budget Reserve via Redlock
-        const intendedSpend = amountSol * (user.activeWallets || 1);
+        // 4. Atomic Budget Locking & Strict Clamping
+        const activeWallets = user.activeWallets || 1;
+        const intendedSpend = amountSol * activeWallets;
+        
         const budgetLockKey = `lock:budget:${telegramId}`;
         let budgetLock;
         try {
@@ -754,30 +762,46 @@ export async function executeSnipe(
             return { success: false, message: "Budget lock contention. Try again in a moment." };
         }
 
+        let actualSpendPerWallet = amountSol;
         try {
             const sessionId = await redis.get(`autosnipe:session_id:live:${telegramId}`);
             const currentSpendFinal = await getSessionSpend(telegramId, 'live');
+            const maxBudget = liveConfig?.maxBudgetSol || Infinity;
+            const remainingBudget = maxBudget - currentSpendFinal;
 
-            if (liveConfig?.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
-                await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
-                
+            if (remainingBudget <= 0) {
+                await prisma.autoSnipeConfig.update({ where: { id: liveConfig!.id }, data: { isActive: false } });
                 const bot = getBotInstance(); 
                 await sendBudgetExhaustedSummary(bot, telegramId, 'live', sessionId);
-                
                 return { success: false, message: "⚠️ Budget exhausted. Sniper paused." };
             }
-            await addSessionSpend(telegramId, intendedSpend, 'live');
+
+            // Clamp total buy size to exact remaining budget
+            const clampedTotalSpend = Math.min(intendedSpend, remainingBudget);
+            actualSpendPerWallet = clampedTotalSpend / activeWallets;
+
+            if (actualSpendPerWallet < 0.005) {
+                await prisma.autoSnipeConfig.update({ where: { id: liveConfig!.id }, data: { isActive: false } });
+                const bot = getBotInstance(); 
+                await sendBudgetExhaustedSummary(bot, telegramId, 'live', sessionId);
+                return { success: false, message: "⚠️ Remaining budget too low for trade. Sniper paused." };
+            }
+
+            // Pre-reserve clamped budget atomically
+            await addSessionSpend(telegramId, clampedTotalSpend, 'live');
         } finally {
             if (budgetLock) await (budgetLock as any).release().catch(() => {});
         }
 
+        // 5. Parallel Multi-Wallet Purchase Assembly & Execution
         const executionPromises = wallets.map(async (w, index) => {
             let wBal = getLiveWalletBalance(w.publicKey.toBase58());
             if (wBal === null) wBal = (await connection.getBalance(w.publicKey).catch(()=>0)) / LAMPORTS_PER_SOL;
             
-            const requiredBuffer = 0.001 + (amountSol * 0.01) + 0.0005;
-            if (wBal < amountSol + requiredBuffer) {
-                walletErrors[index] = `Insufficient Funds`; walletReport[index] = `W${index + 1}: 🔴 Gas`; 
+            const requiredBuffer = 0.001 + (actualSpendPerWallet * 0.01) + 0.0005;
+            if (wBal < actualSpendPerWallet + requiredBuffer) {
+                walletErrors[index] = `Insufficient Funds`; 
+                walletReport[index] = `W${index + 1}: 🔴 Gas`; 
                 return { success: false, index };
             }
 
@@ -785,12 +809,13 @@ export async function executeSnipe(
             const pkEncrypted = typeof rawPkEncrypted === 'string' ? rawPkEncrypted : undefined;
 
             const apiRes = await fetchApiTransaction(
-                'buy', targetCA, w.publicKey.toBase58(), amountSol, 0, "0", 0, 
+                'buy', targetCA, w.publicKey.toBase58(), actualSpendPerWallet, 0, "0", 0, 
                 selectedSlippage, priorityLevel, customPriorityFee, pkEncrypted, raydiumPoolIdToUse, user.enableSOR ?? true
             );
 
             if (!apiRes.buffer) { 
-                walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; 
+                walletErrors[index] = apiRes.errorLog; 
+                walletReport[index] = `W${index + 1}: 🔴 Route`; 
                 return { success: false, index }; 
             }
 
@@ -798,13 +823,17 @@ export async function executeSnipe(
             try {
                 swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
             } catch (e: any) {
-                walletErrors[index] = `Malformed TX buffer: ${e.message}`; walletReport[index] = `W${index + 1}: 🔴 Format`;
+                walletErrors[index] = `Malformed TX buffer: ${e.message}`; 
+                walletReport[index] = `W${index + 1}: 🔴 Format`;
                 return { success: false, index };
             }
             swapTx.sign([w]);
 
-            const tipTx = await buildTipAndFeeTransaction(w, telegramId, amountSol, priorityLevel, customPriorityFee, isBumper, recentBlockhash, feeRate);
-            if (!tipTx) { walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
+            const tipTx = await buildTipAndFeeTransaction(w, telegramId, actualSpendPerWallet, priorityLevel, customPriorityFee, isBumper, recentBlockhash, feeRate);
+            if (!tipTx) { 
+                walletReport[index] = `W${index + 1}: 🔴 Sign`; 
+                return { success: false, index }; 
+            }
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
@@ -816,7 +845,11 @@ export async function executeSnipe(
             }
 
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
-            if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
+            if (!bundleOk) { 
+                walletErrors[index] = "Dropped by Jito."; 
+                walletReport[index] = `W${index + 1}: 🔴 Drop`; 
+                return { success: false, index }; 
+            }
 
             const expectedOutput = apiRes.estimatedOutput || 0;
             const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true, w.publicKey);
@@ -826,8 +859,8 @@ export async function executeSnipe(
                 
                 (async () => {
                     try {
-                        const feeCharged = amountSol * feeRate;
-                        const feeChargedLamports = BigInt(Math.round((amountSol * 1_000_000_000) * feeRate));
+                        const feeCharged = actualSpendPerWallet * feeRate;
+                        const feeChargedLamports = BigInt(Math.round((actualSpendPerWallet * 1_000_000_000) * feeRate));
 
                         const [affiliateCutLamports, guildOwnerCutLamports, leaderCutLamports] = await Promise.all([
                             (async () => {
@@ -876,14 +909,21 @@ export async function executeSnipe(
                             })()
                         ]);
 
-                        prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: amountSol } } }).catch(() => {});
-                        awardGuildPoints(user.telegramId, amountSol).catch(() => {});
+                        prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: actualSpendPerWallet } } }).catch(() => {});
+                        awardGuildPoints(user.telegramId, actualSpendPerWallet).catch(() => {});
                         
                         await prisma.trade.create({
                             data: {
-                                userId: user.id, tokenAddress: targetCA, isBuy: true, amountInSol: amountSol,
-                                feeChargedSol: feeCharged, affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, loyaltyRebateSol: 0,
-                                txSignature: txSig, status: 'CONFIRMED', strategy: strategy,
+                                userId: user.id, 
+                                tokenAddress: targetCA, 
+                                isBuy: true, 
+                                amountInSol: actualSpendPerWallet,
+                                feeChargedSol: feeCharged, 
+                                affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000, 
+                                loyaltyRebateSol: 0,
+                                txSignature: txSig, 
+                                status: 'CONFIRMED', 
+                                strategy: strategy,
                                 aiScore: aiScore ?? null,
                                 expectedPriceUsd: tcaReport.expectedAmount,
                                 executedPriceUsd: tcaReport.executedPricePerToken,
@@ -891,16 +931,16 @@ export async function executeSnipe(
                             } as any
                         }).catch(() => {});
 
-                        fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol, signature: txSig, strategy, aiScore }).catch(() => {});
+                        fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol: actualSpendPerWallet, signature: txSig, strategy, aiScore }).catch(() => {});
                         const { recordStatsEvent } = await import('./simulation.service.js');
                         recordStatsEvent(user.telegramId, 'live', 0).catch(() => {});
                     } catch (err: any) {
                         logger.error('Buy post-processing failed', { error: err.message, txSig });
-                        await redis.rpush('failed_trade_recovery', JSON.stringify({ telegramId, targetCA, txSig, amountSol, side: 'buy' }));
+                        await redis.rpush('failed_trade_recovery', JSON.stringify({ telegramId, targetCA, txSig, amountSol: actualSpendPerWallet, side: 'buy' }));
                     }
                 })();
 
-                return { success: true, index, signature: txSig, volumeSpent: amountSol };
+                return { success: true, index, signature: txSig, volumeSpent: actualSpendPerWallet };
             } else {
                 walletReport[index] = `W${index + 1}: 🔴 Drop`;
                 return { success: false, index };
@@ -922,7 +962,9 @@ export async function executeSnipe(
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); 
 
         return {
-            success: true, signature: firstSignature, volumeSpent: totalVolume,
+            success: true, 
+            signature: firstSignature, 
+            volumeSpent: totalVolume,
             message: `🟢 Trade Confirmed (${successful.length}/${wallets.length} Wallets).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}`
         };
     } catch (error: any) { 
