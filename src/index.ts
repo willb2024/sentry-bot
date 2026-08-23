@@ -975,39 +975,88 @@ bot.action('start_token_wizard', async (ctx) => {
 
 
 
-// Inside src/index.ts
+// Inside src/index.ts — Full Vault & Keys Menu with Deep Explanations & 4-Decimal Clamping
 
 async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
     
-    let liveBalance = await getLiveBalance(user);
+    const rawBalance = await getLiveBalance(user);
+    const formattedBalance = parseFloat(rawBalance || '0').toFixed(4); // 🟢 Formats cleanly to 4 decimal places
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
-    let walletText = `🔑 <b>VAULT & KEYS</b>\n\n<b>Total Balance:</b> <code>${liveBalance} SOL</code>\n\n`;
-    walletText += `<b>W1 (Main):</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n`;
-    if (user.activeWallets >= 2 && user.vault2) walletText += `<b>W2:</b> <code>${maskAddress(user.vault2, hideWallets)}</code>\n`;
-    if (user.activeWallets >= 3 && user.vault3) walletText += `<b>W3:</b> <code>${maskAddress(user.vault3, hideWallets)}</code>\n`;
-    if (user.activeWallets >= 4 && user.vault4) walletText += `<b>W4:</b> <code>${maskAddress(user.vault4, hideWallets)}</code>\n`;
-    if (user.activeWallets >= 5 && user.vault5) walletText += `<b>W5:</b> <code>${maskAddress(user.vault5, hideWallets)}</code>\n\n`;
-    walletText += `🐙 <b>WHY USE MULTI-WALLET (WHALE MODE)?</b>\nPump.fun restricts how many tokens a single wallet can buy at launch. By activating multiple wallets, Sentry fires simultaneous transactions in the exact same millisecond via Jito. <b>You bypass the limits, secure a massive bag at Block-0, and dump on the timeline.</b>\n\n<i>⚠️ NOTE: You MUST send SOL to each individual address above!</i>\n\n<b>Active Wallets:</b> ${user.activeWallets} / 5\n`;
+    let walletList = `• <b>W1 (Primary Master):</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 2 && user.vault2) walletList += `• <b>W2 (Sub-Wallet):</b> <code>${maskAddress(user.vault2, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 3 && user.vault3) walletList += `• <b>W3 (Sub-Wallet):</b> <code>${maskAddress(user.vault3, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 4 && user.vault4) walletList += `• <b>W4 (Sub-Wallet):</b> <code>${maskAddress(user.vault4, hideWallets)}</code>\n`;
+    if (user.activeWallets >= 5 && user.vault5) walletList += `• <b>W5 (Sub-Wallet):</b> <code>${maskAddress(user.vault5, hideWallets)}</code>\n`;
+
+    const whaleModeStatus = user.activeWallets > 1
+        ? `🟢 <b>WHALE MODE ACTIVE (${user.activeWallets} Wallets)</b>\n<i>Fires ${user.activeWallets} concurrent purchases in 1 atomic Jito Block-0 bundle.</i>`
+        : `⚪ <b>STANDARD MODE (1 Wallet)</b>\n<i>All trades execute strictly from your primary W1 vault.</i>`;
+
+    const walletText = 
+        `🔑 <b>VAULT & SECURITY MANAGEMENT</b>\n\n` +
+        `💰 <b>Total Spendable Balance:</b> <code>${formattedBalance} SOL</code>\n\n` +
+        `━━━━━━━━━━━━━━━\n` +
+        `👛 <b>ACTIVE WALLET NODES:</b>\n` +
+        `${walletList}\n` +
+        `${whaleModeStatus}\n\n` +
+
+        `━━━━━━━━━━━━━━━\n` +
+        `🐙 <b>WHAT IS MULTI-WALLET (WHALE MODE)?</b>\n` +
+        `• <b>The Problem:</b> Pump.fun and new Raydium pools restrict how much a single wallet can buy at launch (often capped at 0.5–1.0 SOL) to prevent supply hoarding.\n` +
+        `• <b>How Sentry Solves It:</b> By arming 2 to 5 sub-wallets, Sentry compiles individual buys from every active wallet into <b>one single atomic Jito bundle</b>.\n` +
+        `• <b>The Edge:</b> All your wallets buy simultaneously in the exact same millisecond on <b>Block-0</b>. You bypass per-wallet caps, secure up to 5x the normal bag, and front-run the market.\n\n` +
+
+        `⚠️ <b>IMPORTANT FUNDING RULE:</b>\n` +
+        `<i>Each active wallet node requires its own SOL balance to pay for tokens and gas. Send SOL to each individual address shown above.</i>\n\n` +
+
+        `━━━━━━━━━━━━━━━\n` +
+        `🛡️ <b>SECURITY & RECOVERY TOOLS:</b>\n` +
+        `• <b>🧹 Sweep to W1:</b> Moves all SOL from sub-wallets back into W1 with 1 tap.\n` +
+        `• <b>📤 Export / 📥 Import:</b> View raw private keys (auto-deletes in 60s) or import an existing Phantom wallet.\n` +
+        `• <b>🔒 PIN & 🔑 Recovery:</b> Protects withdrawals with a 4–6 digit Scrypt PIN and self-service 8-character recovery code.\n\n` +
+        `<b>Active Wallets:</b> <b>${user.activeWallets} / 5</b>`;
 
     const UI = Markup.inlineKeyboard([
         [
             Markup.button.callback(user.activeWallets === 1 ? '🟢 1' : '1', 'set_wallets_1'),
             Markup.button.callback(user.activeWallets === 2 ? '🟢 2' : '2', 'set_wallets_2'),
             Markup.button.callback(user.activeWallets === 3 ? '🟢 3' : '3', 'set_wallets_3'),
-            Markup.button.callback(user.activeWallets >= 4 ? '🟢 4' : '4', 'set_wallets_4'),
-            Markup.button.callback(user.activeWallets >= 5 ? '🟢 5' : '5', 'set_wallets_5')
+            Markup.button.callback(user.activeWallets === 4 ? '🟢 4' : '4', 'set_wallets_4'),
+            Markup.button.callback(user.activeWallets === 5 ? '🟢 5' : '5', 'set_wallets_5')
         ],
         [Markup.button.callback('🧹 Sweep All Sub-Wallets to W1', 'action_consolidate_wallets')],
-        [Markup.button.callback('📤 Export Keys', 'action_export_key'), Markup.button.callback('📥 Import Key', 'action_import_key')],
-        [Markup.button.callback('🔒 Set Withdrawal PIN', 'action_set_pin'), Markup.button.callback('🔑 Forgot PIN?', 'action_forgot_pin')],
-        [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
+        [
+            Markup.button.callback('📤 Export Keys', 'action_export_key'), 
+            Markup.button.callback('📥 Import Key', 'action_import_key')
+        ],
+        [
+            Markup.button.callback('🔒 Set Withdrawal PIN', 'action_set_pin'), 
+            Markup.button.callback('🔑 Forgot PIN?', 'action_forgot_pin')
+        ],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 
     await safeEditMessageText(ctx, walletText, UI); 
 }
+
+// 🟢 FIX: Update the button action to smoothly re-render the updated wallet count
+bot.action(/^set_wallets_([1-5])$/, async (ctx) => {
+    const count = parseInt(ctx.match[1], 10);
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    try {
+        await ctx.answerCbQuery(`⚡ Switched to ${count} Active Wallet${count > 1 ? 's' : ''}!`);
+        await ensureWalletsExist(tgId, count);
+        await redis.del(`balance_cache:${tgId}`); // Invalidate balance cache to recalculate immediately
+        await sendOrEditVaultMenu(ctx, tgId);     // Re-render in place
+    } catch (e: any) {
+        console.error("🔴 [VAULT] Switch error:", e.message);
+    }
+});
 
 // =========================================================
 // 💬 USER SUPPORT & CONTACT SYSTEM
@@ -2195,20 +2244,26 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/watch DezXAZ... 0.005</code>. When price hits $0.005, Sentry sends an alert with a 1-tap Buy button. At tax time, send <code>/exporttrades</code> to download your full ledger.`,
 
-    // PAGE 28: VAULT HARDENING & WITHDRAWAL SECURITY
-    `📖 <b>HOW TO TRADE: SECURITY HARDENING & WITHDRAWALS</b> <i>(28/29)</i>\n\n` +
-    `<i>Protect your funds against session hijacking, desktop unauthorized access, and phone theft.</i>\n\n` +
-    `<b>SETTING A WITHDRAWAL PIN:</b>\n` +
+    // PAGE 28: VAULT SECURITY, PIN SETUP & RECOVERY CODES
+    `📖 <b>HOW TO TRADE: WITHDRAWAL PIN & RECOVERY SYSTEM</b> <i>(28/29)</i>\n\n` +
+    `<i>Protect your trading capital against phone theft, desktop session hijacking, and unauthorized withdrawals.</i>\n\n` +
+    `<b>HOW THE WITHDRAWAL PIN WORKS:</b>\n` +
     `1. Go to <b>Vault & Keys</b> → tap <b>🔒 Set Withdrawal PIN</b>.\n` +
-    `2. Reply with a 4 to 6 digit secret code. Sentry stores it using one-way <code>scrypt</code> hashing with random salting.\n` +
-    `3. Every withdrawal requires this PIN before transaction assembly.\n` +
-    `4. <b>3-Strike Lockout:</b> 3 failed PIN attempts trigger an immediate <b>60-minute hardware lockout</b> on all withdrawals.\n\n` +
-    `<b>WITHDRAWING FUNDS:</b>\n` +
-    `• <code>/withdraw [ADDRESS] [AMOUNT]</code> — Withdraw specific SOL amount (e.g., <code>/withdraw 2vMm... 1.5</code> or <code>$100</code>).\n` +
-    `• <code>/withdraw [ADDRESS] ALL</code> — Sweeps all available SOL minus gas from active wallets.\n\n` +
+    `2. Enter a secret 4 to 6 digit numerical PIN.\n` +
+    `3. Sentry hashes your PIN using <b>Scrypt with random cryptographic salt</b>. The raw PIN is never stored on disk.\n` +
+    `4. Every manual withdrawal (<code>/withdraw</code>) requires this PIN before transaction assembly.\n\n` +
+    `<b>🔑 8-CHARACTER RECOVERY CODE (SELF-SERVICE RESET):</b>\n` +
+    `• When you set your PIN, Sentry displays an exclusive <b>8-character Recovery Code</b> (e.g., <code>A7K9X2M4</code>).\n` +
+    `• <b>Save this code offline!</b> It is shown only once and cannot be recovered by admins.\n` +
+    `• If you forget your PIN, tap <b>🔑 Forgot PIN?</b> in the Vault menu, enter your recovery code, and set a new PIN instantly without developer intervention.\n\n` +
+    `<b>🚨 3-STRIKE LOCKOUT PROTECTION:</b>\n` +
+    `To protect against brute-force attacks, entering 3 incorrect PIN or recovery attempts triggers an immediate <b>60-minute hardware lockout</b> on all withdrawal functions.\n\n` +
+    `<b>WITHDRAWAL COMMANDS:</b>\n` +
+    `• <code>/withdraw [ADDRESS] [AMOUNT]</code> — Withdraw specific SOL or USD amount (e.g., <code>/withdraw 2vMm... 1.5</code> or <code>$100</code>).\n` +
+    `• <code>/withdraw [ADDRESS] ALL</code> — Sweeps all available SOL across active wallets minus network gas buffer.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `Send <code>/withdraw 2vMm... ALL</code>. Sentry asks for your PIN. Enter your PIN: Sentry consolidates all active wallets and sweeps funds to your external wallet.`,
+    `Set your PIN and write down the recovery code. Type <code>/withdraw [ADDRESS] ALL</code>. Sentry asks for your PIN. Enter your PIN: funds are swept to your external wallet immediately.`,
 
     // PAGE 29: COMPLETE MASTER COMMAND CHEAT SHEET
     `📖 <b>HOW TO TRADE: MASTER COMMAND CHEAT SHEET</b> <i>(29/29)</i>\n\n` +
@@ -4663,16 +4718,7 @@ bot.action('action_import_key', async (ctx) => {
     await ctx.replyWithHTML(`📥 <b>IMPORT EXISTING WALLET</b>\n\nReply to this message with your Phantom/Solflare <b>Private Key (Base58 string)</b>.\n\n<i>⚠️ NOTE: This will permanently overwrite your current Sentry Vault. Make sure you have exported and saved your current Sentry key first if it holds funds!</i>\n\n<i>Type /cancel to abort.</i>`);
 });
 
-bot.action(/^set_wallets_([1-5])$/, async (ctx) => {
-    try { await ctx.answerCbQuery("⏳ Configuring Wallets..."); } catch(e){}
-    const count = parseInt(ctx.match[1]);
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    await ensureWalletsExist(tgId, count);
-    
-    await ctx.replyWithHTML(`✅ <b>Multi-Wallet Updated!</b>\n\nYour sniper will now fire from <b>${count} Wallets</b> simultaneously on every buy.\n\n<i>Note: Ensure you deposit SOL into all active wallets, or they will be skipped during the snipe.</i>`);
-    await sendOrEditVaultMenu(ctx, tgId); // 🟢 FIX: Removes slow fake bot.handleUpdate re-render
-});
+
 // =========================================================
 // 👥 COPY TRADING (UNLOCKED FOR ALL USERS)
 // =========================================================

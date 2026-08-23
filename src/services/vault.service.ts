@@ -118,53 +118,45 @@ export async function exportPrivateKey(telegramId: string): Promise<string | nul
     return decryptKey(user.turnkeySubOrgId);
 }
 
-// src/services/vault.service.ts -> ensureWalletsExist()
+// Inside src/services/vault.service.ts
+
 export async function ensureWalletsExist(telegramId: string, activeCount: number): Promise<void> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
     
-    const updates: any = {};
-    let actuallyCreated = user.activeWallets;
+    // 🟢 FIX: Directly assign the user's selected active count (1 to 5)
+    const updates: any = {
+        activeWallets: activeCount
+    };
 
     try {
         if (activeCount >= 2 && !user.vault2) {
             const w = Keypair.generate();
             updates.vault2 = w.publicKey.toBase58();
             updates.pk2 = encryptKey(bs58.encode(w.secretKey));
-            actuallyCreated = Math.max(actuallyCreated, 2);
         }
         if (activeCount >= 3 && !user.vault3) {
             const w = Keypair.generate();
             updates.vault3 = w.publicKey.toBase58();
             updates.pk3 = encryptKey(bs58.encode(w.secretKey));
-            actuallyCreated = Math.max(actuallyCreated, 3);
         }
         if (activeCount >= 4 && !user.vault4) {
             const w = Keypair.generate();
             updates.vault4 = w.publicKey.toBase58();
             updates.pk4 = encryptKey(bs58.encode(w.secretKey));
-            actuallyCreated = Math.max(actuallyCreated, 4);
         }
         if (activeCount >= 5 && !user.vault5) {
             const w = Keypair.generate();
             updates.vault5 = w.publicKey.toBase58();
             updates.pk5 = encryptKey(bs58.encode(w.secretKey));
-            actuallyCreated = Math.max(actuallyCreated, 5);
         }
         
-        updates.activeWallets = actuallyCreated; // 🟢 Only commit wallets that succeeded
         await prisma.user.update({ where: { id: user.id }, data: updates });
     } catch (e: any) {
-        console.error(`🔴 [VAULT] Partial wallet creation failure for ${telegramId}:`, e.message);
-        if (Object.keys(updates).length > 0) {
-            updates.activeWallets = actuallyCreated;
-            await prisma.user.update({ where: { id: user.id }, data: updates }).catch(() => {});
-        }
+        console.error(`🔴 [VAULT] Wallet creation error for ${telegramId}:`, e.message);
         throw e;
     }
 }
-
-// Add into src/services/vault.service.ts
 
 export function generateRecoveryCode(): string {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
