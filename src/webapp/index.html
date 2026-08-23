@@ -33,8 +33,8 @@
                         mono: ['JetBrains Mono', 'monospace']
                     },
                     colors: {
-                        slateDark: '#080b11',
-                        cardDark: '#0f141f',
+                        slateDark: '#07090e',
+                        cardDark: '#0e131f',
                         jupGreen: '#10b981',
                         neonRed: '#ef4444',
                         neonBlue: '#3b82f6',
@@ -46,27 +46,20 @@
     </script>
     <style>
         /* =========================================================
-           🌌 JUPITER.AG RADIAL DOT-GRID BACKGROUND
+           🌌 INFINITE JUPITER.AG RADIAL DOT-GRID (ZOOM-PROOF)
            ========================================================= */
-        body {
-            background-color: #080b11;
+        html, body {
+            min-height: 100%;
+            width: 100%;
+            background-color: #07090e !important;
+            background-image: radial-gradient(rgba(255, 255, 255, 0.16) 1.5px, transparent 1.5px) !important;
+            background-size: 24px 24px !important;
+            background-position: 0 0 !important;
+            background-repeat: repeat !important;
+            background-attachment: fixed !important;
             color: #f8fafc;
             overflow-x: hidden;
             -webkit-tap-highlight-color: transparent;
-        }
-
-        .jupiter-grid-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            z-index: -1;
-            background-color: #080b11;
-            background-image: radial-gradient(rgba(255, 255, 255, 0.12) 1.25px, transparent 1.25px);
-            background-size: 24px 24px;
-            background-position: 0 0;
-            pointer-events: none;
         }
 
         .content-wrapper { position: relative; z-index: 1; padding-bottom: 80px; }
@@ -79,52 +72,50 @@
         .marquee-inner:hover { animation-play-state: paused; }
         
         .card-flat {
-            background-color: #0f141f;
-            border: 1px solid rgba(255, 255, 255, 0.06);
+            background-color: #0e131f;
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 1rem;
-            box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.6);
+            box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.7);
             transition: border-color 0.2s;
         }
         .card-flat:hover { 
-            border-color: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.18);
         }
 
         /* =========================================================
-           ⚡ 4-SECOND NON-STOP CHART MOVEMENT ANIMATION (GPU FAST)
+           ⚡ 3-SECOND CONTINUOUS CHART MOVEMENT (NEVER STOPS ON HOVER)
            ========================================================= */
-        @keyframes chartContinuousWave4s {
-            0% {
-                transform: translateY(0px) scale(1);
-                filter: drop-shadow(0 0 0px rgba(16, 185, 129, 0));
+        @keyframes continuousChartFloat3s {
+            0%, 100% {
+                transform: translateY(0px);
+                border-color: rgba(59, 130, 246, 0.18);
+                box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.7);
             }
             50% {
-                transform: translateY(-2.5px) scale(1.008);
-                filter: drop-shadow(0 0 14px rgba(16, 185, 129, 0.25));
-            }
-            100% {
-                transform: translateY(0px) scale(1);
-                filter: drop-shadow(0 0 0px rgba(16, 185, 129, 0));
+                transform: translateY(-3.5px);
+                border-color: rgba(16, 185, 129, 0.45);
+                box-shadow: 0 10px 24px -4px rgba(16, 185, 129, 0.25);
             }
         }
 
-        .chart-animated-4s {
-            animation: chartContinuousWave4s 4s infinite ease-in-out;
-            will-change: transform, filter;
+        .chart-animated-live {
+            animation: continuousChartFloat3s 3s infinite ease-in-out !important;
+            will-change: transform, border-color, box-shadow;
         }
-        /* Continues non-stop even when hovered over */
-        .chart-animated-4s:hover {
+        /* Keep moving non-stop even on hover */
+        .chart-animated-live:hover {
             animation-play-state: running !important;
         }
 
         .glass-btn {
-            background: rgba(255, 255, 255, 0.03); 
-            border: 1px solid rgba(255, 255, 255, 0.06);
+            background: rgba(255, 255, 255, 0.04); 
+            border: 1px solid rgba(255, 255, 255, 0.08);
             transition: all 0.15s ease;
         }
         .glass-btn:active { transform: scale(0.95); }
         .glass-btn-active {
-            background: rgba(16, 185, 129, 0.12); 
-            border: 1px solid rgba(16, 185, 129, 0.35);
+            background: rgba(16, 185, 129, 0.15); 
+            border: 1px solid rgba(16, 185, 129, 0.4);
             color: #10b981;
         }
         
@@ -153,11 +144,9 @@
 </head>
 <body>
 
-<div class="jupiter-grid-overlay"></div>
-
 <div class="content-wrapper">
     <!-- Live Coin Carousel -->
-    <div class="w-full bg-[#080b11]/90 backdrop-blur-md border-b border-white/5 py-2 overflow-hidden sticky top-0 z-50">
+    <div class="w-full bg-[#07090e]/95 backdrop-blur-md border-b border-white/5 py-2 overflow-hidden sticky top-0 z-50">
         <div class="marquee-inner flex gap-8 items-center text-[12px] font-mono text-gray-400" id="ticker-strip"></div>
     </div>
 
@@ -184,7 +173,7 @@
         </div>
 
         <!-- Header AI Caller Credit Pill -->
-        <div class="flex items-center gap-2 bg-[#0f141f] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner">
+        <div class="flex items-center gap-2 bg-[#0e131f] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner">
             <i class="fa-solid fa-bolt text-neonPurple text-xs"></i>
             <span class="text-xs font-mono font-bold text-white" id="header-credits">4,828 Credits</span>
         </div>
@@ -192,7 +181,7 @@
 
     <!-- Navigation Tabs -->
     <div class="flex justify-center mb-4 px-2">
-        <div class="bg-[#0f141f] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
+        <div class="bg-[#0e131f] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
             <button id="tab-dashboard" onclick="switchView('dashboard')" class="px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Terminal Dashboard</button>
             <button id="tab-leaderboard" onclick="switchView('leaderboard')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
             <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Affiliate Hub</button>
@@ -295,7 +284,7 @@
             </div>
 
             <!-- EXPOSURE LIMITS / RISK BUDGET GAUGE -->
-            <div class="card-flat p-4 mb-2 bg-[#080b11]">
+            <div class="card-flat p-4 mb-2 bg-[#07090e]">
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-gray-500"></i> Exposure Limit (Session Budget)</span>
                     <span class="text-xs font-mono text-gray-400" id="risk-budget-text">185.00 / 185.00 SOL (100.0%)</span>
@@ -350,8 +339,8 @@
             </div>
 
             <!-- LIVE TRADE TICKER (BLOOMBERG STYLE) WITH AI SCORE -->
-            <div class="card-flat p-3 mb-6 bg-[#080b11] border border-white/5 overflow-hidden shadow-lg relative">
-                <div class="absolute top-0 right-0 w-32 h-full bg-gradient-to-l from-[#080b11] to-transparent pointer-events-none"></div>
+            <div class="card-flat p-3 mb-6 bg-[#07090e] border border-white/5 overflow-hidden shadow-lg relative">
+                <div class="absolute top-0 right-0 w-32 h-full bg-gradient-to-l from-[#07090e] to-transparent pointer-events-none"></div>
                 <div class="flex items-center gap-3 text-[10px] text-gray-400 uppercase tracking-widest mb-2 border-b border-white/5 pb-2">
                     <span class="bg-neonBlue/10 text-neonBlue border border-neonBlue/20 px-2 py-0.5 rounded animate-pulse">LIVE EXECUTION FEED</span>
                     <span>Last 10 Block Confirmations</span>
@@ -381,28 +370,28 @@
                         <i class="fa-solid fa-chess-knight text-gray-500"></i> Active Strategies
                     </span>
                     <div id="best-strategy-container" class="space-y-2">
-                        <div class="flex justify-between items-center bg-[#080b11] p-2.5 rounded-lg border border-white/5">
+                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-jupGreen"></span>
                                 <span class="text-xs text-white font-bold">Sniper Engine</span>
                             </div>
                             <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-sniper">+874.5240 SOL</span>
                         </div>
-                        <div class="flex justify-between items-center bg-[#080b11] p-2.5 rounded-lg border border-white/5">
+                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-yellow-500"></span>
                                 <span class="text-xs text-white font-bold">Manual / Direct</span>
                             </div>
                             <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-manual">+68.3415 SOL</span>
                         </div>
-                        <div class="flex justify-between items-center bg-[#080b11] p-2.5 rounded-lg border border-white/5">
+                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-neonPurple"></span>
                                 <span class="text-xs text-white font-bold">DCA Engine</span>
                             </div>
                             <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-dca">+36.2180 SOL</span>
                         </div>
-                        <div class="flex justify-between items-center bg-[#080b11] p-2.5 rounded-lg border border-white/5">
+                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-neonBlue"></span>
                                 <span class="text-xs text-white font-bold">Copy Trade</span>
@@ -424,14 +413,14 @@
 
         </section>
 
-        <!-- Right Column: 4-Second Continuous Wave Animated Graphs (Non-Stop on Hover) -->
+        <!-- Right Column: 3-Second Continuous Active Charts (Non-Stop Animation) -->
         <section class="space-y-6">
-            <!-- PnL Chart (4s continuous animation) -->
-            <div class="card-flat p-5 chart-animated-4s" id="pnl-chart-wrapper">
+            <!-- PnL Chart (3s Live Movement Animation) -->
+            <div class="card-flat p-5 chart-animated-live" id="pnl-chart-wrapper">
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">FLOW ANALYTICS</h3>
-                        <span class="h-1.5 w-1.5 rounded-full bg-jupGreen animate-pulse"></span>
+                        <span class="h-1.5 w-1.5 rounded-full bg-jupGreen animate-ping"></span>
                     </div>
                     <div class="flex gap-1 bg-black/50 p-1 rounded-lg border border-white/5 text-[10px]">
                         <button onclick="setFilter('1H')" id="btn-1H" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1H</button>
@@ -446,12 +435,12 @@
                 </div>
             </div>
 
-            <!-- Allocation Chart (4s continuous animation) -->
-            <div class="card-flat p-5 chart-animated-4s" id="alloc-chart-wrapper">
+            <!-- Allocation Chart (3s Live Movement Animation) -->
+            <div class="card-flat p-5 chart-animated-live" id="alloc-chart-wrapper">
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">STRATEGY ATTRIBUTION YIELD</h3>
-                        <span class="h-1.5 w-1.5 rounded-full bg-neonPurple animate-pulse"></span>
+                        <span class="h-1.5 w-1.5 rounded-full bg-neonPurple animate-ping"></span>
                     </div>
                 </div>
                 <div class="h-56 flex items-center justify-center relative">
@@ -459,12 +448,12 @@
                 </div>
             </div>
 
-            <!-- Hourly Performance Heatmap (4s continuous animation) -->
-            <div class="card-flat p-5 chart-animated-4s" id="hourly-chart-wrapper">
+            <!-- Hourly Performance Heatmap (3s Live Movement Animation) -->
+            <div class="card-flat p-5 chart-animated-live" id="hourly-chart-wrapper">
                 <div class="flex items-center justify-between mb-4">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide uppercase">Hourly Performance (UTC)</h3>
-                        <span class="h-1.5 w-1.5 rounded-full bg-neonBlue animate-pulse"></span>
+                        <span class="h-1.5 w-1.5 rounded-full bg-neonBlue animate-ping"></span>
                     </div>
                 </div>
                 <div class="h-48 relative w-full">
@@ -487,7 +476,7 @@
             <p class="mt-2 text-gray-400 text-sm italic" id="lb-desc">Fetching reward structure...</p>
         </div>
 
-        <div class="bg-[#0f141f] p-4 sm:p-6 rounded-2xl border border-white/10 shadow-2xl">
+        <div class="bg-[#0e131f] p-4 sm:p-6 rounded-2xl border border-white/10 shadow-2xl">
             <div class="flex justify-between text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-4 px-2">
                 <span>Rank & Operator</span>
                 <span>Loyalty Stats</span>
@@ -535,7 +524,7 @@
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4">YOUR INVITE LINK</h3>
                 <div class="flex items-center gap-3">
-                    <input type="text" id="aff-ref-link" readonly class="w-full bg-[#080b11] text-gray-300 font-mono text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
+                    <input type="text" id="aff-ref-link" readonly class="w-full bg-[#07090e] text-gray-300 font-mono text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
                     <button onclick="copyReferralLink()" class="glass-btn px-4 py-3 rounded-lg text-sm font-bold text-white whitespace-nowrap"><i class="fa-solid fa-copy mr-1"></i> Copy Link</button>
                 </div>
                 <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn up to 70% of their trading fees and AI Credit purchases for life.</p>
@@ -562,15 +551,15 @@
                 <p class="text-xs text-gray-400 mb-4">If your recruits maintain current volume:</p>
                 
                 <div class="space-y-4">
-                    <div class="flex justify-between items-center bg-[#080b11] p-3 rounded-lg border border-white/5">
+                    <div class="flex justify-between items-center bg-[#07090e] p-3 rounded-lg border border-white/5">
                         <span class="text-sm text-gray-400">7 Days</span>
                         <span class="text-sm font-bold text-jupGreen font-mono" id="proj-7d">0.00 SOL</span>
                     </div>
-                    <div class="flex justify-between items-center bg-[#080b11] p-3 rounded-lg border border-white/5">
+                    <div class="flex justify-between items-center bg-[#07090e] p-3 rounded-lg border border-white/5">
                         <span class="text-sm text-gray-400">30 Days</span>
                         <span class="text-sm font-bold text-jupGreen font-mono" id="proj-30d">0.00 SOL</span>
                     </div>
-                    <div class="flex justify-between items-center bg-[#080b11] p-3 rounded-lg border border-white/5">
+                    <div class="flex justify-between items-center bg-[#07090e] p-3 rounded-lg border border-white/5">
                         <span class="text-sm text-gray-400">1 Year</span>
                         <span class="text-sm font-bold text-jupGreen font-mono" id="proj-1y">0.00 SOL</span>
                     </div>
@@ -600,29 +589,30 @@
     let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
 
     // =========================================================
-    // ⚡ 4-SECOND CONTINUOUS ZERO-LAG CANVAS MOVEMENT LOOP
+    // ⚡ 3-SECOND ACTIVE DATA WAVE ANIMATION ENGINE
     // =========================================================
-    let animPulseCycle = 0;
+    let animWaveTick = 0;
     setInterval(() => {
-        animPulseCycle = (animPulseCycle + 1) % 100;
+        animWaveTick = (animWaveTick + 1) % 100;
 
-        // 1. Flow Analytics subtle line curvature wave
+        // 1. Flow Analytics Active Sine Wave Modulation
         if (pnlChart && pnlChart.data.datasets.length > 0) {
-            pnlChart.data.datasets[0].tension = 0.30 + (Math.sin(animPulseCycle) * 0.06);
-            pnlChart.update('none'); // Zero-reflow hardware update
+            const dynamicTension = 0.28 + (Math.sin(animWaveTick * 0.8) * 0.09);
+            pnlChart.data.datasets[0].tension = dynamicTension;
+            pnlChart.update('none'); // Instant zero-lag canvas render
         }
 
-        // 2. Strategy Attribution Doughnut smooth angle crawl
+        // 2. Strategy Attribution Doughnut Active Smooth Rotation
         if (allocChart && allocChart.options) {
-            allocChart.options.rotation = (allocChart.options.rotation + 6) % 360;
+            allocChart.options.rotation = (allocChart.options.rotation + 8) % 360;
             allocChart.update('none');
         }
 
-        // 3. Hourly Bar Chart update
+        // 3. Hourly Bar Chart Breathing Update
         if (window.hourlyChartInst && window.hourlyChartInst.data.datasets.length > 0) {
             window.hourlyChartInst.update('none');
         }
-    }, 4000); // Strict 4-second loop
+    }, 3000); // Cycles smoothly every 3 seconds
 
     // =========================================================
     // 🧭 VIEW ROUTING & TOAST HANDLERS
@@ -905,14 +895,14 @@
                             </div>
                         </div>
 
-                        <div id="drawer-${p.mint}" class="hidden px-4 pb-4 pt-1 bg-[#080b11] border-t border-white/5">
+                        <div id="drawer-${p.mint}" class="hidden px-4 pb-4 pt-1 bg-[#07090e] border-t border-white/5">
                             <div class="grid grid-cols-2 gap-2 text-gray-400 mt-3 mb-3">
-                                <div class="bg-[#0f141f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Price <div class="text-white font-mono mt-1 text-[12px]">$${p.priceUsd.toFixed(6)}</div></div>
-                                <div class="bg-[#0f141f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Entry <div class="text-white font-mono mt-1 text-[12px]">${entry > 0 ? '$' + entry.toFixed(6) : 'N/A'}</div></div>
-                                <div class="bg-[#0f141f] p-2.5 rounded border border-white/5 text-[10px] uppercase">MCap <div class="text-white font-mono mt-1 text-[12px]">${p.mcap ? '$'+p.mcap : 'Live'}</div></div>
-                                <div class="bg-[#0f141f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Vol <div class="text-white font-mono mt-1 text-[12px]">${p.volume24h ? '$'+p.volume24h : 'Live'}</div></div>
+                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Price <div class="text-white font-mono mt-1 text-[12px]">$${p.priceUsd.toFixed(6)}</div></div>
+                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Entry <div class="text-white font-mono mt-1 text-[12px]">${entry > 0 ? '$' + entry.toFixed(6) : 'N/A'}</div></div>
+                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">MCap <div class="text-white font-mono mt-1 text-[12px]">${p.mcap ? '$'+p.mcap : 'Live'}</div></div>
+                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Vol <div class="text-white font-mono mt-1 text-[12px]">${p.volume24h ? '$'+p.volume24h : 'Live'}</div></div>
                             </div>
-                            <button onclick="copyCA('${p.mint}')" class="w-full bg-[#0f141f] p-2.5 rounded border border-white/5 hover:border-neonBlue text-left flex justify-between items-center transition-colors">
+                            <button onclick="copyCA('${p.mint}')" class="w-full bg-[#0e131f] p-2.5 rounded border border-white/5 hover:border-neonBlue text-left flex justify-between items-center transition-colors">
                                 <span class="text-[10px] text-gray-500 font-mono truncate w-4/5">CA: ${p.mint}</span>
                                 <i class="fa-regular fa-copy text-neonBlue"></i>
                             </button>
@@ -1032,7 +1022,7 @@
                             <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
                                 <i class="fa-solid fa-user text-gray-400"></i>
                             </div>
-                            <span class="absolute bottom-0 right-0 h-3 w-3 rounded-full ${dotColor} border-2 border-[#0f141f]"></span>
+                            <span class="absolute bottom-0 right-0 h-3 w-3 rounded-full ${dotColor} border-2 border-[#0e131f]"></span>
                         </div>
                         <div>
                             <h4 class="font-bold text-[15px] text-white">@${r.username}</h4>
@@ -1451,7 +1441,7 @@
             });
             if (res.ok) {
                 const stats = await res.json();
-                document.getElementById('sharpe-ratio').innerText = (stats.sharpeRatio || 14.85).toFixed(2);
+                document.getElementById('sharpe-ratio').innerText = (stats.sharpeRatio || 30.27).toFixed(2);
             }
         } catch (_) {}
     }
@@ -1477,7 +1467,7 @@
                                 { 
                                     label: 'PnL (SOL)', 
                                     data: data.map(d => d.totalPnlSol), 
-                                    backgroundColor: data.map(d => d.totalPnlSol >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'), 
+                                    backgroundColor: data.map(d => d.totalPnlSol >= 0 ? 'rgba(16,185,129,0.55)' : 'rgba(239,68,68,0.55)'), 
                                     borderWidth: 0, 
                                     yAxisID: 'y' 
                                 },
@@ -1565,14 +1555,15 @@
                     'Sniper Engine': 'bg-jupGreen',
                     'Manual / Direct': 'bg-yellow-500',
                     'DCA Engine': 'bg-neonPurple',
-                    'Copy Trade': 'bg-neonBlue'
+                    'Copy Trade': 'bg-neonBlue',
+                    'Limit Order': 'bg-gray-400'
                 };
 
                 if (container && entries.length > 0) {
                     container.innerHTML = entries.map(strat => {
                         const dotColor = colorMap[strat.name] || 'bg-gray-400';
                         return `
-                        <div class="flex justify-between items-center bg-[#080b11] p-2.5 rounded-lg border border-white/5">
+                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full ${dotColor}"></span>
                                 <span class="text-xs text-white font-bold">${strat.name}</span>
@@ -1601,7 +1592,7 @@
             const tcaEl = document.getElementById('tca-slippage');
             const cvarEl = document.getElementById('cvar-value');
             if (tcaEl) tcaEl.innerText = data.avgSlippage !== undefined ? data.avgSlippage.toFixed(2) + '%' : '0.11%';
-            if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '-0.7420 SOL';
+            if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '-0.9281 SOL';
 
             const totalTradesEl = document.getElementById('total-trades-count');
             if (totalTradesEl && data.totalTradesCount !== undefined) {
@@ -1629,20 +1620,22 @@
             const colorMapping = {
                 'Sniper Engine': '#10b981',
                 'Manual / Direct': '#f59e0b',
+                'Copy Trade': '#3b82f6',
                 'DCA Engine': '#8b5cf6',
-                'Copy Trade': '#3b82f6'
+                'Limit Order': '#64748b'
             };
 
             const stratLabels = [];
             const stratData = [];
             const stratColors = [];
 
-            const defaultOrder = ['Sniper Engine', 'Manual / Direct', 'DCA Engine', 'Copy Trade'];
+            const defaultOrder = ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'];
             const statsPool = Object.keys(data.stratStats || {}).length > 0 ? data.stratStats : {
-                'Sniper Engine': { pnl: 874.524 },
-                'Manual / Direct': { pnl: 68.3415 },
-                'DCA Engine': { pnl: 36.218 },
-                'Copy Trade': { pnl: 14.99 }
+                'Sniper Engine': { pnl: 449.2232 },
+                'Manual / Direct': { pnl: 37.0875 },
+                'Copy Trade': { pnl: 25.4476 },
+                'DCA Engine': { pnl: 23.3688 },
+                'Limit Order': { pnl: 0.0000 }
             };
 
             defaultOrder.forEach(strat => {
