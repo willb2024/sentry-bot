@@ -163,3 +163,34 @@ export async function ensureWalletsExist(telegramId: string, activeCount: number
         throw e;
     }
 }
+
+// Add into src/services/vault.service.ts
+
+export function generateRecoveryCode(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    const bytes = crypto.randomBytes(8);
+    for (let i = 0; i < 8; i++) {
+        code += chars[bytes[i] % chars.length];
+    }
+    return code;
+}
+
+export function hashRecoveryCode(code: string): string {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(code.trim().toUpperCase(), salt, 64).toString('hex');
+    return `${salt}:${hash}`;
+}
+
+export function verifyRecoveryCode(code: string, stored: string): boolean {
+    try {
+        const [salt, hash] = stored.split(':');
+        if (!salt || !hash) return false;
+        const verifyHash = crypto.scryptSync(code.trim().toUpperCase(), salt, 64);
+        const storedHashBuffer = Buffer.from(hash, 'hex');
+        if (verifyHash.length !== storedHashBuffer.length) return false;
+        return crypto.timingSafeEqual(verifyHash, storedHashBuffer);
+    } catch (_) {
+        return false;
+    }
+}

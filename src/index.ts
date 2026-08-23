@@ -973,6 +973,10 @@ bot.action('start_token_wizard', async (ctx) => {
 });
 
 
+
+
+// Inside src/index.ts
+
 async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -997,19 +1001,13 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
             Markup.button.callback(user.activeWallets >= 5 ? '🟢 5' : '5', 'set_wallets_5')
         ],
         [Markup.button.callback('🧹 Sweep All Sub-Wallets to W1', 'action_consolidate_wallets')],
-        [Markup.button.callback('📤 Export Keys', 'action_export_key'),
-             Markup.button.callback('📥 Import Key', 'action_import_key')],
-             [Markup.button.callback('🔒 Set Withdrawal PIN', 'action_set_pin')],
+        [Markup.button.callback('📤 Export Keys', 'action_export_key'), Markup.button.callback('📥 Import Key', 'action_import_key')],
+        [Markup.button.callback('🔒 Set Withdrawal PIN', 'action_set_pin'), Markup.button.callback('🔑 Forgot PIN?', 'action_forgot_pin')],
         [Markup.button.callback('⬅️ Dashboard', 'btn_dashboard')]
     ]);
 
     await safeEditMessageText(ctx, walletText, UI); 
 }
-
-
-// =========================================================
-// 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
-// =========================================================
 
 // =========================================================
 // 💬 USER SUPPORT & CONTACT SYSTEM
@@ -1063,6 +1061,36 @@ bot.command('support', async (ctx) => {
     } catch (e) {
         console.error("Support Error:", e);
     }
+});
+
+
+// Inside src/index.ts
+
+bot.action('action_forgot_pin', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const lockout = await redis.get(`recover_lockout:${tgId}`);
+    if (lockout) {
+        return ctx.replyWithHTML(`🚨 <b>RECOVERY LOCKOUT ACTIVE</b>\n\nToo many failed recovery code attempts. PIN recovery is disabled for 60 minutes.`);
+    }
+
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+    if (!user?.withdrawalPinRecovery) {
+        return ctx.replyWithHTML(
+            `🔴 <b>No Recovery Code Configured.</b>\n\n` +
+            `You have not set a withdrawal PIN yet, or your recovery code has not been generated. Please set a new PIN using the <b>Set Withdrawal PIN</b> button in the Vault menu.`,
+            Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]])
+        );
+    }
+
+    await redis.set(`state:recover_pin:${tgId}`, 'AWAITING_CODE', 'EX', 300);
+    await ctx.replyWithHTML(
+        `🔑 <b>PIN RECOVERY PROCEDURE</b>\n\n` +
+        `Please reply to this message with your <b>8-character Recovery Code</b> (e.g., <code>A7K9X2M4</code>).\n\n` +
+        `<i>Type /cancel to abort.</i>`
+    );
 });
 
 bot.command('reply', async (ctx) => {
@@ -5602,41 +5630,34 @@ async function deleteKeysPattern(pattern: string) {
     if (keys.length > 0) await redis.del(...keys);
 }
 
+// Inside src/index.ts
+
 async function handleCancel(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (user) {
-        // 1. Halt Live Auto-Sniper
         await prisma.autoSnipeConfig.updateMany({ where: { userId: user.id }, data: { isActive: false } });
-
-        // 2. Halt Live DCA Schedules & Limit Orders
         await prisma.activeOrder.updateMany({ where: { userId: user.id, isActive: true }, data: { isActive: false } });
-
-        // 3. Halt Live Copy Trades
         await prisma.copyTradeConfig.updateMany({ where: { userId: user.id }, data: { isActive: false } });
         syncCopyTradeListeners(bot);
-
-        // 4. Clear Trailing Guards
         await cancelAllUserGuards(telegramId);
 
-        // 🟢 5. Hard Kill Sim Auto-Sniper & Invalidate Token Generation
         const { killSimAutoSnipe } = await import('./services/simulation.service.js');
         await killSimAutoSnipe(telegramId);
 
-        // 6. Stop AI Caller Scanning
         const { setUserCallerFilters } = await import('./services/caller.service.js');
         await setUserCallerFilters(telegramId, { isActive: false });
     }
 
-    // 7. Clear all interactive wizard session states
     const keysToClear = [
         `state:simedit:${telegramId}`, `state:guard:${telegramId}`, `state:dca:${telegramId}`,
         `state:limit:${telegramId}`, `state:copytrade:${telegramId}`, `state:import_key:${telegramId}`,
         `state:enter_ref:${telegramId}`, `state:edit_slippage:${telegramId}`, `state:edit_custom_speed:${telegramId}`,
-        `state:set_pin:${telegramId}`, `state:autosnipe_amt:${telegramId}`, `state:autosnipe_sl:${telegramId}`,
+        `state:set_pin:${telegramId}`, `state:recover_pin:${telegramId}`, `recover_failures:${telegramId}`,
+        `state:autosnipe_amt:${telegramId}`, `state:autosnipe_sl:${telegramId}`,
         `state:autosnipe_tp:${telegramId}`, `state:autosnipe_mc:${telegramId}`, `state:autosnipe_budget:${telegramId}`,
-        `state:autosnipe_dev:${telegramId}`, `state:edit_caller_age:${telegramId}`, `state:edit_caller_pct:${telegramId}`,
-        `state:edit_caller_score:${telegramId}`, `state:edit_caller_liq:${telegramId}`, `state:edit_caller_vol:${telegramId}`,
-        `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`,
+        `state:autosnipe_dev:${telegramId}`, `state:autosnipe_loss:${telegramId}`, `state:edit_caller_age:${telegramId}`, 
+        `state:edit_caller_pct:${telegramId}`, `state:edit_caller_score:${telegramId}`, `state:edit_caller_liq:${telegramId}`, 
+        `state:edit_caller_vol:${telegramId}`, `state:caller_guard_input:${telegramId}`, `state:caller_dca_input:${telegramId}`,
         `state:guild_tiered_drop:${telegramId}`, `state:guild_indiv_drop:${telegramId}`, `state:guild_airdrop:${telegramId}`,
         `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`,
         `vip:awaiting_tx:${telegramId}`, `state:withdraw_pin:${telegramId}`, `state:credits_tx:${telegramId}`,
@@ -5653,8 +5674,6 @@ async function handleCancel(telegramId: string) {
         await redis.del(...keysToClear.slice(i, i + 100));
     }
 }
-
-// src/index.ts
 
 // 🟢 1. Net Worth Breakdown Endpoint (Cash vs Positions)
 app.post('/api/networth-breakdown', async (req, res) => {
@@ -6460,16 +6479,107 @@ if (copytradeSocialState) {
         return;
     }
 
-    // --- 13. SET PIN ---
+   
+
+    // --- 13. SET PIN & GENERATE RECOVERY CODE ---
     const isSettingPin = await redis.get(`state:set_pin:${telegramId}`);
     if (isSettingPin) {
         await redis.del(`state:set_pin:${telegramId}`);
         if (!/^\d{4,6}$/.test(text)) {
             return ctx.replyWithHTML(`🔴 <b>Invalid format.</b> PIN must be 4 to 6 numbers. Setup aborted.`);
         }
+        
+        const { generateRecoveryCode, hashRecoveryCode } = await import('./services/vault.service.js');
         const hashed = hashPin(text);
-        await prisma.user.update({ where: { telegramId }, data: { withdrawalPin: hashed } });
-        return ctx.replyWithHTML(`✅ <b>Security PIN Set Successfully!</b>\n\nYour vault is now secured. You will need to enter this PIN for any future withdrawals.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
+        const recoveryCode = generateRecoveryCode();
+        const recoveryHashed = hashRecoveryCode(recoveryCode);
+
+        await prisma.user.update({
+            where: { telegramId },
+            data: {
+                withdrawalPin: hashed,
+                withdrawalPinRecovery: recoveryHashed
+            }
+        });
+
+        return ctx.replyWithHTML(
+            `✅ <b>SECURITY PIN SET SUCCESSFULLY!</b>\n\n` +
+            `Your vault is now secured. You will need to enter this PIN for any future withdrawals.\n\n` +
+            `🔑 <b>YOUR RECOVERY CODE (SAVE THIS!):</b>\n` +
+            `<code>${recoveryCode}</code>\n\n` +
+            `⚠️ <i>This code is the <b>ONLY</b> way to reset your PIN if you forget it. Store it somewhere safe offline. It will NEVER be shown again.</i>\n\n` +
+            `<i>If you ever lose access, use the "Forgot PIN?" button in the Vault menu.</i>`,
+            Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]])
+        );
+    }
+
+    // --- 13.1 FORGOT PIN RECOVERY FLOW ---
+    const recoverState = await redis.get(`state:recover_pin:${telegramId}`);
+    if (recoverState === 'AWAITING_CODE') {
+        const lockout = await redis.get(`recover_lockout:${telegramId}`);
+        if (lockout) {
+            await redis.del(`state:recover_pin:${telegramId}`);
+            return ctx.replyWithHTML(`🚨 <b>LOCKOUT ACTIVE:</b> Recovery disabled for 60 minutes.`);
+        }
+
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user?.withdrawalPinRecovery) {
+            await redis.del(`state:recover_pin:${telegramId}`);
+            return ctx.replyWithHTML(`🔴 <b>Error:</b> No recovery code found for this account.`);
+        }
+
+        const { verifyRecoveryCode } = await import('./services/vault.service.js');
+        const isCodeValid = verifyRecoveryCode(text.trim().toUpperCase(), user.withdrawalPinRecovery);
+
+        if (!isCodeValid) {
+            const attempts = await redis.incr(`recover_failures:${telegramId}`);
+            if (attempts >= 3) {
+                await redis.set(`recover_lockout:${telegramId}`, '1', 'EX', 3600);
+                await redis.del(`recover_failures:${telegramId}`);
+                await redis.del(`state:recover_pin:${telegramId}`);
+                return ctx.replyWithHTML(`🚨 <b>LOCKOUT TRIGGERED</b>\n\nToo many failed attempts. PIN recovery is locked for 60 minutes.`);
+            }
+            return ctx.replyWithHTML(`🔴 <b>Invalid Recovery Code.</b>\n\nAttempts remaining: <b>${3 - attempts}</b>. Try again or type /cancel.`);
+        }
+
+        await redis.del(`recover_failures:${telegramId}`);
+        await redis.set(`state:recover_pin:${telegramId}`, 'AWAITING_NEW_PIN', 'EX', 300);
+        return ctx.replyWithHTML(
+            `✅ <b>RECOVERY CODE VERIFIED!</b>\n\n` +
+            `Please reply with your <b>NEW 4-to-6 digit withdrawal PIN</b>.\n\n` +
+            `<i>Type /cancel to abort.</i>`
+        );
+    }
+
+    if (recoverState === 'AWAITING_NEW_PIN') {
+        if (!/^\d{4,6}$/.test(text)) {
+            return ctx.replyWithHTML(`🔴 <b>Invalid format.</b> PIN must be 4 to 6 numbers. Please try again:`);
+        }
+
+        const { generateRecoveryCode, hashRecoveryCode } = await import('./services/vault.service.js');
+        const hashed = hashPin(text);
+        const newRecoveryCode = generateRecoveryCode();
+        const newRecoveryHashed = hashRecoveryCode(newRecoveryCode);
+
+        await prisma.user.update({
+            where: { telegramId },
+            data: {
+                withdrawalPin: hashed,
+                withdrawalPinRecovery: newRecoveryHashed
+            }
+        });
+
+        await redis.del(`state:recover_pin:${telegramId}`);
+        await redis.del(`recover_lockout:${telegramId}`);
+
+        return ctx.replyWithHTML(
+            `✅ <b>PIN RESET SUCCESSFUL!</b>\n\n` +
+            `Your withdrawal PIN has been updated.\n\n` +
+            `🔑 <b>YOUR NEW RECOVERY CODE:</b>\n` +
+            `<code>${newRecoveryCode}</code>\n\n` +
+            `⚠️ <i>Store this in a secure location. Your old recovery code is now invalidated.</i>`,
+            Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]])
+        );
     }
 
     // --- 14. COPY TRADE CONFIG ---

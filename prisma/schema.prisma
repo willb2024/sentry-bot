@@ -11,83 +11,81 @@ datasource db {
 }
 
 model User {
-  id                  String   @id @default(uuid())
-  telegramId          String   @unique
-  username            String?
+  id                    String   @id @default(uuid())
+  telegramId            String   @unique
+  username              String?
   
-  autoSnipeConfig     AutoSnipeConfig?
-
-  firstTradeAt        DateTime?
+  autoSnipeConfig       AutoSnipeConfig?
+  firstTradeAt          DateTime?
   
-  activeWallets       Int      @default(1)
-  vault2              String?  @unique
-  pk2                 String?  @unique
-  vault3              String?  @unique
-  pk3                 String?  @unique
-  vault4              String?  @unique
-  pk4                 String?  @unique
-  vault5              String?  @unique
-  pk5                 String?  @unique
+  activeWallets         Int      @default(1)
+  vault2                String?  @unique
+  pk2                   String?  @unique
+  vault3                String?  @unique
+  pk3                   String?  @unique
+  vault4                String?  @unique
+  pk4                   String?  @unique
+  vault5                String?  @unique
+  pk5                   String?  @unique
 
-  priorityLevel       String   @default("FAST") 
-  customPriorityFee   Float    @default(0.001) 
+  priorityLevel         String   @default("FAST") 
+  customPriorityFee     Float    @default(0.001) 
 
-  ownedGuild          Guild?            @relation("GuildOwner")
-  guildMemberships    GuildMembership[] @relation("GuildMemberships")
+  ownedGuild            Guild?            @relation("GuildOwner")
+  guildMemberships      GuildMembership[] @relation("GuildMemberships")
 
-  vaultAddress        String?  @unique
-  wasEverPromoGranted Boolean  @default(false)
+  vaultAddress          String?  @unique
+  wasEverPromoGranted   Boolean  @default(false)
   
-  turnkeySubOrgId     String?  @unique
+  turnkeySubOrgId       String?  @unique
 
-  referralCode        String   @unique
-  referredById        String?  
-  referredBy          User?    @relation("AffiliateTree", fields: [referredById], references: [id])
-  recruits            User[]   @relation("AffiliateTree")
+  referralCode          String   @unique
+  referredById          String?  
+  referredBy            User?    @relation("AffiliateTree", fields: [referredById], references: [id])
+  recruits              User[]   @relation("AffiliateTree")
 
-  totalVolumeSol      Float    @default(0.0) 
-  isLoyaltyUnlocked   Boolean  @default(false) 
-  hasReferralDiscount Boolean  @default(false) 
+  totalVolumeSol        Float    @default(0.0) 
+  isLoyaltyUnlocked     Boolean  @default(false) 
+  hasReferralDiscount   Boolean  @default(false) 
 
-  // 🟢 Execution Toggles
-  enableSOR              Boolean  @default(true)  // Smart Order Routing (Multi-DEX)
-  enableAdaptiveSlippage Boolean  @default(true)  // Auto-adjust slippage based on volatility
+  enableSOR             Boolean  @default(true)
+  enableAdaptiveSlippage Boolean @default(true)
 
-  isVip               Boolean   @default(false)
-  vipTier             String?
-  vipExpiresAt        DateTime?
-  vipSource           String?
-  vipTxSignature      String?
-  vipPurchasedAt      DateTime?
-  isDevSuiteUnlocked  Boolean   @default(false)
+  isVip                 Boolean   @default(false)
+  vipTier               String?
+  vipExpiresAt          DateTime?
+  vipSource             String?
+  vipTxSignature        String?
+  vipPurchasedAt        DateTime?
+  isDevSuiteUnlocked    Boolean   @default(false)
   
-  withdrawalPin       String?   
+  withdrawalPin         String?   
+  withdrawalPinRecovery String?   // 🟢 Hashed 8-character recovery code for self-service PIN reset
   
-  slippagePercent     Float    @default(20.0)
-  pendingRewardsSol   Float    @default(0.0)
+  slippagePercent       Float    @default(20.0)
+  pendingRewardsSol     Float    @default(0.0)
 
-  creditBalance       Int      @default(15)  
-  lifetimeCredits     Int      @default(15)
-  creditTxs           CreditTransaction[]
+  creditBalance         Int      @default(25)  
+  lifetimeCredits       Int      @default(25)
+  creditTxs             CreditTransaction[]
 
-  reactionGifsEnabled Boolean  @default(true)
+  reactionGifsEnabled   Boolean  @default(true)
 
-  trades              Trade[]
-  activeOrders        ActiveOrder[] 
-  copyTrades          CopyTradeConfig[] 
-  launchedTokens      LaunchedToken[] 
+  trades                Trade[]
+  activeOrders          ActiveOrder[] 
+  copyTrades            CopyTradeConfig[] 
+  launchedTokens        LaunchedToken[] 
 
-  // 🟢 Social Copy-Trading Relations
-  followedBy          CopyTradeFollow[] @relation("Leader")
-  following           CopyTradeFollow[] @relation("Follower")
+  followedBy            CopyTradeFollow[] @relation("Leader")
+  following             CopyTradeFollow[] @relation("Follower")
 
-  simState            SimState?
-  simTrades           SimTrade[]
+  simState              SimState?
+  simTrades             SimTrade[]
 
-  webhookConfigs      WebhookConfig[]
+  webhookConfigs        WebhookConfig[]
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   @@index([telegramId])
   @@index([referralCode])
