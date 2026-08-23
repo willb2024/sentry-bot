@@ -66,8 +66,8 @@ model User {
   slippagePercent     Float    @default(20.0)
   pendingRewardsSol   Float    @default(0.0)
 
-  creditBalance       Int      @default(5)  
-  lifetimeCredits     Int      @default(5)
+  creditBalance       Int      @default(15)  
+  lifetimeCredits     Int      @default(15)
   creditTxs           CreditTransaction[]
 
   reactionGifsEnabled Boolean  @default(true)

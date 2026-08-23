@@ -1591,9 +1591,10 @@ bot.action(/^export_guild_(.+)$/, async (ctx) => {
     await ctx.replyWithHTML(guideText);
 });
 
-// =========================================================
-// 🚀 COMMAND: /start & ONBOARDING (COMPLIANT RISK AGREEMENT)
-// =========================================================
+
+
+// Inside src/index.ts
+
 bot.start(async (ctx: Context) => {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
@@ -1624,13 +1625,17 @@ bot.start(async (ctx: Context) => {
             const refPrefix = botName.toUpperCase().split(' ')[0];
             userCheck = await prisma.user.create({
                 data: {
-                    telegramId: telegramId, username: ctx.from?.username || "Trader",
-                    referralCode: `${refPrefix}-${telegramId}`, referredById: referrerId,
-                    hasReferralDiscount: getsDiscount
+                    telegramId: telegramId, 
+                    username: ctx.from?.username || "Trader",
+                    referralCode: `${refPrefix}-${telegramId}`, 
+                    referredById: referrerId,
+                    hasReferralDiscount: getsDiscount,
+                    creditBalance: 15,     // 🟢 15 Free Welcome Credits
+                    lifetimeCredits: 15
                 }
             });
 
-            // 🟢 CLAUDE FIX 2.7: Trigger Daily VIP Promo for new users
+            // Trigger Daily VIP Promo for new recruits
             if (payload && !payload.startsWith('guild_')) {
                 const result = await checkAndGrantDailyVip(telegramId, payload);
                 if (result.granted) {
@@ -1657,6 +1662,7 @@ bot.start(async (ctx: Context) => {
         const welcomeText = `🛡️ <b>WELCOME TO ${botName.toUpperCase()}</b>\n\n` +
             `Sentry is a secure, high-efficiency programmatic developer utility interface for decentralized markets. ` +
             `All trades are routed defensive-only via private Jito Block-0 validator paths to prevent public mempool exploitation.\n\n` +
+            `🎁 <b>Welcome Gift:</b> 25 Free AI Caller Credits loaded into your account!\n` +
             `✅ <b>Zero-Latency Memory Execution:</b> Localized non-custodial parameters.\n` +
             `✅ <b>Jito MEV Shield:</b> Bypass congested nodes to protect cost basis.\n` +
             `✅ <b>Risk Controls:</b> Multi-wallet balance delegation and trailing stop-losses.\n\n` +
@@ -2111,21 +2117,24 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Your pending affiliate balance reaches <code>1.5 SOL</code>. Tap <b>Claim Payout</b>: funds arrive in your W1 wallet in under 3 seconds.`,
 
-    // PAGE 25: PAY-PER-RESULT AI CREDITS
-    `📖 <b>HOW TO TRADE: PAY-PER-RESULT AI CREDITS</b> <i>(25/29)</i>\n\n` +
-    `<i>Sentry uses a pay-per-result model for AI scans and alerts.</i>\n\n` +
-    `<b>COMMAND:</b> <code>/credits</code>\n\n` +
-    `<b>BILLING RULES:</b>\n` +
-    `• Credits deduct <b>only when a verified token match clears all safety filters</b> and is delivered to your chat.\n` +
-    `• Empty scans, duds, and honeypot-filtered coins cost <b>0 credits</b>.\n\n` +
-    `<b>CREDIT PACKS:</b>\n` +
-    `• <b>Starter:</b> $30 → 150 credits (~$0.14/alert)\n` +
-    `• <b>Growth:</b> $50 → 280 credits (~$0.13/alert)\n` +
-    `• <b>Pro:</b> $75 → 450 credits (~$0.13/alert)\n` +
-    `• <b>Whale:</b> $100 → 2,000 credits (~$0.05/alert)\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `Send <code>/credits</code>, select <b>Pro Pack</b>, transfer the SOL equivalent, and submit your transaction signature to top up your balance.`,
+   
+
+// PAGE 25: PAY-PER-RESULT AI CREDITS
+`📖 <b>HOW TO TRADE: PAY-PER-RESULT AI CREDITS</b> <i>(25/29)</i>\n\n` +
+`<i>Sentry uses a pay-per-result model for AI scans and alerts.</i>\n\n` +
+`<b>COMMAND:</b> <code>/credits</code>\n\n` +
+`<b>BILLING RULES:</b>\n` +
+`• Credits deduct <b>only when a verified token match clears all safety filters</b> and is delivered to your chat.\n` +
+`• Empty scans, duds, and honeypot-filtered coins cost <b>0 credits</b>.\n` +
+`• Every newly registered user receives <b>25 Free Welcome Credits</b> upon account setup.\n\n` +
+`<b>CREDIT PACKS:</b>\n` +
+`• ⚡ <b>Micro:</b> $12 → 150 credits (~$0.08/alert)\n` +
+`• 🚀 <b>Starter:</b> $29 → 500 credits (~$0.058/alert)\n` +
+`• 🔥 <b>Pro:</b> $59 → 1,500 credits (~$0.039/alert)\n` +
+`• 🐋 <b>Whale:</b> $99 → 4,000 credits (~$0.024/alert)\n\n` +
+`━━━━━━━━━━━━━━━\n\n` +
+`💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
+`Send <code>/credits</code>, select <b>Starter Pack ($29)</b>, transfer the SOL equivalent to the treasury address, and submit your transaction signature to receive 500 alerts instantly.`,
 
     // PAGE 26: VIP STATUS & 0% TRADING FEES
     `📖 <b>HOW TO TRADE: VIP STATUS & 0% FEES</b> <i>(26/29)</i>\n\n` +
@@ -4473,33 +4482,33 @@ bot.action('menu_credits', async (ctx) => {
     await sendCreditsMenu(ctx, ctx.from!.id.toString(), true);
 });
 
-// src/index.ts
+
 
 async function sendCreditsMenu(ctx: any, tgId: string, isEdit: boolean) {
     const { getUsageStats, CREDIT_PACKS } = await import('./services/credits.service.js');
     const stats = await getUsageStats(tgId);
     if (!stats) return;
 
-    const text = `💳 <b>SENTRY CREDITS</b>\n\n` +
-        `<i>Credits only spend when Sentry finds and delivers a real token — never for empty scans.</i>\n\n` +
-        `📊 <b>Your Usage (Last 30 days):</b>\n` +
-        `• Current Balance: <b>${stats.currentBalance} credits</b>\n` +
+    const text = `💳 <b>SENTRY AI CREDITS</b>\n\n` +
+        `<i>Credits deduct ONLY when a verified breakout setup clears all safety audits and is delivered to your chat. Duds and empty scans cost 0 credits.</i>\n\n` +
+        `📊 <b>Your 30-Day Activity:</b>\n` +
+        `• Current Balance: <b>${stats.currentBalance.toLocaleString()} credits</b>\n` +
         `• Lifetime Purchased: <b>${stats.lifetimeCredits.toLocaleString()}</b>\n` +
-        `• Manual Scans Used: <b>${stats.scanConsumed}</b>\n` +
-        `• Auto-Caller Alerts Used: <b>${stats.callerConsumed}</b>\n` +
+        `• Manual Radar Scans: <b>${stats.scanConsumed}</b>\n` +
+        `• Auto-Caller Alerts: <b>${stats.callerConsumed}</b>\n` +
         `• Total Consumed: <b>${stats.totalConsumed}</b>\n\n` +
-        `💰 <b>CREDIT PACKS:</b>\n` +
-        `• ${CREDIT_PACKS.starter.name}: $${CREDIT_PACKS.starter.priceUsd} → ${CREDIT_PACKS.starter.credits} credits <i>(~$0.14/alert)</i>\n` +
-        `• ${CREDIT_PACKS.growth.name}: $${CREDIT_PACKS.growth.priceUsd} → ${CREDIT_PACKS.growth.credits} credits <i>(~$0.13/alert)</i>\n` +
-        `• ${CREDIT_PACKS.pro.name}: $${CREDIT_PACKS.pro.priceUsd} → ${CREDIT_PACKS.pro.credits} credits <i>(~$0.13/alert)</i>\n` +
-        `• ${CREDIT_PACKS.whale.name}: $${CREDIT_PACKS.whale.priceUsd} → ${CREDIT_PACKS.whale.credits} credits <i>(~$0.05/alert)</i>\n\n` +
-        `<i>Pick a pack below to top up:</i>`;
+        `💰 <b>DISCOUNTED CREDIT PACKS:</b>\n` +
+        `• ⚡ <b>${CREDIT_PACKS.starter.name}:</b> $${CREDIT_PACKS.starter.priceUsd} → <b>${CREDIT_PACKS.starter.credits} credits</b> <i>(~$0.08/alert)</i>\n` +
+        `• 🚀 <b>${CREDIT_PACKS.growth.name}:</b> $${CREDIT_PACKS.growth.priceUsd} → <b>${CREDIT_PACKS.growth.credits} credits</b> <i>(~$0.058/alert)</i>\n` +
+        `• 🔥 <b>${CREDIT_PACKS.pro.name}:</b> $${CREDIT_PACKS.pro.priceUsd} → <b>${CREDIT_PACKS.pro.credits.toLocaleString()} credits</b> <i>(~$0.039/alert)</i>\n` +
+        `• 🐋 <b>${CREDIT_PACKS.whale.name}:</b> $${CREDIT_PACKS.whale.priceUsd} → <b>${CREDIT_PACKS.whale.credits.toLocaleString()} credits</b> <i>(~$0.024/alert)</i>\n\n` +
+        `<i>Select a pack below to top up via SOL:</i>`;
 
     const UI = Markup.inlineKeyboard([
-        [Markup.button.callback(`${CREDIT_PACKS.starter.name} — $${CREDIT_PACKS.starter.priceUsd} (${CREDIT_PACKS.starter.credits} credits)`, 'buy_credits_starter')],
-        [Markup.button.callback(`${CREDIT_PACKS.growth.name} — $${CREDIT_PACKS.growth.priceUsd} (${CREDIT_PACKS.growth.credits} credits)`, 'buy_credits_growth')],
-        [Markup.button.callback(`${CREDIT_PACKS.pro.name} — $${CREDIT_PACKS.pro.priceUsd} (${CREDIT_PACKS.pro.credits} credits)`, 'buy_credits_pro')],
-        [Markup.button.callback(`${CREDIT_PACKS.whale.name} — $${CREDIT_PACKS.whale.priceUsd} (${CREDIT_PACKS.whale.credits.toLocaleString()} credits)`, 'buy_credits_whale')],
+        [Markup.button.callback(`⚡ ${CREDIT_PACKS.starter.name} — $${CREDIT_PACKS.starter.priceUsd} (${CREDIT_PACKS.starter.credits} credits)`, 'buy_credits_starter')],
+        [Markup.button.callback(`🚀 ${CREDIT_PACKS.growth.name} — $${CREDIT_PACKS.growth.priceUsd} (${CREDIT_PACKS.growth.credits} credits)`, 'buy_credits_growth')],
+        [Markup.button.callback(`🔥 ${CREDIT_PACKS.pro.name} — $${CREDIT_PACKS.pro.priceUsd} (${CREDIT_PACKS.pro.credits.toLocaleString()} credits)`, 'buy_credits_pro')],
+        [Markup.button.callback(`🐋 ${CREDIT_PACKS.whale.name} — $${CREDIT_PACKS.whale.priceUsd} (${CREDIT_PACKS.whale.credits.toLocaleString()} credits)`, 'buy_credits_whale')],
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 
