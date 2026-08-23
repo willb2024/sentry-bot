@@ -6995,28 +6995,50 @@ bot.action(/^confirm_watch_(.+)$/, async (ctx) => {
     await redis.set(`state:guard_ca:${telegramId}`, tokenAddress, 'EX', 120);
 });
 
+// Inside src/index.ts
+
 bot.command('exporttrades', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    const loader = await ctx.replyWithHTML('<i>⏳ Generating your trade ledger...</i>');
+    const loader = await ctx.replyWithHTML('<i>⏳ Generating your comprehensive trade ledger & executive summary...</i>');
 
     try {
-        const csv = await exportTradesToCsv(tgId);
-        if (!csv) {
-            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
-                '📊 <b>No trades found.</b>', { parse_mode: 'HTML' });
+        const { exportTradesToCsv } = await import('./services/analytics.service.js');
+        const result = await exportTradesToCsv(tgId);
+
+        if (!result || !result.csv) {
+            return ctx.telegram.editMessageText(
+                ctx.chat!.id, 
+                loader.message_id, 
+                undefined, 
+                '📊 <b>No trades found in memory to export.</b>', 
+                { parse_mode: 'HTML' }
+            );
         }
 
-        const buffer = Buffer.from(csv, 'utf-8');
+        const dateTag = new Date().toISOString().split('T')[0];
+        const filename = `Sentry_${result.mode}_Trades_${dateTag}.csv`;
+        const buffer = Buffer.from(result.csv, 'utf-8');
+
         await ctx.replyWithDocument(
-            { source: buffer, filename: `Sentry_Trades_${tgId}.csv` },
-            { caption: '📊 <b>Your Secure Trade Ledger</b>\nIncludes full PnL, fee breakdowns, and Jito signatures.', parse_mode: 'HTML' }
+            { source: buffer, filename },
+            { 
+                caption: `📊 <b>SENTRY TRADE LEDGER EXPORTED (${result.mode} MODE)</b>\n\n` +
+                         `• <b>Total Orders:</b> ${result.tradeCount.toLocaleString()}\n` +
+                         `• <b>Includes:</b> Net Worth, Sharpe Ratio, CVaR Tail Risk, PnL breakdowns & Jito signatures.`, 
+                parse_mode: 'HTML' 
+            }
         );
         await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
     } catch (e: any) {
-        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
-            `🔴 <b>Export failed:</b> ${e.message}`, { parse_mode: 'HTML' });
+        await ctx.telegram.editMessageText(
+            ctx.chat!.id, 
+            loader.message_id, 
+            undefined,
+            `🔴 <b>Export failed:</b> ${e.message}`, 
+            { parse_mode: 'HTML' }
+        );
     }
 });
 
@@ -7928,24 +7950,34 @@ app.post('/api/stats-window', async (req, res) => {
 
 
 // 📤 Export Trades (CSV Web)
+// Inside src/index.ts
+
 app.post('/api/trades/export', async (req, res) => {
-
-
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = extractTelegramId(req.body.initData);
         if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-        const csv = await exportTradesToCsv(telegramId);
-        if (!csv) return res.status(404).json({ error: 'No trades found' });
+        const { exportTradesToCsv } = await import('./services/analytics.service.js');
+        const result = await exportTradesToCsv(telegramId);
 
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename=trades_${telegramId}.csv`);
-        res.send(csv);
-    } catch (e) { res.status(500).json({ error: 'Server error' }); }
+        if (!result || !result.csv) {
+            return res.status(404).json({ error: 'No trades found to export' });
+        }
+
+        const dateTag = new Date().toISOString().split('T')[0];
+        const filename = `Sentry_${result.mode}_Trades_${dateTag}.csv`;
+
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.status(200).send(result.csv);
+    } catch (e: any) {
+        console.error('🔴 [EXPORT API ERROR]:', e.message);
+        res.status(500).json({ error: 'Server error during export' });
+    }
 });
 
-// (Locate your existing `bot.command('simflex', ...)` and `bot.command('simedit', ...)` block and REPLACE IT ENTIRELY with this)
+
 
 
 // 1️⃣ Update /sim command
