@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title id="page-title">{{BOT_NAME}} Dashboard</title>
+    <title id="page-title">{{BOT_NAME}} — Quantitative Terminal</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
     
     <script>
         const originalFetch = window.fetch;
@@ -77,9 +77,11 @@
             border: 1px solid rgba(255, 255, 255, 0.05);
             border-radius: 1rem;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
-            transition: border-color 0.2s;
+            transition: border-color 0.2s, transform 0.2s;
         }
-        .card-flat:hover { border-color: rgba(255, 255, 255, 0.1); }
+        .card-flat:hover { 
+            border-color: rgba(255, 255, 255, 0.12);
+        }
 
         .glass-btn {
             background: rgba(255, 255, 255, 0.03); 
@@ -126,17 +128,22 @@
         <div class="marquee-inner flex gap-8 items-center text-[12px] font-mono text-gray-400" id="ticker-strip"></div>
     </div>
 
-    <!-- Header -->
+    <!-- Header with Sleek Quantitative Branding -->
     <header class="flex items-center justify-between px-4 sm:px-6 py-6 max-w-7xl mx-auto w-full">
         <div class="flex items-center gap-3">
             <div class="bg-jupGreen text-slateDark flex items-center justify-center h-10 w-10 rounded-xl shadow-lg">
                 <i class="fa-solid fa-bolt text-xl"></i>
             </div>
             <div>
-                <h1 class="text-[16px] font-bold tracking-wide text-white">{{BOT_NAME}}</h1>
+                <div class="flex items-center gap-2">
+                    <h1 class="text-[16px] font-bold tracking-wide text-white">{{BOT_NAME}}</h1>
+                    <span class="bg-neonBlue/10 text-neonBlue border border-neonBlue/20 text-[9px] font-mono px-2 py-0.5 rounded-full tracking-wider font-bold uppercase hidden sm:inline-block">QUANTITATIVE TERMINAL</span>
+                </div>
                 <div class="flex items-center gap-2 mt-0.5">
-                    <p class="text-[11px] text-gray-400" id="username-display">@Operator</p>
-                    <span class="flex items-center gap-1 text-[10px] text-jupGreen font-semibold">
+                    <p class="text-[11px] text-gray-400 font-mono" id="username-display">@Operator</p>
+                    <span class="text-gray-600 text-[10px] hidden sm:inline">•</span>
+                    <span class="text-[10px] text-gray-500 font-mono hidden sm:inline">Memecoin Trading</span>
+                    <span class="flex items-center gap-1 text-[10px] text-jupGreen font-semibold ml-1">
                         <span class="h-1.5 w-1.5 rounded-full bg-jupGreen animate-pulse"></span> LIVE
                     </span>
                 </div>
@@ -534,6 +541,75 @@
     let liveLeaderboardData = { guild: null, members: [] };
     let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
 
+    // =========================================================
+    // 🌐 AMBIENT PRESENCE ENGINE (AUTONOMOUS 3-SEC IDLE SCROLL)
+    // =========================================================
+    let idleTimer = null;
+    let isAutoScrolling = false;
+    let scrollDirection = 1; // 1 = down, -1 = up
+    let animationFrameId = null;
+
+    function resetIdleTimer() {
+        if (isAutoScrolling) {
+            isAutoScrolling = false;
+            cancelAnimationFrame(animationFrameId);
+        }
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(startAmbientMotion, 3000); // 3 seconds idle trigger
+    }
+
+    function startAmbientMotion() {
+        const dashView = document.getElementById('view-dashboard');
+        if (dashView.classList.contains('hidden-view')) return;
+
+        isAutoScrolling = true;
+        
+        function step() {
+            if (!isAutoScrolling) return;
+
+            const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+            if (maxScroll <= 0) return;
+
+            const currentScroll = window.scrollY;
+
+            // Ultra-smooth institutional cruise speed (0.55px per frame)
+            const speed = 0.55 * scrollDirection;
+            window.scrollBy({ top: speed, behavior: 'auto' });
+
+            if (currentScroll >= maxScroll - 2) {
+                scrollDirection = -1;
+                isAutoScrolling = false;
+                setTimeout(() => { if (!idleTimer) return; isAutoScrolling = true; requestAnimationFrame(step); }, 2200);
+                return;
+            } else if (currentScroll <= 2 && scrollDirection === -1) {
+                scrollDirection = 1;
+                isAutoScrolling = false;
+                setTimeout(() => { if (!idleTimer) return; isAutoScrolling = true; requestAnimationFrame(step); }, 2200);
+                return;
+            }
+
+            animationFrameId = requestAnimationFrame(step);
+        }
+
+        requestAnimationFrame(step);
+    }
+
+    ['mousemove', 'mousedown', 'touchstart', 'touchmove', 'wheel', 'keydown', 'scroll'].forEach(evt => {
+        window.addEventListener(evt, resetIdleTimer, { passive: true });
+    });
+
+    document.addEventListener('mouseover', (e) => {
+        if (e.target.closest('.card-flat') || e.target.closest('canvas') || e.target.closest('button')) {
+            isAutoScrolling = false;
+            cancelAnimationFrame(animationFrameId);
+        }
+    });
+
+    resetIdleTimer();
+
+    // =========================================================
+    // 🧭 VIEW ROUTING & TOAST HANDLERS
+    // =========================================================
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
         
@@ -564,6 +640,7 @@
             tabAff.className = "px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap";
             renderAffiliates();
         }
+        resetIdleTimer();
     }
 
     function showToast(msg) {
