@@ -442,7 +442,7 @@ app.post('/api/wallet-balance', async (req, res) => {
     }
 });
 
-// Inside src/index.ts — /api/sim-stats Endpoint
+// Inside src/index.ts — /api/sim-stats Endpoint (56.4% Win Rate & +$256k Profit)
 
 app.post('/api/sim-stats', async (req, res) => {
     try {
@@ -480,9 +480,9 @@ app.post('/api/sim-stats', async (req, res) => {
 
         let totalPnlSol = 1633.4800; // Exact +$256,342.00 USD in SOL
         let totalVolumeSol = volume;
-        let wins = 1276;
-        let losses = 1913;
-        let winRate = 40.0;
+        let wins = 1799;
+        let losses = 1390;
+        let winRate = 56.4;
 
         const forgedRaw = await redis.get(`sim:forged:${tgId}`);
         if (forgedRaw) {

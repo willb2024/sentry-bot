@@ -79,29 +79,7 @@
             transition: border-color 0.2s;
         }
         .card-flat:hover { 
-            border-color: rgba(255, 255, 255, 0.22);
-        }
-
-        /* =========================================================
-           ⚡ HIGH-VISIBILITY 3-SECOND GLOW WAVE (ZOOM-RESILIENT)
-           ========================================================= */
-        @keyframes highVizChartFloat3s {
-            0%, 100% {
-                border-color: rgba(59, 130, 246, 0.25);
-                box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.8), 0 0 0px rgba(59, 130, 246, 0);
-            }
-            50% {
-                border-color: rgba(16, 185, 129, 0.75);
-                box-shadow: 0 8px 32px -4px rgba(0, 0, 0, 0.9), 0 0 24px rgba(16, 185, 129, 0.45);
-            }
-        }
-
-        .chart-animated-live {
-            animation: highVizChartFloat3s 3s infinite ease-in-out !important;
-            will-change: border-color, box-shadow;
-        }
-        .chart-animated-live:hover {
-            animation-play-state: running !important;
+            border-color: rgba(255, 255, 255, 0.18);
         }
 
         .glass-btn {
@@ -172,7 +150,7 @@
         <!-- Header AI Caller Credit Pill -->
         <div class="flex items-center gap-2 bg-[#0e131f] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner">
             <i class="fa-solid fa-bolt text-neonPurple text-xs"></i>
-            <span class="text-xs font-mono font-bold text-white" id="header-credits">4,828 Credits</span>
+            <span class="text-xs font-mono font-bold text-white" id="header-credits">5,420 Credits</span>
         </div>
     </header>
 
@@ -195,31 +173,31 @@
                 <div class="card-flat p-5 relative">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-wallet text-gray-500"></i> Net Worth</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-white" id="stat-networth">$82,453.00</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-networth-sub">525.4126 SOL</div>
+                        <span class="text-3xl sm:text-4xl font-bold text-white" id="stat-networth">$184,230.99</span>
+                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-networth-sub">1173.9692 SOL</div>
                     </div>
                 </div>
 
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-money-bill-trend-up text-gray-500"></i> Realized PnL</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-jupGreen" id="stat-pnl">+189.32%</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-pnl-sub">+$156,000.00 net profit</div>
+                        <span class="text-3xl sm:text-4xl font-bold text-jupGreen" id="stat-pnl">+2563.42%</span>
+                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-pnl-sub">+$256,342.00 net profit</div>
                     </div>
                 </div>
 
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-bullseye text-gray-500"></i> Win Rate</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="stat-winrate">66.7%</span>
-                        <div class="text-xs text-gray-500 mt-1 font-mono" id="stat-winrate-sub">1859 Wins / 930 Losses</div>
+                        <span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="stat-winrate">56.4%</span>
+                        <div class="text-xs text-gray-500 mt-1 font-mono" id="stat-winrate-sub">1799 Wins / 1390 Losses</div>
                     </div>
                 </div>
 
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-bolt text-gray-500"></i> Trade Volume</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="stat-volume">8956.5316 SOL</span>
+                        <span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="stat-volume">14895.4648 SOL</span>
                         <div class="text-[10px] text-jupGreen mt-1.5 font-mono bg-jupGreen/10 inline-block px-1.5 py-0.5 rounded border border-jupGreen/20">MEV Protected</div>
                     </div>
                 </div>
@@ -229,7 +207,7 @@
             <div class="card-flat p-4 flex justify-between items-center bg-white/[0.02]">
                 <div>
                     <span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Liquid Cash</span>
-                    <div class="text-base sm:text-lg font-bold text-white font-mono mt-0.5" id="stat-cash">$82,453.00</div>
+                    <div class="text-base sm:text-lg font-bold text-white font-mono mt-0.5" id="stat-cash">$184,230.99</div>
                 </div>
                 <div class="text-right">
                     <span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Deployed in Positions</span>
@@ -246,7 +224,7 @@
                         </div>
                         <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider">Total Trading Days</span>
                     </div>
-                    <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">77</span>
+                    <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">93</span>
                 </div>
 
                 <div class="card-flat p-4 flex items-center justify-between">
@@ -259,7 +237,7 @@
                             <span class="text-[10px] text-gray-500 font-mono">Pay-Per-Result</span>
                         </div>
                     </div>
-                    <span class="text-xl font-bold text-neonPurple font-mono" id="stat-credits">4,828</span>
+                    <span class="text-xl font-bold text-neonPurple font-mono" id="stat-credits">5,420</span>
                 </div>
             </div>
 
@@ -276,7 +254,7 @@
                 </div>
                 <div class="flex gap-2 sm:gap-4 text-[11px] sm:text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
                     <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Manual: 0 trades (+0.00 SOL)</span>
-                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto: 16 trades (+33.4742 SOL)</span>
+                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto: 16 trades (+49.9442 SOL)</span>
                 </div>
             </div>
 
@@ -284,7 +262,7 @@
             <div class="card-flat p-4 mb-2 bg-[#07090e]">
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-gray-500"></i> Exposure Limit (Session Budget)</span>
-                    <span class="text-xs font-mono text-gray-400" id="risk-budget-text">185.00 / 185.00 SOL (100.0%)</span>
+                    <span class="text-xs font-mono text-gray-400" id="risk-budget-text">350.00 / 350.00 SOL (100.0%)</span>
                 </div>
                 <div class="w-full bg-[#1e293b] rounded-full h-2 mt-1 border border-white/5 overflow-hidden">
                     <div id="risk-budget-bar" class="bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" style="width: 100%"></div>
@@ -327,7 +305,7 @@
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Total Trades</span>
-                    <div class="text-xl font-bold text-jupGreen font-mono mt-1 truncate" id="total-trades-count">2,789</div>
+                    <div class="text-xl font-bold text-jupGreen font-mono mt-1 truncate" id="total-trades-count">3,189</div>
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Sharpe Ratio</span>
@@ -372,35 +350,28 @@
                                 <span class="h-2 w-2 rounded-full bg-jupGreen"></span>
                                 <span class="text-xs text-white font-bold">Sniper Engine</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-sniper">+449.2232 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-sniper">+1421.8415 SOL</span>
                         </div>
                         <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-yellow-500"></span>
                                 <span class="text-xs text-white font-bold">Manual / Direct</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-manual">+37.0875 SOL</span>
-                        </div>
-                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-neonBlue"></span>
-                                <span class="text-xs text-white font-bold">Copy Trade</span>
-                            </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-copy">+25.4476 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-manual">+118.4210 SOL</span>
                         </div>
                         <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-neonPurple"></span>
                                 <span class="text-xs text-white font-bold">DCA Engine</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-dca">+23.3688 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-dca">+64.9125 SOL</span>
                         </div>
                         <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-gray-400"></span>
-                                <span class="text-xs text-white font-bold">Limit Order</span>
+                                <span class="h-2 w-2 rounded-full bg-neonBlue"></span>
+                                <span class="text-xs text-white font-bold">Copy Trade</span>
                             </div>
-                            <span class="text-xs text-gray-400 font-mono font-bold" id="strat-pnl-limit">+0.0000 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-copy">+28.3050 SOL</span>
                         </div>
                     </div>
                 </div>
@@ -417,14 +388,13 @@
 
         </section>
 
-        <!-- Right Column: 3-Second Active Moving Charts (Zoom-Resilient & Active Movement) -->
+        <!-- Right Column: Stable Clean Non-Animated Charts -->
         <section class="space-y-6">
-            <!-- PnL Chart (3s Active Wave Animation) -->
-            <div class="card-flat p-5 chart-animated-live" id="pnl-chart-wrapper">
+            <!-- PnL Chart -->
+            <div class="card-flat p-5" id="pnl-chart-wrapper">
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">FLOW ANALYTICS</h3>
-                        <span class="h-2 w-2 rounded-full bg-jupGreen animate-ping"></span>
                     </div>
                     <div class="flex gap-1 bg-black/50 p-1 rounded-lg border border-white/5 text-[10px]">
                         <button onclick="setFilter('1H')" id="btn-1H" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1H</button>
@@ -439,12 +409,11 @@
                 </div>
             </div>
 
-            <!-- Allocation Chart (3s Active Rotation Animation) -->
-            <div class="card-flat p-5 chart-animated-live" id="alloc-chart-wrapper">
+            <!-- Allocation Chart -->
+            <div class="card-flat p-5" id="alloc-chart-wrapper">
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">STRATEGY ATTRIBUTION YIELD</h3>
-                        <span class="h-2 w-2 rounded-full bg-neonPurple animate-ping"></span>
                     </div>
                 </div>
                 <div class="h-56 flex items-center justify-center relative">
@@ -452,12 +421,11 @@
                 </div>
             </div>
 
-            <!-- Hourly Performance Heatmap (3s Active Equalizer Animation) -->
-            <div class="card-flat p-5 chart-animated-live" id="hourly-chart-wrapper">
+            <!-- Hourly Performance Heatmap -->
+            <div class="card-flat p-5" id="hourly-chart-wrapper">
                 <div class="flex items-center justify-between mb-4">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide uppercase">Hourly Performance (UTC)</h3>
-                        <span class="h-2 w-2 rounded-full bg-neonBlue animate-ping"></span>
                     </div>
                 </div>
                 <div class="h-48 relative w-full">
@@ -591,52 +559,6 @@
     
     let liveLeaderboardData = { guild: null, members: [] };
     let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
-
-    // =========================================================
-    // ⚡ ACTIVE 3-SECOND REAL DATA MOVEMENT ENGINE (WORKS AT ANY ZOOM)
-    // =========================================================
-    let chartWaveStep = 0;
-    let pnlBaseData = [];
-    let hourlyBaseData = [];
-
-    setInterval(() => {
-        chartWaveStep = (chartWaveStep + 1) % 100;
-
-        // 1. Flow Analytics Active Visual Traveling Wave on the Curve
-        if (pnlChart && pnlChart.data.datasets.length > 0) {
-            if (pnlBaseData.length === 0 && pnlChart.data.datasets[0].data.length > 0) {
-                pnlBaseData = [...pnlChart.data.datasets[0].data];
-            }
-            if (pnlBaseData.length > 0) {
-                pnlChart.data.datasets[0].data = pnlBaseData.map((val, idx) => {
-                    const wave = Math.sin(chartWaveStep + idx * 0.8) * 0.08;
-                    return val * (1 + wave);
-                });
-                pnlChart.data.datasets[0].tension = 0.32 + Math.sin(chartWaveStep) * 0.08;
-                pnlChart.update(); // Visually animates the line!
-            }
-        }
-
-        // 2. Strategy Attribution Doughnut Active 45-Degree Rotation
-        if (allocChart) {
-            allocChart.options.rotation = (allocChart.options.rotation + 45) % 360;
-            allocChart.update(); // Visually spins the doughnut segments!
-        }
-
-        // 3. Hourly Performance Active Bar Equalizer Pulse
-        if (window.hourlyChartInst && window.hourlyChartInst.data.datasets.length > 0) {
-            if (hourlyBaseData.length === 0 && window.hourlyChartInst.data.datasets[0].data.length > 0) {
-                hourlyBaseData = [...window.hourlyChartInst.data.datasets[0].data];
-            }
-            if (hourlyBaseData.length > 0) {
-                window.hourlyChartInst.data.datasets[0].data = hourlyBaseData.map((val, idx) => {
-                    const wave = Math.cos(chartWaveStep + idx * 0.6) * 0.12;
-                    return val * (1 + wave);
-                });
-                window.hourlyChartInst.update(); // Visually bounces the bars!
-            }
-        }
-    }, 3000); // Strict 3-Second Timeout Loop
 
     // =========================================================
     // 🧭 VIEW ROUTING & TOAST HANDLERS
@@ -788,7 +710,6 @@
                     }
                 }
             });
-            pnlBaseData = [...profitData];
         }
 
         const allocCanvas = document.getElementById('allocationChart');
@@ -798,7 +719,7 @@
             
             const hasData = allocLabels && allocLabels.length > 0 && allocData && allocData.length > 0 && allocData.some(v => v > 0);
             const chartLabels = hasData ? allocLabels : ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'];
-            const chartData = hasData ? allocData : [449.2232, 37.0875, 25.4476, 23.3688, 0.0000];
+            const chartData = hasData ? allocData : [1421.8415, 118.421, 28.305, 64.9125, 0.0000];
             const chartColors = ['#10b981', '#f59e0b', '#3b82f6', '#8b5cf6', '#64748b'];
 
             allocChart = new Chart(allocCtx, {
@@ -1142,7 +1063,6 @@
             pnlChart.data.datasets[0].data = chartData.profitData;
             pnlChart.data.datasets[1].data = chartData.lossData;
             pnlChart.update();
-            pnlBaseData = [...chartData.profitData];
         }
         if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     }
@@ -1320,14 +1240,14 @@
                     const totalPnlSol = simStats.totalPnlSol || 0;
                     const totalVolumeSol = simStats.volume || 0;
                     const totalTrades = simStats.totalTrades || (wins + losses);
-                    const credits = simStats.credits !== undefined ? simStats.credits : 4828;
+                    const credits = simStats.credits !== undefined ? simStats.credits : 5420;
 
                     const startingBalSol = parseFloat(simStats.startingBalance) || simCashSol || 1;
                     const pnlPercent = startingBalSol > 0 ? ((totalPnlSol / startingBalSol) * 100).toFixed(2) : "0.00";
                     const pnlUsd = totalPnlSol * liveSolPrice;
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
 
-                    let tradingDays = 77;
+                    let tradingDays = 93;
                     if (simStats.firstTradeAt) {
                         const oldest = new Date(simStats.firstTradeAt);
                         const diffTime = Math.abs(new Date() - oldest);
@@ -1531,7 +1451,6 @@
                             } 
                         }
                     });
-                    hourlyBaseData = data.map(d => d.totalPnlSol);
                 }
             }
         } catch (_) {}
@@ -1669,10 +1588,10 @@
 
             const defaultOrder = ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'];
             const statsPool = Object.keys(data.stratStats || {}).length > 0 ? data.stratStats : {
-                'Sniper Engine': { pnl: 449.2232 },
-                'Manual / Direct': { pnl: 37.0875 },
-                'Copy Trade': { pnl: 25.4476 },
-                'DCA Engine': { pnl: 23.3688 },
+                'Sniper Engine': { pnl: 1421.8415 },
+                'Manual / Direct': { pnl: 118.421 },
+                'Copy Trade': { pnl: 28.305 },
+                'DCA Engine': { pnl: 64.9125 },
                 'Limit Order': { pnl: 0.0000 }
             };
 
