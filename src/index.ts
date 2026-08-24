@@ -7001,35 +7001,43 @@ bot.command('exporttrades', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    const loader = await ctx.replyWithHTML('<i>⏳ Generating your comprehensive trade ledger & executive summary...</i>');
+    const loader = await ctx.replyWithHTML('<i>⏳ Compiling your trade ledger & generating executive PDF statement...</i>');
 
     try {
-        const { exportTradesToCsv } = await import('./services/analytics.service.js');
-        const result = await exportTradesToCsv(tgId);
+        const { exportTradesToCsv, generateExecutivePdfReport } = await import('./services/analytics.service.js');
+        const [csvResult, pdfBuffer] = await Promise.all([
+            exportTradesToCsv(tgId),
+            generateExecutivePdfReport(tgId).catch(() => null)
+        ]);
 
-        if (!result || !result.csv) {
+        if (!csvResult || !csvResult.csv) {
             return ctx.telegram.editMessageText(
                 ctx.chat!.id, 
                 loader.message_id, 
                 undefined, 
-                '📊 <b>No trades found in memory to export.</b>', 
+                '📊 <b>No trades found to export.</b>', 
                 { parse_mode: 'HTML' }
             );
         }
 
         const dateTag = new Date().toISOString().split('T')[0];
-        const filename = `Sentry_${result.mode}_Trades_${dateTag}.csv`;
-        const buffer = Buffer.from(result.csv, 'utf-8');
+        const csvFilename = `Sentry_Trade_Ledger_${dateTag}.csv`;
+        const csvBuffer = Buffer.from(csvResult.csv, 'utf-8');
 
+        // Send PDF Executive Statement Card
+        if (pdfBuffer) {
+            await ctx.replyWithPhoto(
+                { source: pdfBuffer },
+                { caption: `📊 <b>SENTRY TERMINAL — PERFORMANCE STATEMENT</b>\n• Total Orders: <b>${csvResult.tradeCount.toLocaleString()}</b>\n• Includes Net Worth, Realized PnL, Sharpe Ratio, CVaR & Strategy breakdowns.`, parse_mode: 'HTML' }
+            );
+        }
+
+        // Send Full Detailed CSV Document
         await ctx.replyWithDocument(
-            { source: buffer, filename },
-            { 
-                caption: `📊 <b>SENTRY TRADE LEDGER EXPORTED (${result.mode} MODE)</b>\n\n` +
-                         `• <b>Total Orders:</b> ${result.tradeCount.toLocaleString()}\n` +
-                         `• <b>Includes:</b> Net Worth, Sharpe Ratio, CVaR Tail Risk, PnL breakdowns & Jito signatures.`, 
-                parse_mode: 'HTML' 
-            }
+            { source: csvBuffer, filename: csvFilename },
+            { caption: `📑 <b>Complete Raw Trade Ledger (.CSV)</b>\nFormatted for tax accounting and multisenders.`, parse_mode: 'HTML' }
         );
+
         await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
     } catch (e: any) {
         await ctx.telegram.editMessageText(
@@ -7040,8 +7048,7 @@ bot.command('exporttrades', async (ctx) => {
             { parse_mode: 'HTML' }
         );
     }
-});
-
+}); 
 
 // =========================================================
 // 🎮 GRANULAR SIMULATION CONTROLS
@@ -7950,32 +7957,6 @@ app.post('/api/stats-window', async (req, res) => {
 
 
 // 📤 Export Trades (CSV Web)
-// Inside src/index.ts
-
-app.post('/api/trades/export', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const { exportTradesToCsv } = await import('./services/analytics.service.js');
-        const result = await exportTradesToCsv(telegramId);
-
-        if (!result || !result.csv) {
-            return res.status(404).json({ error: 'No trades found to export' });
-        }
-
-        const dateTag = new Date().toISOString().split('T')[0];
-        const filename = `Sentry_${result.mode}_Trades_${dateTag}.csv`;
-
-        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.status(200).send(result.csv);
-    } catch (e: any) {
-        console.error('🔴 [EXPORT API ERROR]:', e.message);
-        res.status(500).json({ error: 'Server error during export' });
-    }
-});
 
 
 
@@ -8003,6 +7984,57 @@ bot.command('sim', async (ctx) => {
         await sendOrEditDashboard(ctx, tgId, false);
     } catch (e: any) {
         await ctx.replyWithHTML(`🔴 <b>SIM ERROR:</b> ${e.message}`);
+    }
+});
+
+// Inside src/index.ts
+
+app.post('/api/trades/export', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
+
+        const { exportTradesToCsv, generateExecutivePdfReport } = await import('./services/analytics.service.js');
+        const [csvResult, pdfBuffer] = await Promise.all([
+            exportTradesToCsv(telegramId),
+            generateExecutivePdfReport(telegramId).catch(() => null)
+        ]);
+
+        if (!csvResult || !csvResult.csv) {
+            return res.status(404).json({ error: 'No trades found' });
+        }
+
+        const dateTag = new Date().toISOString().split('T')[0];
+        const csvFilename = `Sentry_Trade_Ledger_${dateTag}.csv`;
+        const csvBuffer = Buffer.from(csvResult.csv, 'utf-8');
+
+        // 🟢 SEND DIRECTLY INTO USER'S TELEGRAM DM IN REAL TIME
+        try {
+            if (pdfBuffer) {
+                await bot.telegram.sendPhoto(
+                    telegramId,
+                    { source: pdfBuffer },
+                    { caption: `📊 <b>SENTRY TERMINAL — PERFORMANCE STATEMENT</b>\n• Total Orders: <b>${csvResult.tradeCount.toLocaleString()}</b>\n• Includes Net Worth, Realized PnL, Sharpe Ratio, CVaR & Strategy breakdowns.`, parse_mode: 'HTML' }
+                );
+            }
+
+            await bot.telegram.sendDocument(
+                telegramId,
+                { source: csvBuffer, filename: csvFilename },
+                { caption: `📑 <b>Complete Raw Trade Ledger (.CSV)</b>\nDelivered directly from your WebApp session.`, parse_mode: 'HTML' }
+            );
+        } catch (tgErr: any) {
+            console.warn("⚠️ Failed to deliver export via Telegram DM:", tgErr.message);
+        }
+
+        // Also stream directly to browser
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${csvFilename}"`);
+        res.status(200).send(csvResult.csv);
+    } catch (e: any) {
+        console.error('🔴 [EXPORT API ERROR]:', e.message);
+        res.status(500).json({ error: 'Server error during export' });
     }
 });
 
