@@ -388,7 +388,7 @@
 
         </section>
 
-        <!-- Right Column: Stable Clean Non-Animated Charts -->
+        <!-- Right Column: Stable Clean Static Charts (No Movement Animation) -->
         <section class="space-y-6">
             <!-- PnL Chart -->
             <div class="card-flat p-5" id="pnl-chart-wrapper">
@@ -548,6 +548,11 @@
     const tg = window.Telegram.WebApp;
     tg.expand();
 
+    // Disable Chart.js animation transitions completely for immediate static clarity
+    Chart.defaults.animation = false;
+    Chart.defaults.color = '#64748b';
+    Chart.defaults.font.family = "'Inter', sans-serif";
+
     let isSimModeActive = false;
     let pnlChart = null;
     let allocChart = null;
@@ -674,9 +679,6 @@
     }
 
     function initCharts(labels, profitData, lossData, allocLabels, allocData) {
-        Chart.defaults.color = '#64748b';
-        Chart.defaults.font.family = "'Inter', sans-serif";
-        
         const pnlCanvas = document.getElementById('pnlHistoryChart');
         if (pnlCanvas) {
             const pnlCtx = pnlCanvas.getContext('2d');
@@ -748,8 +750,7 @@
                             cornerRadius: 8
                         } 
                     },
-                    cutout: '75%',
-                    animation: { animateScale: true }
+                    cutout: '75%'
                 }
             });
         }
@@ -1607,7 +1608,7 @@
                 allocChart.data.labels = stratLabels;
                 allocChart.data.datasets[0].data = stratData;
                 allocChart.data.datasets[0].backgroundColor = stratColors;
-                allocChart.update('none');
+                allocChart.update();
             }
 
         } catch (e) {
