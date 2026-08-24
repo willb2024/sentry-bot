@@ -1434,65 +1434,40 @@
         setTimeout(fetchLiveData, 3000);
     }
 
- // Inside src/webapp/index.html
-
-async function exportTrades() {
-    showToast('Compiling executive trade ledger...');
-    try {
-        const res = await fetch('/api/trades/export', {
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: tg.initData || "" })
-        });
-
-        if (res.ok) {
-            // Extract server-provided filename if available
-            let filename = 'Sentry_Trade_Ledger.csv';
-            const disposition = res.headers.get('Content-Disposition');
-            if (disposition && disposition.includes('filename=')) {
-                const match = disposition.match(/filename="?([^"]+)"?/);
-                if (match && match[1]) filename = match[1];
-            }
-
-            const blob = await res.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            showToast('✅ Ledger Exported Successfully!');
-        } else { 
-            showToast('No trades found to export'); 
-        }
-    } catch (_) { 
-        showToast('Export failed: network error'); 
-    }
-}
+    async function exportTrades() {
+        showToast('Compiling executive trade ledger...');
         try {
             const res = await fetch('/api/trades/export', {
                 method: 'POST', 
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData })
+                body: JSON.stringify({ initData: tg.initData || "" })
             });
+
             if (res.ok) {
+                let filename = 'Sentry_Trade_Ledger.csv';
+                const disposition = res.headers.get('Content-Disposition');
+                if (disposition && disposition.includes('filename=')) {
+                    const match = disposition.match(/filename="?([^"]+)"?/);
+                    if (match && match[1]) filename = match[1];
+                }
+
                 const blob = await res.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'Sentry_Trades.csv';
+                a.download = filename;
+                document.body.appendChild(a);
                 a.click();
+                document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-                showToast('Ledger Exported!');
+                showToast('✅ Ledger Exported Successfully!');
             } else { 
                 showToast('No trades found to export'); 
             }
         } catch (_) { 
-            showToast('Export failed'); 
+            showToast('Export failed: network error'); 
         }
-    
+    }
 
     async function fetchAdvancedStats() {
         try {
@@ -1617,8 +1592,8 @@ async function exportTrades() {
                 const colorMap = {
                     'Sniper Engine': 'bg-jupGreen',
                     'Manual / Direct': 'bg-yellow-500',
-                    'DCA Engine': 'bg-neonPurple',
                     'Copy Trade': 'bg-neonBlue',
+                    'DCA Engine': 'bg-neonPurple',
                     'Limit Order': 'bg-gray-400'
                 };
 
@@ -1713,7 +1688,7 @@ async function exportTrades() {
                 allocChart.data.labels = stratLabels;
                 allocChart.data.datasets[0].data = stratData;
                 allocChart.data.datasets[0].backgroundColor = stratColors;
-                allocChart.update();
+                allocChart.update('none');
             }
 
         } catch (e) {
