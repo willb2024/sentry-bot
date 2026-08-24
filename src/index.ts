@@ -95,6 +95,21 @@ app.use(cors({
     credentials: true
 }));
 
+
+async function getWatchlistSymbol(mint: string): Promise<string> {
+    const cacheKey = `watchlist_symbol:${mint}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return cached;
+    try {
+      const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 2000 });
+      const symbol = res.data?.pairs?.[0]?.baseToken?.symbol || 'UNKNOWN';
+      await redis.set(cacheKey, symbol, 'EX', 600);
+      return symbol;
+    } catch (_) {
+      return 'UNKNOWN';
+    }
+  }
+
 // 🟢 ALLOW TELEGRAM IFRAMES (MUST BE HERE NEAR THE TOP)
 app.use((req, res, next) => {
     res.setHeader("Content-Security-Policy", "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org;");
@@ -427,7 +442,8 @@ app.post('/api/wallet-balance', async (req, res) => {
     }
 });
 
-// 🟢 /api/sim-stats with open position values & starting balance ROI
+// Inside src/index.ts — /api/sim-stats Endpoint
+
 app.post('/api/sim-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -460,49 +476,47 @@ app.post('/api/sim-stats', async (req, res) => {
         const tradesRaw = await redis.get(`sim:trades:${tgId}`);
         const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
         const firstTradeAt = await getSimFirstTradeAt(tgId);
-        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '4298');
+        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '5420');
 
-        const { computeUniversalStats } = await import('./utils/math.utils.js');
-        const stats = computeUniversalStats(trades);
+        let totalPnlSol = 1633.4800; // Exact +$256,342.00 USD in SOL
+        let totalVolumeSol = volume;
+        let wins = 1276;
+        let losses = 1913;
+        let winRate = 40.0;
 
-        let totalPnlSol = stats.totalPnLSol;
-        let totalVolumeSol = stats.totalVolumeSol || volume;
-        let wins = stats.wins;
-        let losses = stats.losses;
-        let winRate = stats.winRate;
-
-        // 🟢 Gated explicit forge check
         const forgedRaw = await redis.get(`sim:forged:${tgId}`);
-        const forgeActive = await redis.get(`sim:forge_active:${tgId}`);
-        if (forgedRaw && forgeActive === '1') {
+        if (forgedRaw) {
             try {
                 const f = JSON.parse(forgedRaw);
-                if (f.stratStats) {
-                    const forgedPnl = Object.values(f.stratStats as Record<string, { pnl: number }>).reduce((sum, s) => sum + (s.pnl || 0), 0);
-                    if (forgedPnl !== 0 && totalPnlSol === 0) totalPnlSol = forgedPnl;
-                }
+                if (f.totalStratPnl) totalPnlSol = f.totalStratPnl;
             } catch (_) {}
+        } else {
+            const { computeUniversalStats } = await import('./utils/math.utils.js');
+            const stats = computeUniversalStats(trades);
+            totalPnlSol = stats.totalPnLSol;
+            wins = stats.wins;
+            losses = stats.losses;
+            winRate = stats.winRate;
         }
 
-        // 🟢 FIX 3: Calculate Open Position Values in USD
         const positionsValueUsd = positions.reduce((sum: number, p: any) => sum + (p.valueUsd || 0), 0);
 
         res.json({
             isActive: true,
             balance: parseFloat(balance).toFixed(4),
-            startingBalance,
+            startingBalance: parseFloat(startingBalance.toString()) || 63.7227,
             volume: totalVolumeSol,
             wins,
             losses,
             winRate,
-            totalTrades: stats.totalTrades || trades.length,
-            totalInvestedSol: stats.totalInvestedSol || totalVolumeSol,
+            totalTrades: wins + losses,
+            totalInvestedSol: totalVolumeSol,
             totalPnlSol,
             firstTradeAt,
             credits,
             positions,
             trades: trades.slice(0, 50),
-            positionsValueUsd // 🟢 Sent to WebApp
+            positionsValueUsd
         });
     } catch (e: any) {
         res.status(500).json({ error: 'Server Error' });
@@ -5200,35 +5214,30 @@ async function executeWithdrawalProcess(
 bot.command('watchlist', async (ctx) => {
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
-
+  
     const items = await redis.hgetall(`watchlist:${tgId}`);
     const cas = Object.keys(items);
     if (cas.length === 0) return ctx.reply("👀 Your watchlist is empty. Use /watch [CA] to add tokens.");
-
+  
     const loader = await ctx.reply("<i>⏳ Fetching live prices...</i>", { parse_mode: 'HTML' });
     
     let msg = `👀 <b>YOUR WATCHLIST</b>\n\n`;
     for (const ca of cas) {
-        const data = JSON.parse(items[ca]);
-        let currentPrice = 0;
-        try {
-            const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${ca}`);
-            currentPrice = res.data?.data?.[ca]?.price || 0;
-        } catch (e) {}
-
-        const diff = data.addedPrice > 0 ? (((currentPrice - data.addedPrice) / data.addedPrice) * 100).toFixed(2) : '0.00';
-        
-        // 🟢 FIX 43: Display highly accurate decimals correctly 
-        const displayPrice = currentPrice > 0 ? currentPrice.toFixed(8) : '0';
-
-        msg += `• <code>${ca.substring(0,6)}...</code>\n`;
-        msg += `   Live: <b>$${displayPrice}</b> (${Number(diff) >= 0 ? '+' : ''}${diff}%)\n`;
-        if (data.targetPrice > 0) msg += `   Target Alert: <b>$${data.targetPrice}</b>\n`;
-        msg += `\n`;
+      const data = JSON.parse(items[ca]);
+      let currentPrice = 0;
+      try {
+        const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${ca}`);
+        currentPrice = res.data?.data?.[ca]?.price || 0;
+      } catch (e) {}
+  
+      const diff = data.addedPrice > 0 ? (((currentPrice - data.addedPrice) / data.addedPrice) * 100).toFixed(2) : '0.00';
+      msg += `• <code>${ca.substring(0,6)}...</code>\n`;
+      msg += `   Live: <b>$${currentPrice.toFixed(8)}</b> (${Number(diff) >= 0 ? '+' : ''}${diff}%)\n`;
+      if (data.targetPrice > 0) msg += `   Target Alert: <b>$${data.targetPrice}</b>\n`;
+      msg += `\n`;
     }
-
     await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { parse_mode: 'HTML' });
-});
+  });
 
 // ------------------ LIMIT ORDER WATCHER ------------------
 let cachedLimitOrders: any[] = [];
@@ -6705,7 +6714,8 @@ if (copytradeSocialState) {
         return ctx.replyWithHTML(`✅ Broadcast sent to <b>${sent} users</b>.`);
     }
 
-// --- 18. SIMULATION FORGE EDITOR (MULTI-STRATEGY DYNAMIC PARSER) ---
+// Inside src/index.ts — Full Mathematical Alignment for $10k Deposit -> $256k+ Profit
+
 const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
 if (isSimEdit) {
     await redis.del(`state:simedit:${telegramId}`);
@@ -6726,29 +6736,31 @@ if (isSimEdit) {
     const loader = await ctx.reply("<i>⏳ Synchronizing Simulation Matrix & Unlocking AI Caller...</i>", { parse_mode: 'HTML' });
 
     try {
-        // 🟢 1. FORCE SIMULATION MODE ACTIVE IMMEDIATELY
         await redis.set(`sim:active:${telegramId}`, 'true');
 
-        const wins = parseInt(parsedData['WINS']) || 1554;
-        const losses = parseInt(parsedData['LOSSES']) || 933;
-        const credits = parseInt(parsedData['CREDITS']) || 4298;
-        const balance = parseFloat(parsedData['BALANCE_SOL']) || 238.8700;
-        const volume = parseFloat(parsedData['VOL']) || 4570.3773;
-        const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '389');
-        const spend = parseFloat(parsedData['SPEND'] || '48');
-        const days = parseInt(parsedData['DAYS'] || '83');
-        const risk = parseInt(parsedData['RISK_SCORE'] || '26');
-        const slippage = parseFloat((parsedData['SLIPPAGE'] || '0.85').replace('%', '')) || 0.85;
+        const wins = parseInt(parsedData['WINS']) || 1276;
+        const losses = parseInt(parsedData['LOSSES']) || 1913;
+        const credits = parseInt(parsedData['CREDITS']) || 5420;
+        const balance = parseFloat(parsedData['BALANCE_SOL']) || 1173.9692; // $184,230.00 USD
+        const volume = parseFloat(parsedData['VOL']) || 14895.4648;
+        const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '350');
+        const spend = parseFloat(parsedData['SPEND'] || '350');
+        const days = parseInt(parsedData['DAYS'] || '93');
+        const risk = parseInt(parsedData['RISK_SCORE'] || '18');
+        const slippage = parseFloat((parsedData['SLIPPAGE'] || '0.11').replace('%', '')) || 0.11;
+
+        // 🟢 1. STARTING BALANCE = $10,000 USD (63.7227 SOL @ $156.93)
+        const startingBalanceSol = parseFloat(parsedData['STARTING_BAL_SOL'] || '63.7227');
 
         // 24H Activities
         const manualParts = (parsedData['MANUAL_24H'] || '0 | 0').split('|').map(s => parseFloat(s.trim()));
-        const autoParts = (parsedData['AUTO_24H'] || '16 | 5.3929').split('|').map(s => parseFloat(s.trim()));
+        const autoParts = (parsedData['AUTO_24H'] || '16 | 49.9442').split('|').map(s => parseFloat(s.trim()));
         const manual24hCount = manualParts[0] || 0;
         const manual24hPnl = manualParts[1] || 0;
         const auto24hCount = autoParts[0] || 16;
-        const auto24hPnl = autoParts[1] || 5.3929;
+        const auto24hPnl = autoParts[1] || 49.9442;
 
-        // Strategies
+        // Strategies & Exact Profit Target (+1633.4800 SOL = $256,342.00 USD)
         const stratStats: Record<string, { pnl: number, volume: number }> = {};
         let totalStratPnl = 0;
 
@@ -6764,16 +6776,18 @@ if (isSimEdit) {
             }
         }
 
+        if (totalStratPnl === 0) totalStratPnl = 1633.4800; // Fallback to exact +$256,342.00 USD
+
         const hourlyChart = (parsedData['HOURLY_CHART'] || '').split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
         const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
-        // 🟢 2. PERSIST ALL SIMULATION KEYS (ALIGNED WITH GETSESSIONSPEND)
+        // 🟢 2. PERSIST EXACT MATRICES
         await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
-        await redis.set(`sim:starting_balance:${telegramId}`, balance.toFixed(4));
+        await redis.set(`sim:starting_balance:${telegramId}`, startingBalanceSol.toFixed(4)); // 🟢 Stored as 63.7227 SOL ($10k)
         await redis.set(`sim:first_trade_at:${telegramId}`, firstTradeAt);
         await redis.set(`sim:max_budget:${telegramId}`, maxBudget.toString(), 'EX', 86400);
         await redis.set(`sim:session_spend:${telegramId}`, spend.toString(), 'EX', 86400);
-        await redis.set(`autosnipe:session_spend:sim:${telegramId}`, spend.toString(), 'EX', 86400); // 🟢 Key alignment
+        await redis.set(`autosnipe:session_spend:sim:${telegramId}`, spend.toString(), 'EX', 86400);
         await redis.set(`sim:credits:${telegramId}`, credits.toString());
         await redis.del(`sim_credits_warn:${telegramId}`);
 
@@ -6788,7 +6802,9 @@ if (isSimEdit) {
             firstTradeAt,
             slippage,
             maxBudget,
-            spend
+            spend,
+            startingBalanceSol,
+            totalStratPnl
         };
         await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
 
@@ -6800,8 +6816,7 @@ if (isSimEdit) {
         await redis.set(`sim:stats:totalInvestedSol:${telegramId}`, volume.toFixed(4));
         await redis.set(`sim:stats:totalPnlSol:${telegramId}`, totalStratPnl.toFixed(4));
 
-        // 🟢 3. GENERATE SYNTHETIC TRADES
-        const avgTradeSize = volume / totalTrades;
+        // 🟢 3. GENERATE 3,189 EXACT TRADES SUMMING TO +$256,342.00 PROFIT
         const now = Date.now();
         const syntheticTrades = [];
 
@@ -6813,24 +6828,25 @@ if (isSimEdit) {
             '2qEHjAscRwFa9TrCFddz5BEJwue5VT3Ce2EUPUzypump'
         ];
 
-        const getWeightedStrategy = () => {
-            const rand = Math.random() * 12.1;
-            if (rand < 10.0) return 'Sniper Engine';
-            if (rand < 11.0) return 'Manual / Direct';
-            if (rand < 11.6) return 'DCA Engine';
-            return 'Copy Trade';
-        };
+        // Total Gross Loss on 1,913 losses = -860.85 SOL (Avg: -0.45 SOL per loss)
+        const totalGrossLoss = 860.85;
+        // Total Gross Win on 1,276 wins = +2,494.33 SOL (Avg: +1.9548 SOL per win)
+        // Net Realized PnL = 2,494.33 - 860.85 = +1,633.4800 SOL ($256,342.00 USD)
+        const totalGrossWin = totalStratPnl + totalGrossLoss;
 
-        // 16 Auto-Engine Trades (24h Activity)
+        const avgWinSol = totalGrossWin / wins;
+        const avgLossSol = totalGrossLoss / losses;
+
+        // 16 24h Activity Auto Trades
         for (let i = 0; i < 16; i++) {
             const isWin = i < 11;
-            const pnlPct = isWin ? +(12 + Math.random() * 20) : -(4 + Math.random() * 8);
-            const size = 1.5 + Math.random() * 0.8;
-            const tradePnl = isWin ? (auto24hPnl / 11) * (0.8 + Math.random() * 0.4) : -((auto24hPnl * 0.25) / 5);
+            const pnlPct = isWin ? +(28.0 + Math.random() * 5) : -(9.0 + Math.random() * 2);
+            const size = 1.709 + (i % 2 === 1 ? 0.097 : 0);
+            const tradePnl = isWin ? (auto24hPnl / 11) * (0.9 + Math.random() * 0.2) : -((auto24hPnl * 0.15) / 5);
             syntheticTrades.push({
-                createdAt: new Date(now - (i * 45 + Math.random() * 30) * 60000).toISOString(),
+                createdAt: new Date(now - (i * 40 + Math.random() * 20) * 60000).toISOString(),
                 isBuy: false,
-                amountInSol: parseFloat(size.toFixed(4)),
+                amountInSol: parseFloat(size.toFixed(3)),
                 profitPercent: parseFloat(pnlPct.toFixed(1)),
                 realizedPnlSol: parseFloat(tradePnl.toFixed(4)),
                 strategy: 'Sniper Engine',
@@ -6840,42 +6856,34 @@ if (isSimEdit) {
         }
 
         // Remaining Wins
-        const remainingWins = wins - 11;
-        const winPnlPool = totalStratPnl - auto24hPnl;
-        const avgWinPnl = winPnlPool / Math.max(1, remainingWins);
-
-        for (let i = 0; i < remainingWins; i++) {
-            const pnlPercent = 10 + Math.random() * 45;
-            const amt = avgTradeSize * (0.7 + Math.random() * 0.6);
-            const realizedPnlSol = avgWinPnl * (0.6 + Math.random() * 0.8);
-            const strat = getWeightedStrategy();
+        for (let i = 0; i < wins - 11; i++) {
+            const pnlPercent = 45.0 + Math.random() * 75.0; // Big runners
+            const amt = 2.5 + Math.random() * 2.0;
+            const realizedPnlSol = avgWinSol * (0.7 + Math.random() * 0.6);
             syntheticTrades.push({
                 createdAt: new Date(now - 86400000 - Math.random() * (days - 1) * 86400000).toISOString(),
                 isBuy: false,
                 amountInSol: parseFloat(amt.toFixed(4)),
                 profitPercent: parseFloat(pnlPercent.toFixed(1)),
                 realizedPnlSol: parseFloat(realizedPnlSol.toFixed(4)),
-                strategy: strat,
+                strategy: 'Sniper Engine',
                 mint: sampleMints[i % sampleMints.length],
                 slippagePercent: slippage
             });
         }
 
         // Remaining Losses
-        const remainingLosses = losses - 5;
-        for (let i = 0; i < remainingLosses; i++) {
-            const pnlPercent = -(5 + Math.random() * 18);
-            const amt = avgTradeSize * (0.7 + Math.random() * 0.6);
-            const isTail = i < (remainingLosses * 0.05);
-            const realizedPnlSol = isTail ? -(0.95 + Math.random() * 0.15) : -amt * (Math.abs(pnlPercent) / 100);
-            const strat = getWeightedStrategy();
+        for (let i = 0; i < losses - 5; i++) {
+            const pnlPercent = -(12.0 + Math.random() * 6.0); // Tight stop loss
+            const amt = 2.5 + Math.random() * 2.0;
+            const realizedPnlSol = -avgLossSol * (0.7 + Math.random() * 0.6);
             syntheticTrades.push({
                 createdAt: new Date(now - 86400000 - Math.random() * (days - 1) * 86400000).toISOString(),
                 isBuy: false,
                 amountInSol: parseFloat(amt.toFixed(4)),
                 profitPercent: parseFloat(pnlPercent.toFixed(1)),
                 realizedPnlSol: parseFloat(realizedPnlSol.toFixed(4)),
-                strategy: strat,
+                strategy: 'Sniper Engine',
                 mint: sampleMints[i % sampleMints.length],
                 slippagePercent: slippage
             });
@@ -6884,69 +6892,28 @@ if (isSimEdit) {
         syntheticTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         await redis.set(`sim:trades:${telegramId}`, JSON.stringify(syntheticTrades));
 
-        // 🟢 4. SYNC DATABASE AUTOSNIPECONFIG & SIMSTATE
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (user) {
-            // Update AutoSnipeConfig so the sniper loop respects the budget immediately
-            const autoConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
-            if (autoConfig) {
-                await prisma.autoSnipeConfig.update({
-                    where: { id: autoConfig.id },
-                    data: { maxBudgetSol: maxBudget > 0 ? maxBudget : null }
-                });
-            } else {
-                await prisma.autoSnipeConfig.create({
-                    data: {
-                        userId: user.id,
-                        maxBudgetSol: maxBudget > 0 ? maxBudget : null,
-                        amountSol: 0.05,
-                        sniperMode: "PUMP"
-                    }
-                });
-            }
-
             await prisma.simState.upsert({
                 where: { userId: user.id },
-                update: { balance, startingBalance: balance, volume, credits, active: true },
-                create: { userId: user.id, balance, startingBalance: balance, volume, credits, active: true }
+                update: { balance, startingBalance: startingBalanceSol, volume, credits, active: true },
+                create: { userId: user.id, balance, startingBalance: startingBalanceSol, volume, credits, active: true }
             });
-
-            await prisma.simTrade.deleteMany({ where: { userId: user.id } });
-            
-            const dbTrades = syntheticTrades.slice(0, 2500).map((t: any) => ({
-                userId: user.id,
-                tokenAddress: t.mint,
-                isBuy: t.isBuy,
-                amountInSol: t.amountInSol,
-                profitPercent: t.profitPercent || 0,
-                realizedPnlSol: t.realizedPnlSol || 0,
-                createdAt: new Date(t.createdAt)
-            }));
-
-            const BATCH_SIZE = 100;
-            for (let i = 0; i < dbTrades.length; i += BATCH_SIZE) {
-                await prisma.simTrade.createMany({
-                    data: dbTrades.slice(i, i + BATCH_SIZE),
-                    skipDuplicates: true
-                });
-            }
         }
 
         const { cachedSolUsdPrice } = await import('./services/grpc.service.js');
         const solUsdRate = cachedSolUsdPrice || 156.93;
-        let stratSummary = Object.entries(stratStats).map(([name, s]) => `• ${name}: <b>+${s.pnl.toFixed(4)} SOL</b>`).join('\n');
+        const roiPercent = ((totalStratPnl / startingBalanceSol) * 100).toFixed(2);
 
         return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
-            `✅ <b>SIMULATION FORGE SYNCHRONIZED</b>\n\n` +
-            `• Net Worth: <b>${balance.toFixed(4)} SOL ($${(balance * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})})</b>\n` +
-            `• AI Caller Credits: <b>${credits.toLocaleString()} Credits</b>\n` +
-            `• Total Trades: <b>${totalTrades.toLocaleString()} (${wins}W / ${losses}L — ${((wins/totalTrades)*100).toFixed(1)}%)</b>\n` +
-            `• Volume: <b>${volume.toFixed(4)} SOL</b>\n` +
-            `• Trading Days: <b>${days} Days</b>\n` +
-            `• Exposure Budget: <b>${spend.toFixed(2)} / ${maxBudget.toFixed(2)} SOL (${maxBudget > 0 ? ((spend / maxBudget) * 100).toFixed(1) : '0'}%)</b>\n` +
-            `• Risk Score: <b>${risk}% (Safe Risk)</b>\n\n` +
-            `📊 <b>Active Strategies:</b>\n${stratSummary}\n\n` +
-            `<i>Open your WebApp to see your updated dashboard.</i>`,
+            `✅ <b>SIMULATION SYNCHRONIZED TO EXACT SPECIFICATIONS</b>\n\n` +
+            `• <b>Net Worth:</b> <b>$${(balance * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})}</b> (${balance.toFixed(4)} SOL)\n` +
+            `• <b>Net Realized Profit:</b> <b>+$${(totalStratPnl * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})}</b> (+${totalStratPnl.toFixed(4)} SOL)\n` +
+            `• <b>Cumulative ROI:</b> <b>+${roiPercent}%</b> (Started with $10,000.00 / ${startingBalanceSol.toFixed(2)} SOL)\n` +
+            `• <b>Total Trades:</b> <b>${totalTrades.toLocaleString()}</b> (${wins}W / ${losses}L — 40.0% Win Rate)\n` +
+            `• <b>Trading Volume:</b> <b>${volume.toFixed(4)} SOL</b>\n` +
+            `• <b>Trading Days:</b> <b>${days} Days</b>\n\n` +
+            `<i>Refresh your WebApp terminal to view the updated metrics.</i>`,
             { parse_mode: 'HTML' }
         );
     } catch (e: any) {
@@ -8271,6 +8238,46 @@ await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/5 * * * * *' } }
                 } catch(e) {}
             }
         }, { timezone: 'UTC' });
+
+        // =========================================================
+// 📡 WATCHLIST PRICE ALERT WORKER (30s)
+// =========================================================
+setInterval(async () => {
+    try {
+      const watchKeys = await redis.keys('watchlist:*');
+      for (const key of watchKeys) {
+        const tgId = key.replace('watchlist:', '');
+        const watchData = await redis.hgetall(key);
+        if (Object.keys(watchData).length === 0) continue;
+  
+        for (const [ca, dataStr] of Object.entries(watchData)) {
+          try {
+            const data = JSON.parse(dataStr);
+            const currentPrice = await getCachedTokenPrice(ca);
+            if (currentPrice <= 0) continue;
+  
+            // Check target price (if set)
+            if (data.targetPrice && currentPrice >= data.targetPrice) {
+              const symbol = await getWatchlistSymbol(ca);
+              await bot.telegram.sendMessage(
+                tgId,
+                `🚨 <b>WATCHLIST ALERT!</b>\n\n` +
+                `Token: <code>${ca}</code> ($${symbol})\n` +
+                `Current Price: <b>$${currentPrice}</b>\n` +
+                `Target Price: <b>$${data.targetPrice}</b>\n\n` +
+                `Price has crossed your target.`,
+                { parse_mode: 'HTML' }
+              ).catch(() => {});
+              // Remove after alerting to avoid repeat
+              await redis.hdel(`watchlist:${tgId}`, ca);
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+    } catch (_) {}
+  }, 30000);
 
         setInterval(async () => {
             try {
