@@ -1,4 +1,4 @@
-// src/lib/logger.ts
+// src/lib/logger.ts — Full File with Circular Reference Immunity
 import winston from 'winston';
 
 function safeSerialize(value: any, seen = new WeakSet()): any {
@@ -8,6 +8,8 @@ function safeSerialize(value: any, seen = new WeakSet()): any {
       message: value.message,
       stack: value.stack,
       code: (value as any).code,
+      socket: undefined,
+      parser: undefined,
     };
   }
   if (typeof value === 'object' && value !== null) {
@@ -17,7 +19,16 @@ function safeSerialize(value: any, seen = new WeakSet()): any {
     seen.add(value);
     const out: Record<string, any> = Array.isArray(value) ? [] : {};
     for (const key of Object.keys(value)) {
-      out[key] = safeSerialize(value[key], seen);
+      // 🟢 Skip Node.js internal socket/stream/parser properties
+      if (key === 'socket' || key === 'parser' || key === 'request' || key === 'response' || key === 'req' || key === 'res' || key === '_httpMessage') {
+        out[key] = '[Skipped]';
+        continue;
+      }
+      try {
+        out[key] = safeSerialize(value[key], seen);
+      } catch (_) {
+        out[key] = '[Unserializable]';
+      }
     }
     return out;
   }

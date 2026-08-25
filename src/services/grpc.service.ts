@@ -474,6 +474,8 @@ let wsReconnectDelay = 2000;
 let wsHeartbeat: NodeJS.Timeout | null = null;
 let lastMessageAt = Date.now();
 
+// Replace connectPumpPortalStream in src/services/grpc.service.ts
+
 function connectPumpPortalStream(bot: any) {
     if (isWsConnecting) return;
     isWsConnecting = true;
@@ -493,9 +495,27 @@ function connectPumpPortalStream(bot: any) {
         lastMessageAt = Date.now();
         if (wsHeartbeat) clearInterval(wsHeartbeat);
         wsHeartbeat = setInterval(() => {
-            if (Date.now() - lastMessageAt > 90_000) ws.terminate();
+            if (Date.now() - lastMessageAt > 90_000) {
+                try { ws.terminate(); } catch (_) {}
+            }
         }, 30_000);
         global._sentryIntervals.push(wsHeartbeat);
+    });
+
+    ws.on('unexpected-response', (_req, res) => {
+        // 🟢 Handle HTTP 429 (Rate Limiting) with proper backoff
+        if (res.statusCode === 429) {
+            const retryAfter = res.headers['retry-after'];
+            const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 60_000;
+            logger.warn(`⏳ [SNIPER] PumpPortal rate limited (429). Retrying in ${waitMs / 1000}s.`);
+            wsReconnectDelay = waitMs;
+        } else {
+            logger.warn(`⚠️ [SNIPER] Unexpected response: ${res.statusCode}`);
+            wsReconnectDelay = Math.min(wsReconnectDelay * 2, 60_000);
+        }
+        isWsConnecting = false;
+        if (wsHeartbeat) clearInterval(wsHeartbeat);
+        setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
     });
 
     ws.on('message', async (data: WebSocket.RawData) => {
@@ -512,7 +532,11 @@ function connectPumpPortalStream(bot: any) {
         } catch (_) {}
     });
 
-    ws.on('error', () => {});
+    ws.on('error', (err: any) => {
+        logger.warn(`⚠️ [SNIPER] WebSocket error: ${err.message}`);
+        isWsConnecting = false;
+    });
+
     ws.on('close', () => {
         isWsConnecting = false;
         if (wsHeartbeat) clearInterval(wsHeartbeat);

@@ -1,4 +1,4 @@
-// src/lib/connection.ts
+// src/lib/connection.ts — Full File with Tolerant Circuit Breaker
 import { Connection } from '@solana/web3.js';
 import dotenv from 'dotenv';
 
@@ -31,10 +31,10 @@ const SYNC_REMOVAL_METHODS = new Set([
     'removeSignatureListener', 'removeRootChangeListener'
 ]);
 
-const CIRCUIT_BREAKER_THRESHOLD = 5;
-const CIRCUIT_BREAKER_COOLDOWN_MS = 30_000; 
+const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000; // Increased to 60s cooldown
 
 let circuitOpenedAt: number | null = null;
+let lastBreakerWarnAt = 0;
 let consecutiveSuccesses = 0;
 
 function isCircuitOpen(): boolean {
@@ -48,7 +48,7 @@ function isCircuitOpen(): boolean {
 }
 
 const FAILURE_WINDOW_MS = 10_000;
-const MAX_FAILURES_IN_WINDOW = 6;
+const MAX_FAILURES_IN_WINDOW = 10; // Increased threshold to 10 to avoid false positives
 const failureTimestamps: number[] = [];
 
 function recordPrimarySuccess() { 
@@ -57,7 +57,6 @@ function recordPrimarySuccess() {
     while (failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
         failureTimestamps.shift();
     }
-    // 3 consecutive successes fully close and reset the circuit breaker
     if (consecutiveSuccesses >= 3 && circuitOpenedAt !== null) {
         circuitOpenedAt = null;
         failureTimestamps.length = 0;
@@ -65,7 +64,7 @@ function recordPrimarySuccess() {
     }
 }
 
-function recordPrimaryFailure() {
+function recordPrimaryFailure(error?: any) {
     consecutiveSuccesses = 0;
     const now = Date.now();
     failureTimestamps.push(now);
@@ -74,7 +73,11 @@ function recordPrimaryFailure() {
     }
     if (failureTimestamps.length >= MAX_FAILURES_IN_WINDOW) {
         circuitOpenedAt = now;
-        console.warn(`🔴 [RPC BREAKER] ${MAX_FAILURES_IN_WINDOW} failures in 10s. Routing requests to backup RPC for 30s.`);
+        if (now - lastBreakerWarnAt > 30000) {
+            lastBreakerWarnAt = now;
+            const errMsg = error?.message || 'Rate-limited / Unresponsive';
+            console.warn(`🔴 [RPC BREAKER] ${MAX_FAILURES_IN_WINDOW} failures in 10s (${errMsg}). Routing requests to backup RPC for 60s.`);
+        }
     }
 }
 
@@ -146,7 +149,7 @@ export const connection = new Proxy(primaryConnection, {
                         recordPrimarySuccess();
                         return result;
                     } catch (error: any) {
-                        recordPrimaryFailure();
+                        recordPrimaryFailure(error);
                         throw error;
                     }
                 })();
@@ -162,7 +165,7 @@ export const connection = new Proxy(primaryConnection, {
                     recordPrimarySuccess();
                     return result;
                 } catch (error: any) {
-                    recordPrimaryFailure();
+                    recordPrimaryFailure(error);
                     throw error;
                 }
             });

@@ -95,6 +95,13 @@ app.use(cors({
     credentials: true
 }));
 
+// Inside src/index.ts (near top utilities)
+
+export function safeLog(prefix: string, error: any) {
+    const msg = error?.message || error?.stack || String(error);
+    console.error(`${prefix} ${msg}`);
+}
+
 
 async function getWatchlistSymbol(mint: string): Promise<string> {
     const cacheKey = `watchlist_symbol:${mint}`;
@@ -8496,12 +8503,15 @@ setInterval(async () => {
         const info = await bot.telegram.getMe();
         console.log(`🟢 [4/5] HFT BOT ONLINE -> @${info.username}`);
         
+        // Inside bootEcosystem() in src/index.ts:
+
         const launchBot = async (retries = 5) => {
             try {
                 await bot.launch({ dropPendingUpdates: true });
                 console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
             } catch (e: any) {
-                console.error(`🔴 Telegram Bot Launch Attempt Failed (${retries} retries left):`, e.message);
+                const errMsg = e?.message || String(e);
+                console.error(`🔴 Telegram Bot Launch Attempt Failed (${retries} retries left): ${errMsg}`);
                 if (retries > 0) {
                     setTimeout(() => launchBot(retries - 1), 5000);
                 }
