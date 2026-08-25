@@ -91,6 +91,7 @@ model User {
   @@index([referralCode])
 }
 
+
 model SimState {
   id                   String     @id @default(uuid())
   userId               String     @unique
@@ -103,6 +104,9 @@ model SimState {
   autoSnipeActive      Boolean    @default(false)
   positions            Json?      
   
+  maxBudgetSol         Float?     // 🟢 Simulation Session Budget Cap
+  sessionSpendSol      Float?     // 🟢 Simulation Session Spend Tracking
+
   // Forged stats overrides
   forgedSharpe         Float?
   forgedDrawdown       Float?
@@ -123,6 +127,48 @@ model SimState {
   updatedAt            DateTime   @updatedAt
   trades               SimTrade[]
 }
+
+model GuardRecommendation {
+  id                 String   @id @default(uuid())
+  telegramId         String
+  tokenAddress       String
+  tokenSymbol        String
+  score              Int
+  trailingDrop       Float
+  takeProfit         Float
+  ageMins            Float
+  liquidity          Float
+  volume24h          Float
+  priceChangeM5      Float
+  hasSocials         Boolean
+  isRug              Boolean
+  lpLockPct          Float
+  velocityGrowth     Float
+  sentiment          Float
+  predictedRange     String
+  timeframe          String
+  confidence         String
+  used               Boolean  @default(false)
+  outcomePnlPercent  Float?   
+  outcomePeakPercent Float?   
+  finalized          Boolean  @default(false)
+  createdAt          DateTime @default(now())
+
+  @@index([telegramId, tokenAddress])
+}
+
+model GuardModelWeights {
+  id            String   @id @default(uuid())
+  version       Int      @default(1)
+  trainedAt     DateTime @default(now())
+  coefficients  Json
+  featureNames  Json
+  normalization Json?
+  metrics       Json?
+}
+
+
+
 
 model SimTrade {
   id              String    @id @default(uuid())

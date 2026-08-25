@@ -96,7 +96,9 @@ export function getScoreBand(score: number): { label: string; sizeSol: string; r
     return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
 }
 
-async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
+// In src/services/caller.service.ts — Export getCachedRugStatus
+
+export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
     try {
         const cached = await redis.get(cacheKey);
@@ -118,7 +120,7 @@ async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10
         await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
         return result;
     } catch (_) {
-        const result = { isRug: true, top10Pct: 0, uncertain: true }; // 🟢 Fail-closed on error
+        const result = { isRug: true, top10Pct: 0, uncertain: true };
         await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); 
         return result;
     }

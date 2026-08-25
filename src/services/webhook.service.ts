@@ -1,46 +1,41 @@
 // src/services/webhook.service.ts
-import axios from 'axios';
-import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
-import { redis } from '../lib/redis.js';
 
-export async function fireWebhook(telegramId: string, eventName: string, payload: any) {
+export async function fireWebhook(telegramId: string, event: 'trade_buy' | 'trade_sell', data: any): Promise<void> {
     try {
-        const user = await prisma.user.findUnique({ where: { telegramId }, include: { webhookConfigs: true } });
-        if (!user || !user.webhookConfigs || user.webhookConfigs.length === 0) return;
+        const user = await prisma.user.findUnique({ 
+            where: { telegramId },
+            include: { webhookConfigs: { where: { isActive: true } } }
+        });
+        
+        if (!user || user.webhookConfigs.length === 0) return;
 
-        const activeHooks = user.webhookConfigs.filter(w => w.isActive && w.events.includes(eventName));
-        const timestamp = Date.now();
-        const data = JSON.stringify({ event: eventName, timestamp, data: payload });
+        const payload = {
+            event,
+            timestamp: new Date().toISOString(),
+            telegramId,
+            data
+        };
 
-        await Promise.allSettled(activeHooks.map(async (hook) => {
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (hook.secretKey) {
-                headers['X-Sentry-Signature'] = crypto.createHmac('sha256', hook.secretKey).update(data).digest('hex');
+        await Promise.allSettled(user.webhookConfigs.map(async (cfg) => {
+            if (cfg.events.length > 0 && !cfg.events.includes(event) && !cfg.events.includes('*')) {
+                return;
             }
-            try {
-                await axios.post(hook.url, data, { headers, timeout: 3000 });
-            } catch (err) {
-                // 🟢 Persist to retry queue
-                await redis.rpush('webhook_retry_queue', JSON.stringify({ url: hook.url, data, headers, attempts: 0 }));
+
+            const headers: Record<string, string> = {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Sentry-Webhook-Dispatcher/1.0'
+            };
+
+            if (cfg.secretKey) {
+                headers['X-Webhook-Secret'] = cfg.secretKey;
             }
+
+            await fetch(cfg.url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload)
+            });
         }));
-    } catch (e) {
-        console.error(`🔴 [WEBHOOK] Failed to fire ${eventName}:`, e);
-    }
-}
-
-export async function drainWebhookRetryQueue() {
-    try {
-        const item = await redis.lpop('webhook_retry_queue');
-        if (!item) return;
-        const job = JSON.parse(item);
-        if (job.attempts >= 5) return; // Drop after 5 attempts
-        try {
-            await axios.post(job.url, job.data, { headers: job.headers, timeout: 3000 });
-        } catch {
-            job.attempts++;
-            await redis.rpush('webhook_retry_queue', JSON.stringify(job));
-        }
     } catch (_) {}
 }

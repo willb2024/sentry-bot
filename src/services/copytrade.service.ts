@@ -88,7 +88,6 @@ export async function syncCopyTradeListeners(bot: any) {
                     const subId = connection.onLogs(pubKey, async (logs) => {
                         if (logs.err) return;
 
-                        // 🟢 Cheap pre-filter: only fetch full parsed tx if logs contain DEX/swap activity
                         const relevantPrograms = ['pump', 'Raydium', 'whirlpool', 'Meteora', 'Jupiter', '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'];
                         const isRelevant = logs.logs.some(l => relevantPrograms.some(p => l.toLowerCase().includes(p.toLowerCase())));
                         if (!isRelevant) return;
@@ -156,17 +155,20 @@ export async function syncCopyTradeListeners(bot: any) {
                                         'Copy Trade'
                                     ).then(async (res) => {
                                         if (res.success) {
+                                            // 🟢 Only deploy live in-memory guards if user is NOT in simulation mode
                                             try {
-                                                await addTrailingStopToMemory(
-                                                    follower.user.telegramId,
-                                                    targetTokenMint!,
-                                                    follower.autoTrailingDropPercent,
-                                                    sizeToTrade,
-                                                    entryPrice,
-                                                    follower.autoTakeProfitPercent || undefined,
-                                                    undefined,
-                                                    'Copy Trade'
-                                                );
+                                                if (!(await isSimulationActive(follower.user.telegramId))) {
+                                                    await addTrailingStopToMemory(
+                                                        follower.user.telegramId,
+                                                        targetTokenMint!,
+                                                        follower.autoTrailingDropPercent,
+                                                        sizeToTrade,
+                                                        entryPrice,
+                                                        follower.autoTakeProfitPercent || undefined,
+                                                        undefined,
+                                                        'Copy Trade'
+                                                    );
+                                                }
                                             } catch (guardErr) {}
                                             try { 
                                                 await bot.telegram.sendMessage(

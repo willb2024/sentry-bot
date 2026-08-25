@@ -282,7 +282,20 @@ async function getGuildOwnerSigner(telegramId: string, guildId: string) {
     return { keypair: Keypair.fromSecretKey(bs58.decode(rawPk)), vaultPubkey: new PublicKey(user.vaultAddress) };
 }
 
+
+
+// Inside src/services/guild.service.ts
+
 export async function executeGuildAirdrop(telegramId: string, guildId: string, totalSol: number): Promise<{ success: boolean; message: string; signature?: string }> {
+    const { isSimulationActive, generateSimSignature } = await import('./simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        return {
+            success: true,
+            message: `Airdropped ${totalSol} SOL across Top 50 members (Simulation Sandbox).`,
+            signature: generateSimSignature()
+        };
+    }
+
     let lock;
     try {
         lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
@@ -348,6 +361,15 @@ export async function executeGuildAirdrop(telegramId: string, guildId: string, t
 }
 
 export async function executeTieredAirdrop(telegramId: string, guildId: string, top3Sol: number, next7Sol: number, ranks11to50Sol: number): Promise<{ success: boolean; message: string; signature?: string }> {
+    const { isSimulationActive, generateSimSignature } = await import('./simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        return {
+            success: true,
+            message: `Distributed tiered SOL rewards across Top 50 members (Simulation Sandbox).`,
+            signature: generateSimSignature()
+        };
+    }
+
     let lock;
     try {
         lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
@@ -411,6 +433,15 @@ export async function executeTieredAirdrop(telegramId: string, guildId: string, 
 }
 
 export async function executeIndividualAirdrop(telegramId: string, guildId: string, targetRank: number, amountSol: number): Promise<{ success: boolean; message: string; signature?: string }> {
+    const { isSimulationActive, generateSimSignature } = await import('./simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        return {
+            success: true,
+            message: `Sent ${amountSol} SOL to rank #${targetRank} (Simulation Sandbox).`,
+            signature: generateSimSignature()
+        };
+    }
+
     let lock;
     try {
         lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
@@ -455,3 +486,5 @@ export async function executeIndividualAirdrop(telegramId: string, guildId: stri
         if (lock) await (lock as any).release().catch(() => {});
     }
 }
+
+

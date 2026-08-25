@@ -1058,40 +1058,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
 }
 
 // ─── LIFECYCLE & DATABASE PERSISTENCE ───────────────────
-export async function setSimulationMode(telegramId: string, active: boolean): Promise<void> {
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    if (!user) return;
 
-    const keysToDelete = await redis.keys(`sim:*:${telegramId}`);
-    if (keysToDelete.length > 0) await redis.del(...keysToDelete);
-    if (activeSimLoops.has(telegramId)) activeSimLoops.delete(telegramId);
-
-    if (!active) {
-        await prisma.simTrade.deleteMany({ where: { userId: user.id } });
-        await prisma.simState.delete({ where: { userId: user.id } }).catch(() => {});
-        await redis.set(`sim:active:${telegramId}`, 'false');
-        return;
-    }
-
-    const startBal = parseFloat(await redis.get(`sim:balance:${telegramId}`) || '238.8700');
-
-    try {
-        await prisma.simState.upsert({
-            where: { userId: user.id },
-            update: { active: true, balance: startBal, startingBalance: startBal },
-            create: { userId: user.id, active: true, balance: startBal, startingBalance: startBal }
-        });
-    } catch (e) {
-        console.error(`[SIM] State persistence failure for ${telegramId}:`, e);
-    }
-
-    await redis.set(`sim:active:${telegramId}`, 'true');
-    await redis.set(`sim:balance:${telegramId}`, startBal.toFixed(4));
-    await redis.set(`sim:starting_balance:${telegramId}`, startBal.toFixed(4));
-    await redis.set(`sim:credits:${telegramId}`, '500');
-    const wallets = generateSimWallets();
-    await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
-}
 
 export async function consumeSimCredit(telegramId: string): Promise<boolean> {
     const current = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
@@ -1146,6 +1113,46 @@ export async function isSimLossLimitHit(
     };
 }
 
+
+// Inside src/services/simulation.service.ts
+
+export async function setSimulationMode(telegramId: string, active: boolean): Promise<void> {
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (!user) return;
+
+    const keysToDelete = await redis.keys(`sim:*:${telegramId}`);
+    if (keysToDelete.length > 0) await redis.del(...keysToDelete);
+    if (activeSimLoops.has(telegramId)) activeSimLoops.delete(telegramId);
+
+    if (!active) {
+        await prisma.simTrade.deleteMany({ where: { userId: user.id } });
+        await prisma.simState.delete({ where: { userId: user.id } }).catch(() => {});
+        await redis.set(`sim:active:${telegramId}`, 'false');
+        return;
+    }
+
+    const startBal = parseFloat(await redis.get(`sim:balance:${telegramId}`) || '238.8700');
+
+    try {
+        await prisma.simState.upsert({
+            where: { userId: user.id },
+            update: { balance: startBal, startingBalance: startBal, active: true, maxBudgetSol: 350, sessionSpendSol: 0 },
+            create: { userId: user.id, balance: startBal, startingBalance: startBal, active: true, maxBudgetSol: 350, sessionSpendSol: 0 }
+        });
+    } catch (e) {
+        console.error(`[SIM] State persistence failure for ${telegramId}:`, e);
+    }
+
+    await redis.set(`sim:active:${telegramId}`, 'true');
+    await redis.set(`sim:balance:${telegramId}`, startBal.toFixed(4));
+    await redis.set(`sim:starting_balance:${telegramId}`, startBal.toFixed(4));
+    await redis.set(`sim:credits:${telegramId}`, '5420');
+    await redis.set(`autosnipe:session_spend:sim:${telegramId}`, '0'); // 🟢 Initialized to 0
+    await redis.set(`sim:session_spend:${telegramId}`, '0');
+    const wallets = generateSimWallets();
+    await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
+}
+
 export async function saveSimulationState(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -1156,6 +1163,9 @@ export async function saveSimulationState(telegramId: string) {
     const credits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
     const active = await isSimulationActive(telegramId);
     const autoSnipeActive = (await redis.get(`sim:autosnipe:${telegramId}`)) === 'true';
+
+    const maxBudget = parseFloat(await redis.get(`sim:max_budget:${telegramId}`) || '0');
+    const sessionSpend = parseFloat(await redis.get(`autosnipe:session_spend:sim:${telegramId}`) || '0');
 
     const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
     const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
@@ -1177,11 +1187,15 @@ export async function saveSimulationState(telegramId: string) {
         await prisma.simState.upsert({
             where: { userId: user.id },
             update: {
-                balance, startingBalance, volume, credits, active, autoSnipeActive, positions
+                balance, startingBalance, volume, credits, active, autoSnipeActive, positions,
+                maxBudgetSol: maxBudget > 0 ? maxBudget : null,
+                sessionSpendSol: sessionSpend > 0 ? sessionSpend : null
             },
             create: {
                 userId: user.id,
-                balance, startingBalance, volume, credits, active, autoSnipeActive, positions
+                balance, startingBalance, volume, credits, active, autoSnipeActive, positions,
+                maxBudgetSol: maxBudget > 0 ? maxBudget : null,
+                sessionSpendSol: sessionSpend > 0 ? sessionSpend : null
             }
         });
 
@@ -1215,7 +1229,7 @@ export async function loadSimulationState(telegramId: string) {
                 balance: 238.87,
                 startingBalance: 238.87,
                 volume: 0,
-                credits: 500,
+                credits: 5420,
                 active: false,
                 autoSnipeActive: false,
                 positions: []
@@ -1230,6 +1244,8 @@ export async function loadSimulationState(telegramId: string) {
     await redis.set(`sim:credits:${telegramId}`, state.credits.toString());
     await redis.set(`sim:active:${telegramId}`, state.active ? 'true' : 'false');
     await redis.set(`sim:autosnipe:${telegramId}`, state.autoSnipeActive ? 'true' : 'false');
+    if (state.maxBudgetSol) await redis.set(`sim:max_budget:${telegramId}`, state.maxBudgetSol.toString());
+    if (state.sessionSpendSol) await redis.set(`autosnipe:session_spend:sim:${telegramId}`, state.sessionSpendSol.toString());
     if (state.positions) await redis.set(`sim:positions:${telegramId}`, JSON.stringify(state.positions));
 
     const trades = state.trades.map((t: any) => ({
@@ -1240,7 +1256,7 @@ export async function loadSimulationState(telegramId: string) {
         realizedPnlSol: t.realizedPnlSol || 0,
         mint: t.tokenAddress,
         strategy: 'Sniper Engine',
-        slippagePercent: 0.12
+        slippagePercent: 0.11
     }));
     await redis.set(`sim:trades:${telegramId}`, JSON.stringify(trades));
 }

@@ -28,6 +28,8 @@ export interface TrailingOrder {
     isProcessing?: boolean; // 🟢 In-memory guard execution lock
 }
 
+// Replace syncGuardsFromDb in src/services/order.service.ts
+
 export async function syncGuardsFromDb() {
     console.log("🔄 [DB] Restoring active Trailing Guards into RAM...");
     try {
@@ -56,6 +58,9 @@ export async function syncGuardsFromDb() {
             await redis.sadd(`active_guards_global`, g.id); 
             await redis.sadd(`user_guards:${g.user.telegramId}`, g.id);
             await redis.sadd(`token_guards:${g.user.telegramId}:${g.tokenAddress}`, g.id); 
+
+            // 🟢 Subscribe each restored guard to price feeds
+            await subscribeToMintPrice(g.tokenAddress, g.id).catch(() => {});
         }
         console.log(`✅ [DB] Successfully restored ${dbGuards.length} guards.`);
     } catch (e: any) {

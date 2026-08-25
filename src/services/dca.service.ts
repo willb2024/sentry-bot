@@ -41,7 +41,7 @@ export async function processDcaOrders(bot: any) {
 
         if (timeSinceLastBuy >= intervalMs) {
             const lockKey = `lock:dca_exec:${order.id}`;
-            const lockTtl = Math.min(intervalMs - 5000, 55000); // 🟢 Always release before next cycle
+            const lockTtl = Math.min(intervalMs - 5000, 55000);
             let lock;
             try {
                 lock = await redlock.acquire([lockKey], Math.max(10000, lockTtl));
@@ -57,14 +57,14 @@ export async function processDcaOrders(bot: any) {
                 }
 
                 const buyCountKey = `dca_buy_count:${order.id}`;
-                const currentBuys = parseInt(await redis.get(buyCountKey) || '0');
+                const currentBuys = parseInt(await redis.get(buyCountKey) || '0', 10);
                 if (order.maxBuys && currentBuys >= order.maxBuys) {
                     await prisma.activeOrder.update({ where: { id: order.id }, data: { isActive: false } });
                     cachedDcaOrders = cachedDcaOrders.filter(o => o.id !== order.id);
                     try {
                         await bot.telegram.sendMessage(
                             order.user.telegramId,
-                            `✅ <b>DCA COMPLETE: Max Buys Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nLimit of ${order.maxBuys} buys reached.`,
+                            `🏁 <b>DCA COMPLETE: Max Buys Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nLimit of ${order.maxBuys} buys reached.`,
                             { parse_mode: 'HTML' }
                         );
                     } catch (_) {}
@@ -91,7 +91,7 @@ export async function processDcaOrders(bot: any) {
                     try {
                         await bot.telegram.sendMessage(
                             order.user.telegramId,
-                            `✅ <b>DCA COMPLETE: Max Budget Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nTotal Spent: <b>${order.totalSpentSol.toFixed(4)} SOL</b>`,
+                            `🏁 <b>DCA COMPLETE: Max Budget Reached</b>\n\nToken: <code>${order.tokenAddress.substring(0, 8)}...</code>\nTotal Spent: <b>${order.totalSpentSol.toFixed(4)} SOL</b>`,
                             { parse_mode: 'HTML' }
                         );
                     } catch (_) {}
@@ -102,7 +102,6 @@ export async function processDcaOrders(bot: any) {
                 if (idx !== -1) cachedDcaOrders[idx].updatedAt = new Date();
                 await prisma.activeOrder.update({ where: { id: order.id }, data: { updatedAt: new Date() } });
 
-                // 🟢 FIX: Explicitly set strategy to 'DCA'
                 executeSnipe(
                     order.user.telegramId,
                     order.tokenAddress,
@@ -114,7 +113,7 @@ export async function processDcaOrders(bot: any) {
                     undefined,
                     0,
                     undefined,
-                    'DCA Engine'// 🟢 Exact match for dashboard aggregation
+                    'DCA Engine'
                 ).then(async (result) => {
                     const activeAlloc = parseFloat(await redis.get(allocKey) || '0');
                     await redis.set(allocKey, Math.max(0, activeAlloc - intendedSpend).toString(), 'EX', 120);
@@ -143,16 +142,20 @@ export async function processDcaOrders(bot: any) {
                             }
                         } catch (_) {}
 
-                        await addTrailingStopToMemory(
-                            order.user.telegramId,
-                            order.tokenAddress,
-                            order.trailingPercent || 20.0,
-                            order.amountSol,
-                            initialPriceNative,
-                            order.takeProfitPercent || undefined,
-                            undefined,
-                            'DCA Engine' // 🟢 Pass 'DCA Engine'
-                        );
+                        // 🟢 Only deploy live in-memory guards if user is NOT in simulation mode
+                        const { isSimulationActive } = await import('./simulation.service.js');
+                        if (!(await isSimulationActive(order.user.telegramId))) {
+                            await addTrailingStopToMemory(
+                                order.user.telegramId,
+                                order.tokenAddress,
+                                order.trailingPercent || 20.0,
+                                order.amountSol,
+                                initialPriceNative,
+                                order.takeProfitPercent || undefined,
+                                undefined,
+                                'DCA Engine'
+                            );
+                        }
                         
                         try {
                             const tpText = order.takeProfitPercent ? `+${order.takeProfitPercent}% TP` : '';

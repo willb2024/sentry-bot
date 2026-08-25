@@ -234,6 +234,10 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
     return await executeExit(guard.telegramId, guard.tokenAddress, 100, false, guard.strategy || 'Manual / Direct');
 }
 
+// Inside src/services/grpc.service.ts
+
+// Replace checkAndTriggerGuard in src/services/grpc.service.ts
+
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
     const { isSimulationActive, simExecuteExit, generateSimSignature } = await import('./simulation.service.js');
     const isSim = await isSimulationActive(guardSnapshot.telegramId);
@@ -253,7 +257,9 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         const entryPrice = guard.entryPrice || currentPriceNative;
         if (entryPrice <= 0 || currentPriceNative <= 0) return;
 
+        // ─────────────────────────────────────────────────────────────
         // 1. Time-Based Exit
+        // ─────────────────────────────────────────────────────────────
         if (guard.maxHoldMinutes && guard.createdAt) {
             const ageMinutes = (Date.now() - new Date(guard.createdAt).getTime()) / 60000;
             if (ageMinutes >= guard.maxHoldMinutes) {
@@ -267,6 +273,13 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     await redis.del(`balance_cache:${guard.telegramId}`);
+
+                    const { recordGuardOutcome } = await import('./guard_ai.service.js');
+                    const peakPercent = guard.highestSeenPrice && guard.entryPrice 
+                        ? ((guard.highestSeenPrice - guard.entryPrice) / guard.entryPrice) * 100 
+                        : pnlPercent;
+                    recordGuardOutcome(guard.telegramId, guard.tokenAddress, pnlPercent, peakPercent).catch(() => {});
+
                     try {
                         await bot.telegram.sendMessage(
                             guard.telegramId, 
@@ -279,7 +292,9 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             }
         }
 
+        // ─────────────────────────────────────────────────────────────
         // 2. Take-Profit Exit
+        // ─────────────────────────────────────────────────────────────
         if (guard.takeProfitPercent && entryPrice > 0) {
             const profitPercent = ((currentPriceNative - entryPrice) / entryPrice) * 100;
             if (profitPercent >= guard.takeProfitPercent) {
@@ -295,6 +310,9 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     await redis.del(`balance_cache:${guard.telegramId}`);
+
+                    const { recordGuardOutcome } = await import('./guard_ai.service.js');
+                    recordGuardOutcome(guard.telegramId, guard.tokenAddress, profitPercent, profitPercent).catch(() => {});
 
                     try {
                         const user = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });
@@ -320,7 +338,9 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             }
         }
 
-        // 3. Trailing-Stop Exit
+        // ─────────────────────────────────────────────────────────────
+        // 3. Trailing-Stop Exit (High-Water Mark Peak Tracking)
+        // ─────────────────────────────────────────────────────────────
         if (guard.highestSeenPrice === 0 || currentPriceNative > guard.highestSeenPrice) {
             await updateHighestSeenFast(guard.id, currentPriceNative).catch(() => {});
         } else {
@@ -339,6 +359,12 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     await redis.del(`balance_cache:${guard.telegramId}`);
+
+                    const { recordGuardOutcome } = await import('./guard_ai.service.js');
+                    const peakPercent = guard.highestSeenPrice && guard.entryPrice 
+                        ? ((guard.highestSeenPrice - guard.entryPrice) / guard.entryPrice) * 100 
+                        : totalPnlPercent;
+                    recordGuardOutcome(guard.telegramId, guard.tokenAddress, totalPnlPercent, peakPercent).catch(() => {});
 
                     try {
                         const user = await prisma.user.findUnique({ where: { telegramId: guard.telegramId } });

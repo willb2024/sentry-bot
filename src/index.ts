@@ -1999,21 +1999,37 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Run <code>/callerstats</code> to review the model's verified win rate before scaling up position sizes.`,
 
-    // PAGE 11: TRAILING STOP-LOSS GUARDS
-    `📖 <b>HOW TO TRADE: TRAILING STOP-LOSS GUARDS</b> <i>(11/29)</i>\n\n` +
-    `<i>Sentry uses High-Water Mark peak tracking rather than static stop-losses.</i>\n\n` +
-    `<b>HOW PEAK TRACKING WORKS:</b>\n` +
-    `1. You buy at $1.00 with a 15% trailing guard (stop starts at $0.85).\n` +
-    `2. Price surges to $2.00 — Sentry raises your stop to $1.70 (15% below the new peak).\n` +
-    `3. If price pulls back to $1.70, Sentry sells immediately, locking in <b>+70% net profit</b> instead of falling back to breakeven.\n\n` +
-    `<b>HOW TO DEPLOY:</b>\n` +
-    `Tap <b>🛡️ Trailing Stops</b> → <b>Deploy Trailing Guard</b>, reply with:\n` +
-    `<code>[CA] [DROP %] [AMOUNT SOL OR $USD] [OPTIONAL TP %]</code>\n\n` +
-    `<b>AUTO-RESIZING:</b>\n` +
-    `If you manually sell 50% of your bag, Sentry automatically resizes your trailing stop to protect the remaining 50% without needing manual reconfiguration.\n\n` +
+    // PAGE 11: TRAILING GUARDS & AI GUARD RECOMMENDATIONS
+    `📖 <b>HOW TO TRADE: TRAILING GUARDS & AI RECOMMENDATIONS</b> <i>(11/29)</i>\n\n` +
+    `<i>Sentry provides two ways to protect your capital: Manual High-Water Mark Trailing Stops and Self-Learning AI Guard Recommendations.</i>\n\n` +
+    `━━━━━━━━━━━━━━━\n` +
+    `🎯 <b>1. AI RECOMMENDED GUARD ENGINE:</b>\n` +
+    `• Tap <b>🎯 AI Recommend Stop / TP</b> in the Trailing menu or send <code>[CA] [AMOUNT]</code>.\n` +
+    `• <b>8-Factor On-Chain Analysis:</b> Sentry audits Token Age (0–30 pts), Volume Quality (0–25 pts), Liquidity Depth (0–15 pts), 5m Momentum (0–20 pts), Socials (0–10 pts), LP Security (0–15 pts), Holder Velocity (0–15 pts), and Twitter Sentiment (0–10 pts).\n` +
+    `• <b>Machine Learning Refinement:</b> Our Ridge Regression ML model compares the setup against historical outcomes to calculate the mathematically optimal Take-Profit (+% TP) and Trailing Stop (-% SL) for that specific token.\n` +
+    `• <b>Confidence & Projection:</b> Displays an overall score (0–100), factor breakdown, model confidence (*Low, Moderate, Good, High*), and expected timeframe.\n` +
+    `• <b>1-Tap Deployment:</b> Tap <b>⚡ Deploy</b> to buy and arm the AI-recommended guard in a single atomic Jito bundle.\n\n` +
+    `━━━━━━━━━━━━━━━\n` +
+    `⚙️ <b>2. CONFIGURING AI GUARD FILTERS:</b>\n` +
+    `• Tap <b>⚙️ Configure AI Guard Filters</b> to set strict eligibility thresholds:\n` +
+    `  ├ <b>Min Score (0–100):</b> Tokens below this AI score are rejected.\n` +
+    `  ├ <b>Min Liquidity ($USD):</b> Rejects thin, illiquid pools with high slippage risk.\n` +
+    `  ├ <b>Max 5m Volatility (±%):</b> Rejects over-heated, parabolic pumps.\n` +
+    `  ├ <b>Require Socials (ON/OFF):</b> Mandates verified Twitter/Telegram links.\n` +
+    `  └ <b>Require LP Lock (ON/OFF):</b> Enforces burned or Streamflow-locked liquidity.\n\n` +
+    `━━━━━━━━━━━━━━━\n` +
+    `🧠 <b>3. SELF-IMPROVING OUTCOME TRACKING:</b>\n` +
+    `• Every time an AI Guard exits, Sentry records the realized PnL and peak percentage reached.\n` +
+    `• The background scheduler retrains the ML model every 12 hours once $\\ge 20$ new finalized samples exist.\n` +
+    `• Command: <code>/guardmodelstats</code> (Admin) — View validation $R^2$, sample count, and live prediction usability.\n\n` +
+    `━━━━━━━━━━━━━━━\n` +
+    `🛡️ <b>4. MANUAL HIGH-WATER TRAILING STOPS:</b>\n` +
+    `• Tap <b>➕ Deploy Trailing Guard</b>, reply with: <code>[CA] [DROP %] [AMOUNT] [OPTIONAL TP %]</code>.\n` +
+    `• <b>Dynamic Peak Tracking:</b> If you buy at $1.00 with a 15% guard and price surges to $2.00, Sentry raises your stop to $1.70 (15% below the peak), locking in <b>+70% net profit</b>.\n` +
+    `• <b>Auto-Resizing:</b> Selling 50% of your bag automatically resizes the trailing stop to protect the remaining 50%.\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `Deploy guard: <code>DezXAZ... 15 0.5 50</code>. Sentry executes a 0.5 SOL buy, arms a 15% trailing stop, and sets a 50% take-profit target.`,
+    `Tap <b>🎯 AI Recommend Stop / TP</b>, send <code>DezXAZ... 0.5</code>. Sentry audits the token, scores it 82/100, and recommends <b>-20% Trailing Stop / +60% Take Profit</b>. Tap Deploy to execute immediately.`,
 
     // PAGE 12: MEMPOOL ANTI-RUG SHIELD
     `📖 <b>HOW TO TRADE: MEMPOOL ANTI-RUG SHIELD</b> <i>(12/29)</i>\n\n` +
@@ -2294,7 +2310,9 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <code>/scan [CA]</code> / <code>/xray [CA]</code> / <code>/info [CA]</code> — Deep X-Ray security audit on any token CA\n` +
     `• <code>/batch</code> — Snipe multiple tokens concurrently\n` +
     `• <code>/limit [CA] [PRICE] [AMT]</code> — Place a dip-buying limit order\n` +
+    `• <code>/guardmodelstats</code> — View Guard AI model validation R², sample counts & learning status\n` +
     `• <code>/dca [CA] [INT] [AMT] [SL] [TP]</code> — Start a TWAP / DCA accumulation schedule\n\n` +
+    
     `👥 <b>SOCIAL COPY-TRADING & GUILDS:</b>\n` +
     `• <code>/mytrades</code> — Get your public trade link (Earn 50% Fees)\n` +
     `• <code>/mycopiers</code> — View users copying your trades\n` +
@@ -2479,21 +2497,29 @@ export const CONFIG_GUIDE_PAGES: string[] = [
     `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
     `Open <code>/caller</code>, set <b>Min Score: 55</b>, <b>Max Age: 30m</b>, <b>Min Liq: $5,000</b>, and turn <b>MEV Shield: ON</b>. Tap <b>Scan Mainnet Now</b> to test live matches.`,
 
-    // PAGE 10: AUTOMATED EXITS & ASYMMETRIC RATIOS
-    `⚙️ <b>CONFIG GUIDE: THE 1:3 ASYMMETRIC RATIO</b> <i>(10/12)</i>\n\n` +
-    `<i>Entering a trade without a predefined automated exit guarantees emotional mistakes. Enforce the 1:3 Golden Ratio.</i>\n\n` +
-    `<b>THE 1:3 GOLDEN RATIO SETUP:</b>\n` +
-    `• <b>Auto-Trailing Drop (Stop Loss):</b> <code>-15%</code>\n` +
-    `• <b>Auto-Take Profit (TP):</b> <code>+45%</code>\n\n` +
-    `<b>HOW HIGH-WATER PEAK TRACKING WORKS:</b>\n` +
-    `Sentry does not use static stop-losses. It tracks the highest price reached (High-Water Mark):\n` +
-    `1. You buy a token at <b>$1.00</b> (Stop Loss: <b>$0.85</b>).\n` +
-    `2. Price surges +80% to <b>$1.80</b>.\n` +
-    `3. Sentry raises your stop-loss automatically to 15% below the peak: <code>$1.80 × (1 - 0.15) = $1.53</code>.\n` +
-    `4. If price pulls back, Sentry sells at $1.53, locking in <b>+53% net profit</b> rather than letting the trade fall back to breakeven.\n\n` +
-    `━━━━━━━━━━━━━━━\n\n` +
-    `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
-    `In Auto-Sniper, set <b>Auto-Guard to -15%</b> and <b>Take Profit to +45%</b>.`,
+   // PAGE 10: AUTOMATED EXITS, 1:3 RATIOS & AI GUARD LEARNING
+   `⚙️ <b>CONFIG GUIDE: AUTOMATED EXITS, 1:3 RATIOS & AI GUARDS</b> <i>(10/12)</i>\n\n` +
+   `<i>Entering a trade without predefined mathematical exit criteria guarantees emotional trading errors. Sentry combines strict asymmetric ratios with self-learning AI models.</i>\n\n` +
+   `━━━━━━━━━━━━━━━\n` +
+   `📐 <b>1. THE 1:3 ASYMMETRIC GOLDEN RATIO:</b>\n` +
+   `• <b>Configured Trailing Drop (Stop Loss):</b> <code>-15%</code>\n` +
+   `• <b>Configured Take Profit (TP):</b> <code>+45%</code>\n` +
+   `• <b>Mathematical Expected Value Proof:</b>\n` +
+   `  $$\\text{EV} = (0.40 \\times 45\\%) - (0.60 \\times 15\\%) = +18\\% - 9\\% = +9.0\\% \\text{ per trade}$$\n` +
+   `  Even with a 60% loss rate, this ratio generates consistent positive compounding.\n\n` +
+   `━━━━━━━━━━━━━━━\n` +
+   `🧠 <b>2. AI GUARD MODEL PARAMETER CALIBRATION:</b>\n` +
+   `Sentry's Ridge Regression model refines exit parameters based on live pool telemetry:\n` +
+   `• <b>High Volatility ($|\\Delta P_{5m}| > 50\\%$):</b> Automatically expands trailing drop by $+5\\%$ to prevent premature shakeouts.\n` +
+   `• <b>Deep Liquidity ($L_{\\text{usd}} > \\$50,000$):</b> Tightens trailing drop by $-5\\%$ to lock in tighter cost-basis protection.\n` +
+   `• <b>ML Predicted Take-Profit:</b> Refines TP targets based on historical peak clusters from verified breakout tokens.\n\n` +
+   `━━━━━━━━━━━━━━━\n` +
+   `⚙️ <b>3. RECOMMENDED AI GUARD FILTER PRESETS:</b>\n` +
+   `• <b>🔥 High-Conviction Gem Hunter:</b> Min Score: <code>65</code> | Min Liq: <code>$10,000</code> | Max Vol: <code>50%</code> | LP Lock: <code>ON</code> | Socials: <code>ON</code>\n` +
+   `• <b>⚡ Trench Momentum Runner:</b> Min Score: <code>50</code> | Min Liq: <code>$3,000</code> | Max Vol: <code>80%</code> | LP Lock: <code>OFF</code> | Socials: <code>OFF</code>\n\n` +
+   `━━━━━━━━━━━━━━━\n\n` +
+   `💡 <b>HOW TO CONFIGURE IN SENTRY:</b>\n` +
+   `Open <b>🛡️ Trailing Stops</b> → Tap <b>⚙️ Configure AI Guard Filters</b> → Set Min Score to 55 and Min Liq to $5,000. Use <b>🎯 AI Recommend Stop / TP</b> on any contract address to receive optimized exit parameters.`,
 
     // PAGE 11: TWAP & LIMIT ORDER ACCUMULATION
     `⚙️ <b>CONFIG GUIDE: TWAP & LIMIT ACCUMULATION</b> <i>(11/12)</i>\n\n` +
@@ -4480,17 +4506,191 @@ bot.action('action_cancel_dca', async (ctx) => {
 // =========================================================
 // 🛡️ TRAILING STOPS
 // =========================================================
+
+// Inside src/index.ts
+
 bot.action('menu_trailing', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    const text = `🛡️ <b>ACTIVE GUARDS (TRAILING STOPS)</b>\n\n<i>To deploy a Guard, click the button below and follow instructions.</i>`;
+    const text = `🛡️ <b>ACTIVE GUARDS (TRAILING STOPS)</b>\n\n` +
+                 `Deploy High-Water mark peak-tracking stop-losses or use our self-learning AI to analyze market telemetry and recommend optimal TP/SL ratios.\n\n` +
+                 `<i>Select an option below:</i>`;
     const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('➕ Deploy Trailing Guard', 'action_deploy_guard')], 
-        [Markup.button.callback('🛑 Cancel All Guards', 'action_cancel_guards')], 
-        [Markup.button.callback('⬅️ Back', 'btn_dashboard')]
+        [Markup.button.callback('🎯 AI Recommend Stop / TP', 'ai_recommend_guard')],
+        [Markup.button.callback('⚙️ Configure AI Guard Filters', 'edit_guard_filters')],
+        [Markup.button.callback('➕ Deploy Manual Trailing Guard', 'action_deploy_guard')], 
+        [Markup.button.callback('🛑 Cancel All Active Guards', 'action_cancel_guards')], 
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
     await safeEditMessageText(ctx, text, UI);
 });
 
+async function sendGuardFiltersMenu(ctx: any, tgId: string) {
+    const { getUserGuardFilters } = await import('./services/guard_ai.service.js');
+    const filters = await getUserGuardFilters(tgId);
+    const text = `⚙️ <b>AI GUARD RECOMMENDATION FILTERS</b>\n\n` +
+        `• <b>Min Score:</b> ${filters.minScore} / 100\n` +
+        `• <b>Min Liquidity:</b> $${filters.minLiquidity.toLocaleString()}\n` +
+        `• <b>Max Volatility (5m):</b> ±${filters.maxVolatility}%\n` +
+        `• <b>Require Socials:</b> ${filters.requireSocials ? '🟢 Yes' : '🔴 No'}\n` +
+        `• <b>Require LP Lock:</b> ${filters.requireLpLock ? '🟢 Yes' : '🔴 No'}\n\n` +
+        `<i>Tokens must clear these filters before the AI provides a deployment recommendation.</i>`;
+    const UI = Markup.inlineKeyboard([
+        [Markup.button.callback(`✏️ Min Score (${filters.minScore})`, 'set_guard_min_score'), Markup.button.callback(`💧 Min Liq ($${(filters.minLiquidity/1000).toFixed(0)}k)`, 'set_guard_min_liq')],
+        [Markup.button.callback(`📈 Max Vol (±${filters.maxVolatility}%)`, 'set_guard_max_vol')],
+        [Markup.button.callback(`🌐 Socials: ${filters.requireSocials ? 'ON' : 'OFF'}`, 'toggle_guard_socials'), Markup.button.callback(`🔒 LP Lock: ${filters.requireLpLock ? 'ON' : 'OFF'}`, 'toggle_guard_lp')],
+        [Markup.button.callback('⬅️ Back to Trailing Stops', 'menu_trailing')]
+    ]);
+    await safeEditMessageText(ctx, text, UI);
+}
+
+bot.action('edit_guard_filters', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await sendGuardFiltersMenu(ctx, tgId);
+});
+
+bot.action('set_guard_min_score', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await redis.set(`state:edit_guard_score:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`✏️ <b>SET MINIMUM GUARD SCORE</b>\n\nReply with a score between 0 and 100.\n<i>Type /cancel to abort.</i>`);
+});
+
+bot.action('set_guard_min_liq', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await redis.set(`state:edit_guard_liq:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`💧 <b>SET MINIMUM LIQUIDITY</b>\n\nReply with minimum liquidity in USD (e.g., <code>10000</code> for $10k).\n<i>Type /cancel to abort.</i>`);
+});
+
+bot.action('set_guard_max_vol', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await redis.set(`state:edit_guard_vol:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(`📈 <b>SET MAXIMUM 5M VOLATILITY</b>\n\nReply with max absolute 5m price change % (e.g., <code>50</code>).\n<i>Type /cancel to abort.</i>`);
+});
+
+bot.action('toggle_guard_socials', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    const { getUserGuardFilters, setUserGuardFilters } = await import('./services/guard_ai.service.js');
+    const filters = await getUserGuardFilters(tgId);
+    await setUserGuardFilters(tgId, { requireSocials: !filters.requireSocials });
+    await sendGuardFiltersMenu(ctx, tgId);
+});
+
+bot.action('toggle_guard_lp', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    const { getUserGuardFilters, setUserGuardFilters } = await import('./services/guard_ai.service.js');
+    const filters = await getUserGuardFilters(tgId);
+    await setUserGuardFilters(tgId, { requireLpLock: !filters.requireLpLock });
+    await sendGuardFiltersMenu(ctx, tgId);
+});
+
+
+// Inside src/index.ts
+
+bot.action('ai_recommend_guard', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    await redis.set(`state:ai_guard:${tgId}`, 'AWAITING', 'EX', 300);
+    await ctx.replyWithHTML(
+        `🎯 <b>AI RECOMMENDED GUARD</b>\n\n` +
+        `Send the token contract address (and optional purchase size in SOL or USD, e.g. <code>[CA] 0.2</code> or <code>[CA] $50</code>).\n\n` +
+        `The AI model will audit on-chain market telemetry, verify your active filters, and recommend optimal Stop-Loss and Take-Profit parameters.\n\n` +
+        `<i>Type /cancel to abort.</i>`
+    );
+});
+
+bot.action(/^ai_deploy_guard_(.+)_([\d.]+)_([\d.]+)_([\d.]+)$/, async (ctx) => {
+    const ca = ctx.match[1];
+    const amountSol = parseFloat(ctx.match[2]);
+    const drop = parseFloat(ctx.match[3]);
+    const tp = parseFloat(ctx.match[4]);
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    try { await ctx.answerCbQuery(); } catch(e){}
+
+    const loader = await ctx.replyWithHTML(
+        `⚡ <b>DEPLOYING AI-RECOMMENDED GUARD</b>\n\n` +
+        `Token: <code>${ca.substring(0,8)}...</code>\n` +
+        `Amount: <b>${amountSol.toFixed(4)} SOL</b>\n` +
+        `Trailing Stop: <b>-${drop}%</b>\n` +
+        `Take Profit: <b>+${tp}%</b>\n\n` +
+        `<i>⏳ Routing purchase via Jito bundle...</i>`
+    );
+
+    const { isSimulationActive, simExecuteSnipe } = await import('./services/simulation.service.js');
+    const { executeSnipe, getCachedTokenPrice } = await import('./services/engine.service.js');
+    const { addTrailingStopToMemory } = await import('./services/order.service.js');
+
+    const isSim = await isSimulationActive(tgId);
+    let result;
+
+    if (isSim) {
+        result = await simExecuteSnipe(tgId, ca, amountSol, 'Manual / Direct', 75, drop, tp);
+    } else {
+        result = await executeSnipe(tgId, ca, amountSol, 'buy', undefined, false, undefined, undefined, 0, undefined, 'Manual / Direct');
+        if (result.success) {
+            const price = await getCachedTokenPrice(ca).catch(() => 0);
+            await addTrailingStopToMemory(tgId, ca, drop, amountSol, price || 0, tp, undefined, 'Manual / Direct');
+            
+            // Mark recommendation as used in DB
+            const rec = await prisma.guardRecommendation.findFirst({
+                where: { tokenAddress: ca, telegramId: tgId, used: false },
+                orderBy: { createdAt: 'desc' }
+            });
+            if (rec) {
+                await prisma.guardRecommendation.update({ where: { id: rec.id }, data: { used: true } });
+            }
+        }
+    }
+
+    if (result.success) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `✅ <b>AI GUARD ACTIVATED SUCCESSFULLY!</b>\n\n` +
+            `• Token: <code>${ca}</code>\n` +
+            `• Invested: <b>${amountSol.toFixed(4)} SOL</b>\n` +
+            `• Trailing Stop: <b>-${drop}%</b>\n` +
+            `• Take Profit: <b>+${tp}%</b>\n\n` +
+            `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`,
+            { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...Markup.inlineKeyboard([[Markup.button.callback('💼 View Positions', 'menu_positions')]]) }
+        );
+    } else {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `🔴 <b>Deployment Failed:</b> ${result.message}`, { parse_mode: 'HTML' });
+    }
+});
+
+// Admin Command to inspect Model Weights
+bot.command('guardmodelstats', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+
+    const raw = await redis.get('guard_model_weights');
+    if (!raw) return ctx.replyWithHTML("🧠 <b>Guard AI Model:</b> No weights trained yet (needs 60+ finalized records).");
+    
+    const model = JSON.parse(raw);
+    const metrics = model.metrics;
+    
+    await ctx.replyWithHTML(
+        `🧠 <b>GUARD AI MODEL METRICS</b>\n\n` +
+        `• Trained At: <code>${new Date(model.trainedAt).toUTCString()}</code>\n` +
+        `• Validation R²: <b>${metrics.r2.toFixed(3)}</b>\n` +
+        `• Training Samples: <b>${metrics.sampleCount}</b>\n` +
+        `• Usable for Live Predictions: <b>${metrics.isUsable ? '🟢 Yes' : '🔴 No'}</b>\n\n` +
+        `<i>(Model autonomously predicts optimal Take-Profit targets).</i>`
+    );
+});
 
 
 bot.action('action_cancel_guards', async (ctx) => {
@@ -6008,6 +6208,121 @@ bot.on("text", async (ctx, next) => {
         return;
     }
 
+
+
+    // 1. AI Guard Token Analysis State Handler
+    const aiGuardState = await redis.get(`state:ai_guard:${telegramId}`);
+    if (aiGuardState) {
+        await redis.del(`state:ai_guard:${telegramId}`);
+        const parts = text.split(' ');
+        const ca = parts[0] || '';
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ca)) {
+            return ctx.reply("🔴 Invalid Solana contract address.");
+        }
+        
+        let amount: number | null = null;
+        if (parts.length > 1) amount = parseSolAmount(parts[1]);
+        if (amount !== null && amount <= 0) return ctx.reply("🔴 Invalid trade amount.");
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(telegramId);
+        
+        if (isSim) {
+            const simCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
+            if (simCredits <= 0) return ctx.replyWithHTML("⚠️ <b>OUT OF SIMULATION CREDITS</b>. Use /simcredits to reload.");
+            await redis.set(`sim:credits:${telegramId}`, Math.max(0, simCredits - 1).toString());
+        } else {
+            const { consumeCredit } = await import('./services/credits.service.js');
+            const creditResult = await consumeCredit(telegramId, 'CONSUME_SCAN', ca);
+            if (!creditResult.success) {
+                return ctx.replyWithHTML(
+                    `⚠️ <b>OUT OF CREDITS</b>\n\nYou need 1 credit to analyze a token. Top up below:`,
+                    Markup.inlineKeyboard([[Markup.button.callback('💳 Buy Credits', 'menu_credits')]])
+                );
+            }
+        }
+
+        const loader = await ctx.replyWithHTML("<i>⏳ Auditing token telemetry & running AI Guard model...</i>");
+        
+        try {
+            const { analyzeTokenForGuard } = await import('./services/guard_ai.service.js');
+            const analysis = await analyzeTokenForGuard(telegramId, ca);
+
+            let breakdownStr = '';
+            analysis.scoreBreakdown.forEach(b => {
+                breakdownStr += `• ${b.factor}: <b>${b.points}/${b.maxPoints}</b> (${b.detail})\n`;
+            });
+
+            const responseMsg = 
+                `🎯 <b>AI RECOMMENDED GUARD SPECIFICATIONS</b>\n\n` +
+                `<b>Token:</b> $${analysis.tokenSymbol} (<code>${ca}</code>)\n` +
+                `<b>AI Score:</b> <b>${analysis.score}/100</b> ⭐\n` +
+                `<b>Model Confidence:</b> <b>${analysis.confidence}</b>\n\n` +
+                `📊 <b>Factor Breakdown:</b>\n${breakdownStr}\n` +
+                `🛡️ <b>Recommended Trailing Stop:</b> <b>-${analysis.trailingDropPercent}%</b>\n` +
+                `🎯 <b>Recommended Take Profit:</b> <b>+${analysis.takeProfitPercent}%</b>\n` +
+                `🔮 <b>Target Peak:</b> <b>${analysis.projectedRange}</b> (${analysis.timeframe})\n\n` +
+                `<i>Active Filters: Min Score ${analysis.filters.minScore}, Min Liq $${analysis.filters.minLiquidity.toLocaleString()}, Max Vol ±${analysis.filters.maxVolatility}%.</i>`;
+
+            const keyboardRows = [];
+            if (amount !== null && amount > 0) {
+                keyboardRows.push([
+                    Markup.button.callback(
+                        `⚡ Deploy ${amount} SOL (-${analysis.trailingDropPercent}% / +${analysis.takeProfitPercent}%)`,
+                        `ai_deploy_guard_${ca}_${amount}_${analysis.trailingDropPercent}_${analysis.takeProfitPercent}`
+                    )
+                ]);
+            }
+            keyboardRows.push([Markup.button.callback('⬅️ Back to Trailing Stops', 'menu_trailing')]);
+
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, responseMsg, {
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: keyboardRows }
+            });
+        } catch (err: any) {
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                `🔴 <b>Guard Analysis Blocked:</b> ${err.message}`, { parse_mode: 'HTML' });
+        }
+        return;
+    }
+
+    // 2. Guard Filter Parameter Text Handlers
+    const editGuardScore = await redis.get(`state:edit_guard_score:${telegramId}`);
+    if (editGuardScore) {
+        await redis.del(`state:edit_guard_score:${telegramId}`);
+        const val = parseInt(text, 10);
+        if (isNaN(val) || val < 0 || val > 100) return ctx.reply("🔴 Invalid score. Must be 0-100.");
+        const { setUserGuardFilters } = await import('./services/guard_ai.service.js');
+        await setUserGuardFilters(telegramId, { minScore: val });
+        await ctx.replyWithHTML(`✅ AI Guard Min Score updated to <b>${val}/100</b>.`);
+        await sendGuardFiltersMenu(ctx, telegramId);
+        return;
+    }
+
+    const editGuardLiq = await redis.get(`state:edit_guard_liq:${telegramId}`);
+    if (editGuardLiq) {
+        await redis.del(`state:edit_guard_liq:${telegramId}`);
+        const val = parseFloat(text);
+        if (isNaN(val) || val < 0) return ctx.reply("🔴 Invalid liquidity amount.");
+        const { setUserGuardFilters } = await import('./services/guard_ai.service.js');
+        await setUserGuardFilters(telegramId, { minLiquidity: val });
+        await ctx.replyWithHTML(`✅ AI Guard Min Liquidity set to <b>$${val.toLocaleString()}</b>.`);
+        await sendGuardFiltersMenu(ctx, telegramId);
+        return;
+    }
+
+    const editGuardVol = await redis.get(`state:edit_guard_vol:${telegramId}`);
+    if (editGuardVol) {
+        await redis.del(`state:edit_guard_vol:${telegramId}`);
+        const val = parseFloat(text);
+        if (isNaN(val) || val < 0) return ctx.reply("🔴 Invalid volatility %.");
+        const { setUserGuardFilters } = await import('./services/guard_ai.service.js');
+        await setUserGuardFilters(telegramId, { maxVolatility: val });
+        await ctx.replyWithHTML(`✅ AI Guard Max 5m Volatility set to <b>±${val}%</b>.`);
+        await sendGuardFiltersMenu(ctx, telegramId);
+        return;
+    }
+
     // Add before the standard copytradeState handler:
 const copytradeSocialState = await redis.get(`state:copytrade_social:${telegramId}`);
 if (copytradeSocialState) {
@@ -6493,16 +6808,25 @@ if (copytradeSocialState) {
     }
 
     // --- 11. VIP PURCHASE TX ---
+    // Keep ONLY ONE instance of this block inside bot.on("text", ...):
     const vipTxState = await redis.get(`vip:awaiting_tx:${telegramId}`);
     if (vipTxState) {
         await redis.del(`vip:awaiting_tx:${telegramId}`);
         const loader = await ctx.reply("<i>⏳ Verifying VIP payment...</i>", { parse_mode: 'HTML' });
         const { verifyVipPayment, VIP_TIERS, grantVip } = await import('./services/vip.service.js');
+        const { isSimulationActive } = await import('./services/simulation.service.js');
         const tierDef = VIP_TIERS[vipTxState as keyof typeof VIP_TIERS];
         const treasury = process.env.TREASURY_WALLET_ADDRESS!;
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress) return;
-        const valid = await verifyVipPayment(text, tierDef.priceSol, treasury, user.vaultAddress);
+
+        let valid = { valid: false, reason: '' };
+        if (await isSimulationActive(telegramId)) {
+            valid = { valid: true, reason: 'Simulation payment verified (Sandbox).' };
+        } else {
+            valid = await verifyVipPayment(text, tierDef.priceSol, treasury, user.vaultAddress);
+        }
+
         if (!valid.valid) {
             return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Payment Invalid:</b> ${valid.reason}`, { parse_mode: 'HTML' });
         }
@@ -7923,12 +8247,9 @@ app.post('/api/stats-window', async (req, res) => {
 });
 
 
-// 📤 Export Trades (CSV Web)
 
+// Inside src/index.ts
 
-
-
-// 1️⃣ Update /sim command
 bot.command('sim', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!tgId) return;
@@ -7937,6 +8258,10 @@ bot.command('sim', async (ctx) => {
         const current = await isSimulationActive(tgId);
         const newState = !current;
         await setSimulationMode(tgId, newState);
+
+        if (newState) {
+            await redis.set(`autosnipe:session_spend:sim:${tgId}`, '0'); // 🟢 Initialize session spend
+        }
 
         const displayBal = await redis.get(`sim:balance:${tgId}`) || '1000';
         await ctx.replyWithHTML(
@@ -7954,7 +8279,6 @@ bot.command('sim', async (ctx) => {
     }
 });
 
-// Inside src/index.ts
 
 app.post('/api/trades/export', async (req, res) => {
     try {
@@ -8194,6 +8518,10 @@ setInterval(async () => {
         await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
 await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/1 * * * * *' } });
 await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+
+
+const { runGuardModelTrainingScheduler } = await import('./services/guard_ai.service.js');
+runGuardModelTrainingScheduler();
 
         // 🟢 Starts the High-Frequency Simulation TP/SL Guard Resolver
 

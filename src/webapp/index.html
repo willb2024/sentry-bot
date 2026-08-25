@@ -254,7 +254,7 @@
                 </div>
                 <div class="flex gap-2 sm:gap-4 text-[11px] sm:text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
                     <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Manual: 0 trades (+0.00 SOL)</span>
-                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto: 16 trades (+41.2730 SOL)</span>
+                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto: 16 trades (+49.9442 SOL)</span>
                 </div>
             </div>
 
@@ -388,7 +388,7 @@
 
         </section>
 
-        <!-- Right Column: Clean Static Graphs -->
+        <!-- Right Column: Stable Clean Static Graphs -->
         <section class="space-y-6">
             <!-- PnL Chart -->
             <div class="card-flat p-5" id="pnl-chart-wrapper">
@@ -720,9 +720,9 @@
             if (allocChart) allocChart.destroy();
             
             const hasData = allocLabels && allocLabels.length > 0 && allocData && allocData.length > 0 && allocData.some(v => v > 0);
-            const chartLabels = hasData ? allocLabels : ['Sniper Engine', 'Manual / Direct', 'DCA Engine', 'Copy Trade'];
-            const chartData = hasData ? allocData : [1421.8415, 118.421, 64.9125, 28.305];
-            const chartColors = ['#10b981', '#f59e0b', '#8b5cf6', '#3b82f6'];
+            const chartLabels = hasData ? allocLabels : ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine'];
+            const chartData = hasData ? allocData : [1421.8415, 118.4210, 28.3050, 64.9125];
+            const chartColors = ['#10b981', '#f59e0b', '#3b82f6', '#8b5cf6'];
 
             allocChart = new Chart(allocCtx, {
                 type: 'doughnut',
@@ -1577,20 +1577,20 @@
             const colorMapping = {
                 'Sniper Engine': '#10b981',
                 'Manual / Direct': '#f59e0b',
-                'DCA Engine': '#8b5cf6',
-                'Copy Trade': '#3b82f6'
+                'Copy Trade': '#3b82f6',
+                'DCA Engine': '#8b5cf6'
             };
 
             const stratLabels = [];
             const stratData = [];
             const stratColors = [];
 
-            const defaultOrder = ['Sniper Engine', 'Manual / Direct', 'DCA Engine', 'Copy Trade'];
+            const defaultOrder = ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine'];
             const statsPool = Object.keys(data.stratStats || {}).length > 0 ? data.stratStats : {
                 'Sniper Engine': { pnl: 1421.8415 },
-                'Manual / Direct': { pnl: 118.421 },
-                'DCA Engine': { pnl: 64.9125 },
-                'Copy Trade': { pnl: 28.305 }
+                'Manual / Direct': { pnl: 118.4210 },
+                'Copy Trade': { pnl: 28.3050 },
+                'DCA Engine': { pnl: 64.9125 }
             };
 
             defaultOrder.forEach(strat => {

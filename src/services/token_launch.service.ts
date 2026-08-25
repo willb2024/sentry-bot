@@ -106,17 +106,30 @@ export async function mineVanityKeypair(prefix: string, maxIterations = 50000): 
     });
 }
 
+// Replace launchTokenOnPumpFun in src/services/token_launch.service.ts
+
 export async function launchTokenOnPumpFun(
     telegramId: string, name: string, symbol: string, description: string, metadataUri: string, 
     devBuySol: number, vanityPrefix: string, walletCount: number,
     dex: 'pump' | 'raydium' = 'pump'
 ): Promise<{ success: boolean; tokenAddress?: string; signature?: string; message: string }> {
     try {
-        // 🟢 FIX: Prevent real on-chain token creation while in Simulation Mode
+        // 🟢 SIMULATION INTERCEPT: Simulates token creation and Block-0 buy
+        const { isSimulationActive, generateSimTokenCA, generateSimSignature } = await import('./simulation.service.js');
         if (await isSimulationActive(telegramId)) {
+            const fakeMint = generateSimTokenCA();
+            const fakeSig = generateSimSignature();
+            
+            if (devBuySol > 0) {
+                const { simExecuteSnipe } = await import('./simulation.service.js');
+                await simExecuteSnipe(telegramId, fakeMint, devBuySol, 'Token Launchpad', 85, 15, 50);
+            }
+
             return { 
-                success: false, 
-                message: "🚀 Launchpad is disabled in Simulation Mode. Switch to Live Mainnet to deploy an on-chain token." 
+                success: true, 
+                tokenAddress: fakeMint, 
+                signature: fakeSig, 
+                message: "🚀 Token launched successfully! (Simulation Sandbox — No real SOL spent)." 
             };
         }
 
