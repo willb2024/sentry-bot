@@ -8510,10 +8510,11 @@ setInterval(async () => {
                 await bot.launch({ dropPendingUpdates: true });
                 console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
             } catch (e: any) {
-                const errMsg = e?.message || String(e);
+                // 🟢 FIX: Only log the string message, NEVER the full error object
+                const errMsg = e?.message ? e.message : "Network Timeout / Connection Refused";
                 console.error(`🔴 Telegram Bot Launch Attempt Failed (${retries} retries left): ${errMsg}`);
                 if (retries > 0) {
-                    setTimeout(() => launchBot(retries - 1), 5000);
+                    setTimeout(() => launchBot(retries - 1), 8000);
                 }
             }
         };

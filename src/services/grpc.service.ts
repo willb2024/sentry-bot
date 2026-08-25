@@ -469,80 +469,85 @@ export function startPumpFunPolling() {
     }, 10_000));
 }
 
+// Inside src/services/grpc.service.ts
+
 let isWsConnecting = false;
-let wsReconnectDelay = 2000;
+let wsReconnectDelay = 5000;
 let wsHeartbeat: NodeJS.Timeout | null = null;
 let lastMessageAt = Date.now();
-
-// Replace connectPumpPortalStream in src/services/grpc.service.ts
 
 function connectPumpPortalStream(bot: any) {
     if (isWsConnecting) return;
     isWsConnecting = true;
 
-    const ws = new WebSocket('wss://pumpportal.fun/api/data', {
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://pumpportal.fun' }
-    });
+    try {
+        const ws = new WebSocket('wss://pumpportal.fun/api/data', {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://pumpportal.fun' },
+            handshakeTimeout: 10000
+        });
 
-    ws.on('open', () => {
-        isWsConnecting = false;
-        wsReconnectDelay = 2000;
-        logger.info("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
-        }
-        
-        lastMessageAt = Date.now();
-        if (wsHeartbeat) clearInterval(wsHeartbeat);
-        wsHeartbeat = setInterval(() => {
-            if (Date.now() - lastMessageAt > 90_000) {
-                try { ws.terminate(); } catch (_) {}
+        ws.on('open', () => {
+            isWsConnecting = false;
+            wsReconnectDelay = 5000; // Reset delay on success
+            logger.info("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
             }
-        }, 30_000);
-        global._sentryIntervals.push(wsHeartbeat);
-    });
+            
+            lastMessageAt = Date.now();
+            if (wsHeartbeat) clearInterval(wsHeartbeat);
+            wsHeartbeat = setInterval(() => {
+                if (Date.now() - lastMessageAt > 90_000) {
+                    ws.terminate();
+                }
+            }, 30_000);
+            global._sentryIntervals.push(wsHeartbeat);
+        });
 
-    ws.on('unexpected-response', (_req, res) => {
-        // 🟢 Handle HTTP 429 (Rate Limiting) with proper backoff
-        if (res.statusCode === 429) {
-            const retryAfter = res.headers['retry-after'];
-            const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 60_000;
-            logger.warn(`⏳ [SNIPER] PumpPortal rate limited (429). Retrying in ${waitMs / 1000}s.`);
-            wsReconnectDelay = waitMs;
-        } else {
-            logger.warn(`⚠️ [SNIPER] Unexpected response: ${res.statusCode}`);
-            wsReconnectDelay = Math.min(wsReconnectDelay * 2, 60_000);
-        }
-        isWsConnecting = false;
-        if (wsHeartbeat) clearInterval(wsHeartbeat);
-        setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
-    });
-
-    ws.on('message', async (data: WebSocket.RawData) => {
-        lastMessageAt = Date.now();
-        try {
-            const parsed = JSON.parse(data.toString());
-            if (parsed.mint && !recentlySnipedTokens.has(parsed.mint)) {
-                if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
-                recentlySnipedTokens.add(parsed.mint);
-                setTimeout(() => recentlySnipedTokens.delete(parsed.mint), 60_000);
-                trackNewMint(parsed.mint, parsed.symbol); 
-                await triggerAutoSnipes(bot, parsed.mint, parsed.symbol || "UNKNOWN", parsed.initialBuy || 0, 'PUMP');
+        ws.on('unexpected-response', (_req, res) => {
+            isWsConnecting = false;
+            if (res.statusCode === 429) {
+                logger.warn("🟡 [PUMPPORTAL] Rate-limited (429). Backing off for 60 seconds...");
+                wsReconnectDelay = 60000; // Force 1 minute wait
             }
-        } catch (_) {}
-    });
+            ws.removeAllListeners(); // Prevent duplicate close events
+            ws.terminate();
+            setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
+        });
 
-    ws.on('error', (err: any) => {
-        logger.warn(`⚠️ [SNIPER] WebSocket error: ${err.message}`);
-        isWsConnecting = false;
-    });
+        ws.on('message', async (data: WebSocket.RawData) => {
+            lastMessageAt = Date.now();
+            try {
+                const parsed = JSON.parse(data.toString());
+                if (parsed.mint && !recentlySnipedTokens.has(parsed.mint)) {
+                    if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
+                    recentlySnipedTokens.add(parsed.mint);
+                    setTimeout(() => recentlySnipedTokens.delete(parsed.mint), 60_000);
+                    trackNewMint(parsed.mint, parsed.symbol); 
+                    await triggerAutoSnipes(bot, parsed.mint, parsed.symbol || "UNKNOWN", parsed.initialBuy || 0, 'PUMP');
+                }
+            } catch (_) {}
+        });
 
-    ws.on('close', () => {
+        ws.on('error', (err: any) => {
+            isWsConnecting = false;
+            // Only log if it's not the generic 429 that spam the console
+            if (!err.message.includes('429')) {
+                logger.warn(`⚠️ [SNIPER] WebSocket error: ${err.message}`);
+            }
+        });
+
+        ws.on('close', () => {
+            isWsConnecting = false;
+            if (wsHeartbeat) clearInterval(wsHeartbeat);
+            ws.removeAllListeners();
+            setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
+            wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, 120_000); // Cap max backoff to 2 mins
+        });
+    } catch (e: any) {
         isWsConnecting = false;
-        if (wsHeartbeat) clearInterval(wsHeartbeat);
-        setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
-        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 60_000);
-    });
+        setTimeout(() => connectPumpPortalStream(bot), 15000);
+    }
 }
 
 function connectRaydiumFallbackWatcher(bot: any) {

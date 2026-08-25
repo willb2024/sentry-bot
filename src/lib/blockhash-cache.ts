@@ -7,13 +7,13 @@ export function getCachedBlockhash(): string {
     return cachedBlockhash;
 }
 
-// 🟢 Sub-second 800ms blockhash cache
+// 🟢 Slowed down to 3000ms (3 seconds) to save RPC credits
 setInterval(async () => {
     try {
         const { blockhash } = await connection.getLatestBlockhash('processed');
         cachedBlockhash = blockhash;
-    } catch (_) {}
-}, 800);
+    } catch (_) {} // Silent catch to prevent console spam when rate-limited
+}, 3000);
 
 // Populate immediately on boot
 (async () => {
