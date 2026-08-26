@@ -1,29 +1,63 @@
-// src/lib/logger.ts — Full File with Circular Reference Immunity
+// src/lib/logger.ts — Full File with Circular Reference & Socket Immunity
 import winston from 'winston';
 
 function safeSerialize(value: any, seen = new WeakSet()): any {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  // Handle BigInt serialization
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+
+  // Handle Errors and extract only safe metadata
   if (value instanceof Error) {
     return {
       name: value.name,
       message: value.message,
       stack: value.stack,
       code: (value as any).code,
-      socket: undefined,
-      parser: undefined,
+      status: (value as any).status || (value as any).response?.status,
     };
   }
-  if (typeof value === 'object' && value !== null) {
+
+  // Handle Objects & Arrays
+  if (typeof value === 'object') {
     if (seen.has(value)) {
       return '[Circular]';
     }
     seen.add(value);
+
+    // Filter out Node.js native streams, sockets, and HTTP parsers
+    if (
+      value.constructor?.name === 'TLSSocket' ||
+      value.constructor?.name === 'Socket' ||
+      value.constructor?.name === 'HTTPParser' ||
+      value.constructor?.name === 'ClientRequest' ||
+      value.constructor?.name === 'IncomingMessage'
+    ) {
+      return `[${value.constructor.name}]`;
+    }
+
     const out: Record<string, any> = Array.isArray(value) ? [] : {};
     for (const key of Object.keys(value)) {
-      // 🟢 Skip Node.js internal socket/stream/parser properties
-      if (key === 'socket' || key === 'parser' || key === 'request' || key === 'response' || key === 'req' || key === 'res' || key === '_httpMessage') {
-        out[key] = '[Skipped]';
+      // Skip deep socket/request/response internal trees
+      if (
+        key === 'socket' || 
+        key === 'parser' || 
+        key === 'request' || 
+        key === 'response' || 
+        key === 'req' || 
+        key === 'res' || 
+        key === '_httpMessage' ||
+        key === 'client' ||
+        key === 'agent'
+      ) {
+        out[key] = `[Skipped:${key}]`;
         continue;
       }
+
       try {
         out[key] = safeSerialize(value[key], seen);
       } catch (_) {
@@ -32,6 +66,7 @@ function safeSerialize(value: any, seen = new WeakSet()): any {
     }
     return out;
   }
+
   return value;
 }
 

@@ -1,4 +1,4 @@
-// src/lib/connection.ts — Full File with Tolerant Circuit Breaker
+// src/lib/connection.ts — Tolerant RPC Proxy with 429 Backoff & Resilient Fallbacks
 import { Connection } from '@solana/web3.js';
 import dotenv from 'dotenv';
 
@@ -10,15 +10,18 @@ const PRIMARY_URL = process.env.PRIMARY_RPC_URL
     || process.env.HELIUS_RPC_URL 
     || (HELIUS_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}` : 'https://api.mainnet-beta.solana.com');
 
-const BACKUP_URL = process.env.BACKUP_RPC_URL || PRIMARY_URL;
+// If no backup URL is provided, use a distinct public fallback instead of pointing to the same rate-limited primary!
+const BACKUP_URL = process.env.BACKUP_RPC_URL 
+    || (PRIMARY_URL.includes('helius') ? 'https://api.mainnet-beta.solana.com' : 'https://solana-mainnet.rpc.extrnode.com');
 
 const primaryConnection = new Connection(PRIMARY_URL, {
     commitment: 'confirmed',
-    disableRetryOnRateLimit: true 
+    disableRetryOnRateLimit: false // Enable native retry support
 });
+
 const backupConnection = new Connection(BACKUP_URL, {
     commitment: 'confirmed',
-    disableRetryOnRateLimit: true
+    disableRetryOnRateLimit: false
 });
 
 const SYNC_SUBSCRIPTION_METHODS = new Set([
@@ -31,8 +34,7 @@ const SYNC_REMOVAL_METHODS = new Set([
     'removeSignatureListener', 'removeRootChangeListener'
 ]);
 
-const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000; // Increased to 60s cooldown
-
+const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 let circuitOpenedAt: number | null = null;
 let lastBreakerWarnAt = 0;
 let consecutiveSuccesses = 0;
@@ -47,8 +49,8 @@ function isCircuitOpen(): boolean {
     return true;
 }
 
-const FAILURE_WINDOW_MS = 10_000;
-const MAX_FAILURES_IN_WINDOW = 10; // Increased threshold to 10 to avoid false positives
+const FAILURE_WINDOW_MS = 15_000;
+const MAX_FAILURES_IN_WINDOW = 15; // Higher tolerance to prevent false positives on transient bursts
 const failureTimestamps: number[] = [];
 
 function recordPrimarySuccess() { 
@@ -57,7 +59,7 @@ function recordPrimarySuccess() {
     while (failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
         failureTimestamps.shift();
     }
-    if (consecutiveSuccesses >= 3 && circuitOpenedAt !== null) {
+    if (consecutiveSuccesses >= 5 && circuitOpenedAt !== null) {
         circuitOpenedAt = null;
         failureTimestamps.length = 0;
         console.log("🟢 [RPC BREAKER] Primary RPC restored and circuit breaker closed.");
@@ -73,15 +75,15 @@ function recordPrimaryFailure(error?: any) {
     }
     if (failureTimestamps.length >= MAX_FAILURES_IN_WINDOW) {
         circuitOpenedAt = now;
-        if (now - lastBreakerWarnAt > 30000) {
+        if (now - lastBreakerWarnAt > 60000) {
             lastBreakerWarnAt = now;
-            const errMsg = error?.message || 'Rate-limited / Unresponsive';
-            console.warn(`🔴 [RPC BREAKER] ${MAX_FAILURES_IN_WINDOW} failures in 10s (${errMsg}). Routing requests to backup RPC for 60s.`);
+            const errMsg = error?.message || '429 Rate-Limited';
+            console.warn(`🔴 [RPC BREAKER] RPC rate limit reached (${errMsg}). Routing traffic to backup RPC for 60s.`);
         }
     }
 }
 
-const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 10);
+const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 12);
 let activeCount = 0;
 
 const BYPASS_QUEUE_METHODS = new Set([
@@ -115,9 +117,35 @@ async function withSlot<T>(highPriority: boolean, fn: () => Promise<T>): Promise
     try { return await fn(); } finally { releaseSlot(); }
 }
 
+// 🟢 Auto-retry helper with backoff for 429 responses
+async function executeWithRetry<T>(target: any, prop: any, args: any[], maxRetries = 2): Promise<T> {
+    let attempt = 0;
+    while (true) {
+        try {
+            const currentConn = isCircuitOpen() ? backupConnection : target;
+            const fn = Reflect.get(currentConn, prop);
+            const result = await fn.apply(currentConn, args);
+            recordPrimarySuccess();
+            return result;
+        } catch (err: any) {
+            attempt++;
+            const isRateLimit = err?.message?.includes('429') || err?.toString()?.includes('429');
+            
+            if (isRateLimit && attempt <= maxRetries) {
+                const backoffMs = attempt * 500 + Math.random() * 250;
+                await new Promise(r => setTimeout(r, backoffMs));
+                continue;
+            }
+
+            recordPrimaryFailure(err);
+            throw err;
+        }
+    }
+}
+
 export const connection = new Proxy(primaryConnection, {
     get(target, prop, receiver) {
-        if (prop === 'rpcEndpoint') return target.rpcEndpoint;
+        if (prop === 'rpcEndpoint') return isCircuitOpen() ? backupConnection.rpcEndpoint : target.rpcEndpoint;
         
         const value = Reflect.get(target, prop, receiver);
         if (typeof value !== 'function') return value;
@@ -139,35 +167,11 @@ export const connection = new Proxy(primaryConnection, {
             const isHighPriority = methodName.includes('sendRawTransaction') || methodName.includes('getLatestBlockhash');
 
             if (BYPASS_QUEUE_METHODS.has(methodName)) {
-                return (async () => {
-                    if (isCircuitOpen()) {
-                        const backupValue = Reflect.get(backupConnection, prop);
-                        if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
-                    }
-                    try {
-                        const result = await value.apply(target, args);
-                        recordPrimarySuccess();
-                        return result;
-                    } catch (error: any) {
-                        recordPrimaryFailure(error);
-                        throw error;
-                    }
-                })();
+                return executeWithRetry(target, prop, args);
             }
 
             return withSlot(isHighPriority, async () => {
-                if (isCircuitOpen()) {
-                    const backupValue = Reflect.get(backupConnection, prop);
-                    if (typeof backupValue === 'function') return await backupValue.apply(backupConnection, args);
-                }
-                try {
-                    const result = await value.apply(target, args);
-                    recordPrimarySuccess();
-                    return result;
-                } catch (error: any) {
-                    recordPrimaryFailure(error);
-                    throw error;
-                }
+                return executeWithRetry(target, prop, args);
             });
         };
     }

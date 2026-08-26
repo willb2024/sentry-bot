@@ -97,10 +97,6 @@ app.use(cors({
 
 // Inside src/index.ts (near top utilities)
 
-export function safeLog(prefix: string, error: any) {
-    const msg = error?.message || error?.stack || String(error);
-    console.error(`${prefix} ${msg}`);
-}
 
 
 async function getWatchlistSymbol(mint: string): Promise<string> {
@@ -127,13 +123,21 @@ app.use((req, res, next) => {
 dotenv.config();
 console.log("🟢 [1/5] Booting Sentry Terminal Core...");
 
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('🔴 Unhandled Rejection at:', promise, 'reason:', reason);
-  });
-  
-  process.on('uncaughtException', (error) => {
-    console.error('🔴 Uncaught Exception:', error);
-  });
+// 🟢 CRASH IMMUNITY: Safe global error handlers (Prevents circular JSON crashes)
+process.on('unhandledRejection', (reason: any) => {
+    const msg = reason?.message || (typeof reason === 'string' ? reason : 'Unknown rejection');
+    console.error(`🔴 [Unhandled Rejection]: ${msg}`);
+});
+
+process.on('uncaughtException', (error: any) => {
+    const msg = error?.message || (typeof error === 'string' ? error : 'Unknown exception');
+    console.error(`🔴 [Uncaught Exception]: ${msg}`);
+});
+
+export function safeLog(prefix: string, error: any) {
+    const msg = error?.message || (typeof error === 'string' ? error : 'Unknown error');
+    console.error(`${prefix} ${msg}`);
+}
 
 
 // Add this helper function near the top of index.ts
@@ -8622,8 +8626,8 @@ const gracefulShutdown = async (signal: string) => {
 process.once('SIGINT', () => gracefulShutdown('SIGINT'));
 process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-bootEcosystem().catch((err) => {
-    console.error("🔴 [FATAL] Ecosystem boot failed!");
-    console.error("Check your .env, database, and Redis connection. Error:", err);
+bootEcosystem().catch((err: any) => {
+    const errMsg = err?.message || (typeof err === 'string' ? err : 'Initialization error');
+    console.error(`🔴 [FATAL] Ecosystem boot failed: ${errMsg}`);
     process.exit(1);
 });
