@@ -8420,6 +8420,7 @@ app.post('/api/analytics/advanced-stats', async (req, res) => {
 
 
 
+
 async function bootEcosystem() {
     await warmDnsCache();
     await syncGuardsFromDb(); 
@@ -8427,26 +8428,25 @@ async function bootEcosystem() {
     try {
         app.listen(3001, () => console.log('🟢 WebApp API Server listening on port 3001'))
            .on('error', (e: any) => {
-               if (e.code === 'EADDRINUSE') console.warn('⚠️ Port 3001 already in use (Ghost process). Skipping Express boot.');
-               else console.error('🔴 Express Error:', e);
+               if (e.code === 'EADDRINUSE') console.warn('⚠️ Port 3001 already in use. Skipping Express boot.');
+               else console.error('🔴 Express Error:', e?.message || e);
            });
-    } catch (e) {
-        console.error('🔴 Express Boot Error:', e);
+    } catch (e: any) {
+        console.error('🔴 Express Boot Error:', e?.message || e);
     }
 
     setInterval(async () => { await sweepExpiredVips(); }, 10 * 60 * 1000);
 
-   // In src/index.ts -> inside bootEcosystem():
-setInterval(async () => {
-    try {
-        const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
-        const CONCURRENCY = 5;
-        for (let i = 0; i < guilds.length; i += CONCURRENCY) {
-            const batch = guilds.slice(i, i + CONCURRENCY);
-            await Promise.allSettled(batch.map(g => updateRankCache(g.id))); // 🟢 Parallel execution
-        }
-    } catch (e) {}
-}, 20000); // 🟢 Refreshes every 20s
+    setInterval(async () => {
+        try {
+            const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
+            const CONCURRENCY = 5;
+            for (let i = 0; i < guilds.length; i += CONCURRENCY) {
+                const batch = guilds.slice(i, i + CONCURRENCY);
+                await Promise.allSettled(batch.map(g => updateRankCache(g.id)));
+            }
+        } catch (e) {}
+    }, 20000);
 
     console.log("⏳ Pinging Telegram Servers...");
     try {
@@ -8456,14 +8456,11 @@ setInterval(async () => {
         const info = await bot.telegram.getMe();
         console.log(`🟢 [4/5] HFT BOT ONLINE -> @${info.username}`);
         
-        // Inside bootEcosystem() in src/index.ts:
-
         const launchBot = async (retries = 5) => {
             try {
                 await bot.launch({ dropPendingUpdates: true });
                 console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
             } catch (e: any) {
-                // 🟢 FIX: Only log the string message, NEVER the full error object
                 const errMsg = e?.message ? e.message : "Network Timeout / Connection Refused";
                 console.error(`🔴 Telegram Bot Launch Attempt Failed (${retries} retries left): ${errMsg}`);
                 if (retries > 0) {
@@ -8473,35 +8470,25 @@ setInterval(async () => {
         };
         launchBot();
 
-        igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err.message));
+        igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err?.message || err));
         
         startCopyTradeWatcher(bot); 
         startDepositWatcher(bot); 
         startCoinCaller(bot); 
 
-        await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
-await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/1 * * * * *' } });
-await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
-
-
-const { runGuardModelTrainingScheduler } = await import('./services/guard_ai.service.js');
-runGuardModelTrainingScheduler();
-
-        // 🟢 Starts the High-Frequency Simulation TP/SL Guard Resolver
-
-        const { startSimulationGuardResolver, recoverSimAutoSnipeLoops } = await import('./services/simulation.service.js');
-        startSimulationGuardResolver(bot);
-        await recoverSimAutoSnipeLoops(bot); // 🟢 Auto-recovers sim sniper on boot
-
+        // 🟢 FIX: Pass empty object `{}` so BullMQ doesn't try to JSON.stringify the circular `bot` instance!
         console.log('⏳ Booting BullMQ Background Task Queues...');
-        await dcaQueue.add('dca-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } });
-        await guardQueue.add('guard-check', { bot }, { repeat: { pattern: '*/1 * * * * *' } });
-        await limitQueue.add('limit-check', { bot }, { repeat: { pattern: '*/5 * * * * *' } });
+        await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+        await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/1 * * * * *' } });
+        await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+
+        const { runGuardModelTrainingScheduler } = await import('./services/guard_ai.service.js');
+        runGuardModelTrainingScheduler();
 
         cron.schedule('0 8 * * 1', async () => {
             const weekKey = `lock:cron:weekly_report:${new Date().toISOString().split('T')[0]}`;
             const acquired = await redis.set(weekKey, '1', 'EX', 86400 * 2, 'NX');
-            if (!acquired) return; // 🟢 Only one instance runs the dispatch
+            if (!acquired) return;
         
             console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
             await sendWeeklyReportsToAll(bot);
@@ -8531,45 +8518,41 @@ runGuardModelTrainingScheduler();
             }
         }, { timezone: 'UTC' });
 
-        // =========================================================
-// 📡 WATCHLIST PRICE ALERT WORKER (30s)
-// =========================================================
-setInterval(async () => {
-    try {
-      const watchKeys = await redis.keys('watchlist:*');
-      for (const key of watchKeys) {
-        const tgId = key.replace('watchlist:', '');
-        const watchData = await redis.hgetall(key);
-        if (Object.keys(watchData).length === 0) continue;
-  
-        for (const [ca, dataStr] of Object.entries(watchData)) {
-          try {
-            const data = JSON.parse(dataStr);
-            const currentPrice = await getCachedTokenPrice(ca);
-            if (currentPrice <= 0) continue;
-  
-            // Check target price (if set)
-            if (data.targetPrice && currentPrice >= data.targetPrice) {
-              const symbol = await getWatchlistSymbol(ca);
-              await bot.telegram.sendMessage(
-                tgId,
-                `🚨 <b>WATCHLIST ALERT!</b>\n\n` +
-                `Token: <code>${ca}</code> ($${symbol})\n` +
-                `Current Price: <b>$${currentPrice}</b>\n` +
-                `Target Price: <b>$${data.targetPrice}</b>\n\n` +
-                `Price has crossed your target.`,
-                { parse_mode: 'HTML' }
-              ).catch(() => {});
-              // Remove after alerting to avoid repeat
-              await redis.hdel(`watchlist:${tgId}`, ca);
-            }
-          } catch (e) {
-            continue;
-          }
-        }
-      }
-    } catch (_) {}
-  }, 30000);
+        // 📡 WATCHLIST PRICE ALERT WORKER (30s)
+        setInterval(async () => {
+            try {
+                const watchKeys = await redis.keys('watchlist:*');
+                for (const key of watchKeys) {
+                    const tgId = key.replace('watchlist:', '');
+                    const watchData = await redis.hgetall(key);
+                    if (Object.keys(watchData).length === 0) continue;
+            
+                    for (const [ca, dataStr] of Object.entries(watchData)) {
+                        try {
+                            const data = JSON.parse(dataStr);
+                            const currentPrice = await getCachedTokenPrice(ca);
+                            if (currentPrice <= 0) continue;
+            
+                            if (data.targetPrice && currentPrice >= data.targetPrice) {
+                                const symbol = await getWatchlistSymbol(ca);
+                                await bot.telegram.sendMessage(
+                                    tgId,
+                                    `🚨 <b>WATCHLIST ALERT!</b>\n\n` +
+                                    `Token: <code>${ca}</code> ($${symbol})\n` +
+                                    `Current Price: <b>$${currentPrice}</b>\n` +
+                                    `Target Price: <b>$${data.targetPrice}</b>\n\n` +
+                                    `Price has crossed your target.`,
+                                    { parse_mode: 'HTML' }
+                                ).catch(() => {});
+                                await redis.hdel(`watchlist:${tgId}`, ca);
+                            }
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+                }
+            } catch (_) {}
+        }, 30000);
 
         setInterval(async () => {
             try {
@@ -8588,7 +8571,7 @@ setInterval(async () => {
         setInterval(updateLaunchCalendar, 30 * 60 * 1000);
 
     } catch (err: any) {
-        console.error("🔴 TELEGRAM BOOT FAILED:", err.message);
+        console.error("🔴 TELEGRAM BOOT FAILED:", err?.message || err);
     }
 
     const { startCallerEvaluator, scheduleTraining } = await import('./services/caller.service.js');
