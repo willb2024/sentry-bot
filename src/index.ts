@@ -59,6 +59,9 @@ import path from 'path';
 import fs from 'fs'; // 🟢 ADD THIS LINE
 import { fileURLToPath } from 'url';
 
+
+
+
 const app = express();
 app.use(express.json());
 
@@ -97,6 +100,23 @@ for (const key of requiredEnv) {
     }
 }
 
+// 🟢 FIX 3: Non-blocking fire-and-forget middleware (Returns next() in 0ms!)
+bot.use(async (ctx, next) => {
+    if (ctx.chat && ctx.chat.type !== 'private') {
+        if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
+            ctx.reply("🛡️ Security Alert: Sentry Terminal only operates in direct private messages (DMs).").catch(() => {});
+            ctx.leaveChat().catch(() => {});
+        }
+        return; 
+    }
+    
+    const tgId = ctx.from?.id?.toString();
+    if (tgId) {
+        markUserActive(tgId).catch(() => {}); // 🟢 Fire-and-forget, never awaited!
+    }
+    return next();
+});
+
 // 🟢 FIX 4: Add CORS Middleware
 app.use(cors({
     origin: process.env.WEBAPP_URL || '*',
@@ -105,12 +125,7 @@ app.use(cors({
 
 
 
-// 🟢 Non-blocking activity tracker for background balance pre-warming
-bot.use(async (ctx, next) => {
-    const tgId = ctx.from?.id?.toString();
-    if (tgId) markUserActive(tgId).catch(() => {});
-    return next();
-});
+
 
 
 async function getWatchlistSymbol(mint: string): Promise<string> {
@@ -2563,11 +2578,6 @@ function buildGuideKeyboard(page: number) {
 
 
 
-// 🟢 Operations Manual Button Handlers
-bot.action('btn_trade_guide', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx, TRADE_GUIDE_PAGES[0], buildGuideKeyboard(0));
-});
 
 
 // Add into your bot action handlers in src/index.ts
@@ -2601,9 +2611,87 @@ function buildConfigGuideKeyboard(page: number) {
     return Markup.inlineKeyboard(buttons);
 }
 
-// 🟢 Action: Open Configuration Guide (Page 1)
+
+
+// 🟢 FIX 4: Universal instant placeholders across all menus
+
+bot.action('menu_trailing', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Loading Trailing Stops...</i>', {});
+    const text = 
+        `🛡️ <b>ACTIVE GUARDS & AI EXIT OPTIMIZER</b>\n\n` +
+        `<i>Protect your capital and lock in profits with High-Water mark peak-tracking stops and Take-Profit automation.</i>\n\n` +
+        `━━━━━━━━━━━━━━━\n` +
+        `🎯 <b>1. AI Recommended Stop / TP:</b>\n` +
+        `• Scans current-minute market telemetry (volume, liquidity, LP security, holder velocity & sentiment).\n` +
+        `• Our self-learning ML model calculates the optimal Take-Profit and Trailing Stop.\n` +
+        `• 💳 <b>Cost:</b> <code>1 Credit</code> per analysis.\n\n` +
+        `⚙️ <b>2. Configure AI Guard Filters:</b>\n` +
+        `• Set minimum score, liquidity, and security filters for AI recommendations.\n\n` +
+        `➕ <b>3. Manual Trailing Guard (0 Credits):</b>\n` +
+        `• Deploy custom trailing stop and take profit parameters without AI audit.\n\n` +
+        `🛑 <b>4. Cancel All Guards:</b>\n` +
+        `• Instantly disarms all active trailing stops from memory.\n\n` +
+        `<i>Select an option below:</i>`;
+
+    const UI = Markup.inlineKeyboard([
+        [Markup.button.callback('🎯 AI Recommend Stop / TP (1 Credit)', 'ai_recommend_guard')],
+        [Markup.button.callback('⚙️ Configure AI Guard Filters', 'edit_guard_filters')],
+        [Markup.button.callback('➕ Deploy Manual Trailing Guard', 'action_deploy_guard')], 
+        [Markup.button.callback('🛑 Cancel All Active Guards', 'action_cancel_guards')], 
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
+    await safeEditMessageText(ctx, text, UI);
+});
+
+bot.action('menu_dca', async (ctx) => { 
+    try{await ctx.answerCbQuery();}catch(e){} 
+    await safeEditMessageText(ctx, '<i>⏳ Loading DCA & Limit Engine...</i>', {});
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+    
+    const activeDcaCount = await prisma.activeOrder.count({ where: { user: { telegramId: tgId }, orderType: 'DCA', isActive: true }});
+    const activeLimitCount = await prisma.activeOrder.count({ where: { user: { telegramId: tgId }, orderType: 'LIMIT', isActive: true }});
+
+    const dcaText = `⏳ <b>LIMIT & DCA ENGINE</b>\n\nConfigure automated interval buying or set target prices to buy dips.\n\n<i>Active Limit Orders: ${activeLimitCount}\nActive DCA Schedules: ${activeDcaCount}</i>`;
+    const UI = Markup.inlineKeyboard([
+        [Markup.button.callback('🎯 New Limit Order', 'action_deploy_limit')],
+        [Markup.button.callback('➕ New DCA Schedule', 'action_deploy_dca')],
+        [Markup.button.callback('🛑 Cancel All', 'action_cancel_dca')], 
+        [Markup.button.callback('⬅️ Back', 'btn_dashboard')]
+    ]);
+    await safeEditMessageText(ctx, dcaText, UI);
+});
+
+bot.action('action_guild_menu', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Loading Sentry Guilds...</i>', {});
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const text = 
+        `🏰 <b>SENTRY GUILDS</b>\n\n` +
+        `Trade together, climb leaderboards, and earn revenue shares or WL spots from top KOLs.\n\n` +
+        `<i>Select an option below to manage your Guilds:</i>`;
+
+    const UI = Markup.inlineKeyboard([
+        [Markup.button.callback('📊 View My Active Guild Status', 'menu_guild_status')],
+        [Markup.button.callback('👥 Switch Active Guild', 'menu_switch_guilds')],
+        [Markup.button.callback('🛠️ Create / Manage My Own Guild', 'action_manage_guild')],
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+    ]);
+    await safeEditMessageText(ctx, text, UI);
+});
+
+bot.action('btn_trade_guide', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Opening Operations Guide...</i>', {});
+    await safeEditMessageText(ctx, TRADE_GUIDE_PAGES[0], buildGuideKeyboard(0));
+});
+
 bot.action('btn_config_guide', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch (e) {}
+    await safeEditMessageText(ctx, '<i>⏳ Opening Configuration Guide...</i>', {});
     await safeEditMessageText(ctx, CONFIG_GUIDE_PAGES[0], buildConfigGuideKeyboard(0));
 });
 
@@ -3550,6 +3638,11 @@ bot.action('btn_dashboard', async (ctx) => {
     await sendOrEditDashboard(ctx, ctx.from!.id.toString(), true); 
 });
 
+bot.action('menu_sniper', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Loading Sniper Engine...</i>', {});
+    await sendOrEditSniper(ctx, ctx.from!.id.toString(), true);
+});
 
 
 
@@ -3620,24 +3713,12 @@ bot.action('toggle_hide_wallets', async (ctx) => {
 });
 
 
-bot.action('menu_sniper', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx, '<i>⏳ Loading Sniper Engine...</i>', {});
-    await sendOrEditSniper(ctx, ctx.from!.id.toString(), true);
-});
-
 async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = false) {
-    // 🟢 CACHE FIX: 30s Redis cache instead of fresh Prisma query every click
-    const user = await getCachedAutoSnipeConfigFull(telegramId, 30);
+    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
     if (!user) return;
 
     let config = user.autoSnipeConfig;
-    if (!config) {
-        config = await prisma.autoSnipeConfig.create({ 
-            data: { userId: user.id, amountSol: 0.01, sniperMode: "PUMP" } 
-        });
-        await invalidateUserCache(telegramId);
-    }
+    if (!config) config = await prisma.autoSnipeConfig.create({ data: { userId: user.id, amountSol: 0.01, sniperMode: "PUMP" } });
 
     const { isSimulationActive } = await import('./services/simulation.service.js');
     const isSimMode = await isSimulationActive(telegramId);
@@ -3665,41 +3746,59 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const sniperText = 
         `🎯 <b>TRENCH AUTO-SNIPER ENGINE</b> 🎯\n` +
         `<i>Sentry scans raw block transitions to front-run listings with private Jito bundles.</i>\n\n` +
+
         `• <b>Status:</b> ${statusObj}\n` +
         `  └ <i>Master engine toggle. Starts or halts automated mempool buying.</i>\n\n` +
+
         `• <b>Target Mode:</b> <b>${modeDisplay}</b>\n` +
         `  └ <i>Selects DEX pool source: Pump.fun bonding curves, Raydium AMM pools, or Both.</i>\n\n` +
+
         `• <b>Scoring Mode:</b> <b>${deepScoringObj}</b>\n` +
         `  └ <i>Fast (150ms speed for block-0) vs. Deep (full holder & dev security audits).</i>\n\n` +
+
         `• <b>Spend Amount (Static):</b> <b>${config.amountSol} SOL</b>\n` +
         `  └ <i>Fixed purchase amount used per trade when Dynamic Sizing is turned OFF.</i>\n\n` +
+
         `• <b>Max Budget:</b> <b>${config.maxBudgetSol ? config.maxBudgetSol + ' SOL' : 'Infinite (No Limit)'}</b>\n` +
         `  └ <i>Hard session cap. Auto-stops the sniper once total spend hits this threshold.</i>\n\n` +
+
         `• <b>Max Loss Limit:</b> <b>${lossLimitDisplay}</b>\n` +
         `  └ <i>Circuit breaker: auto-stops sniper if portfolio drops this % from starting balance.</i>\n\n` +
+
         `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n` +
         `  └ <i>Cumulative SOL spent across all automated snipes during the active session.</i>\n\n` +
+
         `• <b>AI Score Filter:</b> <b>${scoreDisplay}</b>\n` +
         `  └ <i>Minimum AI quality score (0-100) required to trigger a buy. Set to 55+ for best safety.</i>\n\n` +
+
         `• <b>Market Cap Filter:</b> <b>${mcDisplay}</b>\n` +
         `  └ <i>Only snipes tokens whose initial market cap falls strictly within this range.</i>\n\n` +
+
         `• <b>Max Dev Bag (Dev Limit):</b> <b>${devBagDisplay}</b>\n` +
         `  └ <i>Aborts the snipe if the developer buys or holds more than this % of total supply.</i>\n\n` +
+
         `• <b>Anti-Dead Shield:</b> ${antiDeadObj}\n` +
         `  └ <i>Skips coins where the creator bought 0 supply at launch (filters out abandoned duds).</i>\n\n` +
+
         `• <b>Block Delay:</b> <b>${config.snipeDelaySeconds} Seconds</b>\n` +
         `  └ <i>Wait time before buying. Set to 0s for block-0, or 1-2s to dodge launch anti-bot taxes.</i>\n\n` +
+
         `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n` +
         `  └ <i>Deploys a high-water trailing stop and optional take profit the moment a buy confirms.</i>\n\n` +
+
         `━━━━━━━━━━━━━━━\n` +
         `📊 <b>DYNAMIC SIZING ENGINE</b>\n` +
         `<i>Scales trade sizes exponentially based on AI conviction score.</i>\n\n` +
+
         `• <b>Status:</b> ${scalingStatus}\n` +
         `  └ <i>When ON, replaces static sizes with the formula: Base × (Score/100)^Exp × MaxMult.</i>\n\n` +
+
         `• <b>Base Risk Unit:</b> <b>${config.baseRiskUnitSol} SOL</b>\n` +
         `  └ <i>Starting baseline allocation for a median-conviction setup (Score ~50).</i>\n\n` +
+
         `• <b>Max Risk Multiplier:</b> <b>${config.maxRiskMultiplier}x</b>\n` +
         `  └ <i>Maximum size ceiling allowed for a perfect 100-score setup (Base × Multiplier).</i>\n\n` +
+
         `• <b>Scaling Curve:</b> <b>${curveDesc}</b>\n` +
         `  └ <i>Exponent power: Linear (1.0), Aggressive Square (2.0), or Exponential (3.0).</i>`;
 
@@ -3729,6 +3828,7 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     if (isEdit) await safeEditMessageText(ctx, sniperText, UI);
     else await ctx.replyWithHTML(sniperText, UI);
 }
+
 
 // Toggle Dynamic Sizing
 bot.action('toggle_dynamic_scaling', async (ctx) => {
@@ -4194,25 +4294,7 @@ bot.action('menu_positions', async (ctx) => {
 // 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
 // =========================================================
 
-bot.action('action_guild_menu', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
 
-    const text = 
-        `🏰 <b>SENTRY GUILDS</b>\n\n` +
-        `Trade together, climb leaderboards, and earn revenue shares or WL spots from top KOLs.\n\n` +
-        `<i>Select an option below to manage your Guilds:</i>`;
-
-    const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('📊 View My Active Guild Status', 'menu_guild_status')],
-        [Markup.button.callback('👥 Switch Active Guild', 'menu_switch_guilds')],
-        [Markup.button.callback('🛠️ Create / Manage My Own Guild', 'action_manage_guild')],
-        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-    ]);
-
-    await safeEditMessageText(ctx, text, UI);
-});
 
 
 // 🟢 Unified Guild Status Display Logic
@@ -4466,24 +4548,7 @@ bot.action(/^sell_(10|25|50|75|100)_(.+)$/, async (ctx) => {
 // =========================================================
 // ⏳ DCA & LIMIT ENGINE
 // =========================================================
-bot.action('menu_dca', async (ctx) => { 
-    try{await ctx.answerCbQuery();}catch(e){} 
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    
-    const activeDcaCount = await prisma.activeOrder.count({ where: { user: { telegramId: tgId }, orderType: 'DCA', isActive: true }});
-    const activeLimitCount = await prisma.activeOrder.count({ where: { user: { telegramId: tgId }, orderType: 'LIMIT', isActive: true }});
 
-    const dcaText = `⏳ <b>LIMIT & DCA ENGINE</b>\n\nConfigure automated interval buying or set target prices to buy dips.\n\n<i>Active Limit Orders: ${activeLimitCount}\nActive DCA Schedules: ${activeDcaCount}</i>`;
-    const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('🎯 New Limit Order', 'action_deploy_limit')],
-        [Markup.button.callback('➕ New DCA Schedule', 'action_deploy_dca')],
-        [Markup.button.callback('🛑 Cancel All', 'action_cancel_dca')], 
-        [Markup.button.callback('⬅️ Back', 'btn_dashboard')]
-    ]);
-    
-    await safeEditMessageText(ctx, dcaText, UI);
-});
 
 
 
@@ -4505,33 +4570,7 @@ bot.action('action_cancel_dca', async (ctx) => {
 // =========================================================
 // 🛡️ TRAILING GUARDS MENU
 // =========================================================
-bot.action('menu_trailing', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const text = 
-        `🛡️ <b>ACTIVE GUARDS & AI EXIT OPTIMIZER</b>\n\n` +
-        `<i>Protect your capital and lock in profits with High-Water mark peak-tracking stops and Take-Profit automation.</i>\n\n` +
-        `━━━━━━━━━━━━━━━\n` +
-        `🎯 <b>1. AI Recommended Stop / TP:</b>\n` +
-        `• Scans current-minute market telemetry (volume, liquidity, LP security, holder velocity & sentiment).\n` +
-        `• Our self-learning ML model calculates the optimal Take-Profit and Trailing Stop.\n` +
-        `• 💳 <b>Cost:</b> <code>1 Credit</code> per analysis.\n\n` +
-        `⚙️ <b>2. Configure AI Guard Filters:</b>\n` +
-        `• Set minimum score, liquidity, and security filters for AI recommendations.\n\n` +
-        `➕ <b>3. Manual Trailing Guard (0 Credits):</b>\n` +
-        `• Deploy custom trailing stop and take profit parameters without AI audit.\n\n` +
-        `🛑 <b>4. Cancel All Guards:</b>\n` +
-        `• Instantly disarms all active trailing stops from memory.\n\n` +
-        `<i>Select an option below:</i>`;
 
-    const UI = Markup.inlineKeyboard([
-        [Markup.button.callback('🎯 AI Recommend Stop / TP (1 Credit)', 'ai_recommend_guard')],
-        [Markup.button.callback('⚙️ Configure AI Guard Filters', 'edit_guard_filters')],
-        [Markup.button.callback('➕ Deploy Manual Trailing Guard', 'action_deploy_guard')], 
-        [Markup.button.callback('🛑 Cancel All Active Guards', 'action_cancel_guards')], 
-        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-    ]);
-    await safeEditMessageText(ctx, text, UI);
-});
 
 bot.action('ai_recommend_guard', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -8445,7 +8484,10 @@ app.post('/api/analytics/advanced-stats', async (req, res) => {
 
 async function bootEcosystem() {
     await warmDnsCache();
+    
+    // 🟢 STAGGER 1: Restore active guards from DB into RAM
     await syncGuardsFromDb(); 
+    await new Promise(r => setTimeout(r, 1500));
     
     try {
         app.listen(3001, () => console.log('🟢 WebApp API Server listening on port 3001'))
@@ -8457,29 +8499,7 @@ async function bootEcosystem() {
         console.error('🔴 Express Boot Error:', e?.message || e);
     }
 
-    setInterval(async () => { await sweepExpiredVips(); }, 10 * 60 * 1000);
-
-    // 🟢 Pre-warm active users' balances in RAM every 10s so button clicks are 0ms instant!
-    setInterval(async () => {
-        try {
-            const recentUserIds = await redis.zrevrange('active_users_recent', 0, 49);
-            for (const tgId of recentUserIds) {
-                const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-                if (user) getLiveBalance(user).catch(() => {});
-            }
-        } catch (_) {}
-    }, 10000);
-
-    setInterval(async () => {
-        try {
-            const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
-            const CONCURRENCY = 5;
-            for (let i = 0; i < guilds.length; i += CONCURRENCY) {
-                const batch = guilds.slice(i, i + CONCURRENCY);
-                await Promise.allSettled(batch.map(g => updateRankCache(g.id)));
-            }
-        } catch (e) {}
-    }, 20000);
+    await new Promise(r => setTimeout(r, 1000));
 
     console.log("⏳ Pinging Telegram Servers...");
     try {
@@ -8503,13 +8523,20 @@ async function bootEcosystem() {
         };
         launchBot();
 
+        // 🟢 STAGGER 2: Allow Telegram connection to stabilize before starting gRPC streams
+        await new Promise(r => setTimeout(r, 2000));
         igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err?.message || err));
         
+        // 🟢 STAGGER 3: Initialize watchers sequentially
+        await new Promise(r => setTimeout(r, 1500));
         startCopyTradeWatcher(bot); 
+        
+        await new Promise(r => setTimeout(r, 1000));
         startDepositWatcher(bot); 
+        
+        await new Promise(r => setTimeout(r, 1000));
         startCoinCaller(bot); 
 
-        // 🟢 FIX: Pass empty object `{}` so BullMQ doesn't try to JSON.stringify the circular `bot` instance!
         console.log('⏳ Booting BullMQ Background Task Queues...');
         await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
         await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/1 * * * * *' } });
@@ -8518,11 +8545,36 @@ async function bootEcosystem() {
         const { runGuardModelTrainingScheduler } = await import('./services/guard_ai.service.js');
         runGuardModelTrainingScheduler();
 
+        // Guild rank refresh interval (runs every 25s)
+        setInterval(async () => {
+            try {
+                const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
+                const CONCURRENCY = 5;
+                for (let i = 0; i < guilds.length; i += CONCURRENCY) {
+                    const batch = guilds.slice(i, i + CONCURRENCY);
+                    await Promise.allSettled(batch.map(g => updateRankCache(g.id)));
+                }
+            } catch (e) {}
+        }, 25000);
+
+        setInterval(async () => { await sweepExpiredVips(); }, 10 * 60 * 1000);
+
+        // Pre-warm recently active users' balances in RAM
+        setInterval(async () => {
+            try {
+                const recentUserIds = await redis.zrevrange('active_users_recent', 0, 49);
+                for (const tgId of recentUserIds) {
+                    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+                    if (user) getLiveBalance(user).catch(() => {});
+                }
+            } catch (_) {}
+        }, 12000);
+
+        // Crons for weekly reports & VIP expirations
         cron.schedule('0 8 * * 1', async () => {
             const weekKey = `lock:cron:weekly_report:${new Date().toISOString().split('T')[0]}`;
             const acquired = await redis.set(weekKey, '1', 'EX', 86400 * 2, 'NX');
             if (!acquired) return;
-        
             console.log('🕗 [CRON] Monday 8AM — firing weekly reports');
             await sendWeeklyReportsToAll(bot);
         }, { timezone: 'UTC' });
@@ -8551,7 +8603,7 @@ async function bootEcosystem() {
             }
         }, { timezone: 'UTC' });
 
-        // 📡 WATCHLIST PRICE ALERT WORKER (30s)
+        // 📡 Watchlist Price Alert Worker
         setInterval(async () => {
             try {
                 const watchKeys = await redis.keys('watchlist:*');
@@ -8604,7 +8656,7 @@ async function bootEcosystem() {
         setInterval(updateLaunchCalendar, 30 * 60 * 1000);
 
     } catch (err: any) {
-        console.error("🔴 TELEGRAM BOOT FAILED:", err?.message || err);
+        console.error("🔴 TELEGRAM BOOT FAILED:", err?.message || String(err));
     }
 
     const { startCallerEvaluator, scheduleTraining } = await import('./services/caller.service.js');

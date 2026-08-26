@@ -7,18 +7,18 @@ export function getCachedBlockhash(): string {
     return cachedBlockhash;
 }
 
-// 🟢 Slowed down to 3000ms (3 seconds) to save RPC credits
+// 🟢 Steady-state refresh every 3000ms
 setInterval(async () => {
     try {
         const { blockhash } = await connection.getLatestBlockhash('processed');
         cachedBlockhash = blockhash;
-    } catch (_) {} // Silent catch to prevent console spam when rate-limited
+    } catch (_) {}
 }, 3000);
 
-// Populate immediately on boot
-(async () => {
+// 🟢 FIX: Stagger initial boot fetch by 4 seconds instead of firing at 0ms
+setTimeout(async () => {
     try {
         const { blockhash } = await connection.getLatestBlockhash('processed');
         cachedBlockhash = blockhash;
     } catch (_) {}
-})();
+}, 4000);
