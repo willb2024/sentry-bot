@@ -456,10 +456,11 @@ async function fetchApiTransaction(
 
         let bestRoute: DexRouteQuote | undefined;
 
+        // 🟢 FIX: Fast-path execution when Smart Order Routing (SOR) is disabled
         if (useSOR) {
             const dexPools = ['Raydium', 'Meteora DLMM', 'Meteora', 'Pump.fun'];
             const quotePromises = dexPools.map(dex => getIsolatedDexQuote(dex, inputMint, outputMint, jupAmount, slippageBps));
-            const globalJupPromise = axiosClient.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`, { headers: API_HEADERS, timeout: 2500 })
+            const globalJupPromise = axiosClient.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`, { headers: API_HEADERS, timeout: 2000 })
                 .then(res => res.data ? ({ dex: 'Jupiter_Aggregated', outAmount: Number(res.data.outAmount), quoteResponse: res.data }) : null).catch(() => null);
 
             const allPromises = [...quotePromises, globalJupPromise];
@@ -468,7 +469,7 @@ async function fetchApiTransaction(
             
             await new Promise<void>((resolve) => {
                 let settled = 0;
-                const GRACE_MS = 400;
+                const GRACE_MS = 250;
                 let graceTimer: NodeJS.Timeout | null = null;
 
                 allPromises.forEach(p => {
@@ -493,7 +494,7 @@ async function fetchApiTransaction(
             validQuotes.sort((a, b) => b.outAmount - a.outAmount);
             bestRoute = validQuotes[0];
         } else {
-            const res = await axiosClient.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`, { headers: API_HEADERS, timeout: 2000 }).catch(() => null);
+            const res = await axiosClient.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${jupAmount}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}`, { headers: API_HEADERS, timeout: 1500 }).catch(() => null);
             if (res && res.data && res.data.outAmount) bestRoute = { dex: 'Jupiter_Direct', outAmount: Number(res.data.outAmount), quoteResponse: res.data };
             else return { buffer: null, errorLog: globalErrorLog || "Direct: No routes." };
         }

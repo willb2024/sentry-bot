@@ -833,7 +833,7 @@ async function getLiveBalance(user: any): Promise<string> {
     
     if (!user || !user.vaultAddress) return "0.0000";
     
-    // 1. Instant RAM
+    // 1. Instant RAM balance
     const liveDepositBal = getLiveWalletBalance(user.vaultAddress);
     if (liveDepositBal !== null && liveDepositBal > 0) {
         return liveDepositBal.toFixed(4);
@@ -844,7 +844,11 @@ async function getLiveBalance(user: any): Promise<string> {
     const cachedBalance = await redis.get(cacheKey);
     if (cachedBalance) return parseFloat(cachedBalance).toFixed(4);
 
-    // 3. Background fetch with strict 3s timeout
+    // 3. 🟢 FIX: Stale fallback returned immediately instead of showing "0.0000" while fetching
+    const staleKey = `balance_cache_stale:${user.telegramId}`;
+    const stale = await redis.get(staleKey);
+
+    // 4. Background fetch with strict 3s timeout
     (async () => {
         try {
             const pubkeys = [new PublicKey(user.vaultAddress)];
@@ -864,11 +868,12 @@ async function getLiveBalance(user: any): Promise<string> {
                 accounts.forEach((acc: any) => { if (acc) totalLamports += acc.lamports; });
                 const finalBal = (totalLamports / 1_000_000_000).toFixed(4);
                 await redis.set(cacheKey, finalBal, 'EX', 30);
+                await redis.set(staleKey, finalBal, 'EX', 3600); // 🟢 Long-lived fallback
             }
         } catch (_) {}
     })();
 
-    return "0.0000";
+    return stale ? parseFloat(stale).toFixed(4) : "0.0000";
 }
 
 async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean = false) {
@@ -8535,11 +8540,11 @@ async function bootEcosystem() {
         startCoinCaller(bot); 
 
        // 🟢 FIX: Reduce guard check from 1s to 5s to stop RPC overload
-      // 🟢 FIX: Reduce queue check frequency from 5s to 15s to relieve database pressure
-      console.log('⏳ Booting BullMQ Background Task Queues...');
-      await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/15 * * * * *' } }); // 🟢 CHANGED to 15s
-      await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/5 * * * * *' } });  // Kept fast for Guards
-      await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/15 * * * * *' } }); // 🟢 CHANGED to 15s
+       console.log('⏳ Booting BullMQ Background Task Queues...');
+       // 🟢 FIX: Re-tuned DCA and Limit queues to 8-second interval for responsive executions
+       await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/8 * * * * *' } });
+       await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+       await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/8 * * * * *' } });
 
         const { runGuardModelTrainingScheduler } = await import('./services/guard_ai.service.js');
         runGuardModelTrainingScheduler();

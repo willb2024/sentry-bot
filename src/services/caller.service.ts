@@ -639,20 +639,21 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     const chunks = chunkArray(mints, 30);
     const allPairs: any[] = [];
     
-    for (const chunk of chunks) {
-        try {
-            const res = await dexScreenerLimiter(() =>
-                axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 })
-            );
-            if (res.data?.pairs) allPairs.push(...res.data.pairs);
-        } catch (e: any) {}
-        await new Promise(r => setTimeout(r, 350)); 
-    }
+    // 🟢 FIX: Run chunks concurrently through dexScreenerLimiter without artificial sleeps
+    const results = await Promise.all(chunks.map(chunk =>
+        dexScreenerLimiter(() =>
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 })
+                .then(res => res.data?.pairs || [])
+                .catch(() => [])
+        )
+    ));
+    
+    results.forEach(pairs => allPairs.push(...pairs));
     return allPairs;
 }
 
 async function fetchRecentNewMints() {
-    const rawMints = getRecentNewMints().slice(0, 50) as any[]; // Reduced from 120
+    const rawMints = getRecentNewMints().slice(0, 50) as any[];
     if (rawMints.length === 0) return [];
 
     const enrichedTokens: any[] = [];
@@ -712,7 +713,6 @@ async function fetchRecentNewMints() {
                         });
                     });
                 }
-                await new Promise(r => setTimeout(r, 200)); 
             }
         } catch (e: any) {}
     }
@@ -892,12 +892,12 @@ export async function scoreTokens() {
                         }
                     });
                 }
-                await new Promise(r => setTimeout(r, 250)); 
             }
         }
 
         const stage1Scored: any[] = [];
-        const stage1Chunks = chunkArray(uniquePairs, 8);
+        // 🟢 FIX: Increased stage 1 concurrency chunk from 8 to 20
+        const stage1Chunks = chunkArray(uniquePairs, 20);
         for (const chunk of stage1Chunks) {
             const results = await Promise.all(chunk.map(async (pair) => {
                 const { isRug, top10Pct, uncertain } = await getCachedRugStatus(pair.mint);
@@ -916,8 +916,8 @@ export async function scoreTokens() {
 
         const passedStage1 = stage1Scored.filter(t => t.score >= 15).sort((a,b) => b.score - a.score);
         const fullyScored: any[] = [];
-        // Only run deep score on the top 10 tokens to save API calls
-        const stage2Chunks = chunkArray(passedStage1.slice(0, 10), 5);
+        // 🟢 FIX: Expanded deep audit to top 15 tokens in chunks of 8
+        const stage2Chunks = chunkArray(passedStage1.slice(0, 15), 8);
         
         for (const chunk of stage2Chunks) {
             const results = await Promise.all(chunk.map(async (t) => {
@@ -997,9 +997,9 @@ export async function scoreTokens() {
 let isScoring = false;
 
 export async function startCoinCaller(bot: any) {
-    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (30s) & Sim loop (60s) active.");
+    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (12s) & Sim loop (20s) active.");
 
-    // 🟢 SIMULATION SYNTHETIC LOOP
+    // 🟢 FIX: Tightened synthetic sim interval to 20s
     setInterval(async () => {
         try {
             const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
@@ -1030,9 +1030,9 @@ export async function startCoinCaller(bot: any) {
                 }
             }
         } catch (_) {}
-    }, 60000); 
+    }, 20000); 
 
-    // 🟢 LIVE MEMPOOL LOOP
+    // 🟢 FIX: Tightened live mempool interval to 12s
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
@@ -1113,7 +1113,7 @@ export async function startCoinCaller(bot: any) {
         } finally {
             isScoring = false;
         }
-    }, 30000);
+    }, 12000);
 }
 
 export async function pruneCallerHistory(): Promise<void> {

@@ -7,18 +7,18 @@ export function getCachedBlockhash(): string {
     return cachedBlockhash;
 }
 
-// 🟢 Steady-state refresh every 3000ms
+// 🟢 FIX: Tightened steady-state refresh from 3000ms to 1500ms so blockhashes are always hot
 setInterval(async () => {
     try {
         const { blockhash } = await connection.getLatestBlockhash('processed');
         cachedBlockhash = blockhash;
     } catch (_) {}
-}, 3000);
+}, 1500);
 
-// 🟢 FIX: Stagger initial boot fetch by 4 seconds instead of firing at 0ms
+// Staggered initial boot fetch
 setTimeout(async () => {
     try {
         const { blockhash } = await connection.getLatestBlockhash('processed');
         cachedBlockhash = blockhash;
     } catch (_) {}
-}, 4000);
+}, 2000);

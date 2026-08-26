@@ -493,10 +493,14 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
 
     if (pool.length === 0) {
         try {
-            const res = await axios.get('https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false', { timeout: 2500 });
+            const res = await axios.get(
+                'https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false',
+                { timeout: 2500 }
+            );
             if (Array.isArray(res.data) && res.data.length > 0) {
                 pool = res.data.map((c: any) => ({ mint: c.mint, symbol: c.symbol || 'UNKNOWN' }));
-                await redis.set(cacheKey, JSON.stringify(pool), 'EX', 120);
+                // 🟢 FIX: 15-minute cache TTL reduces redundant external Pump.fun API requests
+                await redis.set(cacheKey, JSON.stringify(pool), 'EX', 900);
             }
         } catch (_) {
             pool = [{ mint: generateSimTokenCA(), symbol: 'MEME' }];
@@ -918,7 +922,6 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
             }
 
             if (config.minScore > 0) {
-                // Deduct Sim Credit for AI Scoring
                 const simCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
                 if (simCredits <= 0) {
                     const warnKey = `sim_sniper_credits_warn:${telegramId}`;
@@ -945,7 +948,7 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                 }
 
                 if (score < config.minScore) {
-                    await new Promise(r => setTimeout(r, 500));
+                    await new Promise(r => setTimeout(r, 200));
                     continue;
                 }
             }
@@ -956,11 +959,14 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
             const activeWallets = user?.activeWallets || 1;
             const intendedTotalSpend = calculatedSize * activeWallets;
 
-            // 3. 🟢 CLAMP SIZING TO EXACT REMAINING BUDGET CEILING
+            // 3. Clamp Sizing to Budget & Snap Remaining Cent/Dust
             const clampedTotalSpend = Math.min(intendedTotalSpend, remainingBudget);
-            const actualSnipeAmountPerWallet = clampedTotalSpend / activeWallets;
+            let actualSnipeAmountPerWallet = clampedTotalSpend / activeWallets;
 
-            // If remaining budget cannot support a minimal order (0.005 SOL), halt immediately
+            if (remainingBudget - clampedTotalSpend < 0.0001) {
+                actualSnipeAmountPerWallet = remainingBudget / activeWallets;
+            }
+
             if (actualSnipeAmountPerWallet < 0.005) {
                 await killSimAutoSnipe(telegramId);
                 await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
@@ -1026,7 +1032,6 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                 } catch (_) {}
             }
 
-            // Post-Trade Loss Check
             const postLossStatus = await isSimLossLimitHit(telegramId, config);
             if (postLossStatus.hit) {
                 await killSimAutoSnipe(telegramId);
@@ -1044,7 +1049,8 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
 
             if (!stillActive) break;
 
-            const organicDelayMs = 500 + Math.random() * 1000;
+            // 🟢 FIX: 150-400ms organic delay (4x faster execution loop)
+            const organicDelayMs = 150 + Math.random() * 250;
             await new Promise(r => setTimeout(r, organicDelayMs));
         }
     } catch (e: any) {
