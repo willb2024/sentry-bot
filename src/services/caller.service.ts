@@ -996,15 +996,42 @@ export async function scoreTokens() {
 let isScoring = false;
 
 export async function startCoinCaller(bot: any) {
-    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (30s) & Sim loop (5s) active.");
+    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (30s) active.");
 
+    // 🟢 SIMULATION SYNTHETIC LOOP
     setInterval(async () => {
         try {
-            const { processSimCopyTrades } = await import('./simulation.service.js');
-            await processSimCopyTrades(bot);
-        } catch (_) {}
-    }, 5000);
+            const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
+            const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
 
+            for (const user of allUsers) {
+                const isSim = await isSimulationActive(user.telegramId);
+                if (!isSim) continue; 
+
+                const filters = await getUserCallerFilters(user.telegramId);
+                if (!filters.isActive) continue; 
+
+                const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
+                if (matchedToken) {
+                    const projection = await getCalibratedProjection(matchedToken);
+                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: false });
+                    try {
+                        await bot.telegram.sendMessage(user.telegramId, msg, {
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: `⚡ Snipe 0.1 SOL`, callback_data: `forcebuy_${matchedToken.mint}_0.1` }],
+                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
+                                ]
+                            }
+                        });
+                    } catch (_) {}
+                }
+            }
+        } catch (_) {}
+    }, 5000); 
+
+    // 🟢 LIVE MEMPOOL LOOP
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
@@ -1017,6 +1044,9 @@ export async function startCoinCaller(bot: any) {
             const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
             
             for (const user of allUsers) {
+                const isSim = await isSimulationActive(user.telegramId);
+                if (isSim) continue; // Decoupled
+
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
@@ -1028,84 +1058,20 @@ export async function startCoinCaller(bot: any) {
                     const alreadyAlerted = await redis.get(alertKey);
                     if (!alreadyAlerted) {
                         matchedToken = t;
-                        // 🟢 FIX: ensure token is never reshown by tracking it.
                         await redis.set(alertKey, '1', 'EX', 180); 
-                        matchedToken.isReshow = false;
                         break; 
                     }
                 }
 
-                if (matchedToken && !matchedToken.isReshow) { // 🟢 CREDIT FIX: Explicitly prevents charging for reshows
-
-                    const isSim = await isSimulationActive(user.telegramId);
-                    
-                    if (isSim) {
-                        const simCredits = parseInt(await redis.get(`sim:credits:${user.telegramId}`) || '0', 10);
-                        if (simCredits <= 0) {
-                            const warnKey = `sim_credits_warn:${user.telegramId}`;
-                            if (!(await redis.get(warnKey))) {
-                                await redis.set(warnKey, '1', 'EX', 600);
-                                try { 
-                                    await bot.telegram.sendMessage(
-                                        user.telegramId, 
-                                        `⚠️ <b>AI CALLER PAUSED (SIMULATION) — OUT OF CREDITS</b>\n\n` +
-                                        `Your AI Coin Caller has paused because your virtual credit balance is <b>0</b>.\n\n` +
-                                        `Use <code>/simcredits 500</code> to reload virtual credits or top up below:`, 
-                                        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]] } }
-                                    ); 
-                                } catch(_) {}
-                            }
-                            continue;
-                        }
-
-                        // Deduct SIM Credit
-                        await redis.set(`sim:credits:${user.telegramId}`, Math.max(0, simCredits - 1).toString());
-                    } else {
-                        // 🟢 LIVE CREDIT FIX
-                        const { consumeCredit } = await import('./credits.service.js');
-                        const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
-                        
-                        if (!creditResult.success) {
-                            const warnKey = `live_caller_credits_warn:${user.telegramId}`;
-                            if (!(await redis.get(warnKey))) {
-                                await redis.set(warnKey, '1', 'EX', 600);
-                                try {
-                                    await bot.telegram.sendMessage(
-                                        user.telegramId,
-                                        `⚠️ <b>AI CALLER PAUSED — OUT OF CREDITS</b>\n\n` +
-                                        `Your AI Coin Caller found breakout tokens, but has paused scanning because your credit balance is <b>0</b>.\n\n` +
-                                        `Top up your credit balance to resume automatic mempool alerts:`,
-                                        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]] } }
-                                    );
-                                } catch (_) {}
-                            }
-                            continue; 
-                        }
-                    }
-
+                if (matchedToken) {
                     const projection = await getCalibratedProjection(matchedToken);
-                    const historyData = {
-                        mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
-                        priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
-                        predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
-                    };
-                    const historyKey = `${matchedToken.mint}:${Date.now()}`;
-                    await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
-                    
-                    await storePredictionData(matchedToken, projection, historyKey);
-
                     const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed });
-
-                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
-                    const defaultSize = userConfig?.amountSol || 0.1;
-                    
                     try {
                         await bot.telegram.sendMessage(user.telegramId, msg, {
                             parse_mode: 'HTML',
                             reply_markup: {
                                 inline_keyboard: [
-                                    [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
-                                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
+                                    [{ text: `⚡ Snipe 0.1 SOL`, callback_data: `forcebuy_${matchedToken.mint}_0.1` }],
                                     [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
                                 ]
                             }
@@ -1113,9 +1079,7 @@ export async function startCoinCaller(bot: any) {
                     } catch (e: any) {}
                 }
             }
-        } catch (e: any) {
-            console.error("🔴 [CALLER] Engine Error:", e.message);
-        } finally {
+        } catch (e: any) {} finally {
             isScoring = false;
         }
     }, 30000);

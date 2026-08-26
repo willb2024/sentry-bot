@@ -827,7 +827,7 @@ app.post('/api/affiliate-stats', async (req, res) => {
 
 
 
-// 🟢 SPEED FIX 1: Hard 3.5s timeout cap on RPC + instant memory cache fallback
+// 🟢 ULTRA-FAST DASHBOARD FIX: Never wait for RPC. Read from cache instantly.
 async function getLiveBalance(user: any): Promise<string> {
     const { getSimBalance, isSimulationActive } = await import('./services/simulation.service.js');
     if (await isSimulationActive(user.telegramId)) {
@@ -836,44 +836,36 @@ async function getLiveBalance(user: any): Promise<string> {
     
     if (!user || !user.vaultAddress) return "0.0000";
     
-    // 1. Check in-memory deposit watcher balance first (Instant 0ms!)
+    // 1. Instant RAM Check
+    const { getLiveWalletBalance } = await import('./services/deposit.service.js');
     const liveDepositBal = getLiveWalletBalance(user.vaultAddress);
     if (liveDepositBal !== null && liveDepositBal > 0) {
         return liveDepositBal.toFixed(4);
     }
 
+    // 2. Instant Redis Cache Check
     const cacheKey = `balance_cache:${user.telegramId}`;
     const cachedBalance = await redis.get(cacheKey);
+    if (cachedBalance) return parseFloat(cachedBalance).toFixed(4);
 
-    try {
-        const pubkeys: PublicKey[] = [new PublicKey(user.vaultAddress)];
-        if (user.activeWallets >= 2 && user.vault2) pubkeys.push(new PublicKey(user.vault2));
-        if (user.activeWallets >= 3 && user.vault3) pubkeys.push(new PublicKey(user.vault3));
-        if (user.activeWallets >= 4 && user.vault4) pubkeys.push(new PublicKey(user.vault4));
-        if (user.activeWallets >= 5 && user.vault5) pubkeys.push(new PublicKey(user.vault5));
+    // 3. Background fetch (Does NOT block the UI)
+    (async () => {
+        try {
+            const pubkeys = [new PublicKey(user.vaultAddress)];
+            if (user.activeWallets >= 2 && user.vault2) pubkeys.push(new PublicKey(user.vault2));
+            if (user.activeWallets >= 3 && user.vault3) pubkeys.push(new PublicKey(user.vault3));
+            if (user.activeWallets >= 4 && user.vault4) pubkeys.push(new PublicKey(user.vault4));
+            if (user.activeWallets >= 5 && user.vault5) pubkeys.push(new PublicKey(user.vault5));
 
-        // 🟢 HARD 3.5s TIMEOUT: Never allows a lagging RPC to block the dashboard
-        const accounts = await withTimeout(
-            connection.getMultipleAccountsInfo(pubkeys),
-            3500,
-            null
-        );
-
-        if (accounts) {
             let totalLamports = 0;
-            accounts.forEach(acc => {
-                if (acc) totalLamports += acc.lamports;
-            });
-            const finalBalance = (totalLamports / LAMPORTS_PER_SOL).toFixed(4);
-            await redis.set(cacheKey, finalBalance, 'EX', 15);
-            return finalBalance;
-        }
+            const accounts = await connection.getMultipleAccountsInfo(pubkeys).catch(() => []);
+            accounts.forEach(acc => { if (acc) totalLamports += acc.lamports; });
+            const finalBal = (totalLamports / 1_000_000_000).toFixed(4);
+            await redis.set(cacheKey, finalBal, 'EX', 30);
+        } catch (_) {}
+    })();
 
-        // Stale cache fallback if RPC timed out or rate-limited
-        return cachedBalance || "0.0000";
-    } catch (e) { 
-        return cachedBalance || "0.0000"; 
-    }
+    return "0.0000";
 }
 
 // 🟢 SPEED FIX 2: Uses 8-second Redis cache & parallelized queries (<50ms execution)
@@ -1011,7 +1003,6 @@ bot.action('start_token_wizard', async (ctx) => {
 
 bot.action('menu_vault', async (ctx) => { 
     try{await ctx.answerCbQuery();}catch(e){} 
-    await safeEditMessageText(ctx, '<i>⏳ Loading Vault Security Node...</i>', {});
     await sendOrEditVaultMenu(ctx, ctx.from!.id.toString());
 });
 
@@ -3634,13 +3625,12 @@ bot.action('action_support', async (ctx) => {
 // 🟢 SPEED FIX 3: Immediate visual feedback on button clicks
 bot.action('btn_dashboard', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx, '<i>⏳ Loading dashboard...</i>', {});
+
     await sendOrEditDashboard(ctx, ctx.from!.id.toString(), true); 
 });
 
 bot.action('menu_sniper', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx, '<i>⏳ Loading Sniper Engine...</i>', {});
     await sendOrEditSniper(ctx, ctx.from!.id.toString(), true);
 });
 
@@ -3649,7 +3639,6 @@ bot.action('menu_sniper', async (ctx) => {
 
 bot.action('menu_settings', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx, '<i>⏳ Loading Settings...</i>', {});
     await sendOrEditSettings(ctx, ctx.from!.id.toString(), true);
 });
 
@@ -5005,7 +4994,6 @@ bot.action('action_import_key', async (ctx) => {
 
 bot.action('menu_copytrade', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx, '<i>⏳ Loading Copy Trade Network...</i>', {});
 
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
