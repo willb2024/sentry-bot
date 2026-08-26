@@ -483,6 +483,7 @@ app.post('/api/wallet-balance', async (req, res) => {
 
 // Inside src/index.ts — /api/sim-stats Endpoint (56.4% Win Rate & +$256k Profit)
 
+// 🟢 FIXED: /api/sim-stats endpoint — Real computed trade stats by default, no hardcoded fallbacks
 app.post('/api/sim-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -509,47 +510,48 @@ app.post('/api/sim-stats', async (req, res) => {
 
         const balance = await getSimBalance(tgId);
         const startingBalance = await getSimStartingBalance(tgId);
-        let volume = await getSimVolume(tgId);
+        const volume = await getSimVolume(tgId);
         const positionsRaw = await redis.get(`sim:positions:${tgId}`);
         const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
         const tradesRaw = await redis.get(`sim:trades:${tgId}`);
         const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
         const firstTradeAt = await getSimFirstTradeAt(tgId);
-        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '5420');
+        const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0', 10);
 
-        let totalPnlSol = 1633.4800; // Exact +$256,342.00 USD in SOL
-        let totalVolumeSol = volume;
-        let wins = 1799;
-        let losses = 1390;
-        let winRate = 56.4;
+        // 🟢 FIX: Compute real metrics dynamically from simulated trade history
+        const { computeUniversalStats } = await import('./utils/math.utils.js');
+        const stats = computeUniversalStats(trades);
 
+        let totalPnlSol = stats.totalPnLSol;
+        let totalVolumeSol = stats.totalVolumeSol || volume;
+        let wins = stats.wins;
+        let losses = stats.losses;
+        let winRate = stats.winRate;
+
+        // Optional admin override only when explicitly forged via /simedit or /simflex
         const forgedRaw = await redis.get(`sim:forged:${tgId}`);
         if (forgedRaw) {
             try {
                 const f = JSON.parse(forgedRaw);
-                if (f.totalStratPnl) totalPnlSol = f.totalStratPnl;
+                if (f.totalStratPnl !== undefined && f.totalStratPnl !== null) {
+                    totalPnlSol = f.totalStratPnl;
+                }
             } catch (_) {}
-        } else {
-            const { computeUniversalStats } = await import('./utils/math.utils.js');
-            const stats = computeUniversalStats(trades);
-            totalPnlSol = stats.totalPnLSol;
-            wins = stats.wins;
-            losses = stats.losses;
-            winRate = stats.winRate;
         }
 
         const positionsValueUsd = positions.reduce((sum: number, p: any) => sum + (p.valueUsd || 0), 0);
+        const resolvedStartingBalance = parseFloat(startingBalance.toString()) || parseFloat(balance) || 0;
 
         res.json({
             isActive: true,
             balance: parseFloat(balance).toFixed(4),
-            startingBalance: parseFloat(startingBalance.toString()) || 63.7227,
+            startingBalance: resolvedStartingBalance.toFixed(4),
             volume: totalVolumeSol,
             wins,
             losses,
             winRate,
             totalTrades: wins + losses,
-            totalInvestedSol: totalVolumeSol,
+            totalInvestedSol: stats.totalInvestedSol || totalVolumeSol,
             totalPnlSol,
             firstTradeAt,
             credits,

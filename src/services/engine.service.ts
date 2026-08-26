@@ -564,7 +564,8 @@ export async function executeSnipe(
     const mevPromise = (side === 'buy' && !isBumper) ? checkRecentMevActivityCached(targetCA).catch(() => 'ERROR') : Promise.resolve(false);
 
     if (side === 'buy' && !isBumper) {
-        const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), 800));
+        // 🟢 FIX: 400ms timeout race (shaves 400ms off every live buy while keeping sandwich protection active)
+        const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), 400));
         const mevResult = await Promise.race([mevPromise, timeoutPromise]);
         if (mevResult === true) return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
         if (mevResult === 'TIMEOUT' || mevResult === 'ERROR') return { success: false, message: "⚠️ MEV check timeout — trade blocked." };
@@ -649,6 +650,11 @@ export async function executeSnipe(
             const clampedTotalSpend = Math.min(intendedSpend, remainingBudget);
             actualSpendPerWallet = clampedTotalSpend / activeWallets;
 
+            // 🟢 Clean dust snap for exact budget depletion on final trade
+            if (remainingBudget - clampedTotalSpend < 0.0001) {
+                actualSpendPerWallet = remainingBudget / activeWallets;
+            }
+
             if (actualSpendPerWallet < 0.005) {
                 await prisma.autoSnipeConfig.update({ where: { id: liveConfig!.id }, data: { isActive: false } });
                 await sendBudgetExhaustedSummary(getBotInstance(), telegramId, 'live', sessionId);
@@ -706,7 +712,6 @@ export async function executeSnipe(
                         const feeCharged = actualSpendPerWallet * feeRate;
                         const feeChargedLamports = BigInt(Math.round((actualSpendPerWallet * 1_000_000_000) * feeRate));
 
-                        // 🟢 MATH FIX: Properly cascading shared fee deduction pool to prevent >100% payouts
                         let remainingFeeLamports = feeChargedLamports;
                         let affiliateCutLamports = 0n, guildOwnerCutLamports = 0n, leaderCutLamports = 0n;
 
