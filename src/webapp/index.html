@@ -45,9 +45,6 @@
         }
     </script>
     <style>
-        /* =========================================================
-           🌌 INFINITE JUPITER.AG RADIAL DOT-GRID (ZOOM-PROOF)
-           ========================================================= */
         html, body {
             min-height: 100vh;
             width: 100%;
@@ -83,25 +80,38 @@
         }
 
         /* =========================================================
-           ⚡ HIGH-VISIBILITY 3-SECOND GLOW WAVE (ZOOM-RESILIENT)
+           ⚡ CONTINUOUS RGB MULTI-COLOR HOVER BORDER (NO POPPING)
            ========================================================= */
-        @keyframes highVizChartFloat3s {
-            0%, 100% {
-                border-color: rgba(59, 130, 246, 0.25);
-                box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.8), 0 0 0px rgba(59, 130, 246, 0);
+        @keyframes continuousRgbBorder {
+            0% {
+                border-color: rgba(239, 68, 68, 0.85);
+                box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
+            }
+            25% {
+                border-color: rgba(245, 158, 11, 0.85);
+                box-shadow: 0 0 16px rgba(245, 158, 11, 0.45);
             }
             50% {
-                border-color: rgba(16, 185, 129, 0.75);
-                box-shadow: 0 8px 32px -4px rgba(0, 0, 0, 0.9), 0 0 24px rgba(16, 185, 129, 0.45);
+                border-color: rgba(16, 185, 129, 0.85);
+                box-shadow: 0 0 16px rgba(16, 185, 129, 0.45);
+            }
+            75% {
+                border-color: rgba(59, 130, 246, 0.85);
+                box-shadow: 0 0 16px rgba(59, 130, 246, 0.45);
+            }
+            100% {
+                border-color: rgba(239, 68, 68, 0.85);
+                box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
             }
         }
 
         .chart-animated-live {
-            animation: highVizChartFloat3s 3s infinite ease-in-out !important;
-            will-change: border-color, box-shadow;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s ease;
         }
+
         .chart-animated-live:hover {
-            animation-play-state: running !important;
+            animation: continuousRgbBorder 3s linear infinite !important;
         }
 
         .glass-btn {
@@ -142,12 +152,10 @@
 <body>
 
 <div class="content-wrapper">
-    <!-- Live Coin Carousel -->
     <div class="w-full bg-[#07090e]/95 backdrop-blur-md border-b border-white/5 py-2 overflow-hidden sticky top-0 z-50">
         <div class="marquee-inner flex gap-8 items-center text-[12px] font-mono text-gray-400" id="ticker-strip"></div>
     </div>
 
-    <!-- Header with Quantitative Memecoin Terminal Branding -->
     <header class="flex items-center justify-between px-4 sm:px-6 py-6 max-w-7xl mx-auto w-full">
         <div class="flex items-center gap-3">
             <div class="bg-jupGreen text-slateDark flex items-center justify-center h-10 w-10 rounded-xl shadow-lg">
@@ -169,14 +177,12 @@
             </div>
         </div>
 
-        <!-- Header AI Caller Credit Pill -->
         <div class="flex items-center gap-2 bg-[#0e131f] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner">
             <i class="fa-solid fa-bolt text-neonPurple text-xs"></i>
             <span class="text-xs font-mono font-bold text-white" id="header-credits">4,828 Credits</span>
         </div>
     </header>
 
-    <!-- Navigation Tabs -->
     <div class="flex justify-center mb-4 px-2">
         <div class="bg-[#0e131f] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
             <button id="tab-dashboard" onclick="switchView('dashboard')" class="px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Terminal Dashboard</button>
@@ -187,8 +193,6 @@
 
     <!-- VIEW 1: DASHBOARD -->
     <main id="view-dashboard" class="max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-        <!-- Left Column: Stats & Holdings -->
         <section class="xl:col-span-2 space-y-6">
             
             <div class="grid grid-cols-2 gap-3 sm:gap-4">
@@ -225,7 +229,6 @@
                 </div>
             </div>
 
-            <!-- Liquid Cash vs Deployed Positions -->
             <div class="card-flat p-4 flex justify-between items-center bg-white/[0.02]">
                 <div>
                     <span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Liquid Cash</span>
@@ -237,7 +240,6 @@
                 </div>
             </div>
 
-            <!-- Total Trading Days & AI Caller Credits Row -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div class="card-flat p-4 flex items-center justify-between">
                     <div class="flex items-center gap-3">
@@ -263,7 +265,6 @@
                 </div>
             </div>
 
-            <!-- 24-HOUR ROLLING ACTIVITY -->
             <div class="card-flat p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/[0.02]">
                 <div class="flex items-center gap-3">
                     <div class="bg-neonBlue/10 text-neonBlue h-8 w-8 rounded-lg flex items-center justify-center border border-neonBlue/20">
@@ -280,7 +281,6 @@
                 </div>
             </div>
 
-            <!-- EXPOSURE LIMITS / RISK BUDGET GAUGE -->
             <div class="card-flat p-4 mb-2 bg-[#07090e]">
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-gray-500"></i> Exposure Limit (Session Budget)</span>
@@ -289,17 +289,14 @@
                 <div class="w-full bg-[#1e293b] rounded-full h-2 mt-1 border border-white/5 overflow-hidden">
                     <div id="risk-budget-bar" class="bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" style="width: 100%"></div>
                 </div>
-                <!-- Remaining Budget -->
                 <div class="flex justify-between items-center mt-2.5 pt-2 border-t border-white/5">
                     <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Remaining Budget</span>
                     <span class="text-xs font-bold font-mono text-jupGreen" id="risk-budget-remaining">0.00 SOL</span>
                 </div>
-                <!-- Max Loss Limit -->
                 <div class="flex justify-between items-center mt-2.5 pt-2 border-t border-white/5">
                     <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Max Loss Limit</span>
                     <span class="text-xs font-bold font-mono text-neonRed" id="max-loss-limit">-50%</span>
                 </div>
-                <!-- Sweep to Cash Trigger Button -->
                 <div class="mt-3 pt-2 border-t border-white/5">
                     <button onclick="triggerSweepAll()" class="w-full bg-neonRed/10 hover:bg-neonRed/20 text-neonRed border border-neonRed/20 py-2.5 rounded-lg text-xs font-bold font-mono transition-all flex items-center justify-center gap-2">
                         <i class="fa-solid fa-broom"></i> SWEEP ALL POSITIONS TO CASH
@@ -307,7 +304,6 @@
                 </div>
             </div>
 
-            <!-- SIZING CAP WARNING BANNER -->
             <div class="card-flat p-3 flex items-center justify-between border border-yellow-500/30 bg-yellow-500/10" id="sizing-cap-card" style="display:none;">
                 <span class="text-[11px] text-yellow-400 font-bold flex items-center gap-2">
                     <i class="fa-solid fa-triangle-exclamation"></i> Sizing Capped by Risk Controls
@@ -315,7 +311,6 @@
                 <span class="text-xs font-bold text-yellow-400 font-mono" id="sizing-cap-count">0 times</span>
             </div>
 
-            <!-- WALL STREET STATS ROW -->
             <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.02] border border-white/5 mb-6 mt-4 shadow-inner">
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Avg Slippage (TCA)</span>
@@ -335,7 +330,6 @@
                 </div>
             </div>
 
-            <!-- LIVE TRADE TICKER (BLOOMBERG STYLE) WITH AI SCORE -->
             <div class="card-flat p-3 mb-6 bg-[#07090e] border border-white/5 overflow-hidden shadow-lg relative">
                 <div class="absolute top-0 right-0 w-32 h-full bg-gradient-to-l from-[#07090e] to-transparent pointer-events-none"></div>
                 <div class="flex items-center gap-3 text-[10px] text-gray-400 uppercase tracking-widest mb-2 border-b border-white/5 pb-2">
@@ -347,9 +341,7 @@
                 </div>
             </div>
 
-            <!-- RISK SCORE & STRATEGY ATTRIBUTION GRID -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <!-- Risk Score Card -->
                 <div class="card-flat p-5">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-shield-halved text-gray-500"></i> Portfolio Risk Score</span>
@@ -361,7 +353,6 @@
                     <p class="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest" id="risk-label">Assessment: Safe Risk</p>
                 </div>
 
-                <!-- Active Strategies -->
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2 mb-3">
                         <i class="fa-solid fa-chess-knight text-gray-500"></i> Active Strategies
@@ -406,7 +397,6 @@
                 </div>
             </div>
 
-            <!-- Holdings -->
             <div id="verified-holdings-section" class="space-y-3 mt-6">
                 <div class="flex items-center justify-between px-1 pt-2 pb-2">
                     <h3 class="text-sm text-gray-300 font-semibold tracking-wide">VERIFIED HOLDINGS</h3>
@@ -417,14 +407,11 @@
 
         </section>
 
-        <!-- Right Column: 3-Second Active Moving Charts (Zoom-Resilient & Active Movement) -->
         <section class="space-y-6">
-            <!-- PnL Chart (3s Active Wave Animation) -->
             <div class="card-flat p-5 chart-animated-live" id="pnl-chart-wrapper">
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">FLOW ANALYTICS</h3>
-                        <span class="h-2 w-2 rounded-full bg-jupGreen animate-ping"></span>
                     </div>
                     <div class="flex gap-1 bg-black/50 p-1 rounded-lg border border-white/5 text-[10px]">
                         <button onclick="setFilter('1H')" id="btn-1H" class="glass-btn px-2 py-1 rounded-md font-semibold text-gray-400">1H</button>
@@ -439,12 +426,10 @@
                 </div>
             </div>
 
-            <!-- Allocation Chart (3s Active Rotation Animation) -->
             <div class="card-flat p-5 chart-animated-live" id="alloc-chart-wrapper">
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide">STRATEGY ATTRIBUTION YIELD</h3>
-                        <span class="h-2 w-2 rounded-full bg-neonPurple animate-ping"></span>
                     </div>
                 </div>
                 <div class="h-56 flex items-center justify-center relative">
@@ -452,12 +437,10 @@
                 </div>
             </div>
 
-            <!-- Hourly Performance Heatmap (3s Active Equalizer Animation) -->
             <div class="card-flat p-5 chart-animated-live" id="hourly-chart-wrapper">
                 <div class="flex items-center justify-between mb-4">
                     <div class="flex items-center gap-2">
                         <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide uppercase">Hourly Performance (UTC)</h3>
-                        <span class="h-2 w-2 rounded-full bg-neonBlue animate-ping"></span>
                     </div>
                 </div>
                 <div class="h-48 relative w-full">
@@ -465,7 +448,6 @@
                 </div>
             </div>
 
-            <!-- Export Button -->
             <button onclick="exportTrades()" class="w-full card-flat p-4 flex items-center justify-center gap-2 hover:bg-white/[0.05] transition-all text-white font-bold text-sm">
                 <i class="fa-solid fa-file-csv text-jupGreen"></i> Export Ledger to CSV
             </button>
@@ -571,7 +553,6 @@
             </div>
         </section>
     </main>
-
 </div>
 
 <div id="toast"><i class="fa-solid fa-check text-jupGreen mr-2"></i> <span id="toast-msg">Copied!</span></div>
@@ -592,55 +573,6 @@
     let liveLeaderboardData = { guild: null, members: [] };
     let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
 
-    // =========================================================
-    // ⚡ ACTIVE 3-SECOND REAL DATA MOVEMENT ENGINE (WORKS AT ANY ZOOM)
-    // =========================================================
-    let chartWaveStep = 0;
-    let pnlBaseData = [];
-    let hourlyBaseData = [];
-
-    setInterval(() => {
-        chartWaveStep = (chartWaveStep + 1) % 100;
-
-        // 1. Flow Analytics Active Visual Traveling Wave on the Curve
-        if (pnlChart && pnlChart.data.datasets.length > 0) {
-            if (pnlBaseData.length === 0 && pnlChart.data.datasets[0].data.length > 0) {
-                pnlBaseData = [...pnlChart.data.datasets[0].data];
-            }
-            if (pnlBaseData.length > 0) {
-                pnlChart.data.datasets[0].data = pnlBaseData.map((val, idx) => {
-                    const wave = Math.sin(chartWaveStep + idx * 0.8) * 0.08;
-                    return val * (1 + wave);
-                });
-                pnlChart.data.datasets[0].tension = 0.32 + Math.sin(chartWaveStep) * 0.08;
-                pnlChart.update(); // Visually animates the line!
-            }
-        }
-
-        // 2. Strategy Attribution Doughnut Active 45-Degree Rotation
-        if (allocChart) {
-            allocChart.options.rotation = (allocChart.options.rotation + 45) % 360;
-            allocChart.update(); // Visually spins the doughnut segments!
-        }
-
-        // 3. Hourly Performance Active Bar Equalizer Pulse
-        if (window.hourlyChartInst && window.hourlyChartInst.data.datasets.length > 0) {
-            if (hourlyBaseData.length === 0 && window.hourlyChartInst.data.datasets[0].data.length > 0) {
-                hourlyBaseData = [...window.hourlyChartInst.data.datasets[0].data];
-            }
-            if (hourlyBaseData.length > 0) {
-                window.hourlyChartInst.data.datasets[0].data = hourlyBaseData.map((val, idx) => {
-                    const wave = Math.cos(chartWaveStep + idx * 0.6) * 0.12;
-                    return val * (1 + wave);
-                });
-                window.hourlyChartInst.update(); // Visually bounces the bars!
-            }
-        }
-    }, 3000); // Strict 3-Second Timeout Loop
-
-    // =========================================================
-    // 🧭 VIEW ROUTING & TOAST HANDLERS
-    // =========================================================
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
         
@@ -788,7 +720,6 @@
                     }
                 }
             });
-            pnlBaseData = [...profitData];
         }
 
         const allocCanvas = document.getElementById('allocationChart');
@@ -1142,7 +1073,6 @@
             pnlChart.data.datasets[0].data = chartData.profitData;
             pnlChart.data.datasets[1].data = chartData.lossData;
             pnlChart.update();
-            pnlBaseData = [...chartData.profitData];
         }
         if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     }
@@ -1374,11 +1304,8 @@
                     return;
                 }
             }
-        } catch (simErr) {
-            console.warn("Simulation check fallback:", simErr);
-        }
+        } catch (simErr) {}
 
-        // Live Mainnet Mode
         isSimModeActive = false;
         try {
             const [positionsRes, analyticsRes, solRes, balanceRes] = await Promise.all([
@@ -1531,7 +1458,6 @@
                             } 
                         }
                     });
-                    hourlyBaseData = data.map(d => d.totalPnlSol);
                 }
             }
         } catch (_) {}
@@ -1691,12 +1617,9 @@
                 allocChart.update('none');
             }
 
-        } catch (e) {
-            console.error("Error fetching institutional stats:", e);
-        }
+        } catch (e) {}
     }
 
-    // INITIALIZATION & RECURRING POLLERS
     fetchNetworthBreakdown();
     fetchSizingCapCount();
     fetchSniperSettings();
