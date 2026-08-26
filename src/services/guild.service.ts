@@ -5,7 +5,7 @@ import { decryptKey } from './vault.service.js';
 import { redis } from '../lib/redis.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
-import { prisma } from '../lib/prisma.js';
+import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Only uses shared singleton connection
 import { redlock } from '../lib/redlock.js';
 import { isSimulationActive } from './simulation.service.js';
 
@@ -363,7 +363,7 @@ export async function executeGuildAirdrop(telegramId: string, guildId: string, t
     }
 }
 
-export async function executeTieredAirdrop(telegramId: string, guildId: string, top3Sol: number, next7Sol: number, ranks11to50Sol: number): Promise<{ success: boolean; message: string; signature?: string }> {
+export async function executeTieredAirdrop(telegramId: string, guildId: string, top3Sol: number, next7Sol: number, ranks11to50Sol: Promise<{ success: boolean; message: string; signature?: string }> | any): Promise<{ success: boolean; message: string; signature?: string }> {
     const { isSimulationActive, generateSimSignature } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
         return {
@@ -389,7 +389,7 @@ export async function executeTieredAirdrop(telegramId: string, guildId: string, 
             let amount = 0;
             if (m.rank <= 3) amount = top3Sol;
             else if (m.rank <= 10) amount = next7Sol;
-            else amount = ranks11to50Sol;
+            else amount = ranks11to50Sol as number;
             if (amount <= 0) continue;
 
             try {

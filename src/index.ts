@@ -1,63 +1,63 @@
 // src/index.ts
+// src/index.ts
 import { Telegraf, Markup, Context } from 'telegraf';
-
-import { startCopyTradeWatcher, syncCopyTradeListeners } from './services/copytrade.service.js';
-import { computeUniversalStats } from './utils/math.utils.js';
-import { getBondingCurveAddress, decodePumpCurvePrice, checkTokenRugRisk } from './services/price.service.js';
-import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from '@solana/web3.js';
-import bs58 from 'bs58';
-
-import { dcaQueue, guardQueue, limitQueue } from './queues/index.js';
-import { startDepositWatcher, getLiveWalletBalance } from './services/deposit.service.js';
-import { checkRedisHealth } from './lib/redis.js';
+import express from 'express';
 import cors from 'cors';
-import { prisma } from './lib/prisma.js'; // 🟢 FIX: Use Singleton
 import dotenv from 'dotenv';
-import { redis } from './lib/redis.js';
-import { isSimulationActive } from './services/simulation.service.js';
-import axios from 'axios';
-import { igniteYellowstoneStream } from './services/grpc.service.js';
+import bs58 from 'bs58';
+import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import cron from 'node-cron';
 import FormData from 'form-data';
+import axios from 'axios';
+import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from '@solana/web3.js';
+
+// 🟢 Core Infrastructure
+import { prisma } from './lib/prisma.js';
+import { redis, checkRedisHealth } from './lib/redis.js';
+import { connection } from './lib/connection.js';
+import { setBotInstance } from './lib/bot-instance.js';
+import { withTimeout } from './lib/rpc-timeout.js';
+import { dcaQueue, guardQueue, limitQueue } from './queues/index.js';
+
+// 🟢 Cache Layer
+import { 
+    getCachedUser, 
+    getCachedVipStatus, 
+    getCachedGuildMemberships, 
+    getCachedAutoSnipeConfigFull, 
+    getCachedCopyTradeMenu, 
+    invalidateUserCache, 
+    markUserActive 
+} from './lib/cache.js';
+
+// 🟢 Platform Services
+import { executeSnipe, executeExit, warmDnsCache, getCachedTokenPrice } from './services/engine.service.js';
+import { startCopyTradeWatcher, syncCopyTradeListeners } from './services/copytrade.service.js';
+import { getBondingCurveAddress, decodePumpCurvePrice, checkTokenRugRisk } from './services/price.service.js';
+import { igniteYellowstoneStream, cachedSolUsdPrice } from './services/grpc.service.js';
 import { getAdvancedStats, getHourlyPerformance, exportTradesToCsv } from './services/analytics.service.js';
-import { sweepExpiredVips } from './services/vip_promo.service.js';
-import { addTrailingStopToMemory, cancelAllUserGuards, cancelAllGuardsForToken, updateGuardSize } from './services/order.service.js';
+import { addTrailingStopToMemory, cancelAllUserGuards, cancelAllGuardsForToken, updateGuardSize, syncGuardsFromDb } from './services/order.service.js';
 import { generateSecureVault, exportPrivateKey, importPrivateKey, ensureWalletsExist, decryptKey } from './services/vault.service.js';
-import { cachedSolUsdPrice } from './services/grpc.service.js';
 import { getUserPositions } from './services/position.service.js';
 import { processAffiliatePayout } from './services/payout.service.js';
 import { getEmptyTokenAccounts, executeRentSweep } from './services/burn.service.js';
 import { createGuild, joinGuild, getLeaderboard, exportLeaderboard, updateRankCache } from './services/guild.service.js';  
-import { syncGuardsFromDb } from './services/order.service.js';
 import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './services/caller.service.js';
-import { connection } from './lib/connection.js';
-import { withTimeout } from './lib/rpc-timeout.js';
-import { 
-    getCachedUser, 
-    getCachedAutoSnipeConfigFull, 
-    getCachedCopyTradeMenu, 
-    markUserActive, 
-    invalidateUserCache 
-} from './lib/cache.js';
-// 🟢 Update line 22 in src/index.ts:
-import { executeSnipe, executeExit, warmDnsCache, getCachedTokenPrice } from './services/engine.service.js';
-import cron from 'node-cron';
-import { sendWeeklyReportsToAll, computeWeeklyStats, formatWeeklyReport } from './services/weekly_report.service.js';
-import { VIP_TIERS, VipTierKey, checkVipStatus, grantVip, verifyVipPayment, getPlatformFeeRate, formatVipStatus, VIP_CREDIT_BONUS } from './services/vip.service.js';
-import { 
-    checkAndGrantDailyVip, 
-    startPromo, 
-    stopPromo, 
-    getPromoStats,
-    getVipStatus,
-    getSlotsRemaining,
-    resolveBadge
-} from './services/vip_promo.service.js';
+import { sendWeeklyReportsToAll } from './services/weekly_report.service.js';
 
-import express from 'express';
-import crypto from 'crypto';
-import path from 'path';
-import fs from 'fs'; // 🟢 ADD THIS LINE
-import { fileURLToPath } from 'url';
+// 🟢 VIP & Promotions
+import { VIP_TIERS, VipTierKey, checkVipStatus, grantVip, verifyVipPayment, getPlatformFeeRate, formatVipStatus, VIP_CREDIT_BONUS } from './services/vip.service.js';
+import { checkAndGrantDailyVip, startPromo, stopPromo, getPromoStats, getVipStatus, getSlotsRemaining, resolveBadge, sweepExpiredVips } from './services/vip_promo.service.js';
+
+// 🟢 Deposit & Simulation (FIXED: Explicitly importing startDepositWatcher)
+import { startDepositWatcher, getLiveWalletBalance } from './services/deposit.service.js';
+import { isSimulationActive, getSimBalance } from './services/simulation.service.js';
+
+
+
 
 
 
@@ -76,7 +76,6 @@ if (!BOT_TOKEN) { console.error("🔴 FATAL: BOT_TOKEN is missing in .env!"); pr
 if (!process.env.TREASURY_WALLET_ADDRESS) { console.error("🔴 FATAL: TREASURY_WALLET_ADDRESS is missing in .env! All trades will run fee-free."); process.exit(1); }
 const bot = new Telegraf(BOT_TOKEN);
 
-import { setBotInstance } from './lib/bot-instance.js';
 setBotInstance(bot);
 
 
@@ -827,28 +826,25 @@ app.post('/api/affiliate-stats', async (req, res) => {
 
 
 
-// 🟢 ULTRA-FAST DASHBOARD FIX: Never wait for RPC. Read from cache instantly.
 async function getLiveBalance(user: any): Promise<string> {
-    const { getSimBalance, isSimulationActive } = await import('./services/simulation.service.js');
     if (await isSimulationActive(user.telegramId)) {
         return await getSimBalance(user.telegramId);
     }
     
     if (!user || !user.vaultAddress) return "0.0000";
     
-    // 1. Instant RAM Check
-    const { getLiveWalletBalance } = await import('./services/deposit.service.js');
+    // 1. Instant RAM
     const liveDepositBal = getLiveWalletBalance(user.vaultAddress);
     if (liveDepositBal !== null && liveDepositBal > 0) {
         return liveDepositBal.toFixed(4);
     }
 
-    // 2. Instant Redis Cache Check
+    // 2. Instant Redis cache
     const cacheKey = `balance_cache:${user.telegramId}`;
     const cachedBalance = await redis.get(cacheKey);
     if (cachedBalance) return parseFloat(cachedBalance).toFixed(4);
 
-    // 3. Background fetch (Does NOT block the UI)
+    // 3. Background fetch with strict 3s timeout
     (async () => {
         try {
             const pubkeys = [new PublicKey(user.vaultAddress)];
@@ -858,26 +854,34 @@ async function getLiveBalance(user: any): Promise<string> {
             if (user.activeWallets >= 5 && user.vault5) pubkeys.push(new PublicKey(user.vault5));
 
             let totalLamports = 0;
-            const accounts = await connection.getMultipleAccountsInfo(pubkeys).catch(() => []);
-            accounts.forEach(acc => { if (acc) totalLamports += acc.lamports; });
-            const finalBal = (totalLamports / 1_000_000_000).toFixed(4);
-            await redis.set(cacheKey, finalBal, 'EX', 30);
+            const accounts = await withTimeout(
+                connection.getMultipleAccountsInfo(pubkeys),
+                3000, 
+                []
+            );
+            
+            if (accounts && Array.isArray(accounts)) {
+                accounts.forEach((acc: any) => { if (acc) totalLamports += acc.lamports; });
+                const finalBal = (totalLamports / 1_000_000_000).toFixed(4);
+                await redis.set(cacheKey, finalBal, 'EX', 30);
+            }
         } catch (_) {}
     })();
 
     return "0.0000";
 }
 
-// 🟢 SPEED FIX 2: Uses 8-second Redis cache & parallelized queries (<50ms execution)
 async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean = false) {
-    const user = await getCachedUser(telegramId, 8);
-    if (!user) return; 
+    // 🟢 Fast cached user (30s TTL)
+    const user = await getCachedUser(telegramId, 30);
+    if (!user) return;
 
+    // 🟢 Parallel, cached VIP, sim status, balance, and guilds
     const [vipStatus, isSimMode, liveBalance, userGuilds] = await Promise.all([
-        getVipStatus(telegramId),
-        import('./services/simulation.service.js').then(m => m.isSimulationActive(telegramId)),
+        getCachedVipStatus(telegramId, 30),
+        isSimulationActive(telegramId),
         getLiveBalance(user),
-        prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } })
+        getCachedGuildMemberships(telegramId, 30)
     ]);
 
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
@@ -942,7 +946,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     if (isEdit) await safeEditMessageText(ctx, layoutTxt, UI);
     else await ctx.replyWithHTML(layoutTxt, UI);
 }
-  
 
 
 // =========================================================
@@ -8525,10 +8528,11 @@ async function bootEcosystem() {
         await new Promise(r => setTimeout(r, 1000));
         startCoinCaller(bot); 
 
-        console.log('⏳ Booting BullMQ Background Task Queues...');
-        await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
-        await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/1 * * * * *' } });
-        await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+       // 🟢 FIX: Reduce guard check from 1s to 5s to stop RPC overload
+       console.log('⏳ Booting BullMQ Background Task Queues...');
+       await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+       await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/5 * * * * *' } }); // CHANGED
+       await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
 
         const { runGuardModelTrainingScheduler } = await import('./services/guard_ai.service.js');
         runGuardModelTrainingScheduler();

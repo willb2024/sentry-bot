@@ -140,7 +140,6 @@ async function executeWithFallback<T>(target: any, prop: any, args: any[]): Prom
         return result;
     } catch (err: any) {
         recordPrimaryFailure(err);
-        // Fail fast: Try backup once without queuing retry storms
         if (!isCircuitOpen()) {
             try {
                 const backupFn = Reflect.get(backupConnection, prop);

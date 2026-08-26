@@ -59,6 +59,31 @@ export async function getCachedCopyTradeMenu(telegramId: string, ttl = 20) {
     return user;
 }
 
+export async function getCachedVipStatus(telegramId: string, ttl = 30) {
+    const key = `cache:vip:${telegramId}`;
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+
+    const { getVipStatus } = await import('../services/vip_promo.service.js');
+    const status = await getVipStatus(telegramId);
+    await redis.set(key, JSON.stringify(status), 'EX', ttl);
+    return status;
+}
+
+export async function getCachedGuildMemberships(telegramId: string, ttl = 30) {
+    const key = `cache:guilds:${telegramId}`;
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    if (!user) return [];
+    const memberships = await prisma.guildMembership.findMany({ 
+        where: { userId: user.id, isActive: true }, include: { guild: true } 
+    });
+    await redis.set(key, JSON.stringify(memberships), 'EX', ttl);
+    return memberships;
+}
+
 // 🟢 Activity tracker: tracks recent users so background workers pre-warm balances in RAM
 export async function markUserActive(telegramId: string) {
     try {
@@ -71,6 +96,8 @@ export async function invalidateUserCache(telegramId: string) {
     try {
         await redis.del(
             `cache:user:${telegramId}`,
+            `cache:vip:${telegramId}`,
+            `cache:guilds:${telegramId}`,
             `cache:autosnipe:${telegramId}`,
             `cache:autosnipe_full:${telegramId}`,
             `cache:copytrade_menu:${telegramId}`
