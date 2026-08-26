@@ -30,6 +30,8 @@ import { createGuild, joinGuild, getLeaderboard, exportLeaderboard, updateRankCa
 import { syncGuardsFromDb } from './services/order.service.js';
 import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './services/caller.service.js';
 import { connection } from './lib/connection.js';
+import { withTimeout } from './lib/rpc-timeout.js';
+import { getCachedUser, invalidateUserCache } from './lib/cache.js';
 // 🟢 Update line 22 in src/index.ts:
 import { executeSnipe, executeExit, warmDnsCache, getCachedTokenPrice } from './services/engine.service.js';
 import cron from 'node-cron';
@@ -795,62 +797,74 @@ app.post('/api/affiliate-stats', async (req, res) => {
 });
 
 
-import { getCachedUser, getCachedAutoSnipeConfig } from './lib/cache.js';
 
-// 🟢 PERFORMANCE FIX: Check cached deposit watcher balance before querying RPC
+
+
+// 🟢 SPEED FIX 1: Hard 3.5s timeout cap on RPC + instant memory cache fallback
 async function getLiveBalance(user: any): Promise<string> {
-    const { getSimBalance } = await import('./services/simulation.service.js');
+    const { getSimBalance, isSimulationActive } = await import('./services/simulation.service.js');
     if (await isSimulationActive(user.telegramId)) {
         return await getSimBalance(user.telegramId);
     }
     
     if (!user || !user.vaultAddress) return "0.0000";
     
-    // Check in-memory deposit watcher cache first (Instant!)
+    // 1. Check in-memory deposit watcher balance first (Instant 0ms!)
     const liveDepositBal = getLiveWalletBalance(user.vaultAddress);
     if (liveDepositBal !== null && liveDepositBal > 0) {
         return liveDepositBal.toFixed(4);
     }
 
-    try {
-        const cacheKey = `balance_cache:${user.telegramId}`;
-        const cachedBalance = await redis.get(cacheKey);
-        if (cachedBalance) return parseFloat(cachedBalance).toFixed(4);
+    const cacheKey = `balance_cache:${user.telegramId}`;
+    const cachedBalance = await redis.get(cacheKey);
 
+    try {
         const pubkeys: PublicKey[] = [new PublicKey(user.vaultAddress)];
         if (user.activeWallets >= 2 && user.vault2) pubkeys.push(new PublicKey(user.vault2));
         if (user.activeWallets >= 3 && user.vault3) pubkeys.push(new PublicKey(user.vault3));
         if (user.activeWallets >= 4 && user.vault4) pubkeys.push(new PublicKey(user.vault4));
         if (user.activeWallets >= 5 && user.vault5) pubkeys.push(new PublicKey(user.vault5));
 
-        let totalLamports = 0;
-        const accounts = await connection.getMultipleAccountsInfo(pubkeys).catch(() => []);
-        accounts.forEach(acc => {
-            if (acc) totalLamports += acc.lamports;
-        });
+        // 🟢 HARD 3.5s TIMEOUT: Never allows a lagging RPC to block the dashboard
+        const accounts = await withTimeout(
+            connection.getMultipleAccountsInfo(pubkeys),
+            3500,
+            null
+        );
 
-        const finalBalance = (totalLamports / LAMPORTS_PER_SOL).toFixed(4);
-        await redis.set(cacheKey, finalBalance, 'EX', 15);
-        return finalBalance;
-    } catch (e) { return "0.0000"; }
+        if (accounts) {
+            let totalLamports = 0;
+            accounts.forEach(acc => {
+                if (acc) totalLamports += acc.lamports;
+            });
+            const finalBalance = (totalLamports / LAMPORTS_PER_SOL).toFixed(4);
+            await redis.set(cacheKey, finalBalance, 'EX', 15);
+            return finalBalance;
+        }
+
+        // Stale cache fallback if RPC timed out or rate-limited
+        return cachedBalance || "0.0000";
+    } catch (e) { 
+        return cachedBalance || "0.0000"; 
+    }
 }
 
-// 🟢 PERFORMANCE FIX: Parallelized dashboard fetching (<50ms execution time)
+// 🟢 SPEED FIX 2: Uses 8-second Redis cache & parallelized queries (<50ms execution)
 async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean = false) {
-    const [user, vipStatus, isSimMode] = await Promise.all([
-        getCachedUser(telegramId, 5),
-        getVipStatus(telegramId),
-        import('./services/simulation.service.js').then(m => m.isSimulationActive(telegramId))
-    ]);
+    const user = await getCachedUser(telegramId, 8);
     if (!user) return; 
 
-    const [liveBalance, userGuilds] = await Promise.all([
+    const [vipStatus, isSimMode, liveBalance, userGuilds] = await Promise.all([
+        getVipStatus(telegramId),
+        import('./services/simulation.service.js').then(m => m.isSimulationActive(telegramId)),
         getLiveBalance(user),
         prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true }, include: { guild: true } })
     ]);
 
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
-    const whaleModeText = user.activeWallets > 1 ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
+    const whaleModeText = user.activeWallets > 1 
+        ? `🐙 <b>WHALE MODE:</b> 🟢 ACTIVE (Firing ${user.activeWallets} Wallets)` 
+        : `⚙️ <b>Active Wallets:</b> 1 / 5 (Standard Mode)`;
 
     let displayCredits = user.creditBalance;
     if (isSimMode) {
@@ -1035,21 +1049,7 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
     await safeEditMessageText(ctx, walletText, UI); 
 }
 
-// 🟢 FIX: Update the button action to smoothly re-render the updated wallet count
-bot.action(/^set_wallets_([1-5])$/, async (ctx) => {
-    const count = parseInt(ctx.match[1], 10);
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
 
-    try {
-        await ctx.answerCbQuery(`⚡ Switched to ${count} Active Wallet${count > 1 ? 's' : ''}!`);
-        await ensureWalletsExist(tgId, count);
-        await redis.del(`balance_cache:${tgId}`); // Invalidate balance cache to recalculate immediately
-        await sendOrEditVaultMenu(ctx, tgId);     // Re-render in place
-    } catch (e: any) {
-        console.error("🔴 [VAULT] Switch error:", e.message);
-    }
-});
 
 // =========================================================
 // 💬 USER SUPPORT & CONTACT SYSTEM
@@ -3309,10 +3309,7 @@ bot.action('action_global_cancel', async (ctx) => {
     );
 });
 
-bot.action('btn_dashboard', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await sendOrEditDashboard(ctx, ctx.from!.id.toString(), true); 
-});
+
 
 bot.action('btn_withdraw_prompt', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3531,14 +3528,49 @@ bot.action('action_support', async (ctx) => {
     await safeEditMessageText(ctx, supportText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]]));
 });
 
+// 🟢 SPEED FIX 3: Immediate visual feedback on button clicks
+bot.action('btn_dashboard', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Loading dashboard...</i>', {});
+    await sendOrEditDashboard(ctx, ctx.from!.id.toString(), true); 
+});
+
+bot.action('menu_sniper', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Opening Sniper Engine...</i>', {});
+    await sendOrEditSniper(ctx, ctx.from!.id.toString(), true);
+});
+
+bot.action('menu_vault', async (ctx) => { 
+    try{await ctx.answerCbQuery();}catch(e){} 
+    await safeEditMessageText(ctx, '<i>⏳ Accessing Vault Node...</i>', {});
+    await sendOrEditVaultMenu(ctx, ctx.from!.id.toString());
+});
+
 bot.action('menu_settings', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Loading Settings...</i>', {});
     await sendOrEditSettings(ctx, ctx.from!.id.toString(), true);
+});
+
+
+bot.action(/^set_wallets_([1-5])$/, async (ctx) => {
+    const count = parseInt(ctx.match[1], 10);
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    try {
+        await ctx.answerCbQuery(`⚡ Switched to ${count} Active Wallet${count > 1 ? 's' : ''}!`);
+        await ensureWalletsExist(tgId, count);
+        await invalidateUserCache(tgId); // 🟢 Purges cached user record
+        await redis.del(`balance_cache:${tgId}`);
+        await sendOrEditVaultMenu(ctx, tgId);
+    } catch (e: any) {}
 });
 
 bot.action(/^set_speed_(ECO|FAST|TURBO)$/, async (ctx) => {
     const level = ctx.match[1];
-    try { await ctx.answerCbQuery(`✅ Speed configuration updated to ${level}!`); } catch(e){}
+    try { await ctx.answerCbQuery(`✅ Speed updated to ${level}!`); } catch(e){}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
@@ -3546,9 +3578,9 @@ bot.action(/^set_speed_(ECO|FAST|TURBO)$/, async (ctx) => {
         where: { telegramId: tgId },
         data: { priorityLevel: level }
     });
+    await invalidateUserCache(tgId); // 🟢 Purges cached user record
 
-    await ctx.replyWithHTML(`✅ <b>Speed successfully updated to ${level}.</b>`);
-    await sendOrEditSettings(ctx, tgId, false);
+    await sendOrEditSettings(ctx, tgId, true);
 });
 
 bot.action('action_edit_custom_speed', async (ctx) => {
@@ -3755,10 +3787,8 @@ bot.action('toggle_sniper_mode', async (ctx) => {
     await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { sniperMode: nextMode } });
     await sendOrEditSniper(ctx, tgId!, true);
 });
-bot.action('menu_sniper', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await sendOrEditSniper(ctx, ctx.from!.id.toString(), true);
-});
+
+
 
 // Add this helper function somewhere near the top/utilities in src/index.ts
 export async function getTotalTradeCount(telegramId: string, mode: 'live' | 'sim'): Promise<number> {
@@ -4703,10 +4733,7 @@ bot.action('action_cancel_guards', async (ctx) => {
 // =========================================================
 // 🔑 VAULT SYSTEM
 // =========================================================
-bot.action('menu_vault', async (ctx) => { 
-    try{await ctx.answerCbQuery();}catch(e){} 
-    await sendOrEditVaultMenu(ctx, ctx.from!.id.toString());
-});
+
 
 bot.action('action_consolidate_wallets', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
