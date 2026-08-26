@@ -31,7 +31,13 @@ import { syncGuardsFromDb } from './services/order.service.js';
 import { startCoinCaller, getUserCallerFilters, setUserCallerFilters } from './services/caller.service.js';
 import { connection } from './lib/connection.js';
 import { withTimeout } from './lib/rpc-timeout.js';
-import { getCachedUser, invalidateUserCache } from './lib/cache.js';
+import { 
+    getCachedUser, 
+    getCachedAutoSnipeConfigFull, 
+    getCachedCopyTradeMenu, 
+    markUserActive, 
+    invalidateUserCache 
+} from './lib/cache.js';
 // 🟢 Update line 22 in src/index.ts:
 import { executeSnipe, executeExit, warmDnsCache, getCachedTokenPrice } from './services/engine.service.js';
 import cron from 'node-cron';
@@ -97,8 +103,14 @@ app.use(cors({
     credentials: true
 }));
 
-// Inside src/index.ts (near top utilities)
 
+
+// 🟢 Non-blocking activity tracker for background balance pre-warming
+bot.use(async (ctx, next) => {
+    const tgId = ctx.from?.id?.toString();
+    if (tgId) markUserActive(tgId).catch(() => {});
+    return next();
+});
 
 
 async function getWatchlistSymbol(mint: string): Promise<string> {
@@ -982,14 +994,18 @@ bot.action('start_token_wizard', async (ctx) => {
 
 
 
-// Inside src/index.ts — Full Vault & Keys Menu with Deep Explanations & 4-Decimal Clamping
+bot.action('menu_vault', async (ctx) => { 
+    try{await ctx.answerCbQuery();}catch(e){} 
+    await safeEditMessageText(ctx, '<i>⏳ Loading Vault Security Node...</i>', {});
+    await sendOrEditVaultMenu(ctx, ctx.from!.id.toString());
+});
 
 async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
-    const user = await prisma.user.findUnique({ where: { telegramId } });
+    const user = await getCachedUser(telegramId, 30);
     if (!user) return;
     
     const rawBalance = await getLiveBalance(user);
-    const formattedBalance = parseFloat(rawBalance || '0').toFixed(4); // 🟢 Formats cleanly to 4 decimal places
+    const formattedBalance = parseFloat(rawBalance || '0').toFixed(4);
     const hideWallets = await redis.get(`user_settings:hide_wallets:${telegramId}`) === 'true';
 
     let walletList = `• <b>W1 (Primary Master):</b> <code>${maskAddress(user.vaultAddress, hideWallets)}</code>\n`;
@@ -1048,7 +1064,6 @@ async function sendOrEditVaultMenu(ctx: any, telegramId: string) {
 
     await safeEditMessageText(ctx, walletText, UI); 
 }
-
 
 
 // =========================================================
@@ -3535,17 +3550,9 @@ bot.action('btn_dashboard', async (ctx) => {
     await sendOrEditDashboard(ctx, ctx.from!.id.toString(), true); 
 });
 
-bot.action('menu_sniper', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    await safeEditMessageText(ctx, '<i>⏳ Opening Sniper Engine...</i>', {});
-    await sendOrEditSniper(ctx, ctx.from!.id.toString(), true);
-});
 
-bot.action('menu_vault', async (ctx) => { 
-    try{await ctx.answerCbQuery();}catch(e){} 
-    await safeEditMessageText(ctx, '<i>⏳ Accessing Vault Node...</i>', {});
-    await sendOrEditVaultMenu(ctx, ctx.from!.id.toString());
-});
+
+
 
 bot.action('menu_settings', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -3613,12 +3620,24 @@ bot.action('toggle_hide_wallets', async (ctx) => {
 });
 
 
+bot.action('menu_sniper', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Loading Sniper Engine...</i>', {});
+    await sendOrEditSniper(ctx, ctx.from!.id.toString(), true);
+});
+
 async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = false) {
-    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+    // 🟢 CACHE FIX: 30s Redis cache instead of fresh Prisma query every click
+    const user = await getCachedAutoSnipeConfigFull(telegramId, 30);
     if (!user) return;
 
     let config = user.autoSnipeConfig;
-    if (!config) config = await prisma.autoSnipeConfig.create({ data: { userId: user.id, amountSol: 0.01, sniperMode: "PUMP" } });
+    if (!config) {
+        config = await prisma.autoSnipeConfig.create({ 
+            data: { userId: user.id, amountSol: 0.01, sniperMode: "PUMP" } 
+        });
+        await invalidateUserCache(telegramId);
+    }
 
     const { isSimulationActive } = await import('./services/simulation.service.js');
     const isSimMode = await isSimulationActive(telegramId);
@@ -3646,59 +3665,41 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     const sniperText = 
         `🎯 <b>TRENCH AUTO-SNIPER ENGINE</b> 🎯\n` +
         `<i>Sentry scans raw block transitions to front-run listings with private Jito bundles.</i>\n\n` +
-
         `• <b>Status:</b> ${statusObj}\n` +
         `  └ <i>Master engine toggle. Starts or halts automated mempool buying.</i>\n\n` +
-
         `• <b>Target Mode:</b> <b>${modeDisplay}</b>\n` +
         `  └ <i>Selects DEX pool source: Pump.fun bonding curves, Raydium AMM pools, or Both.</i>\n\n` +
-
         `• <b>Scoring Mode:</b> <b>${deepScoringObj}</b>\n` +
         `  └ <i>Fast (150ms speed for block-0) vs. Deep (full holder & dev security audits).</i>\n\n` +
-
         `• <b>Spend Amount (Static):</b> <b>${config.amountSol} SOL</b>\n` +
         `  └ <i>Fixed purchase amount used per trade when Dynamic Sizing is turned OFF.</i>\n\n` +
-
         `• <b>Max Budget:</b> <b>${config.maxBudgetSol ? config.maxBudgetSol + ' SOL' : 'Infinite (No Limit)'}</b>\n` +
         `  └ <i>Hard session cap. Auto-stops the sniper once total spend hits this threshold.</i>\n\n` +
-
         `• <b>Max Loss Limit:</b> <b>${lossLimitDisplay}</b>\n` +
         `  └ <i>Circuit breaker: auto-stops sniper if portfolio drops this % from starting balance.</i>\n\n` +
-
         `• <b>Total Spent:</b> <b>${spentSol.toFixed(4)} SOL</b>\n` +
         `  └ <i>Cumulative SOL spent across all automated snipes during the active session.</i>\n\n` +
-
         `• <b>AI Score Filter:</b> <b>${scoreDisplay}</b>\n` +
         `  └ <i>Minimum AI quality score (0-100) required to trigger a buy. Set to 55+ for best safety.</i>\n\n` +
-
         `• <b>Market Cap Filter:</b> <b>${mcDisplay}</b>\n` +
         `  └ <i>Only snipes tokens whose initial market cap falls strictly within this range.</i>\n\n` +
-
         `• <b>Max Dev Bag (Dev Limit):</b> <b>${devBagDisplay}</b>\n` +
         `  └ <i>Aborts the snipe if the developer buys or holds more than this % of total supply.</i>\n\n` +
-
         `• <b>Anti-Dead Shield:</b> ${antiDeadObj}\n` +
         `  └ <i>Skips coins where the creator bought 0 supply at launch (filters out abandoned duds).</i>\n\n` +
-
         `• <b>Block Delay:</b> <b>${config.snipeDelaySeconds} Seconds</b>\n` +
         `  └ <i>Wait time before buying. Set to 0s for block-0, or 1-2s to dodge launch anti-bot taxes.</i>\n\n` +
-
         `• <b>Auto-Guard:</b> <b>-${config.autoTrailingDropPercent}% Stop Loss</b> | Take Profit: <b>${tpDisplay}</b>\n` +
         `  └ <i>Deploys a high-water trailing stop and optional take profit the moment a buy confirms.</i>\n\n` +
-
         `━━━━━━━━━━━━━━━\n` +
         `📊 <b>DYNAMIC SIZING ENGINE</b>\n` +
         `<i>Scales trade sizes exponentially based on AI conviction score.</i>\n\n` +
-
         `• <b>Status:</b> ${scalingStatus}\n` +
         `  └ <i>When ON, replaces static sizes with the formula: Base × (Score/100)^Exp × MaxMult.</i>\n\n` +
-
         `• <b>Base Risk Unit:</b> <b>${config.baseRiskUnitSol} SOL</b>\n` +
         `  └ <i>Starting baseline allocation for a median-conviction setup (Score ~50).</i>\n\n` +
-
         `• <b>Max Risk Multiplier:</b> <b>${config.maxRiskMultiplier}x</b>\n` +
         `  └ <i>Maximum size ceiling allowed for a perfect 100-score setup (Base × Multiplier).</i>\n\n` +
-
         `• <b>Scaling Curve:</b> <b>${curveDesc}</b>\n` +
         `  └ <i>Exponent power: Linear (1.0), Aggressive Square (2.0), or Exponential (3.0).</i>`;
 
@@ -3728,7 +3729,6 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     if (isEdit) await safeEditMessageText(ctx, sniperText, UI);
     else await ctx.replyWithHTML(sniperText, UI);
 }
-
 
 // Toggle Dynamic Sizing
 bot.action('toggle_dynamic_scaling', async (ctx) => {
@@ -4966,17 +4966,13 @@ bot.action('action_import_key', async (ctx) => {
 
 bot.action('menu_copytrade', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
+    await safeEditMessageText(ctx, '<i>⏳ Loading Copy Trade Network...</i>', {});
+
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    const user = await prisma.user.findUnique({ 
-        where: { telegramId: tgId }, 
-        include: { 
-            copyTrades: { where: { isActive: true } },
-            followedBy: { where: { isActive: true } },
-            following: { where: { isActive: true }, include: { leader: true } }
-        } 
-    });
+    // 🟢 CACHE FIX: Uses cached triple-include query (30s TTL)
+    const user = await getCachedCopyTradeMenu(tgId, 30);
     if (!user) return;
 
     const activeCustomTargets = user.copyTrades.length;
@@ -8462,6 +8458,17 @@ async function bootEcosystem() {
     }
 
     setInterval(async () => { await sweepExpiredVips(); }, 10 * 60 * 1000);
+
+    // 🟢 Pre-warm active users' balances in RAM every 10s so button clicks are 0ms instant!
+    setInterval(async () => {
+        try {
+            const recentUserIds = await redis.zrevrange('active_users_recent', 0, 49);
+            for (const tgId of recentUserIds) {
+                const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+                if (user) getLiveBalance(user).catch(() => {});
+            }
+        } catch (_) {}
+    }, 10000);
 
     setInterval(async () => {
         try {
