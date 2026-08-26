@@ -3912,8 +3912,14 @@ bot.action('toggle_autosnipe', async (ctx) => {
     if (!tgId) return;
 
     const { isSimulationActive, toggleSimAutoSnipe } = await import('./services/simulation.service.js');
-    if (await isSimulationActive(tgId)) {
-        await toggleSimAutoSnipe(tgId, bot);
+    const isSim = await isSimulationActive(tgId);
+    
+    // 🟢 DEBUG LOGS TO DIAGNOSE SIM ENGINE
+    console.log(`[DEBUG] toggle_autosnipe: tgId=${tgId} isSim=${isSim}`);
+
+    if (isSim) {
+        const result = await toggleSimAutoSnipe(tgId, bot);
+        console.log(`[DEBUG] sim autosnipe toggled to: ${result}`);
         await sendOrEditSniper(ctx, tgId!, true);
         return;
     }
@@ -8529,10 +8535,11 @@ async function bootEcosystem() {
         startCoinCaller(bot); 
 
        // 🟢 FIX: Reduce guard check from 1s to 5s to stop RPC overload
-       console.log('⏳ Booting BullMQ Background Task Queues...');
-       await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
-       await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/5 * * * * *' } }); // CHANGED
-       await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
+      // 🟢 FIX: Reduce queue check frequency from 5s to 15s to relieve database pressure
+      console.log('⏳ Booting BullMQ Background Task Queues...');
+      await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/15 * * * * *' } }); // 🟢 CHANGED to 15s
+      await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/5 * * * * *' } });  // Kept fast for Guards
+      await limitQueue.add('limit-check', {}, { repeat: { pattern: '*/15 * * * * *' } }); // 🟢 CHANGED to 15s
 
         const { runGuardModelTrainingScheduler } = await import('./services/guard_ai.service.js');
         runGuardModelTrainingScheduler();

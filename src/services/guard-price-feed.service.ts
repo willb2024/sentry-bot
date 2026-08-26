@@ -13,7 +13,7 @@ function startFastPollLoop() {
     if (fastPollLoopStarted) return;
     fastPollLoopStarted = true;
 
-    // 🟢 250ms interval with parallel chunk processing
+    // 🟢 FIX: Increased interval from 250ms to 2000ms to stop HTTP/Event Loop saturation
     setInterval(async () => {
         const mints = [...fastPollTargets.keys()];
         if (mints.length === 0) return;
@@ -32,9 +32,9 @@ function startFastPollLoop() {
                 }
             } catch (_) {}
         }));
-    }, 250);
+    }, 2000); // 🟢 CHANGED HERE
 
-    console.log("🟢 [GUARD FEED] Fast-poll loop active (250ms interval, parallel chunks).");
+    console.log("🟢 [GUARD FEED] Fast-poll loop active (2000ms interval, parallel chunks).");
 }
 
 export async function subscribeToMintPrice(mint: string, guardId: string): Promise<void> {
