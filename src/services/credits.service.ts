@@ -1,5 +1,6 @@
 // src/services/credits.service.ts
 import { prisma } from '../lib/prisma.js';
+import { redis } from '../lib/redis.js';
 
 export const CREDIT_PACKS = {
     starter: { name: 'Micro',   priceSol: null, priceUsd: 12,  credits: 150 },
@@ -20,10 +21,21 @@ export async function consumeCredit(
     type: 'CONSUME_SCAN' | 'CONSUME_CALLER' | 'CONSUME_SNIPER_SCORE',
     tokenMint: string
 ): Promise<{ success: boolean; remaining: number }> {
+    
+    // 🟢 SIM FIX: Check if simulation is active first
+    const { isSimulationActive } = await import('./simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        const currentSimCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
+        if (currentSimCredits <= 0) return { success: false, remaining: 0 };
+        
+        const newSimCredits = currentSimCredits - 1;
+        await redis.set(`sim:credits:${telegramId}`, newSimCredits.toString());
+        return { success: true, remaining: newSimCredits };
+    }
+
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return { success: false, remaining: 0 };
 
-    // Atomic conditional decrement prevents race conditions
     const updateResult = await prisma.user.updateMany({
         where: { id: user.id, creditBalance: { gt: 0 } },
         data: { creditBalance: { decrement: 1 } }
@@ -50,6 +62,18 @@ export async function consumeSniperCredit(
     telegramId: string,
     tokenMint: string
 ): Promise<{ success: boolean; remaining: number; fallback: boolean }> {
+
+    // 🟢 SIM FIX: Check if simulation is active
+    const { isSimulationActive } = await import('./simulation.service.js');
+    if (await isSimulationActive(telegramId)) {
+        const currentSimCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
+        if (currentSimCredits <= 0) return { success: false, remaining: 0, fallback: true };
+        
+        const newSimCredits = currentSimCredits - 1;
+        await redis.set(`sim:credits:${telegramId}`, newSimCredits.toString());
+        return { success: true, remaining: newSimCredits, fallback: false };
+    }
+
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return { success: false, remaining: 0, fallback: true };
 

@@ -95,7 +95,8 @@ let cachedActiveSnipers: any[] = [];
 global._sentryIntervals.push(setInterval(async () => {
     try {
         cachedActiveSnipers = await prisma.autoSnipeConfig.findMany({
-            where: { isActive: true }, include: { user: true }
+            where: { isActive: true }, 
+            include: { user: true }
         });
     } catch (_) {}
 }, 3_000));
@@ -103,7 +104,6 @@ global._sentryIntervals.push(setInterval(async () => {
 let cachedActiveGuards: TrailingOrder[] = [];
 let cachedLimitOrders: any[] = [];
 
-// 500ms active guard cache refresh for low-latency response
 global._sentryIntervals.push(setInterval(async () => {
     try {
         cachedActiveGuards = await getAllActiveGuards();
@@ -116,14 +116,9 @@ global._sentryIntervals.push(setInterval(async () => {
 
 function safePublicKey(address: string | undefined | null): PublicKey | null {
     if (!address) return null;
-    try {
-        return new PublicKey(address);
-    } catch {
-        return null;
-    }
+    try { return new PublicKey(address); } catch { return null; }
 }
 
-// 1000ms presign refresh interval with 4s TTL
 global._sentryIntervals.push(setInterval(async () => {
     await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
         if ((guard as any).isProcessing) return;
@@ -163,7 +158,6 @@ export async function releaseGuardSubscription(tokenAddress: string) {
             if (subId !== undefined) {
                 try { connection.removeAccountChangeListener(subId); } catch(e){}
                 activeSubscriptions.delete(curvePda);
-                console.log(`🔵 [GUARD FEED] Cleaned up subscription for ${tokenAddress.substring(0,8)}...`);
             }
         }
     } catch (_) {}
@@ -182,7 +176,7 @@ function isBondingCurveGraduated(data: Buffer): boolean {
 
 async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     try {
-        const price = await getCachedTokenPrice(tokenAddress);
+        const price = await getCachedTokenPrice(tokenAddress, true);
         if (price > 0) return price;
     } catch (_) {}
 
@@ -224,7 +218,7 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
                 }));
 
                 if (anySuccess) {
-                    return { success: true, signature: firstSig, message: `Instant Multi-Wallet Exit Executed (${payloads.length} wallets)` };
+                    return { success: true, signature: firstSig, message: `Instant Multi-Wallet Exit Executed` };
                 }
             }
         }
@@ -234,15 +228,17 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
     return await executeExit(guard.telegramId, guard.tokenAddress, 100, false, guard.strategy || 'Manual / Direct');
 }
 
-// Inside src/services/grpc.service.ts
-
-// Replace checkAndTriggerGuard in src/services/grpc.service.ts
-
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
     const { isSimulationActive, simExecuteExit, generateSimSignature } = await import('./simulation.service.js');
     const isSim = await isSimulationActive(guardSnapshot.telegramId);
 
     if ((guardSnapshot as any).isProcessing) return;
+
+    // 🟢 CRITICAL FIX: Redis-backed distributed lock prevents duplicate exits across ticks
+    const exitLockKey = `lock:guard_exit:${guardSnapshot.id}`;
+    const acquired = await redis.set(exitLockKey, '1', 'EX', 30, 'NX');
+    if (!acquired) return;
+
     (guardSnapshot as any).isProcessing = true;
 
     try {
@@ -255,7 +251,11 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
             if (idx !== -1) cachedActiveGuards[idx].entryPrice = currentPriceNative;
         }
         const entryPrice = guard.entryPrice || currentPriceNative;
-        if (entryPrice <= 0 || currentPriceNative <= 0) return;
+        
+        if (entryPrice <= 0 || currentPriceNative <= 0) {
+            await redis.del(exitLockKey); 
+            return;
+        }
 
         // ─────────────────────────────────────────────────────────────
         // 1. Time-Based Exit
@@ -343,6 +343,7 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
         // ─────────────────────────────────────────────────────────────
         if (guard.highestSeenPrice === 0 || currentPriceNative > guard.highestSeenPrice) {
             await updateHighestSeenFast(guard.id, currentPriceNative).catch(() => {});
+            await redis.del(exitLockKey); // 🟢 Release lock: price is rising, allow next tick
         } else {
             const dropPercent = ((guard.highestSeenPrice - currentPriceNative) / guard.highestSeenPrice) * 100;
             if (dropPercent >= guard.trailingPercent) {
@@ -383,6 +384,8 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                         await bot.telegram.sendPhoto(guard.telegramId, { source: imageBuffer }, { caption, parse_mode: 'HTML' });
                     } catch (e) {}
                 })();
+            } else {
+                await redis.del(exitLockKey); // 🟢 Release lock: drop threshold not breached yet
             }
         }
     } finally {
@@ -435,7 +438,8 @@ export async function processGuardOrders(bot: any) {
             let livePrice = getLivePriceSol(guard.tokenAddress) ?? prices[guard.tokenAddress];
             if (livePrice == null || livePrice <= 0) {
                 const { getCachedTokenPrice } = await import('./engine.service.js');
-                livePrice = await getCachedTokenPrice(guard.tokenAddress).catch(() => 0);
+                // 🟢 SPEED FIX: bypassCache = true ensures price checks aren't delayed by stale 5s cache
+                livePrice = await getCachedTokenPrice(guard.tokenAddress, true).catch(() => 0);
             }
             if (livePrice <= 0) return; 
             return checkAndTriggerGuard(guard, livePrice, bot);
@@ -469,8 +473,6 @@ export function startPumpFunPolling() {
     }, 10_000));
 }
 
-// Inside src/services/grpc.service.ts
-
 let isWsConnecting = false;
 let wsReconnectDelay = 5000;
 let wsHeartbeat: NodeJS.Timeout | null = null;
@@ -488,7 +490,7 @@ function connectPumpPortalStream(bot: any) {
 
         ws.on('open', () => {
             isWsConnecting = false;
-            wsReconnectDelay = 5000; // Reset delay on success
+            wsReconnectDelay = 5000;
             logger.info("🎯 [SNIPER] Connected to PumpPortal new-mint stream!");
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
@@ -508,9 +510,9 @@ function connectPumpPortalStream(bot: any) {
             isWsConnecting = false;
             if (res.statusCode === 429) {
                 logger.warn("🟡 [PUMPPORTAL] Rate-limited (429). Backing off for 60 seconds...");
-                wsReconnectDelay = 60000; // Force 1 minute wait
+                wsReconnectDelay = 60000;
             }
-            ws.removeAllListeners(); // Prevent duplicate close events
+            ws.removeAllListeners();
             ws.terminate();
             setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
         });
@@ -531,7 +533,6 @@ function connectPumpPortalStream(bot: any) {
 
         ws.on('error', (err: any) => {
             isWsConnecting = false;
-            // Only log if it's not the generic 429 that spam the console
             if (!err.message.includes('429')) {
                 logger.warn(`⚠️ [SNIPER] WebSocket error: ${err.message}`);
             }
@@ -542,7 +543,7 @@ function connectPumpPortalStream(bot: any) {
             if (wsHeartbeat) clearInterval(wsHeartbeat);
             ws.removeAllListeners();
             setTimeout(() => connectPumpPortalStream(bot), wsReconnectDelay);
-            wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, 120_000); // Cap max backoff to 2 mins
+            wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, 120_000);
         });
     } catch (e: any) {
         isWsConnecting = false;
@@ -789,8 +790,9 @@ export async function triggerAutoSnipes(
                             }
                         }
 
-                        if (score > 0) score = Math.min(85, Math.max(55, score));
-                        if (score < liveConfig.minScore) { await redis.del(sniperLockKey); return; } 
+                        // 🟢 FIX: Check threshold with raw, unclamped score!
+                        const rawScore = score;
+                        if (rawScore < liveConfig.minScore) { await redis.del(sniperLockKey); return; } 
                     } catch (e) { await redis.del(sniperLockKey); return; }
                 }
 
@@ -803,6 +805,7 @@ export async function triggerAutoSnipes(
                             liveBal = (await connection.getBalance(vaultPub).catch(() => 0)) / 1_000_000_000;
                         }
                     }
+                    // 🟢 Pass the real, unclamped score to the dynamic scaling math
                     snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice, liveBal);
                 }
 
@@ -871,7 +874,7 @@ export async function triggerAutoSnipes(
                     try {
                         const finalMsg = buildSniperAuditMessage(
                             mintCa, 
-                            score, 
+                            Math.min(100, Math.max(0, Math.round(score))), // Safe 0-100 display
                             auditStats,
                             auditReasons, 
                             spent, 

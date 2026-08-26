@@ -5,11 +5,9 @@ import { prisma } from '../lib/prisma.js';
 import { executeSnipe, executeExit, getCachedTokenPrice } from './engine.service.js'; 
 import { addTrailingStopToMemory } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
-import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
-import { isSimulationActive } from './simulation.service.js';
 
 dotenv.config();
 
@@ -20,7 +18,7 @@ export function shutdownCopyTradeWatchers() {
     for (const [walletStr, subId] of activeWsListeners.entries()) {
         try {
             connection.removeOnLogsListener(subId);
-        } catch (e) {}
+        } catch (e: any) {}
         activeWsListeners.delete(walletStr);
     }
 }
@@ -60,21 +58,14 @@ export async function syncCopyTradeListeners(bot: any) {
             include: { user: true }
         });
 
-        const filteredConfigs = [];
-        for (const config of activeConfigs) {
-            if (!(await isSimulationActive(config.user.telegramId))) {
-                filteredConfigs.push(config);
-            }
-        }
-
-        const targetWallets = [...new Set(filteredConfigs.map(c => c.targetWallet))];
+        const targetWallets = [...new Set(activeConfigs.map(c => c.targetWallet))];
 
         for (const [walletStr, subId] of activeWsListeners.entries()) {
             if (!targetWallets.includes(walletStr)) {
                 try { 
                     connection.removeOnLogsListener(subId); 
-                } catch (e) {
-                    console.warn(`⚠️ [COPY-TRADE] Failed to teardown subId ${subId}:`, e);
+                } catch (e: any) {
+                    console.warn(`⚠️ [COPY-TRADE] Failed to teardown subId ${subId}:`, e.message);
                 }
                 activeWsListeners.delete(walletStr);
             }
@@ -103,47 +94,44 @@ export async function syncCopyTradeListeners(bot: any) {
                         const preBalances = txDetails.meta.preTokenBalances || [];
                         const postBalances = txDetails.meta.postTokenBalances || [];
                         
-                        let targetTokenMint: string | null = null;
-                        let tradeType: 'buy' | 'sell' | null = null;
-                        let sellPercentage = 0;
+                        const tradeLegs: Array<{ mint: string; type: 'buy' | 'sell'; sellPercentage: number }> = [];
 
                         for (const post of postBalances) {
                             if (post.owner === walletStr) {
+                                if (post.mint === "So11111111111111111111111111111111111111112") continue;
+
                                 const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
                                 const preAmt = pre ? Number(pre.uiTokenAmount.uiAmount) : 0;
                                 const postAmt = Number(post.uiTokenAmount.uiAmount);
                                 
                                 if (postAmt > preAmt) {
-                                    tradeType = 'buy'; 
-                                    targetTokenMint = post.mint; 
-                                    break;
+                                    tradeLegs.push({ mint: post.mint, type: 'buy', sellPercentage: 0 });
                                 } else if (postAmt < preAmt && preAmt > 0) {
-                                    tradeType = 'sell'; 
-                                    targetTokenMint = post.mint;
-                                    sellPercentage = ((preAmt - postAmt) / preAmt) * 100; 
-                                    break;
+                                    const sellPercentage = ((preAmt - postAmt) / preAmt) * 100;
+                                    tradeLegs.push({ mint: post.mint, type: 'sell', sellPercentage });
                                 }
                             }
                         }
 
-                        if (targetTokenMint && targetTokenMint !== "So11111111111111111111111111111111111111112") {
-                            const freshConfigs = await prisma.copyTradeConfig.findMany({
-                                where: { targetWallet: walletStr, isActive: true },
-                                include: { user: true }
-                            });
+                        if (tradeLegs.length === 0) return;
 
-                            if (tradeType === 'buy') {
-                                const entryPrice = await fetchLiveEntryPrice(targetTokenMint);
+                        const freshConfigs = await prisma.copyTradeConfig.findMany({
+                            where: { targetWallet: walletStr, isActive: true },
+                            include: { user: true }
+                        });
+
+                        for (const leg of tradeLegs) {
+                            if (leg.type === 'buy') {
+                                const entryPrice = await fetchLiveEntryPrice(leg.mint);
 
                                 for (const follower of freshConfigs) {
-                                    if (await isSimulationActive(follower.user.telegramId)) continue;
                                     const f: any = follower; 
                                     if (f.copyBuys === false) continue;
                                     const sizeToTrade = f.maxTradeSizeSol ? Math.min(f.tradeAmountSol, f.maxTradeSizeSol) : f.tradeAmountSol;
 
                                     executeSnipe(
                                         follower.user.telegramId,
-                                        targetTokenMint,
+                                        leg.mint,
                                         sizeToTrade,
                                         'buy',
                                         undefined,
@@ -155,25 +143,22 @@ export async function syncCopyTradeListeners(bot: any) {
                                         'Copy Trade'
                                     ).then(async (res) => {
                                         if (res.success) {
-                                            // 🟢 Only deploy live in-memory guards if user is NOT in simulation mode
                                             try {
-                                                if (!(await isSimulationActive(follower.user.telegramId))) {
-                                                    await addTrailingStopToMemory(
-                                                        follower.user.telegramId,
-                                                        targetTokenMint!,
-                                                        follower.autoTrailingDropPercent,
-                                                        sizeToTrade,
-                                                        entryPrice,
-                                                        follower.autoTakeProfitPercent || undefined,
-                                                        undefined,
-                                                        'Copy Trade'
-                                                    );
-                                                }
+                                                await addTrailingStopToMemory(
+                                                    follower.user.telegramId,
+                                                    leg.mint,
+                                                    follower.autoTrailingDropPercent,
+                                                    sizeToTrade,
+                                                    entryPrice,
+                                                    follower.autoTakeProfitPercent || undefined,
+                                                    undefined,
+                                                    'Copy Trade'
+                                                );
                                             } catch (guardErr) {}
                                             try { 
                                                 await bot.telegram.sendMessage(
                                                     follower.user.telegramId, 
-                                                    `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nToken: <code>${targetTokenMint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
+                                                    `👥 <b>COPY TRADE: BUY SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nToken: <code>${leg.mint}</code>\nInvested: <b>${sizeToTrade} SOL</b>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
                                                     { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                                                 ); 
                                             } catch (_) {}
@@ -183,16 +168,15 @@ export async function syncCopyTradeListeners(bot: any) {
                                     });
                                 }
                             } 
-                            else if (tradeType === 'sell' && sellPercentage >= 1) {
+                            else if (leg.type === 'sell' && leg.sellPercentage >= 1) {
                                 for (const follower of freshConfigs) {
-                                    if (await isSimulationActive(follower.user.telegramId)) continue;
                                     const f: any = follower; 
                                     if (f.copySells === false) continue;
 
                                     executeExit(
                                         follower.user.telegramId,
-                                        targetTokenMint,
-                                        sellPercentage,
+                                        leg.mint,
+                                        leg.sellPercentage,
                                         false,
                                         'Copy Trade'
                                     ).then(async (res) => {
@@ -200,7 +184,7 @@ export async function syncCopyTradeListeners(bot: any) {
                                             try { 
                                                 await bot.telegram.sendMessage(
                                                     follower.user.telegramId, 
-                                                    `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${sellPercentage.toFixed(1)}%</b> of <code>${targetTokenMint}</code>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
+                                                    `👥 <b>COPY TRADE: SELL SUCCESSFUL!</b>\nTarget: <code>${walletStr.substring(0, 8)}...</code>\nWhale Sold: <b>${leg.sellPercentage.toFixed(1)}%</b> of <code>${leg.mint}</code>\n🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`, 
                                                     { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                                                 ); 
                                             } catch (_) {}

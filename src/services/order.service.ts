@@ -28,8 +28,6 @@ export interface TrailingOrder {
     isProcessing?: boolean; // 🟢 In-memory guard execution lock
 }
 
-// Replace syncGuardsFromDb in src/services/order.service.ts
-
 export async function syncGuardsFromDb() {
     console.log("🔄 [DB] Restoring active Trailing Guards into RAM...");
     try {
@@ -59,7 +57,6 @@ export async function syncGuardsFromDb() {
             await redis.sadd(`user_guards:${g.user.telegramId}`, g.id);
             await redis.sadd(`token_guards:${g.user.telegramId}:${g.tokenAddress}`, g.id); 
 
-            // 🟢 Subscribe each restored guard to price feeds
             await subscribeToMintPrice(g.tokenAddress, g.id).catch(() => {});
         }
         console.log(`✅ [DB] Successfully restored ${dbGuards.length} guards.`);
@@ -107,7 +104,6 @@ export async function getAllActiveGuards(): Promise<TrailingOrder[]> {
     }
 }
 
-// 🟢 Ultra-fast single-roundtrip peak price update for hot tick paths
 export async function updateHighestSeenFast(orderId: string, newHigh: number) {
     try {
         const key = `order:trail:${orderId}`;
@@ -145,6 +141,8 @@ export async function addTrailingStopToMemory(
         strategy
     };
 
+    // 🟢 SIM FIX: This now executes identically for Simulation users, placing
+    // real guards in memory tracking real token prices!
     await redis.set(`order:trail:${orderId}`, JSON.stringify(order));
     await redis.sadd(`active_guards_global`, orderId); 
     await redis.sadd(`user_guards:${telegramId}`, orderId);
@@ -165,7 +163,6 @@ export async function addTrailingStopToMemory(
         }
     } catch (e: any) {}
 
-    // 🟢 Immediate in-memory cache registration & pre-signing
     pushGuardToCacheImmediately(order);
     presignGuardImmediately(order).catch(() => {});
 
@@ -201,7 +198,6 @@ export async function removeOrderFromMemory(orderId: string, telegramId: string,
     }
 }
 
-// 🟢 Fully parallelized guard cleanup
 export async function cancelAllGuardsForToken(telegramId: string, tokenAddress: string) {
     try {
         const orderIds = await redis.smembers(`token_guards:${telegramId}:${tokenAddress}`);

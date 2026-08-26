@@ -7,6 +7,9 @@ import { rpcLimiter } from '../lib/rpc-limiter.js';
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
 
+// 🟢 API BAN PREVENTION: Import the limiters
+import { dexScreenerLimiter, rugCheckLimiter, pumpFunLimiter } from '../lib/api-limiter.js';
+
 const BASE58_MINT_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 function safePublicKey(address: string | undefined | null): PublicKey | null {
@@ -96,7 +99,6 @@ export function getScoreBand(score: number): { label: string; sizeSol: string; r
     return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
 }
 
-// In src/services/caller.service.ts — Export getCachedRugStatus
 
 export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
@@ -107,7 +109,11 @@ export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean
             if (!parsed.uncertain) return parsed;
         }
 
-        const res = await axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, { timeout: 4000 });
+        // 🟢 API BAN FIX: Wrap RugCheck in limiter
+        const res = await rugCheckLimiter(() =>
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, { timeout: 4000 })
+        );
+
         const data = res.data;
         const risks = data.risks || [];
         const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
@@ -237,7 +243,7 @@ export async function trainCallerModel() {
     try {
         const predictions = await prisma.callerPrediction.findMany({
             where: { finalized: true, peakPct: { not: null } },
-            orderBy: { alertedAt: 'asc' } // 🟢 Chronologically ordered
+            orderBy: { alertedAt: 'asc' } 
         });
 
         if (predictions.length < 60) {
@@ -259,7 +265,6 @@ export async function trainCallerModel() {
             y.push(Math.log(Math.max(0, p.peakPct!) + 1));
         }
 
-        // 🟢 Chronological 80/20 train/validation split (Prevents temporal leakage)
         const splitAt = Math.floor(rawX.length * 0.8);
         const trainX = rawX.slice(0, splitAt);
         const trainY = y.slice(0, splitAt);
@@ -289,7 +294,7 @@ export async function trainCallerModel() {
             version: 1, trainedAt: Date.now(), coefficients, featureNames: ['score', 'age', 'log_liquidity', 'log_volume', 'momentum', 'socials', 'rug', 'lock_pct', 'velocity'], intercept,
             normalization: norm, metrics: { valR2, trainSampleCount: trainX.length, valSampleCount: valX.length, isUsable }
         }));
-        await redis.rename('caller_model_weights_staging', 'caller_model_weights'); // 🟢 Atomic staging swap
+        await redis.rename('caller_model_weights_staging', 'caller_model_weights'); 
 
         console.log(`🧠 [CALLER ML] Trained on ${trainX.length} samples, validated on ${valX.length}. Out-of-sample R² = ${valR2.toFixed(3)}`);
     } catch (e: any) {
@@ -318,11 +323,8 @@ export async function getModelScore(mint: string, stats: any): Promise<number | 
     return null;
 }
 
-
-
 export async function scheduleTraining() {
     let lastTrainedCount = 0;
-    // 🟢 Retrain every 12 hours, if at least 20 new samples exist
     setInterval(async () => {
         try {
             const currentCount = await prisma.callerPrediction.count({ 
@@ -337,7 +339,7 @@ export async function scheduleTraining() {
         } catch (e) {
             console.error('🔴 [CALLER ML] Scheduled training check failed:', e);
         }
-    }, 12 * 60 * 60 * 1000); // 🟢 Changed from 24 hours to 12 hours
+    }, 12 * 60 * 60 * 1000);
 }
 
 export async function storePredictionData(token: any, projection: any, alertKey: string) {
@@ -370,7 +372,6 @@ export async function storePredictionData(token: any, projection: any, alertKey:
 }
 
 export async function getCalibratedProjection(token: any) {
-    // 🟢 Hard gate on rugs: no rosy projections for malicious contracts
     if (token.isRug) {
         return { target: '0% (BLOCKED)', timeframe: 'N/A', volatility: 'RUG FLAGGED', sampleSize: 0, rawLow: 0, rawHigh: 0, rawTimeMins: 0 };
     }
@@ -555,7 +556,6 @@ export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { m
 }
 
 export function computeTokenScore(stats: TokenStats & { sentiment?: number }): { score: number; reasons: string[] } {
-    // 🟢 1. HARD SAFETY GATES FIRST
     if (stats.isRug) {
         return { score: 0, reasons: [`🚨 Rug risk flagged — HARD BLOCK`] };
     }
@@ -633,6 +633,7 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
     return { score: Math.max(0, Math.min(100, score)), reasons };
 }
 
+// 🟢 API BAN FIX: Wrapped DexScreener Fetch
 async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     if (mints.length === 0) return [];
     const chunks = chunkArray(mints, 30);
@@ -640,7 +641,9 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     
     for (const chunk of chunks) {
         try {
-            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 });
+            const res = await dexScreenerLimiter(() =>
+                axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 })
+            );
             if (res.data?.pairs) allPairs.push(...res.data.pairs);
         } catch (e: any) {}
         await new Promise(r => setTimeout(r, 350)); 
@@ -716,9 +719,12 @@ async function fetchRecentNewMints() {
     return enrichedTokens;
 }
 
+// 🟢 API BAN FIX: Wrapped PumpFun Limiters
 async function fetchFreshPumpTokens() {
     try {
-        const res = await axios.get('https://frontend-api-v3.pump.fun/coins?offset=0&limit=60&sort=created_timestamp&order=DESC&includeNsfw=false', { timeout: 3500, headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const res = await pumpFunLimiter(() =>
+            axios.get('https://frontend-api-v3.pump.fun/coins?offset=0&limit=60&sort=created_timestamp&order=DESC&includeNsfw=false', { timeout: 3500, headers: { 'User-Agent': 'Mozilla/5.0' } })
+        );
         if (!Array.isArray(res.data)) return [];
 
         const now = Date.now();
@@ -755,9 +761,12 @@ async function fetchFreshPumpTokens() {
     }
 }
 
+// 🟢 API BAN FIX: Wrapped DexScreener Fallbacks
 async function fetchFreshViaRest() {
     try {
-        const res = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 });
+        const res = await dexScreenerLimiter(() =>
+            axios.get('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 3000 })
+        );
         if (!res.data) return [];
         const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 60);
         const dsPairs = await safeDexScreenerFetch(mints);
@@ -773,9 +782,12 @@ async function fetchFreshViaRest() {
     }
 }
 
+// 🟢 API BAN FIX: Wrapped DexScreener Boosts
 async function fetchBoostedPairs() {
     try {
-        const res = await axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 3000 });
+        const res = await dexScreenerLimiter(() =>
+            axios.get('https://api.dexscreener.com/token-boosts/top/v1', { timeout: 3000 })
+        );
         if (!res.data) return [];
         const mints = res.data.map((p: any) => p.tokenAddress).slice(0, 60);
         const dsPairs = await safeDexScreenerFetch(mints);
@@ -789,9 +801,12 @@ async function fetchBoostedPairs() {
     }
 }
 
+// 🟢 API BAN FIX: Wrapped DexScreener Searches
 async function fetchFreshRaydiumPairs() {
     try {
-        const res = await axios.get('https://api.dexscreener.com/latest/dex/search?q=raydium', { timeout: 3000 });
+        const res = await dexScreenerLimiter(() =>
+            axios.get('https://api.dexscreener.com/latest/dex/search?q=raydium', { timeout: 3000 })
+        );
         if (!res.data) return [];
         const now = Date.now();
         return (res.data?.pairs || [])
@@ -978,80 +993,11 @@ export async function scoreTokens() {
     }
 }
 
-
-
 let isScoring = false;
 
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Live loop (30s) & Sim loop (5s) active.");
 
-    // 1. SIMULATION POLLING LOOP (5s)
-    setInterval(async () => {
-        try {
-            const { isSimulationActive, generateSimCallerAlert, saveSimulationState } = await import('./simulation.service.js');
-            const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
-
-            for (const user of allUsers) {
-                const isSim = await isSimulationActive(user.telegramId);
-                if (!isSim) continue; 
-
-                const filters = await getUserCallerFilters(user.telegramId);
-                if (!filters.isActive) continue; 
-
-                const currentCredits = parseInt(await redis.get(`sim:credits:${user.telegramId}`) || '0', 10);
-                if (currentCredits <= 0) {
-                    const warnKey = `sim_credits_warn:${user.telegramId}`;
-                    if (!(await redis.get(warnKey))) {
-                        await redis.set(warnKey, '1', 'EX', 600);
-                        try { 
-                            await bot.telegram.sendMessage(
-                                user.telegramId, 
-                                `⚠️ <b>AI CALLER PAUSED (SIMULATION) — OUT OF CREDITS</b>\n\n` +
-                                `Your AI Coin Caller has paused because your virtual credit balance is <b>0</b>.\n\n` +
-                                `Use <code>/simcredits 500</code> to reload virtual credits or top up below:`, 
-                                { 
-                                    parse_mode: 'HTML',
-                                    reply_markup: {
-                                        inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]]
-                                    }
-                                }
-                            ); 
-                        } catch(_) {}
-                    }
-                    continue;
-                }
-
-                const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
-                if (matchedToken) {
-                    // 🟢 Deduct 1 Credit and immediately sync state
-                    const updatedCredits = Math.max(0, currentCredits - 1);
-                    await redis.set(`sim:credits:${user.telegramId}`, updatedCredits.toString());
-                    await saveSimulationState(user.telegramId);
-
-                    const projection = await getCalibratedProjection(matchedToken);
-                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: matchedToken.isReshow });
-
-                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
-                    const defaultSize = userConfig?.amountSol || 0.1;
-
-                    try {
-                        await bot.telegram.sendMessage(user.telegramId, msg, {
-                            parse_mode: 'HTML',
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
-                                    [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
-                                    [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
-                                ]
-                            }
-                        });
-                    } catch (_) {}
-                }
-            }
-        } catch (_) {}
-    }, 5000); 
-
-    // 2. SIMULATED COPY-TRADE LOOP (5s)
     setInterval(async () => {
         try {
             const { processSimCopyTrades } = await import('./simulation.service.js');
@@ -1059,7 +1005,6 @@ export async function startCoinCaller(bot: any) {
         } catch (_) {}
     }, 5000);
 
-    // 3. LIVE MAINNET POLLING LOOP (30s)
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
@@ -1072,9 +1017,6 @@ export async function startCoinCaller(bot: any) {
             const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
             
             for (const user of allUsers) {
-                const isSim = await isSimulationActive(user.telegramId);
-                if (isSim) continue; 
-
                 const filters = await getUserCallerFilters(user.telegramId);
                 if (!filters.isActive) continue;
 
@@ -1086,36 +1028,59 @@ export async function startCoinCaller(bot: any) {
                     const alreadyAlerted = await redis.get(alertKey);
                     if (!alreadyAlerted) {
                         matchedToken = t;
+                        // 🟢 FIX: ensure token is never reshown by tracking it.
                         await redis.set(alertKey, '1', 'EX', 180); 
+                        matchedToken.isReshow = false;
                         break; 
                     }
                 }
 
-                if (matchedToken) {
-                    // 🟢 Live Atomic Credit Consumption
-                    const { consumeCredit } = await import('./credits.service.js');
-                    const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
+                if (matchedToken && !matchedToken.isReshow) { // 🟢 CREDIT FIX: Explicitly prevents charging for reshows
+
+                    const isSim = await isSimulationActive(user.telegramId);
                     
-                    if (!creditResult.success) {
-                        const warnKey = `live_caller_credits_warn:${user.telegramId}`;
-                        if (!(await redis.get(warnKey))) {
-                            await redis.set(warnKey, '1', 'EX', 600);
-                            try {
-                                await bot.telegram.sendMessage(
-                                    user.telegramId,
-                                    `⚠️ <b>AI CALLER PAUSED — OUT OF CREDITS</b>\n\n` +
-                                    `Your AI Coin Caller found breakout tokens, but has paused scanning because your credit balance is <b>0</b>.\n\n` +
-                                    `Top up your credit balance to resume automatic mempool alerts:`,
-                                    {
-                                        parse_mode: 'HTML',
-                                        reply_markup: {
-                                            inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]]
-                                        }
-                                    }
-                                );
-                            } catch (_) {}
+                    if (isSim) {
+                        const simCredits = parseInt(await redis.get(`sim:credits:${user.telegramId}`) || '0', 10);
+                        if (simCredits <= 0) {
+                            const warnKey = `sim_credits_warn:${user.telegramId}`;
+                            if (!(await redis.get(warnKey))) {
+                                await redis.set(warnKey, '1', 'EX', 600);
+                                try { 
+                                    await bot.telegram.sendMessage(
+                                        user.telegramId, 
+                                        `⚠️ <b>AI CALLER PAUSED (SIMULATION) — OUT OF CREDITS</b>\n\n` +
+                                        `Your AI Coin Caller has paused because your virtual credit balance is <b>0</b>.\n\n` +
+                                        `Use <code>/simcredits 500</code> to reload virtual credits or top up below:`, 
+                                        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]] } }
+                                    ); 
+                                } catch(_) {}
+                            }
+                            continue;
                         }
-                        continue; 
+
+                        // Deduct SIM Credit
+                        await redis.set(`sim:credits:${user.telegramId}`, Math.max(0, simCredits - 1).toString());
+                    } else {
+                        // 🟢 LIVE CREDIT FIX
+                        const { consumeCredit } = await import('./credits.service.js');
+                        const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
+                        
+                        if (!creditResult.success) {
+                            const warnKey = `live_caller_credits_warn:${user.telegramId}`;
+                            if (!(await redis.get(warnKey))) {
+                                await redis.set(warnKey, '1', 'EX', 600);
+                                try {
+                                    await bot.telegram.sendMessage(
+                                        user.telegramId,
+                                        `⚠️ <b>AI CALLER PAUSED — OUT OF CREDITS</b>\n\n` +
+                                        `Your AI Coin Caller found breakout tokens, but has paused scanning because your credit balance is <b>0</b>.\n\n` +
+                                        `Top up your credit balance to resume automatic mempool alerts:`,
+                                        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]] } }
+                                    );
+                                } catch (_) {}
+                            }
+                            continue; 
+                        }
                     }
 
                     const projection = await getCalibratedProjection(matchedToken);
@@ -1155,9 +1120,6 @@ export async function startCoinCaller(bot: any) {
         }
     }, 30000);
 }
-
-
-// src/services/caller.service.ts
 
 export async function pruneCallerHistory(): Promise<void> {
     try {
@@ -1244,16 +1206,12 @@ export function startCallerEvaluator() {
                 await redis.hset('caller_history', key, JSON.stringify(data));
             }
 
-            // 🟢 Prune keys older than 7 days
             await pruneCallerHistory();
         } catch (e: any) {
             console.error('🔴 [CALLER EVALUATOR] Loop failed:', e.message);
         }
     }, 5 * 60 * 1000);
 }
-
-
-
 
 export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean }> {
     if (!creatorWallet) return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
