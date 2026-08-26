@@ -37,6 +37,13 @@ export function generateSimSignature(): string {
     return randomBase58(87);
 }
 
+// 🟢 ADD THIS FUNCTION:
+export function generateSimTokenCA(): string {
+    const isPump = Math.random() > 0.3;
+    const base = randomBase58(isPump ? 36 : 44);
+    return isPump ? base + 'pump' : base;
+}
+
 export function generateSimWallets(): Array<{ address: string; balance: number }> {
     const count = Math.floor(Math.random() * 5) + 1;
     return Array.from({ length: count }, () => ({
