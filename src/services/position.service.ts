@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import { connection } from '../lib/connection.js'; 
 import { redis } from '../lib/redis.js';
 import { rpcLimiter } from '../lib/rpc-limiter.js';
-import { getTokenMetadata } from './price.service.js';
+import { getTokensMetadata } from './price.service.js';
 
 dotenv.config();
 
@@ -59,50 +59,40 @@ export async function getUserPositions(telegramId: string) {
                         }
                     }
                 });
-            } catch (e: any) {
-                console.warn(`⚠️ [POSITIONS] Failed to fetch accounts for ${pubKey.toBase58()}: ${e.message}`);
-            }
+            } catch (e: any) {}
         }));
 
         let rawPositions = Object.values(aggregatedPositions);
         if (rawPositions.length === 0) return [];
 
         const uniqueMints = rawPositions.map(p => p.mint);
-        
-        const metadataResults = await Promise.all(uniqueMints.map(mint => getTokenMetadata(mint)));
-        const tokenMetadata: Record<string, any> = {};
-        uniqueMints.forEach((mint, index) => {
-            tokenMetadata[mint] = metadataResults[index];
-        });
+        const tokenMetadata = await getTokensMetadata(uniqueMints);
 
-        // 🟢 FIX: Map positions with actual entryPriceUsd from trade ledger
-       // In src/services/position.service.ts -> getUserPositions:
-// Replace the sequential `for (const p of rawPositions)` loop with:
+        const mappedPositions = await Promise.all(rawPositions.map(async (p) => {
+            const meta = tokenMetadata[p.mint] || { priceUsd: 0, symbol: "UNKNOWN", name: "Unknown Token" };
+            let entryPriceUsd = 0;
 
-const mappedPositions = await Promise.all(rawPositions.map(async (p) => {
-    const meta = tokenMetadata[p.mint] || { priceUsd: 0, symbol: "UNKNOWN", name: "Unknown Token" };
-    let entryPriceUsd = 0;
+            try {
+                // 🟢 FIX: Removed the invalid select clause
+                const lastBuy = await prisma.trade.findFirst({
+                    where: { userId: user.id, tokenAddress: p.mint, isBuy: true, status: 'CONFIRMED' },
+                    orderBy: { createdAt: 'desc' }
+                });
+                if (lastBuy && (lastBuy as any).executedPriceUsd && (lastBuy as any).executedPriceUsd > 0) {
+                    entryPriceUsd = (lastBuy as any).executedPriceUsd;
+                }
+            } catch (_) {}
 
-    try {
-        const lastBuy = await prisma.trade.findFirst({
-            where: { userId: user.id, tokenAddress: p.mint, isBuy: true, status: 'CONFIRMED' },
-            orderBy: { createdAt: 'desc' }
-        });
-        if (lastBuy && (lastBuy as any).executedPriceUsd && (lastBuy as any).executedPriceUsd > 0) {
-            entryPriceUsd = (lastBuy as any).executedPriceUsd;
-        }
-    } catch (_) {}
-
-    return {
-        ...p,
-        symbol: meta.symbol,
-        name: meta.name,
-        priceUsd: meta.priceUsd,
-        valueUsd: p.amount * meta.priceUsd,
-        entryPriceUsd,
-        entryPrice: entryPriceUsd
-    };
-}));
+            return {
+                ...p,
+                symbol: meta.symbol,
+                name: meta.name,
+                priceUsd: meta.priceUsd,
+                valueUsd: p.amount * meta.priceUsd,
+                entryPriceUsd,
+                entryPrice: entryPriceUsd
+            };
+        }));
           
         const finalPositions = mappedPositions
             .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 
@@ -112,7 +102,6 @@ const mappedPositions = await Promise.all(rawPositions.map(async (p) => {
         return finalPositions;
 
     } catch (e: any) {
-        console.error("🔴 [POSITIONS] Aggregation error:", e.message);
         return null;
     }
 }

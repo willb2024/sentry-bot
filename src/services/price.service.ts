@@ -45,7 +45,58 @@ export async function getCachedMintInfo(mint: string): Promise<{ decimals: numbe
     }
 }
 
-// Replace getTokenMetadata in src/services/price.service.ts
+export async function getTokensMetadata(mints: string[]): Promise<Record<string, any>> {
+    if (mints.length === 0) return {};
+    const result: Record<string, any> = {};
+    const uncachedMints: string[] = [];
+
+    await Promise.all(mints.map(async (mint) => {
+        const cached = await redis.get(`token_metadata:${mint}`);
+        if (cached) {
+            result[mint] = JSON.parse(cached);
+        } else {
+            uncachedMints.push(mint);
+        }
+    }));
+
+    if (uncachedMints.length === 0) return result;
+
+    const chunks: string[][] = [];
+    for (let i = 0; i < uncachedMints.length; i += 30) {
+        chunks.push(uncachedMints.slice(i, i + 30));
+    }
+
+    await Promise.all(chunks.map(chunk => dexScreenerLimiter(async () => {
+        try {
+            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 2500 });
+            const pairs = res.data?.pairs || [];
+            
+            for (const pair of pairs) {
+                const mint = pair.baseToken?.address;
+                if (!mint) continue;
+                const metadata = {
+                    symbol: pair.baseToken?.symbol || "UNKNOWN",
+                    name: pair.baseToken?.name || "Unknown Token",
+                    decimals: 6,
+                    liquidityUsd: pair.liquidity?.usd || 0,
+                    volume24h: pair.volume?.h24 || 0,
+                    priceUsd: parseFloat(pair.priceUsd || '0'),
+                };
+                result[mint] = metadata;
+                redis.set(`token_metadata:${mint}`, JSON.stringify(metadata), 'EX', 300).catch(() => {});
+            }
+        } catch (_) {}
+    })));
+
+    for (const mint of uncachedMints) {
+        if (!result[mint]) {
+            result[mint] = { symbol: "UNKNOWN", name: "Unknown Token", decimals: 6, liquidityUsd: 0, volume24h: 0, priceUsd: 0 };
+        }
+    }
+
+    return result;
+}
+
 export async function getTokenMetadata(mint: string): Promise<{
     symbol: string;
     decimals: number;
@@ -60,7 +111,6 @@ export async function getTokenMetadata(mint: string): Promise<{
 
     const fallback = { symbol: "UNKNOWN", name: "Unknown Token", decimals: 6, liquidityUsd: 0, volume24h: 0, priceUsd: 0 };
 
-    // 🟢 FIX 12: Global try/catch with retries
     try {
         const res = await dexScreenerLimiter(() =>
             axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 2500 })
@@ -189,18 +239,6 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         if (cached === 'true') return true;
         if (cached === 'false') return false;
 
-        try {
-            const pubkey = new PublicKey(tokenMint);
-            const accountInfo = await connection.getAccountInfo(pubkey);
-            if (accountInfo && accountInfo.owner.toBase58() === 'TokenzQdBNbLqP5VEhvkASnYGQYcBmiJXcwghAMPw') {
-                if (accountInfo.data.length > 165) {
-                    console.warn(`🚨 [HONEYPOT DETECTED] Token-2022 Tax/TransferFee extension found on ${tokenMint}`);
-                    await redis.set(key, 'true', 'EX', 600);
-                    return true;
-                }
-            }
-        } catch (e) {}
-
         const res = await rugCheckLimiter(() => 
             axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 4000 })
         );
@@ -219,8 +257,8 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
 
         await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
         return isUnsafe;
-    }  catch (_) {
+    } catch (_) {
         await redis.set(key, 'uncertain', 'EX', 45).catch(() => {});
-        return true; // 🟢 FIX: Fail-closed on error — unknown tokens are treated as risky
+        return true; 
     }
 }

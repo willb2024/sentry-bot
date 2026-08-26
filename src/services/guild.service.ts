@@ -154,12 +154,14 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
         const pipeline = redis.pipeline();
         memberships.forEach(m => pipeline.zincrby(`guild_lb:${m.guildId}`, points, user.id));
         await pipeline.exec();
+
+        // Invalidate leaderboard cache
+        memberships.forEach(m => {
+            redis.del(`guild_lb_cache:${m.guildId}:50`).catch(() => {});
+            redis.del(`guild_lb_cache:${m.guildId}:3`).catch(() => {});
+        });
     } catch (e) {}
 }
-
-
-
-// src/services/guild.service.ts
 
 export interface LeaderboardMember {
     rank: number;
@@ -170,8 +172,13 @@ export interface LeaderboardMember {
     airdropsReceived?: number;
 }
 
+// 🟢 PERFORMANCE FIX: Cache full leaderboard in Redis for 30s
 export async function getLeaderboard(guildId: string, limit: number = 50): Promise<LeaderboardMember[]> {
+    const cacheKey = `guild_lb_cache:${guildId}:${limit}`;
     try {
+        const cached = await redis.get(cacheKey);
+        if (cached) return JSON.parse(cached);
+
         const rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, limit - 1, 'WITHSCORES');
         if (rawLb.length === 0) return [];
 
@@ -207,9 +214,9 @@ export async function getLeaderboard(guildId: string, limit: number = 50): Promi
             }
         });
 
+        await redis.set(cacheKey, JSON.stringify(results), 'EX', 30);
         return results;
     } catch (e: any) {
-        console.error('🔴 [GUILD] getLeaderboard failed:', e.message);
         return [];
     }
 }
@@ -281,10 +288,6 @@ async function getGuildOwnerSigner(telegramId: string, guildId: string) {
     if (!rawPk) return null;
     return { keypair: Keypair.fromSecretKey(bs58.decode(rawPk)), vaultPubkey: new PublicKey(user.vaultAddress) };
 }
-
-
-
-// Inside src/services/guild.service.ts
 
 export async function executeGuildAirdrop(telegramId: string, guildId: string, totalSol: number): Promise<{ success: boolean; message: string; signature?: string }> {
     const { isSimulationActive, generateSimSignature } = await import('./simulation.service.js');
@@ -486,5 +489,3 @@ export async function executeIndividualAirdrop(telegramId: string, guildId: stri
         if (lock) await (lock as any).release().catch(() => {});
     }
 }
-
-

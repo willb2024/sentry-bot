@@ -1630,14 +1630,17 @@
     fetchEnterpriseMetrics();
     fetchInstitutionalStats(); 
 
-    setInterval(fetchNetworthBreakdown, 4000);
-    setInterval(fetchSizingCapCount, 8000);
-    setInterval(fetchSniperSettings, 15000);
-    setInterval(fetchStatsWindow, 3000);
-    setInterval(fetchEnterpriseMetrics, 15000);
-    setInterval(fetchAdvancedStats, 15000);
-    setInterval(fetchHourlyPerformance, 15000);
-    setInterval(fetchInstitutionalStats, 5000);
+   
+
+    // 🟢 PERFORMANCE FIX: Staggered polling intervals to eliminate server load
+    setInterval(fetchNetworthBreakdown, 8000);      // 8s (was 4s)
+    setInterval(fetchSizingCapCount, 12000);        // 12s (was 8s)
+    setInterval(fetchSniperSettings, 20000);        // 20s (was 15s)
+    setInterval(fetchStatsWindow, 6000);            // 6s (was 3s)
+    setInterval(fetchEnterpriseMetrics, 20000);     // 20s (was 15s)
+    setInterval(fetchAdvancedStats, 20000);         // 20s (was 15s)
+    setInterval(fetchHourlyPerformance, 25000);     // 25s (was 15s)
+    setInterval(fetchInstitutionalStats, 10000);    // 10s (was 5s)
 </script>
 </body>
 </html>
