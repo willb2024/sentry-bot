@@ -2,23 +2,29 @@
 import { connection } from './connection.js';
 
 let cachedBlockhash: string = '';
+let isFetching = false;
 
 export function getCachedBlockhash(): string {
     return cachedBlockhash;
 }
 
-// 🟢 FIX: Tightened steady-state refresh from 3000ms to 1500ms so blockhashes are always hot
-setInterval(async () => {
+async function refreshBlockhash() {
+    if (isFetching) return;
+    isFetching = true;
     try {
         const { blockhash } = await connection.getLatestBlockhash('processed');
-        cachedBlockhash = blockhash;
-    } catch (_) {}
-}, 1500);
+        if (blockhash) {
+            cachedBlockhash = blockhash;
+        }
+    } catch (_) {
+        // Silently back off on transient rate limits
+    } finally {
+        isFetching = false;
+    }
+}
 
-// Staggered initial boot fetch
-setTimeout(async () => {
-    try {
-        const { blockhash } = await connection.getLatestBlockhash('processed');
-        cachedBlockhash = blockhash;
-    } catch (_) {}
-}, 2000);
+// 🟢 Steady-state refresh every 1500ms
+setInterval(refreshBlockhash, 1500);
+
+// Staggered initial boot fetch (2s after boot)
+setTimeout(refreshBlockhash, 2000);

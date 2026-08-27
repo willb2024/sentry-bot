@@ -1,4 +1,4 @@
-// src/lib/connection.ts — Socket-Aborting RPC Engine with Zero Internal Retry Loops
+// src/lib/connection.ts — High-Performance RPC Engine with Smart Rate-Limit Resiliency
 import { Connection } from '@solana/web3.js';
 import dotenv from 'dotenv';
 
@@ -10,22 +10,30 @@ const PRIMARY_URL = process.env.PRIMARY_RPC_URL
     || process.env.HELIUS_RPC_URL 
     || (HELIUS_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}` : 'https://api.mainnet-beta.solana.com');
 
-const BACKUP_URL = process.env.BACKUP_RPC_URL 
-    || (PRIMARY_URL.includes('helius') ? 'https://solana-mainnet.rpc.extrnode.com' : 'https://api.mainnet-beta.solana.com');
+const BACKUP_URL = process.env.BACKUP_RPC_URL || 'https://solana-mainnet.rpc.extrnode.com';
 
-// 🟢 FIX 1: Custom fetch with hard 3.5s AbortController — kills orphaned hanging sockets at the TCP level!
-const customTimeoutFetch = (url: any, options: any = {}) => {
+// 🟢 FIX 1: Robust Fetch with Clean Abort Handling (Eliminates unhandled "TypeError: fetch failed")
+const customTimeoutFetch = async (url: any, options: any = {}) => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500);
-    return fetch(url, {
-        ...options,
-        signal: controller.signal
-    }).finally(() => {
+    const timeoutMs = options?.timeout || 4000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const res = await fetch(url, {
+            ...options,
+            signal: controller.signal
+        });
+        return res;
+    } catch (err: any) {
+        if (err.name === 'AbortError') {
+            throw new Error(`RPC Request Timed Out (${timeoutMs}ms)`);
+        }
+        throw err;
+    } finally {
         clearTimeout(timeoutId);
-    });
+    }
 };
 
-// 🟢 FIX 2: disableRetryOnRateLimit: true stops web3.js from spawning internal exponential retry cascades
 const primaryConnection = new Connection(PRIMARY_URL, {
     commitment: 'confirmed',
     disableRetryOnRateLimit: true,
@@ -48,56 +56,49 @@ const SYNC_REMOVAL_METHODS = new Set([
     'removeSignatureListener', 'removeRootChangeListener'
 ]);
 
-const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+// 🟢 FIX 2: Dynamic Breaker (Fails over only on genuine prolonged outage, not single 429s)
+const CIRCUIT_BREAKER_COOLDOWN_MS = 15_000; // Reduced from 60s to 15s for faster recovery
 let circuitOpenedAt: number | null = null;
 let lastBreakerWarnAt = 0;
+let consecutiveFailures = 0;
 let consecutiveSuccesses = 0;
 
 function isCircuitOpen(): boolean {
     if (circuitOpenedAt === null) return false;
     if (Date.now() - circuitOpenedAt >= CIRCUIT_BREAKER_COOLDOWN_MS) {
         circuitOpenedAt = null;
-        consecutiveSuccesses = 0;
+        consecutiveFailures = 0;
         return false;
     }
     return true;
 }
 
-const FAILURE_WINDOW_MS = 15_000;
-const MAX_FAILURES_IN_WINDOW = 15;
-const failureTimestamps: number[] = [];
-
 function recordPrimarySuccess() { 
     consecutiveSuccesses++;
-    const now = Date.now();
-    while (failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
-        failureTimestamps.shift();
-    }
-    if (consecutiveSuccesses >= 5 && circuitOpenedAt !== null) {
+    consecutiveFailures = 0;
+    if (circuitOpenedAt !== null && consecutiveSuccesses >= 3) {
         circuitOpenedAt = null;
-        failureTimestamps.length = 0;
         console.log("🟢 [RPC BREAKER] Primary RPC restored and circuit breaker closed.");
     }
 }
 
 function recordPrimaryFailure(error?: any) {
     consecutiveSuccesses = 0;
+    consecutiveFailures++;
     const now = Date.now();
-    failureTimestamps.push(now);
-    while (failureTimestamps.length > 0 && now - failureTimestamps[0] > FAILURE_WINDOW_MS) {
-        failureTimestamps.shift();
-    }
-    if (failureTimestamps.length >= MAX_FAILURES_IN_WINDOW) {
+
+    // Only trip breaker after 10 consecutive hard failures in a short window
+    if (consecutiveFailures >= 10 && circuitOpenedAt === null) {
         circuitOpenedAt = now;
-        if (now - lastBreakerWarnAt > 60000) {
+        if (now - lastBreakerWarnAt > 30000) {
             lastBreakerWarnAt = now;
             const errMsg = error?.message || 'Rate-Limited';
-            console.warn(`🔴 [RPC BREAKER] RPC rate limit reached (${errMsg}). Routing traffic to backup RPC for 60s.`);
+            console.warn(`🟡 [RPC BREAKER] Primary RPC experiencing load (${errMsg}). Routing non-critical traffic to backup for 15s.`);
         }
     }
 }
 
-const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 8);
+const MAX_CONCURRENT_RPC = Number(process.env.RPC_MAX_CONCURRENT || 10);
 let activeCount = 0;
 
 const BYPASS_QUEUE_METHODS = new Set([
@@ -140,6 +141,8 @@ async function executeWithFallback<T>(target: any, prop: any, args: any[]): Prom
         return result;
     } catch (err: any) {
         recordPrimaryFailure(err);
+        
+        // Try fallback connection only if primary failed and circuit wasn't already on backup
         if (!isCircuitOpen()) {
             try {
                 const backupFn = Reflect.get(backupConnection, prop);
