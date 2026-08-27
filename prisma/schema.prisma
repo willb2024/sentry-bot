@@ -167,9 +167,6 @@ model GuardModelWeights {
   metrics       Json?
 }
 
-
-
-
 model SimTrade {
   id              String    @id @default(uuid())
   userId          String

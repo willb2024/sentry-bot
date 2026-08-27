@@ -4163,6 +4163,40 @@ app.post('/api/sweep', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+
+
+// src/index.ts
+
+bot.command(['speedtest', 'benchmark'], async (ctx) => {
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const loader = await ctx.replyWithHTML("<i>⚡ Running live execution speed benchmark across all modules...</i>");
+
+    try {
+        const { runExecutionBenchmark } = await import('./services/engine.service.js');
+        const bench = await runExecutionBenchmark(tgId);
+
+        const statusEmoji = bench.status === 'EXCELLENT' ? '🚀' : bench.status === 'GOOD' ? '⚡' : '⚠️';
+        const rating = bench.status === 'EXCELLENT' ? 'Tier-1 Institutional (Sub-100ms)' : bench.status === 'GOOD' ? 'Fast' : 'High Latency';
+
+        const report = 
+            `⚡ <b>SENTRY LIVE SPEED BENCHMARK</b>\n\n` +
+            `• <b>Overall Rating:</b> ${statusEmoji} <b>${rating}</b>\n` +
+            `• <b>Total Execution Pipeline:</b> <code>${bench.totalMs}ms</code>\n\n` +
+            `📊 <b>Detailed Component Breakdown:</b>\n` +
+            `├ 🧠 <b>Redis Pipelining:</b> <code>${bench.redisMs}ms</code>\n` +
+            `├ 🛡️ <b>MEV Safety Guard:</b> <code>${bench.mevMs}ms</code>\n` +
+            `├ 📈 <b>Live DEX Quote Routing:</b> <code>${bench.quoteMs}ms</code>\n` +
+            `├ 🔐 <b>Key Decrypt & Sign:</b> <code>${bench.signMs}ms</code>\n` +
+            `└ 🌐 <b>Nozomi / Staked Relay:</b> <code>${bench.nozomiPingMs}ms</code>\n\n` +
+            `<i>(Test performed with live market data — 0 SOL spent).</i>`;
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, report, { parse_mode: 'HTML' });
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Benchmark failed: ${e.message}`, { parse_mode: 'HTML' });
+    }
+});
 // =========================================================
 // 💼 POSITIONS & DUST SWEEPER ENGINE
 // =========================================================

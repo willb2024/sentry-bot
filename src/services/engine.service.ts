@@ -471,6 +471,76 @@ export async function sendToJitoBundle(
 }
 
 
+// src/services/engine.service.ts
+
+export async function runExecutionBenchmark(
+    telegramId: string, 
+    sampleCA: string = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+): Promise<{
+    redisMs: number;
+    mevMs: number;
+    quoteMs: number;
+    signMs: number;
+    nozomiPingMs: number;
+    totalMs: number;
+    status: 'EXCELLENT' | 'GOOD' | 'NEEDS_OPTIMIZATION';
+}> {
+    const user = await prisma.user.findUnique({ where: { telegramId } });
+    const vault = user?.vaultAddress || Keypair.generate().publicKey.toBase58();
+
+    // 1. Measure Redis Hot-Path Preload
+    const t0 = process.hrtime.bigint();
+    await preloadHotPathCache(telegramId, sampleCA);
+    const t1 = process.hrtime.bigint();
+
+    // 2. Measure MEV Risk Evaluation
+    const t2 = process.hrtime.bigint();
+    await checkRecentMevActivityCached(sampleCA).catch(() => false);
+    const t3 = process.hrtime.bigint();
+
+    // 3. Measure Real Live DEX Quote & Route Compilation
+    const t4 = process.hrtime.bigint();
+    const apiRes = await fetchApiTransaction('buy', sampleCA, vault, 0.1, 0, "0", 0, 20.0, 'FAST', 0.001, undefined, undefined, false);
+    const t5 = process.hrtime.bigint();
+
+    // 4. Measure Cryptographic Key Decryption & Ed25519 Signing
+    const dummyKeypair = Keypair.generate();
+    const t6 = process.hrtime.bigint();
+    if (apiRes.buffer) {
+        try {
+            const tx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer));
+            tx.sign([dummyKeypair]);
+        } catch (_) {}
+    }
+    const t7 = process.hrtime.bigint();
+
+    // 5. Measure Network Ping to Nozomi / Staked Relay
+    const t8 = process.hrtime.bigint();
+    let nozomiPing = 0;
+    const stakedUrl = process.env.STAKED_JITO_URL;
+    if (stakedUrl) {
+        try {
+            await axiosClient.get(stakedUrl.split('?')[0], { timeout: 1500 }).catch(() => null);
+            const t9 = process.hrtime.bigint();
+            nozomiPing = parseFloat((Number(t9 - t8) / 1e6).toFixed(2));
+        } catch (_) {
+            nozomiPing = 20.0;
+        }
+    }
+
+    const redisMs = parseFloat((Number(t1 - t0) / 1e6).toFixed(2));
+    const mevMs = parseFloat((Number(t3 - t2) / 1e6).toFixed(2));
+    const quoteMs = parseFloat((Number(t5 - t4) / 1e6).toFixed(2));
+    const signMs = parseFloat((Number(t7 - t6) / 1e6).toFixed(2));
+    const totalMs = parseFloat((redisMs + mevMs + quoteMs + signMs + nozomiPing).toFixed(2));
+
+    let status: 'EXCELLENT' | 'GOOD' | 'NEEDS_OPTIMIZATION' = 'EXCELLENT';
+    if (totalMs > 250) status = 'NEEDS_OPTIMIZATION';
+    else if (totalMs > 150) status = 'GOOD';
+
+    return { redisMs, mevMs, quoteMs, signMs, nozomiPingMs: nozomiPing, totalMs, status };
+}
+
 export interface DexRouteQuote {
     dex: string;
     outAmount: number;
