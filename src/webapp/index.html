@@ -79,37 +79,18 @@
             border-color: rgba(255, 255, 255, 0.22);
         }
 
-        /* =========================================================
-           ⚡ CONTINUOUS RGB MULTI-COLOR HOVER BORDER (NO POPPING)
-           ========================================================= */
         @keyframes continuousRgbBorder {
-            0% {
-                border-color: rgba(239, 68, 68, 0.85);
-                box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
-            }
-            25% {
-                border-color: rgba(245, 158, 11, 0.85);
-                box-shadow: 0 0 16px rgba(245, 158, 11, 0.45);
-            }
-            50% {
-                border-color: rgba(16, 185, 129, 0.85);
-                box-shadow: 0 0 16px rgba(16, 185, 129, 0.45);
-            }
-            75% {
-                border-color: rgba(59, 130, 246, 0.85);
-                box-shadow: 0 0 16px rgba(59, 130, 246, 0.45);
-            }
-            100% {
-                border-color: rgba(239, 68, 68, 0.85);
-                box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
-            }
+            0% { border-color: rgba(239, 68, 68, 0.85); box-shadow: 0 0 16px rgba(239, 68, 68, 0.45); }
+            25% { border-color: rgba(245, 158, 11, 0.85); box-shadow: 0 0 16px rgba(245, 158, 11, 0.45); }
+            50% { border-color: rgba(16, 185, 129, 0.85); box-shadow: 0 0 16px rgba(16, 185, 129, 0.45); }
+            75% { border-color: rgba(59, 130, 246, 0.85); box-shadow: 0 0 16px rgba(59, 130, 246, 0.45); }
+            100% { border-color: rgba(239, 68, 68, 0.85); box-shadow: 0 0 16px rgba(239, 68, 68, 0.45); }
         }
 
         .chart-animated-live {
             border: 1px solid rgba(255, 255, 255, 0.08);
             transition: all 0.3s ease;
         }
-
         .chart-animated-live:hover {
             animation: continuousRgbBorder 3s linear infinite !important;
         }
@@ -179,7 +160,7 @@
 
         <div class="flex items-center gap-2 bg-[#0e131f] px-3.5 py-1.5 rounded-xl border border-white/5 shadow-inner">
             <i class="fa-solid fa-bolt text-neonPurple text-xs"></i>
-            <span class="text-xs font-mono font-bold text-white" id="header-credits">4,828 Credits</span>
+            <span class="text-xs font-mono font-bold text-white" id="header-credits">0 Credits</span>
         </div>
     </header>
 
@@ -199,31 +180,31 @@
                 <div class="card-flat p-5 relative">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-wallet text-gray-500"></i> Net Worth</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-white" id="stat-networth">$82,453.00</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-networth-sub">525.4126 SOL</div>
+                        <span class="text-3xl sm:text-4xl font-bold text-white" id="stat-networth">$0.00</span>
+                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-networth-sub">0.0000 SOL</div>
                     </div>
                 </div>
 
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-money-bill-trend-up text-gray-500"></i> Realized PnL</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-jupGreen" id="stat-pnl">+189.32%</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-pnl-sub">+$156,000.00 net profit</div>
+                        <span class="text-3xl sm:text-4xl font-bold text-gray-400" id="stat-pnl">0.00%</span>
+                        <div class="text-xs font-mono text-gray-500 mt-1" id="stat-pnl-sub">+$0.00 net profit</div>
                     </div>
                 </div>
 
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-bullseye text-gray-500"></i> Win Rate</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="stat-winrate">66.7%</span>
-                        <div class="text-xs text-gray-500 mt-1 font-mono" id="stat-winrate-sub">1859 Wins / 930 Losses</div>
+                        <span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="stat-winrate">0.0%</span>
+                        <div class="text-xs text-gray-500 mt-1 font-mono" id="stat-winrate-sub">0 Wins / 0 Losses</div>
                     </div>
                 </div>
 
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-bolt text-gray-500"></i> Trade Volume</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="stat-volume">8956.5316 SOL</span>
+                        <span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="stat-volume">0.00 SOL</span>
                         <div class="text-[10px] text-jupGreen mt-1.5 font-mono bg-jupGreen/10 inline-block px-1.5 py-0.5 rounded border border-jupGreen/20">MEV Protected</div>
                     </div>
                 </div>
@@ -232,7 +213,7 @@
             <div class="card-flat p-4 flex justify-between items-center bg-white/[0.02]">
                 <div>
                     <span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Liquid Cash</span>
-                    <div class="text-base sm:text-lg font-bold text-white font-mono mt-0.5" id="stat-cash">$82,453.00</div>
+                    <div class="text-base sm:text-lg font-bold text-white font-mono mt-0.5" id="stat-cash">$0.00</div>
                 </div>
                 <div class="text-right">
                     <span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Deployed in Positions</span>
@@ -248,7 +229,7 @@
                         </div>
                         <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider">Total Trading Days</span>
                     </div>
-                    <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">77</span>
+                    <span class="text-xl font-bold text-white font-mono" id="stat-trading-days">0</span>
                 </div>
 
                 <div class="card-flat p-4 flex items-center justify-between">
@@ -261,7 +242,7 @@
                             <span class="text-[10px] text-gray-500 font-mono">Pay-Per-Result</span>
                         </div>
                     </div>
-                    <span class="text-xl font-bold text-neonPurple font-mono" id="stat-credits">4,828</span>
+                    <span class="text-xl font-bold text-neonPurple font-mono" id="stat-credits">0</span>
                 </div>
             </div>
 
@@ -277,14 +258,14 @@
                 </div>
                 <div class="flex gap-2 sm:gap-4 text-[11px] sm:text-xs font-mono w-full sm:w-auto justify-between sm:justify-end">
                     <span id="stats-live" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Manual: 0 trades (+0.00 SOL)</span>
-                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto: 16 trades (+33.4742 SOL)</span>
+                    <span id="stats-sim" class="text-gray-300 bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">Auto: 0 trades (+0.00 SOL)</span>
                 </div>
             </div>
 
             <div class="card-flat p-4 mb-2 bg-[#07090e]">
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-gray-500"></i> Exposure Limit (Session Budget)</span>
-                    <span class="text-xs font-mono text-gray-400" id="risk-budget-text">185.00 / 185.00 SOL (100.0%)</span>
+                    <span class="text-xs font-mono text-gray-400" id="risk-budget-text">0.00 / 0.00 SOL (100.0%)</span>
                 </div>
                 <div class="w-full bg-[#1e293b] rounded-full h-2 mt-1 border border-white/5 overflow-hidden">
                     <div id="risk-budget-bar" class="bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" style="width: 100%"></div>
@@ -295,7 +276,7 @@
                 </div>
                 <div class="flex justify-between items-center mt-2.5 pt-2 border-t border-white/5">
                     <span class="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Max Loss Limit</span>
-                    <span class="text-xs font-bold font-mono text-neonRed" id="max-loss-limit">-50%</span>
+                    <span class="text-xs font-bold font-mono text-neonRed" id="max-loss-limit">OFF (0%)</span>
                 </div>
                 <div class="mt-3 pt-2 border-t border-white/5">
                     <button onclick="triggerSweepAll()" class="w-full bg-neonRed/10 hover:bg-neonRed/20 text-neonRed border border-neonRed/20 py-2.5 rounded-lg text-xs font-bold font-mono transition-all flex items-center justify-center gap-2">
@@ -318,15 +299,15 @@
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold cursor-help" title="Expected Shortfall of bottom 5% trades">CVaR (5% Tail Risk)</span>
-                    <div class="text-xl font-bold text-neonRed font-mono mt-1" id="cvar-value">-0.9281 SOL</div>
+                    <div class="text-xl font-bold text-neonRed font-mono mt-1" id="cvar-value">0.0000 SOL</div>
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Total Trades</span>
-                    <div class="text-xl font-bold text-jupGreen font-mono mt-1 truncate" id="total-trades-count">2,789</div>
+                    <div class="text-xl font-bold text-jupGreen font-mono mt-1 truncate" id="total-trades-count">0</div>
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Sharpe Ratio</span>
-                    <div class="text-xl font-bold text-neonBlue font-mono mt-1" id="sharpe-ratio">30.27</div>
+                    <div class="text-xl font-bold text-neonBlue font-mono mt-1" id="sharpe-ratio">--</div>
                 </div>
             </div>
 
@@ -345,10 +326,10 @@
                 <div class="card-flat p-5">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-shield-halved text-gray-500"></i> Portfolio Risk Score</span>
-                        <span class="text-xl font-bold text-white font-mono" id="risk-score">18%</span>
+                        <span class="text-xl font-bold text-white font-mono" id="risk-score">0%</span>
                     </div>
                     <div class="mt-2 h-2 w-full bg-gray-800 rounded-full overflow-hidden border border-white/5">
-                        <div id="risk-bar" class="h-full bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed transition-all duration-1000" style="width:18%"></div>
+                        <div id="risk-bar" class="h-full bg-gradient-to-r from-jupGreen via-yellow-500 to-neonRed transition-all duration-1000" style="width:0%"></div>
                     </div>
                     <p class="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest" id="risk-label">Assessment: Safe Risk</p>
                 </div>
@@ -363,28 +344,28 @@
                                 <span class="h-2 w-2 rounded-full bg-jupGreen"></span>
                                 <span class="text-xs text-white font-bold">Sniper Engine</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-sniper">+449.2232 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-sniper">+0.0000 SOL</span>
                         </div>
                         <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-yellow-500"></span>
                                 <span class="text-xs text-white font-bold">Manual / Direct</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-manual">+37.0875 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-manual">+0.0000 SOL</span>
                         </div>
                         <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-neonBlue"></span>
                                 <span class="text-xs text-white font-bold">Copy Trade</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-copy">+25.4476 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-copy">+0.0000 SOL</span>
                         </div>
                         <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
                                 <span class="h-2 w-2 rounded-full bg-neonPurple"></span>
                                 <span class="text-xs text-white font-bold">DCA Engine</span>
                             </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-dca">+23.3688 SOL</span>
+                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-dca">+0.0000 SOL</span>
                         </div>
                         <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">
@@ -729,7 +710,7 @@
             
             const hasData = allocLabels && allocLabels.length > 0 && allocData && allocData.length > 0 && allocData.some(v => v > 0);
             const chartLabels = hasData ? allocLabels : ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'];
-            const chartData = hasData ? allocData : [449.2232, 37.0875, 25.4476, 23.3688, 0.0000];
+            const chartData = hasData ? allocData : [0, 0, 0, 0, 0];
             const chartColors = ['#10b981', '#f59e0b', '#3b82f6', '#8b5cf6', '#64748b'];
 
             allocChart = new Chart(allocCtx, {
@@ -1152,7 +1133,7 @@
             if (data.success) {
                 showToast(`Swept ${data.closed} positions to cash!`);
                 fetchLiveData();
-                fetchNetworthBreakdown();
+                fetchDashboardBundle();
             } else {
                 showToast('Sweep failed or no open positions');
             }
@@ -1161,61 +1142,137 @@
         }
     }
 
-    async function fetchNetworthBreakdown() {
+    async function fetchDashboardBundle() {
         try {
-            const res = await fetch('/api/networth-breakdown', {
+            const res = await fetch('/api/dashboard-bundle', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ initData: tg.initData || "" })
             });
             if (!res.ok) return;
             const d = await res.json();
-            const cashEl = document.getElementById('stat-cash');
-            const depEl = document.getElementById('stat-deployed');
-            if (cashEl) cashEl.innerText = '$' + (d.cashUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            if (depEl) depEl.innerText = '$' + (d.positionsValueUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-        } catch (_) {}
-    }
 
-    async function fetchSizingCapCount() {
-        try {
-            const res = await fetch('/api/sizing-cap-count', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
-            });
-            if (!res.ok) return;
-            const { count } = await res.json();
-            const card = document.getElementById('sizing-cap-card');
-            const el = document.getElementById('sizing-cap-count');
-            if (count > 0 && card && el) {
-                card.style.display = 'flex';
-                el.innerText = `${count} time${count !== 1 ? 's' : ''}`;
-            } else if (card) {
-                card.style.display = 'none';
+            // 1. Networth UI
+            if (d.networth) {
+                const cashEl = document.getElementById('stat-cash');
+                const depEl = document.getElementById('stat-deployed');
+                if (cashEl) cashEl.innerText = '$' + (d.networth.cashUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                if (depEl) depEl.innerText = '$' + (d.networth.positionsValueUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
             }
-        } catch (_) {}
-    }
 
-    async function fetchSniperSettings() {
-        try {
-            const res = await fetch('/api/sniper-settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-            const lossEl = document.getElementById('max-loss-limit');
-            if (lossEl) {
-                if (data.maxLossPercent && data.maxLossPercent > 0) {
-                    lossEl.innerText = `-${data.maxLossPercent}%`;
-                    lossEl.className = 'text-xs font-bold font-mono text-neonRed';
-                } else {
-                    lossEl.innerText = 'OFF (0%)';
-                    lossEl.className = 'text-xs font-bold font-mono text-gray-500';
+            // 2. Sizing Cap UI
+            if (d.sizingCap) {
+                const card = document.getElementById('sizing-cap-card');
+                const el = document.getElementById('sizing-cap-count');
+                if (d.sizingCap.count > 0 && card && el) {
+                    card.style.display = 'flex';
+                    el.innerText = `${d.sizingCap.count} time${d.sizingCap.count !== 1 ? 's' : ''}`;
+                } else if (card) {
+                    card.style.display = 'none';
                 }
             }
+
+            // 3. Sniper Settings UI
+            if (d.sniperSettings) {
+                const lossEl = document.getElementById('max-loss-limit');
+                if (lossEl) {
+                    if (d.sniperSettings.maxLossPercent && d.sniperSettings.maxLossPercent > 0) {
+                        lossEl.innerText = `-${d.sniperSettings.maxLossPercent}%`;
+                        lossEl.className = 'text-xs font-bold font-mono text-neonRed';
+                    } else {
+                        lossEl.innerText = 'OFF (0%)';
+                        lossEl.className = 'text-xs font-bold font-mono text-gray-500';
+                    }
+                }
+            }
+
+            // 4. Stats Window UI
+            if (d.statsWindow) {
+                const liveEl = document.getElementById('stats-live');
+                const simEl = document.getElementById('stats-sim');
+                if (d.statsWindow.manual && liveEl) {
+                    liveEl.innerText = `Manual: ${d.statsWindow.manual.count} trades (${d.statsWindow.manual.pnl >= 0 ? '+' : ''}${d.statsWindow.manual.pnl.toFixed(4)} SOL)`;
+                }
+                if (d.statsWindow.auto && simEl) {
+                    simEl.innerText = `Auto: ${d.statsWindow.auto.count} trades (${d.statsWindow.auto.pnl >= 0 ? '+' : ''}${d.statsWindow.auto.pnl.toFixed(4)} SOL)`;
+                }
+            }
+
+            // 5. Hourly Chart UI
+            if (d.hourly && Array.isArray(d.hourly)) {
+                const hourlyCanvas = document.getElementById('hourlyChart');
+                if (hourlyCanvas) {
+                    const ctx = hourlyCanvas.getContext('2d');
+                    if (window.hourlyChartInst) window.hourlyChartInst.destroy();
+                    window.hourlyChartInst = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: d.hourly.map(item => item.hour + ':00'),
+                            datasets: [
+                                { 
+                                    label: 'PnL (SOL)', 
+                                    data: d.hourly.map(item => item.totalPnlSol), 
+                                    backgroundColor: d.hourly.map(item => item.totalPnlSol >= 0 ? 'rgba(16,185,129,0.55)' : 'rgba(239,68,68,0.55)'), 
+                                    borderWidth: 0, 
+                                    yAxisID: 'y' 
+                                },
+                                { 
+                                    label: 'Win Rate %', 
+                                    data: d.hourly.map(item => item.winRate), 
+                                    type: 'line', 
+                                    borderColor: '#3b82f6', 
+                                    borderWidth: 2, 
+                                    pointRadius: 1, 
+                                    fill: false, 
+                                    yAxisID: 'y1' 
+                                }
+                            ]
+                        },
+                        options: { 
+                            responsive: true, 
+                            maintainAspectRatio: false, 
+                            plugins: { legend: { display: false } }, 
+                            scales: { 
+                                x: { ticks: { color: '#64748b' }, grid: { display: false } }, 
+                                y: { display: false }, 
+                                y1: { display: false } 
+                            } 
+                        }
+                    });
+                }
+            }
+
+            // 6. Institutional Stats UI
+            if (d.institutional) {
+                const tcaEl = document.getElementById('tca-slippage');
+                const cvarEl = document.getElementById('cvar-value');
+                if (tcaEl) tcaEl.innerText = d.institutional.avgSlippage !== undefined ? d.institutional.avgSlippage.toFixed(2) + '%' : '0.11%';
+                if (cvarEl) cvarEl.innerText = d.institutional.cvar ? d.institutional.cvar.toFixed(4) + ' SOL' : '-0.9281 SOL';
+
+                const totalTradesEl = document.getElementById('total-trades-count');
+                if (totalTradesEl && d.institutional.totalTradesCount !== undefined) {
+                    totalTradesEl.innerText = d.institutional.totalTradesCount.toLocaleString();
+                }
+
+                const spend = d.institutional.currentSpend || 0;
+                const budget = d.institutional.maxBudget || 0;
+                const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
+                const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
+
+                const gauge = document.getElementById('risk-budget-bar');
+                const gaugeText = document.getElementById('risk-budget-text');
+                const remainingEl = document.getElementById('risk-budget-remaining');
+
+                if (gauge) gauge.style.width = pct + '%';
+                if (gaugeText) {
+                    gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
+                }
+                if (remainingEl) {
+                    remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
+                    remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
+                }
+            }
+
         } catch (_) {}
     }
 
@@ -1250,14 +1307,14 @@
                     const totalPnlSol = simStats.totalPnlSol || 0;
                     const totalVolumeSol = simStats.volume || 0;
                     const totalTrades = simStats.totalTrades || (wins + losses);
-                    const credits = simStats.credits !== undefined ? simStats.credits : 4828;
+                    const credits = simStats.credits !== undefined ? simStats.credits : 0;
 
                     const startingBalSol = parseFloat(simStats.startingBalance) || simCashSol || 1;
                     const pnlPercent = startingBalSol > 0 ? ((totalPnlSol / startingBalSol) * 100).toFixed(2) : "0.00";
                     const pnlUsd = totalPnlSol * liveSolPrice;
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
 
-                    let tradingDays = 77;
+                    let tradingDays = 0;
                     if (simStats.firstTradeAt) {
                         const oldest = new Date(simStats.firstTradeAt);
                         const diffTime = Math.abs(new Date() - oldest);
@@ -1396,251 +1453,10 @@
         }
     }
 
-    async function fetchAdvancedStats() {
-        try {
-            const res = await fetch('/api/analytics/advanced-stats', {
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData })
-            });
-            if (res.ok) {
-                const stats = await res.json();
-                document.getElementById('sharpe-ratio').innerText = (stats.sharpeRatio || 30.27).toFixed(2);
-            }
-        } catch (_) {}
-    }
-
-    async function fetchHourlyPerformance() {
-        try {
-            const res = await fetch('/api/analytics/hourly', {
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                const hourlyCanvas = document.getElementById('hourlyChart');
-                if (hourlyCanvas) {
-                    const ctx = hourlyCanvas.getContext('2d');
-                    if (window.hourlyChartInst) window.hourlyChartInst.destroy();
-                    window.hourlyChartInst = new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: data.map(d => d.hour + ':00'),
-                            datasets: [
-                                { 
-                                    label: 'PnL (SOL)', 
-                                    data: data.map(d => d.totalPnlSol), 
-                                    backgroundColor: data.map(d => d.totalPnlSol >= 0 ? 'rgba(16,185,129,0.55)' : 'rgba(239,68,68,0.55)'), 
-                                    borderWidth: 0, 
-                                    yAxisID: 'y' 
-                                },
-                                { 
-                                    label: 'Win Rate %', 
-                                    data: data.map(d => d.winRate), 
-                                    type: 'line', 
-                                    borderColor: '#3b82f6', 
-                                    borderWidth: 2, 
-                                    pointRadius: 1, 
-                                    fill: false, 
-                                    yAxisID: 'y1' 
-                                }
-                            ]
-                        },
-                        options: { 
-                            responsive: true, 
-                            maintainAspectRatio: false, 
-                            plugins: { legend: { display: false } }, 
-                            scales: { 
-                                x: { ticks: { color: '#64748b' }, grid: { display: false } }, 
-                                y: { display: false }, 
-                                y1: { display: false } 
-                            } 
-                        }
-                    });
-                }
-            }
-        } catch (_) {}
-    }
-
-    async function fetchStatsWindow() {
-        try {
-            const res = await fetch('/api/stats-window', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                const liveEl = document.getElementById('stats-live');
-                const simEl = document.getElementById('stats-sim');
-
-                if (data.manual && liveEl) {
-                    liveEl.innerText = `Manual: ${data.manual.count} trades (${data.manual.pnl >= 0 ? '+' : ''}${data.manual.pnl.toFixed(4)} SOL)`;
-                } else if (!data.manual && liveEl && data.tradeCount !== undefined) {
-                    liveEl.innerText = `Manual: ${data.tradeCount} trades (${data.totalPnl >= 0 ? '+' : ''}${data.totalPnl.toFixed(4)} SOL)`;
-                }
-
-                if (data.auto && simEl) {
-                    simEl.innerText = `Auto: ${data.auto.count} trades (${data.auto.pnl >= 0 ? '+' : ''}${data.auto.pnl.toFixed(4)} SOL)`;
-                }
-            }
-        } catch (_) {}
-    }
-
-    async function fetchEnterpriseMetrics() {
-        try {
-            const riskRes = await fetch('/api/risk-score', { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ initData: tg.initData }) 
-            });
-            if (riskRes.ok) {
-                const riskData = await riskRes.json();
-                const scoreEl = document.getElementById('risk-score');
-                const barEl = document.getElementById('risk-bar');
-                const labelEl = document.getElementById('risk-label');
-                if (scoreEl) scoreEl.innerText = (riskData.score || 18) + '%';
-                if (barEl) barEl.style.width = Math.min(100, Math.max(5, (riskData.score || 18))) + '%';
-                if (labelEl) labelEl.innerText = `Assessment: ${riskData.riskLevel || 'Safe'} Risk`;
-            }
-
-            const perfRes = await fetch('/api/performance', { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ initData: tg.initData }) 
-            });
-            if (perfRes.ok) {
-                const perfData = await perfRes.json();
-                const container = document.getElementById('best-strategy-container');
-                const entries = Object.entries(perfData).map(([name, stats]) => ({ name, pnl: stats.totalPnl })).sort((a, b) => b.pnl - a.pnl);
-
-                const colorMap = {
-                    'Sniper Engine': 'bg-jupGreen',
-                    'Manual / Direct': 'bg-yellow-500',
-                    'Copy Trade': 'bg-neonBlue',
-                    'DCA Engine': 'bg-neonPurple',
-                    'Limit Order': 'bg-gray-400'
-                };
-
-                if (container && entries.length > 0) {
-                    container.innerHTML = entries.map(strat => {
-                        const dotColor = colorMap[strat.name] || 'bg-gray-400';
-                        return `
-                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full ${dotColor}"></span>
-                                <span class="text-xs text-white font-bold">${strat.name}</span>
-                            </div>
-                            <span class="text-xs ${strat.pnl >= 0 ? 'text-jupGreen' : 'text-neonRed'} font-mono font-bold">
-                                ${strat.pnl >= 0 ? '+' : ''}${strat.pnl.toFixed(4)} SOL
-                            </span>
-                        </div>
-                        `;
-                    }).join('');
-                }
-            }
-        } catch (_) {}
-    }
-
-    async function fetchInstitutionalStats() {
-        try {
-            const res = await fetch('/api/institutional-stats', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData })
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-
-            const tcaEl = document.getElementById('tca-slippage');
-            const cvarEl = document.getElementById('cvar-value');
-            if (tcaEl) tcaEl.innerText = data.avgSlippage !== undefined ? data.avgSlippage.toFixed(2) + '%' : '0.11%';
-            if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '-0.9281 SOL';
-
-            const totalTradesEl = document.getElementById('total-trades-count');
-            if (totalTradesEl && data.totalTradesCount !== undefined) {
-                totalTradesEl.innerText = data.totalTradesCount.toLocaleString();
-            }
-
-            const spend = data.currentSpend || 185;
-            const budget = data.maxBudget || 185;
-            const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
-            const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
-
-            const gauge = document.getElementById('risk-budget-bar');
-            const gaugeText = document.getElementById('risk-budget-text');
-            const remainingEl = document.getElementById('risk-budget-remaining');
-
-            if (gauge) gauge.style.width = pct + '%';
-            if (gaugeText) {
-                gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
-            }
-            if (remainingEl) {
-                remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
-                remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
-            }
-
-            const colorMapping = {
-                'Sniper Engine': '#10b981',
-                'Manual / Direct': '#f59e0b',
-                'Copy Trade': '#3b82f6',
-                'DCA Engine': '#8b5cf6',
-                'Limit Order': '#64748b'
-            };
-
-            const stratLabels = [];
-            const stratData = [];
-            const stratColors = [];
-
-            const defaultOrder = ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'];
-            const statsPool = Object.keys(data.stratStats || {}).length > 0 ? data.stratStats : {
-                'Sniper Engine': { pnl: 449.2232 },
-                'Manual / Direct': { pnl: 37.0875 },
-                'Copy Trade': { pnl: 25.4476 },
-                'DCA Engine': { pnl: 23.3688 },
-                'Limit Order': { pnl: 0.0000 }
-            };
-
-            defaultOrder.forEach(strat => {
-                if (statsPool[strat]) {
-                    stratLabels.push(strat);
-                    stratData.push(Math.max(0, statsPool[strat].pnl));
-                    stratColors.push(colorMapping[strat] || '#64748b');
-                }
-            });
-
-            if (allocChart && stratLabels.length > 0) {
-                allocChart.data.labels = stratLabels;
-                allocChart.data.datasets[0].data = stratData;
-                allocChart.data.datasets[0].backgroundColor = stratColors;
-                allocChart.update('none');
-            }
-
-        } catch (e) {}
-    }
-
-    fetchNetworthBreakdown();
-    fetchSizingCapCount();
-    fetchSniperSettings();
+    // Initial load + single consolidated 10-second polling loop
     fetchLiveData();
-    fetchAdvancedStats();
-    fetchHourlyPerformance();
-    fetchStatsWindow();
-    fetchEnterpriseMetrics();
-    fetchInstitutionalStats(); 
-
-   
-
-    // 🟢 PERFORMANCE FIX: Staggered polling intervals to eliminate server load
-    setInterval(fetchNetworthBreakdown, 8000);      // 8s (was 4s)
-    setInterval(fetchSizingCapCount, 12000);        // 12s (was 8s)
-    setInterval(fetchSniperSettings, 20000);        // 20s (was 15s)
-    setInterval(fetchStatsWindow, 6000);            // 6s (was 3s)
-    setInterval(fetchEnterpriseMetrics, 20000);     // 20s (was 15s)
-    setInterval(fetchAdvancedStats, 20000);         // 20s (was 15s)
-    setInterval(fetchHourlyPerformance, 25000);     // 25s (was 15s)
-    setInterval(fetchInstitutionalStats, 10000);    // 10s (was 5s)
+    fetchDashboardBundle();
+    setInterval(fetchDashboardBundle, 10000);
 </script>
 </body>
 </html>

@@ -366,43 +366,110 @@ export async function verifyExecutionQuality(
     return fallbackReport;
 }
 
-export async function sendToJitoBundle(swapTx: VersionedTransaction, tipTx: VersionedTransaction, allowRawFallback: boolean = true): Promise<boolean> {
-    const JITO_REGIONS = [
-        'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
-        'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
-        'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
-        'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
-        'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
-    ];
 
-    const bundledTxs = [
-        Buffer.from(swapTx.serialize()).toString('base64'),
-        Buffer.from(tipTx.serialize()).toString('base64')
-    ];
 
-    const payload = { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] };
+const STAKED_JITO_ENDPOINT = process.env.STAKED_JITO_URL || "";
+const STAKED_JITO_AUTH = process.env.STAKED_JITO_AUTH_TOKEN || "";
+const JITO_PRIMARY_REGION = process.env.JITO_PRIMARY_REGION || 'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles';
 
-    const promises = JITO_REGIONS.map(url =>
-        axiosClient.post(url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 2000 })
-            .then(res => res.data && !res.data.error).catch(() => false)
-    );
+export async function sendToJitoBundle(
+    swapTx: VersionedTransaction, 
+    tipTx: VersionedTransaction, 
+    allowRawFallback: boolean = true
+): Promise<boolean> {
+    const swapBase64 = Buffer.from(swapTx.serialize()).toString('base64');
+    const tipBase64 = Buffer.from(tipTx.serialize()).toString('base64');
+    const bundledTxs = [swapBase64, tipBase64];
 
-    const results = await Promise.allSettled(promises);
-    const landed = results.some(r => r.status === 'fulfilled' && r.value === true);
+    // 🟢 Priority 1: Nozomi / Staked Relayer (Dedicated Low-Latency Path)
+    if (STAKED_JITO_ENDPOINT) {
+        try {
+            let targetUrl = STAKED_JITO_ENDPOINT;
+            if (STAKED_JITO_AUTH && !targetUrl.includes('?c=')) {
+                targetUrl += (targetUrl.includes('?') ? '&' : '?') + `c=${STAKED_JITO_AUTH}`;
+            }
 
-    if (landed) return true;
+            const isNozomi = targetUrl.includes('nozomi');
 
+            if (isNozomi) {
+                // Nozomi API: Submit raw signed transaction directly to TPU leader
+                const nozomiUrl = targetUrl.includes('/api/sendTransaction2')
+                    ? targetUrl
+                    : targetUrl.replace(/\/\?/, '/api/sendTransaction2?').replace(/\/$/, '/api/sendTransaction2');
+
+                const res = await axiosClient.post(nozomiUrl, swapBase64, {
+                    headers: { 'Content-Type': 'text/plain' },
+                    timeout: 1200
+                });
+
+                if (res.status === 200) {
+                    logger.info('🟢 [ROUTE] Landed via Nozomi/Staked relayer (API v2)');
+                    return true;
+                }
+                logger.warn('🟡 [ROUTE] Nozomi rejected response', { status: res.status, data: res.data });
+            } else {
+                // Standard Jito / Helius Staked Bundle JSON-RPC
+                const bundlePayload = { 
+                    jsonrpc: "2.0", 
+                    id: 1, 
+                    method: "sendBundle", 
+                    params: [bundledTxs, { encoding: "base64" }] 
+                };
+
+                const res = await axiosClient.post(targetUrl, bundlePayload, {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 1500
+                });
+
+                if (res.data && !res.data.error && (res.data.result || res.data.bundle_id)) {
+                    logger.info('🟢 [ROUTE] Landed via Staked Jito / Helius');
+                    return true;
+                }
+                logger.warn('🟡 [ROUTE] Staked Jito rejected response', { data: res.data });
+            }
+        } catch (e: any) {
+            logger.warn('🟡 [ROUTE] Staked path failed — failing over to primary Jito block engine', {
+                error: e.message,
+                status: e.response?.status,
+                data: e.response?.data
+            });
+        }
+    }
+
+    // 🟢 Priority 2: Public Jito Single Best-Performing Primary Region (NYC)
+    const jitoPayload = { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] };
+    try {
+        const res = await axiosClient.post(JITO_PRIMARY_REGION, jitoPayload, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 1500
+        });
+        if (res.data && !res.data.error) {
+            logger.info(`🟢 [ROUTE] Landed via Jito primary region (${JITO_PRIMARY_REGION})`);
+            return true;
+        }
+        logger.warn('🟡 [ROUTE] Public Jito primary rejected bundle', { data: res.data });
+    } catch (e: any) {
+        logger.warn('🟡 [ROUTE] Public Jito primary failed', { error: e.message });
+    }
+
+    // 🟢 Priority 3: Raw skip-preflight fallback
     if (allowRawFallback) {
         try {
             const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null);
             if (rawSig) {
                 connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
+                logger.info('🟡 [ROUTE] Landed via raw fallback');
                 return true;
             }
-        } catch (e: any) {}
+        } catch (e: any) {
+            logger.error('🔴 [ROUTE] Raw fallback exception', { error: e.message });
+        }
     }
+
+    logger.error('🔴 [ROUTE] ALL execution routes failed to land transaction');
     return false;
 }
+
 
 export interface DexRouteQuote {
     dex: string;
@@ -549,6 +616,24 @@ export async function buildTipAndFeeTransaction(
     } catch (_) { return null; }
 }
 
+// 🟢 FIX 2: Preload hot path cache via single Redis pipeline round-trip
+export async function preloadHotPathCache(telegramId: string, mint: string) {
+    const pipeline = redis.pipeline();
+    pipeline.get(`price_cache:${mint}`);
+    pipeline.get(`autosnipe:session_id:live:${telegramId}`);
+    pipeline.get(`autosnipe:session_spend:live:${telegramId}`);
+    pipeline.get(`sniper:starting_balance:${telegramId}`);
+    pipeline.get(`mev_check:${mint}`);
+    const results = await pipeline.exec();
+    return {
+        priceCache: results?.[0]?.[1] as string | null,
+        sessionId: results?.[1]?.[1] as string | null,
+        sessionSpend: results?.[2]?.[1] ? parseFloat(results[2][1] as string) : 0,
+        startingBalance: results?.[3]?.[1] ? parseFloat(results[3][1] as string) : 0,
+        mevCache: results?.[4]?.[1] as string | null,
+    };
+}
+
 export async function executeSnipe(
     telegramId: string, targetCA: string, amountSol: number, side: 'buy' | 'sell' = 'buy', 
     tokenAmount?: number, isBumper: boolean = false, raydiumPoolId?: string, overrideSlippage?: number,
@@ -561,14 +646,21 @@ export async function executeSnipe(
     }
     
     if (antiMevDelayMs > 0) await new Promise(r => setTimeout(r, antiMevDelayMs));
-    const mevPromise = (side === 'buy' && !isBumper) ? checkRecentMevActivityCached(targetCA).catch(() => 'ERROR') : Promise.resolve(false);
+
+    // Preload Redis hot-path cache in 1 single network round-trip
+    const preloaded = await preloadHotPathCache(telegramId, targetCA);
 
     if (side === 'buy' && !isBumper) {
-        // 🟢 FIX: 400ms timeout race (shaves 400ms off every live buy while keeping sandwich protection active)
-        const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), 400));
-        const mevResult = await Promise.race([mevPromise, timeoutPromise]);
-        if (mevResult === true) return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
-        if (mevResult === 'TIMEOUT' || mevResult === 'ERROR') return { success: false, message: "⚠️ MEV check timeout — trade blocked." };
+        let isMev = preloaded.mevCache === 'true';
+        if (preloaded.mevCache === null) {
+            const mevPromise = checkRecentMevActivityCached(targetCA).catch(() => 'ERROR');
+            const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), 400));
+            const mevResult = await Promise.race([mevPromise, timeoutPromise]);
+            if (mevResult === true) return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
+            if (mevResult === 'TIMEOUT' || mevResult === 'ERROR') return { success: false, message: "⚠️ MEV check timeout — trade blocked." };
+        } else if (isMev) {
+            return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
+        }
     }
 
     const tokenPubkey = safePublicKey(targetCA);
@@ -636,8 +728,8 @@ export async function executeSnipe(
 
         let actualSpendPerWallet = amountSol;
         try {
-            const sessionId = await redis.get(`autosnipe:session_id:live:${telegramId}`);
-            const currentSpendFinal = await getSessionSpend(telegramId, 'live');
+            const sessionId = preloaded.sessionId || (await redis.get(`autosnipe:session_id:live:${telegramId}`));
+            const currentSpendFinal = preloaded.sessionSpend || (await getSessionSpend(telegramId, 'live'));
             const maxBudget = liveConfig?.maxBudgetSol || Infinity;
             const remainingBudget = maxBudget - currentSpendFinal;
 
@@ -650,7 +742,6 @@ export async function executeSnipe(
             const clampedTotalSpend = Math.min(intendedSpend, remainingBudget);
             actualSpendPerWallet = clampedTotalSpend / activeWallets;
 
-            // 🟢 Clean dust snap for exact budget depletion on final trade
             if (remainingBudget - clampedTotalSpend < 0.0001) {
                 actualSpendPerWallet = remainingBudget / activeWallets;
             }
@@ -666,6 +757,10 @@ export async function executeSnipe(
             if (budgetLock) await (budgetLock as any).release().catch(() => {});
         }
 
+        // 🟢 FIX 2: Force SOR OFF for Auto-Sniper trades to eliminate multi-DEX quote race latency
+        const forceNoSOR = strategy === 'Sniper Engine';
+        const useSORForTrade = forceNoSOR ? false : (user.enableSOR ?? true);
+
         const executionPromises = wallets.map(async (w, index) => {
             let wBal = getLiveWalletBalance(w.publicKey.toBase58());
             if (wBal === null) wBal = (await connection.getBalance(w.publicKey).catch(()=>0)) / LAMPORTS_PER_SOL;
@@ -678,16 +773,34 @@ export async function executeSnipe(
             const rawPkEncrypted = index === 0 ? user.turnkeySubOrgId : user[`pk${index+1}` as keyof typeof user];
             const pkEncrypted = typeof rawPkEncrypted === 'string' ? rawPkEncrypted : undefined;
 
-            const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), actualSpendPerWallet, 0, "0", 0, selectedSlippage, priorityLevel, customPriorityFee, pkEncrypted, raydiumPoolIdToUse, user.enableSOR ?? true);
-            if (!apiRes.buffer) { walletErrors[index] = apiRes.errorLog; walletReport[index] = `W${index + 1}: 🔴 Route`; return { success: false, index }; }
+            // 🟢 Timing: 1. Quote / Routing
+            const tQuoteStart = process.hrtime.bigint();
+            const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), actualSpendPerWallet, 0, "0", 0, selectedSlippage, priorityLevel, customPriorityFee, pkEncrypted, raydiumPoolIdToUse, useSORForTrade);
+            const tQuoteEnd = process.hrtime.bigint();
 
+            if (!apiRes.buffer) { 
+                walletErrors[index] = apiRes.errorLog; 
+                walletReport[index] = `W${index + 1}: 🔴 Route`; 
+                return { success: false, index }; 
+            }
+
+            // 🟢 Timing: 2. Deserialization & Signing
             let swapTx: VersionedTransaction;
-            try { swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer)); } 
-            catch (e: any) { walletErrors[index] = `Malformed TX buffer`; walletReport[index] = `W${index + 1}: 🔴 Format`; return { success: false, index }; }
+            try { 
+                swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer)); 
+            } catch (e: any) { 
+                walletErrors[index] = `Malformed TX buffer`; 
+                walletReport[index] = `W${index + 1}: 🔴 Format`; 
+                return { success: false, index }; 
+            }
             swapTx.sign([w]);
 
             const tipTx = await buildTipAndFeeTransaction(w, telegramId, actualSpendPerWallet, priorityLevel, customPriorityFee, isBumper, recentBlockhash, feeRate);
-            if (!tipTx) { walletReport[index] = `W${index + 1}: 🔴 Sign`; return { success: false, index }; }
+            if (!tipTx) { 
+                walletReport[index] = `W${index + 1}: 🔴 Sign`; 
+                return { success: false, index }; 
+            }
+            const tSignEnd = process.hrtime.bigint();
 
             let txSig = bs58.encode(swapTx.signatures[0]);
 
@@ -698,8 +811,26 @@ export async function executeSnipe(
                 } catch(e) {}
             }
 
+            // 🟢 Timing: 3. Relayer / Jito Bundle Transmission
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
-            if (!bundleOk) { walletErrors[index] = "Dropped by Jito."; walletReport[index] = `W${index + 1}: 🔴 Drop`; return { success: false, index }; }
+            const tSendEnd = process.hrtime.bigint();
+
+            // Log high-resolution execution breakdown
+            logger.info('⚡ [SNIPE TIMING]', {
+                mint: targetCA,
+                strategy,
+                route: apiRes.winningRoute || 'Direct',
+                quoteMs: parseFloat((Number(tQuoteEnd - tQuoteStart) / 1e6).toFixed(2)),
+                signMs: parseFloat((Number(tSignEnd - tQuoteEnd) / 1e6).toFixed(2)),
+                sendMs: parseFloat((Number(tSendEnd - tSignEnd) / 1e6).toFixed(2)),
+                totalPipelineMs: parseFloat((Number(tSendEnd - tQuoteStart) / 1e6).toFixed(2))
+            });
+
+            if (!bundleOk) { 
+                walletErrors[index] = "Dropped by Jito."; 
+                walletReport[index] = `W${index + 1}: 🔴 Drop`; 
+                return { success: false, index }; 
+            }
 
             const expectedOutput = apiRes.estimatedOutput || 0;
             const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true, w.publicKey);
