@@ -26,5 +26,5 @@ async function refreshBlockhash() {
 // 🟢 Steady-state refresh every 1500ms
 setInterval(refreshBlockhash, 1500);
 
-// Staggered initial boot fetch (2s after boot)
-setTimeout(refreshBlockhash, 2000);
+// 🟢 FIX: Fire immediately on module load instead of waiting 2000ms
+refreshBlockhash();

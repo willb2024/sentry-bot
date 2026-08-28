@@ -5,7 +5,7 @@ import { decryptKey } from './vault.service.js';
 import { redis } from '../lib/redis.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
-import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Only uses shared singleton connection
+import { prisma } from '../lib/prisma.js';
 import { redlock } from '../lib/redlock.js';
 import { isSimulationActive } from './simulation.service.js';
 
@@ -35,7 +35,6 @@ export async function createGuild(
         if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
 
         const isSim = await isSimulationActive(telegramId);
-
         const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
         const randomTwoDigit = Math.floor(10 + Math.random() * 90);
         const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
@@ -135,7 +134,8 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user) return;
 
-        const memberships = await prisma.guildMembership.findMany({ where: { userId: user.id } });
+        // 🟢 FIX: Only credit the user's ACTIVE guild membership
+        const memberships = await prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true } });
         if (memberships.length === 0) return;
 
         const points = (volumeSol / 0.1) * 10;
@@ -155,9 +155,9 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
         memberships.forEach(m => pipeline.zincrby(`guild_lb:${m.guildId}`, points, user.id));
         await pipeline.exec();
 
-        // Invalidate leaderboard cache
         memberships.forEach(m => {
             redis.del(`guild_lb_cache:${m.guildId}:50`).catch(() => {});
+            redis.del(`guild_lb_cache:${m.guildId}:10`).catch(() => {});
             redis.del(`guild_lb_cache:${m.guildId}:3`).catch(() => {});
         });
     } catch (e) {}
@@ -172,7 +172,6 @@ export interface LeaderboardMember {
     airdropsReceived?: number;
 }
 
-// 🟢 PERFORMANCE FIX: Cache full leaderboard in Redis for 30s
 export async function getLeaderboard(guildId: string, limit: number = 50): Promise<LeaderboardMember[]> {
     const cacheKey = `guild_lb_cache:${guildId}:${limit}`;
     try {
@@ -218,6 +217,16 @@ export async function getLeaderboard(guildId: string, limit: number = 50): Promi
         return results;
     } catch (e: any) {
         return [];
+    }
+}
+
+// 🟢 FIX: Live rank lookup directly from Redis sorted set
+export async function getUserGuildRank(guildId: string, userId: string): Promise<number | null> {
+    try {
+        const rank = await redis.zrevrank(`guild_lb:${guildId}`, userId);
+        return rank === null ? null : rank + 1;
+    } catch (e) {
+        return null;
     }
 }
 
@@ -461,7 +470,8 @@ export async function executeIndividualAirdrop(telegramId: string, guildId: stri
             const destPubkey = new PublicKey(target.walletAddress);
             const { blockhash } = await connection.getLatestBlockhash('confirmed');
             const vTx = new VersionedTransaction(new TransactionMessage({
-                payerKey: signer.vaultPubkey, recentBlockhash: blockhash,
+                payerKey: signer.vaultPubkey,
+                recentBlockhash: blockhash,
                 instructions: [SystemProgram.transfer({
                     fromPubkey: signer.vaultPubkey, toPubkey: destPubkey,
                     lamports: Math.floor(amountSol * LAMPORTS_PER_SOL)

@@ -31,7 +31,6 @@ export interface SimPosition {
     ticksRemaining?: number;
 }
 
-// ─── UTILITIES & GENERATORS ─────────────────────────────
 export function randomBase58(length: number): string {
     const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
     let result = '';
@@ -64,7 +63,6 @@ export function applySimSlippage(targetPnl: number): number {
     return parseFloat((targetPnl + absoluteDeviation).toFixed(2));
 }
 
-// ─── DYNAMIC SIZING ENGINE (WITH HARD SAFETY CAP) ────────
 export function calculateDynamicSize(
     config: any,
     score: number,
@@ -82,15 +80,12 @@ export function calculateDynamicSize(
     const maxMult = config.maxRiskMultiplier || 5.0;
     let computedSize = baseRisk + (convictionMultiplier * (baseRisk * maxMult));
 
-    // Never risk more than 5% of total balance per trade
     if (currentBalanceSol && currentBalanceSol > 0) {
         computedSize = Math.min(computedSize, currentBalanceSol * 0.05);
     }
 
-    // Hard per-trade safety ceiling (Max 2.0 SOL)
     computedSize = Math.min(computedSize, 2.0);
 
-    // Liquidity cap (Never buy more than 2% of pool liquidity)
     if (liqUsd > 0 && solPrice > 0) {
         const maxLiqInSol = (liqUsd * 0.02) / solPrice;
         computedSize = Math.min(computedSize, maxLiqInSol);
@@ -100,7 +95,6 @@ export function calculateDynamicSize(
     const remaining = (config.maxBudgetSol || Infinity) - totalSpent;
     computedSize = Math.min(computedSize, remaining);
 
-    // Track sizing capped occurrences in Redis
     if (computedSize >= 2.0 || (currentBalanceSol && computedSize >= currentBalanceSol * 0.05)) {
         const userIdentifier = config.telegramId || config.userId || config.user?.telegramId;
         if (userIdentifier) {
@@ -113,7 +107,6 @@ export function calculateDynamicSize(
     return Math.max(parseFloat(computedSize.toFixed(4)), 0.005);
 }
 
-// ─── COUNTERS & ANCHORS ─────────────────────────────────
 export async function getSimCounters(telegramId: string) {
     const wins = parseInt(await redis.get(`sim:stats:wins:${telegramId}`) || '0', 10);
     const losses = parseInt(await redis.get(`sim:stats:losses:${telegramId}`) || '0', 10);
@@ -146,13 +139,11 @@ export async function setSimFirstTradeAt(telegramId: string, dateStr: string): P
     await redis.set(`sim:first_trade_at:${telegramId}`, dateStr);
 }
 
-// ─── SINGLE SOURCE OF TRUTH SESSION SPEND & BUDGET CONTROL ─
 export async function getSessionSpend(telegramId: string, mode: 'live' | 'sim'): Promise<number> {
     const key = `autosnipe:session_spend:${mode}:${telegramId}`;
     const val = await redis.get(key);
     return val ? parseFloat(val) : 0;
 }
-
 
 export async function startNewAutoSnipeSession(telegramId: string, mode: 'live' | 'sim'): Promise<string> {
     const sessionId = crypto.randomUUID();
@@ -250,7 +241,6 @@ export async function sendBudgetExhaustedSummary(
     });
 }
 
-// ─── STATE MANAGEMENT ──────────────────────────────────
 export async function isSimulationActive(telegramId: string): Promise<boolean> {
     let val = await redis.get(`sim:active:${telegramId}`);
     if (val === null) {
@@ -367,7 +357,6 @@ export async function recordSimTrade(
     await redis.incrbyfloat(`sim:volume:${telegramId}`, amountInSol);
 }
 
-// ─── HIGH-FREQUENCY SIMULATION GUARD RESOLVER ───────────
 export async function startSimulationGuardResolver(bot: any) {
     setInterval(async () => {
         try {
@@ -418,7 +407,6 @@ export async function startSimulationGuardResolver(bot: any) {
                         pos.highestSeenPrice = pos.currentPriceSol;
                     }
 
-                    // Exit on final tick
                     if (pos.ticksRemaining <= 0) {
                         const finalPnl = applySimSlippage(targetPnl);
                         const isWin = finalPnl >= 0;
@@ -499,7 +487,6 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
             );
             if (Array.isArray(res.data) && res.data.length > 0) {
                 pool = res.data.map((c: any) => ({ mint: c.mint, symbol: c.symbol || 'UNKNOWN' }));
-                // 🟢 FIX: 15-minute cache TTL reduces redundant external Pump.fun API requests
                 await redis.set(cacheKey, JSON.stringify(pool), 'EX', 900);
             }
         } catch (_) {
@@ -510,9 +497,6 @@ export async function getRealTokenForSimDisplay(): Promise<{ mint: string; symbo
     if (pool.length === 0) return { mint: generateSimTokenCA(), symbol: 'MEME' };
     return pool[Math.floor(Math.random() * pool.length)];
 }
-
-// ─── TRADE EXECUTION ────────────────────────────────────
-
 
 export async function simExecuteSnipe(
     telegramId: string, 
@@ -566,27 +550,49 @@ export async function simExecuteSnipe(
         
         const winTrajectory = Math.random() < winProbability;
 
-        const newPosition: SimPosition = {
-            mint: tokenAddress,
-            symbol,
-            amount: tokenAmount,
-            entryPrice: priceSol,
-            entryPriceUsd: priceUsd,
-            priceUsd: priceUsd,
-            valueUsd: parseFloat((amountSol * solPrice).toFixed(2)),
-            amountInSol: amountSol,
-            highestSeenPrice: priceSol,
-            currentPriceSol: priceSol,
-            trailingPercent: trailingPercent || 10,
-            takeProfitPercent: takeProfitPercent || 40,
-            strategy,
-            score: clampedScore,
-            winTrajectory,
-            ticksRemaining: 4,
-            createdAt: Date.now()
-        };
+        const existingPosIndex = existing.findIndex(p => p.mint === tokenAddress);
+        if (existingPosIndex !== -1) {
+            const prev = existing[existingPosIndex];
+            const totalAmount = prev.amount + tokenAmount;
+            const totalSolInvested = prev.amountInSol + amountSol;
+            const weightedEntryPriceSol = totalAmount > 0 ? totalSolInvested / totalAmount : priceSol;
+            const weightedEntryPriceUsd = weightedEntryPriceSol * solPrice;
 
-        existing.push(newPosition);
+            existing[existingPosIndex] = {
+                ...prev,
+                amount: totalAmount,
+                amountInSol: totalSolInvested,
+                entryPrice: weightedEntryPriceSol,
+                entryPriceUsd: weightedEntryPriceUsd,
+                currentPriceSol: priceSol,
+                priceUsd: priceUsd,
+                valueUsd: parseFloat((totalAmount * priceUsd).toFixed(2)),
+                highestSeenPrice: Math.max(prev.highestSeenPrice, priceSol),
+                ticksRemaining: 4
+            };
+        } else {
+            const newPosition: SimPosition = {
+                mint: tokenAddress,
+                symbol,
+                amount: tokenAmount,
+                entryPrice: priceSol,
+                entryPriceUsd: priceUsd,
+                priceUsd: priceUsd,
+                valueUsd: parseFloat((amountSol * solPrice).toFixed(2)),
+                amountInSol: amountSol,
+                highestSeenPrice: priceSol,
+                currentPriceSol: priceSol,
+                trailingPercent: trailingPercent || 10,
+                takeProfitPercent: takeProfitPercent || 40,
+                strategy,
+                score: clampedScore,
+                winTrajectory,
+                ticksRemaining: 4,
+                createdAt: Date.now()
+            };
+            existing.push(newPosition);
+        }
+
         await redis.set(posKey, JSON.stringify(existing));
 
         await recordSimTrade(telegramId, true, amountSol, 0, strategy, tokenAddress, 0.12, clampedScore);
@@ -694,10 +700,9 @@ export async function addSessionSpend(telegramId: string, amount: number, mode: 
     const key = `autosnipe:session_spend:${mode}:${telegramId}`;
     const newTotal = await redis.incrbyfloat(key, amount);
     await redis.expire(key, 86400);
-    return parseFloat(newTotal as any);
+    return typeof newTotal === 'number' ? newTotal : parseFloat(newTotal || '0');
 }
 
-// ─── SIMULATED AI COIN CALLER ───────────────────────────
 export async function generateSimCallerAlert(
     telegramId: string,
     filters: {
@@ -753,7 +758,6 @@ export async function generateSimCallerAlert(
     return null;
 }
 
-// ─── SIMULATION COPY TRADE SIMULATOR ─────────────────────
 export async function processSimCopyTrades(bot: any) {
     const simUsers = await prisma.user.findMany({
         where: { simState: { active: true } },
@@ -785,7 +789,6 @@ export async function processSimCopyTrades(bot: any) {
     }
 }
 
-// ─── SIMULATION AUTO-SNIPER CONTROLLERS ──────────────────
 export async function toggleSimAutoSnipe(telegramId: string, bot: any): Promise<boolean> {
     const key = `sim:autosnipe:${telegramId}`;
     const current = await redis.get(key);
@@ -873,7 +876,6 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                 continue;
             }
 
-            // 1. Pre-Trade Max Loss Circuit Breaker Check
             const lossStatus = await isSimLossLimitHit(telegramId, config);
             if (lossStatus.hit) {
                 await killSimAutoSnipe(telegramId);
@@ -889,7 +891,6 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                 break;
             }
 
-            // 2. Strict Budget Remaining Check
             const currentSpend = await getSessionSpend(telegramId, 'sim');
             const maxBudget = config.maxBudgetSol || Infinity;
             const remainingBudget = maxBudget - currentSpend;
@@ -959,7 +960,6 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
             const activeWallets = user?.activeWallets || 1;
             const intendedTotalSpend = calculatedSize * activeWallets;
 
-            // 3. Clamp Sizing to Budget & Snap Remaining Cent/Dust
             const clampedTotalSpend = Math.min(intendedTotalSpend, remainingBudget);
             let actualSnipeAmountPerWallet = clampedTotalSpend / activeWallets;
 
@@ -1049,7 +1049,6 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
 
             if (!stillActive) break;
 
-            // 🟢 FIX: 150-400ms organic delay (4x faster execution loop)
             const organicDelayMs = 150 + Math.random() * 250;
             await new Promise(r => setTimeout(r, organicDelayMs));
         }
@@ -1063,16 +1062,12 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
     }
 }
 
-// ─── LIFECYCLE & DATABASE PERSISTENCE ───────────────────
-
-
 export async function consumeSimCredit(telegramId: string): Promise<boolean> {
     const current = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
     if (current <= 0) return false;
     await redis.set(`sim:credits:${telegramId}`, (current - 1).toString());
     return true;
 }
-
 
 const MAX_SIM_SNIPER_LOOPS = 5;
 let activeSimSniperLoops = 0;
@@ -1119,9 +1114,6 @@ export async function isSimLossLimitHit(
     };
 }
 
-
-// Inside src/services/simulation.service.ts
-
 export async function setSimulationMode(telegramId: string, active: boolean): Promise<void> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
@@ -1153,7 +1145,7 @@ export async function setSimulationMode(telegramId: string, active: boolean): Pr
     await redis.set(`sim:balance:${telegramId}`, startBal.toFixed(4));
     await redis.set(`sim:starting_balance:${telegramId}`, startBal.toFixed(4));
     await redis.set(`sim:credits:${telegramId}`, '5420');
-    await redis.set(`autosnipe:session_spend:sim:${telegramId}`, '0'); // 🟢 Initialized to 0
+    await redis.set(`autosnipe:session_spend:sim:${telegramId}`, '0');
     await redis.set(`sim:session_spend:${telegramId}`, '0');
     const wallets = generateSimWallets();
     await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));

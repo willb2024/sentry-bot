@@ -15,6 +15,7 @@ import { redlock } from '../lib/redlock.js';
 import { getBotInstance } from '../lib/bot-instance.js';
 import { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } from './simulation.service.js';
 import axios from 'axios';
+import { getDynamicAffiliateRate as getAffiliateRateFromPoints } from './points.js';
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { awardGuildPoints } from './guild.service.js';
@@ -182,7 +183,6 @@ function getCachedKeypair(walletAddress: string, pkEncrypted: string): Keypair |
     } catch (_) { return null; }
 }
 
-// 🟢 SPEED FIX: Added bypassCache option so trailing stops don't wait 5 seconds for a stale price
 export async function getCachedTokenPrice(mint: string, bypassCache = false): Promise<number> {
     if (!bypassCache) {
         const cached = await redis.get(`price_cache:${mint}`);
@@ -366,8 +366,6 @@ export async function verifyExecutionQuality(
     return fallbackReport;
 }
 
-
-
 const STAKED_JITO_ENDPOINT = process.env.STAKED_JITO_URL || "";
 const STAKED_JITO_AUTH = process.env.STAKED_JITO_AUTH_TOKEN || "";
 const JITO_PRIMARY_REGION = process.env.JITO_PRIMARY_REGION || 'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles';
@@ -381,7 +379,6 @@ export async function sendToJitoBundle(
     const tipBase64 = Buffer.from(tipTx.serialize()).toString('base64');
     const bundledTxs = [swapBase64, tipBase64];
 
-    // 🟢 Priority 1: Nozomi / Staked Relayer (Dedicated Low-Latency Path)
     if (STAKED_JITO_ENDPOINT) {
         try {
             let targetUrl = STAKED_JITO_ENDPOINT;
@@ -392,7 +389,6 @@ export async function sendToJitoBundle(
             const isNozomi = targetUrl.includes('nozomi');
 
             if (isNozomi) {
-                // Nozomi API: Submit raw signed transaction directly to TPU leader
                 const nozomiUrl = targetUrl.includes('/api/sendTransaction2')
                     ? targetUrl
                     : targetUrl.replace(/\/\?/, '/api/sendTransaction2?').replace(/\/$/, '/api/sendTransaction2');
@@ -408,7 +404,6 @@ export async function sendToJitoBundle(
                 }
                 logger.warn('🟡 [ROUTE] Nozomi rejected response', { status: res.status, data: res.data });
             } else {
-                // Standard Jito / Helius Staked Bundle JSON-RPC
                 const bundlePayload = { 
                     jsonrpc: "2.0", 
                     id: 1, 
@@ -436,7 +431,6 @@ export async function sendToJitoBundle(
         }
     }
 
-    // 🟢 Priority 2: Public Jito Single Best-Performing Primary Region (NYC)
     const jitoPayload = { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] };
     try {
         const res = await axiosClient.post(JITO_PRIMARY_REGION, jitoPayload, {
@@ -452,7 +446,6 @@ export async function sendToJitoBundle(
         logger.warn('🟡 [ROUTE] Public Jito primary failed', { error: e.message });
     }
 
-    // 🟢 Priority 3: Raw skip-preflight fallback
     if (allowRawFallback) {
         try {
             const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null);
@@ -470,9 +463,6 @@ export async function sendToJitoBundle(
     return false;
 }
 
-
-// src/services/engine.service.ts
-
 export async function runExecutionBenchmark(
     telegramId: string, 
     sampleCA: string = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
@@ -488,22 +478,18 @@ export async function runExecutionBenchmark(
     const user = await prisma.user.findUnique({ where: { telegramId } });
     const vault = user?.vaultAddress || Keypair.generate().publicKey.toBase58();
 
-    // 1. Measure Redis Hot-Path Preload
     const t0 = process.hrtime.bigint();
     await preloadHotPathCache(telegramId, sampleCA);
     const t1 = process.hrtime.bigint();
 
-    // 2. Measure MEV Risk Evaluation
     const t2 = process.hrtime.bigint();
     await checkRecentMevActivityCached(sampleCA).catch(() => false);
     const t3 = process.hrtime.bigint();
 
-    // 3. Measure Real Live DEX Quote & Route Compilation
     const t4 = process.hrtime.bigint();
     const apiRes = await fetchApiTransaction('buy', sampleCA, vault, 0.1, 0, "0", 0, 20.0, 'FAST', 0.001, undefined, undefined, false);
     const t5 = process.hrtime.bigint();
 
-    // 4. Measure Cryptographic Key Decryption & Ed25519 Signing
     const dummyKeypair = Keypair.generate();
     const t6 = process.hrtime.bigint();
     if (apiRes.buffer) {
@@ -514,7 +500,6 @@ export async function runExecutionBenchmark(
     }
     const t7 = process.hrtime.bigint();
 
-    // 5. Measure Network Ping to Nozomi / Staked Relay
     const t8 = process.hrtime.bigint();
     let nozomiPing = 0;
     const stakedUrl = process.env.STAKED_JITO_URL;
@@ -593,7 +578,6 @@ async function fetchApiTransaction(
 
         let bestRoute: DexRouteQuote | undefined;
 
-        // 🟢 FIX: Fast-path execution when Smart Order Routing (SOR) is disabled
         if (useSOR) {
             const dexPools = ['Raydium', 'Meteora DLMM', 'Meteora', 'Pump.fun'];
             const quotePromises = dexPools.map(dex => getIsolatedDexQuote(dex, inputMint, outputMint, jupAmount, slippageBps));
@@ -606,7 +590,8 @@ async function fetchApiTransaction(
             
             await new Promise<void>((resolve) => {
                 let settled = 0;
-                const GRACE_MS = 250;
+                // 🟢 SPEED FIX: Lowered from 250ms to 130ms for faster multi-quote consensus
+                const GRACE_MS = 130;
                 let graceTimer: NodeJS.Timeout | null = null;
 
                 allPromises.forEach(p => {
@@ -686,7 +671,6 @@ export async function buildTipAndFeeTransaction(
     } catch (_) { return null; }
 }
 
-// 🟢 FIX 2: Preload hot path cache via single Redis pipeline round-trip
 export async function preloadHotPathCache(telegramId: string, mint: string) {
     const pipeline = redis.pipeline();
     pipeline.get(`price_cache:${mint}`);
@@ -717,10 +701,10 @@ export async function executeSnipe(
     
     if (antiMevDelayMs > 0) await new Promise(r => setTimeout(r, antiMevDelayMs));
 
-    // Preload Redis hot-path cache in 1 single network round-trip
     const preloaded = await preloadHotPathCache(telegramId, targetCA);
 
-    if (side === 'buy' && !isBumper) {
+    // 🟢 SPEED FIX: Skip 400ms MEV blocking check for Fast-Mode Sniper Engine buys
+    if (side === 'buy' && !isBumper && strategy !== 'Sniper Engine') {
         let isMev = preloaded.mevCache === 'true';
         if (preloaded.mevCache === null) {
             const mevPromise = checkRecentMevActivityCached(targetCA).catch(() => 'ERROR');
@@ -827,7 +811,6 @@ export async function executeSnipe(
             if (budgetLock) await (budgetLock as any).release().catch(() => {});
         }
 
-        // 🟢 FIX 2: Force SOR OFF for Auto-Sniper trades to eliminate multi-DEX quote race latency
         const forceNoSOR = strategy === 'Sniper Engine';
         const useSORForTrade = forceNoSOR ? false : (user.enableSOR ?? true);
 
@@ -843,7 +826,6 @@ export async function executeSnipe(
             const rawPkEncrypted = index === 0 ? user.turnkeySubOrgId : user[`pk${index+1}` as keyof typeof user];
             const pkEncrypted = typeof rawPkEncrypted === 'string' ? rawPkEncrypted : undefined;
 
-            // 🟢 Timing: 1. Quote / Routing
             const tQuoteStart = process.hrtime.bigint();
             const apiRes = await fetchApiTransaction('buy', targetCA, w.publicKey.toBase58(), actualSpendPerWallet, 0, "0", 0, selectedSlippage, priorityLevel, customPriorityFee, pkEncrypted, raydiumPoolIdToUse, useSORForTrade);
             const tQuoteEnd = process.hrtime.bigint();
@@ -854,7 +836,6 @@ export async function executeSnipe(
                 return { success: false, index }; 
             }
 
-            // 🟢 Timing: 2. Deserialization & Signing
             let swapTx: VersionedTransaction;
             try { 
                 swapTx = VersionedTransaction.deserialize(new Uint8Array(apiRes.buffer)); 
@@ -881,11 +862,9 @@ export async function executeSnipe(
                 } catch(e) {}
             }
 
-            // 🟢 Timing: 3. Relayer / Jito Bundle Transmission
             const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
             const tSendEnd = process.hrtime.bigint();
 
-            // Log high-resolution execution breakdown
             logger.info('⚡ [SNIPE TIMING]', {
                 mint: targetCA,
                 strategy,
@@ -1102,7 +1081,6 @@ export async function executeExit(
                         const feeCharged = volumeToRecord * feeRate;
                         const feeChargedLamports = BigInt(Math.round((volumeToRecord * 1_000_000_000) * feeRate));
 
-                        // 🟢 MATH FIX: Properly cascading shared fee deduction pool to prevent >100% payouts
                         let remainingFeeLamports = feeChargedLamports;
                         let affiliateCutLamports = 0n, guildOwnerCutLamports = 0n, leaderCutLamports = 0n;
 
@@ -1188,23 +1166,7 @@ export async function executeExit(
 }
 
 export async function getDynamicAffiliateRate(referrerId: string): Promise<number> {
-    try {
-        const referrer = await prisma.user.findUnique({
-            where: { id: referrerId },
-            include: { _count: { select: { recruits: true } } }
-        });
-        if (!referrer) return 0.50; 
-
-        const volumeSol = referrer.totalVolumeSol || 0;
-        const recruitBonus = (referrer._count?.recruits || 0) * 2000;
-        const totalPoints = (volumeSol * 10000) + recruitBonus;
-
-        if (totalPoints >= 25000000) return 0.70; 
-        if (totalPoints >= 5000000)  return 0.60; 
-        return 0.50;                              
-    } catch { 
-        return 0.50; 
-    }
+    return await getAffiliateRateFromPoints(referrerId);
 }
 
 export interface PreSignedExitPayload {
