@@ -746,46 +746,131 @@ app.post('/api/positions', async (req, res) => {
     } catch (e) { res.status(500).json([]); }
 });
 
-// 🟢 FEATURE: Affiliate Stats WebApp Data
+
+// 🟢 FIXED: /api/affiliate-stats with Copy-Trading Points, 50% Base Tier, and 40% AI Credit Tracking
 app.post('/api/affiliate-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) 
             return res.status(403).json({ error: 'Unauthorized' });
         
-        const telegramId = JSON.parse(
-            new URLSearchParams(req.body.initData).get('user')!
-        ).id.toString();
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
         
         const user = await prisma.user.findUnique({
-            where: { telegramId },
-            include: { recruits: { include: { trades: { orderBy: { createdAt: 'desc' }, take: 50 } } } }
+            where: { telegramId: tgId },
+            include: { 
+                recruits: { 
+                    include: { 
+                        trades: { where: { status: 'CONFIRMED' }, orderBy: { createdAt: 'desc' }, take: 50 },
+                        creditTxs: { where: { type: 'PURCHASE' } }
+                    } 
+                },
+                followedBy: {
+                    where: { isActive: true },
+                    include: {
+                        follower: {
+                            include: {
+                                trades: { where: { strategy: 'Copy Trade', status: 'CONFIRMED' }, orderBy: { createdAt: 'desc' }, take: 50 }
+                            }
+                        }
+                    }
+                }
+            }
         });
         if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const { cachedSolUsdPrice } = await import('./services/grpc.service.js');
+        const solRate = cachedSolUsdPrice || 156.93;
         
+        let tradingFeeEarnedSol = 0;
+        let creditEarnedSol = 0;
+        let totalRecruitVolumeSol = 0;
+
+        // 1. Process Recruits & 40% AI Credit Revenue Share
         const recruitList = user.recruits.map(r => {
             const volumeSol = r.trades.reduce((sum, t) => sum + t.amountInSol, 0);
-            const yourEarningSol = r.trades.reduce((sum, t) => sum + (t.affiliateCutSol || 0), 0); 
+            const yourTradingFeeCut = r.trades.reduce((sum, t) => sum + (t.affiliateCutSol || 0), 0);
+            tradingFeeEarnedSol += yourTradingFeeCut;
+            totalRecruitVolumeSol += volumeSol;
+
+            let recruitCreditCut = 0;
+            r.creditTxs.forEach(ctx => {
+                const packPriceUsd = ctx.packName === 'Micro' ? 12 : ctx.packName === 'Starter' ? 29 : ctx.packName === 'Pro' ? 59 : 99;
+                const packSol = packPriceUsd / solRate;
+                recruitCreditCut += (packSol * 0.40);
+            });
+            creditEarnedSol += recruitCreditCut;
+
             const lastTrade = r.trades[0];
             const lastActiveDaysAgo = lastTrade 
                 ? Math.floor((Date.now() - new Date(lastTrade.createdAt).getTime()) / 86400000)
                 : 999;
+
             return {
-                username: r.username || r.telegramId,
+                username: r.username || `Trader_${r.telegramId.slice(-4)}`,
                 volumeSol: parseFloat(volumeSol.toFixed(4)),
-                yourEarningSol: parseFloat(yourEarningSol.toFixed(4)),
+                yourEarningSol: parseFloat((yourTradingFeeCut + recruitCreditCut).toFixed(4)),
+                tradingFeeEarningSol: parseFloat(yourTradingFeeCut.toFixed(4)),
+                creditEarningSol: parseFloat(recruitCreditCut.toFixed(4)),
                 lastActiveDaysAgo
             };
         });
-        
-        // Build 30-day daily earnings array
-        const dailyEarnings: number[] = Array(30).fill(0);
-        const now = Date.now();
-        let totalHistoricalEarned = 0;
 
+        // 2. Process Copiers (Traders Mirroring You) & 50% Leader Rev-Share
+        let totalCopierVolumeSol = 0;
+        let copierLeaderEarnedSol = 0;
+
+        const copierList = (user.followedBy || []).map(f => {
+            const followerTrades = f.follower.trades || [];
+            const copierVolume = followerTrades.reduce((sum, t) => sum + t.amountInSol, 0);
+            // Leader earns 50% of the platform fee (0.5% of mirrored volume)
+            const leaderYield = followerTrades.reduce((sum, t) => sum + (t.amountInSol * 0.005), 0);
+
+            totalCopierVolumeSol += copierVolume;
+            copierLeaderEarnedSol += leaderYield;
+
+            const daysConnected = Math.floor((Date.now() - new Date(f.createdAt).getTime()) / 86400000);
+
+            return {
+                username: f.follower.username || `Copier_${f.follower.telegramId.slice(-4)}`,
+                walletAddress: f.follower.vaultAddress || "Unknown",
+                volumeSol: parseFloat(copierVolume.toFixed(4)),
+                yourEarningSol: parseFloat(leaderYield.toFixed(4)),
+                connectedDaysAgo: daysConnected
+            };
+        });
+
+        // 3. Connect Copy-Trading Directly to Accumulated Points Formula
+        const selfVolumeSol = user.totalVolumeSol || 0;
+        const selfPoints = selfVolumeSol * 10000;
+        const recruitPoints = user.recruits.length * 2000;
+        const copierPoints = (user.followedBy.length * 5000) + (totalCopierVolumeSol * 5000);
+        const totalPoints = Math.floor(selfPoints + recruitPoints + copierPoints);
+
+        // 4. Tier System: Starts at 50% (Bronze)
+        let currentTier = "Bronze";
+        let currentRate = 0.50; // 🟢 Starts from 50%!
+        let nextTier = "Silver (5M PTS)";
+        let nextTierPoints = 5000000;
+
+        if (totalPoints >= 25000000) {
+            currentTier = "Gold";
+            currentRate = 0.70;
+            nextTier = "Max Tier";
+            nextTierPoints = 25000000;
+        } else if (totalPoints >= 5000000) {
+            currentTier = "Silver";
+            currentRate = 0.60;
+            nextTier = "Gold (25M PTS)";
+            nextTierPoints = 25000000;
+        }
+
+        // 5. 30-Day Daily Earnings History Array
+        const dailyEarnings = Array(30).fill(0);
+        const now = Date.now();
         user.recruits.forEach(r => {
             r.trades.forEach(t => {
                 const earned = t.affiliateCutSol || 0;
-                totalHistoricalEarned += earned;
                 const daysAgo = Math.floor((now - new Date(t.createdAt).getTime()) / 86400000);
                 if (daysAgo >= 0 && daysAgo < 30) {
                     dailyEarnings[29 - daysAgo] += earned;
@@ -793,39 +878,34 @@ app.post('/api/affiliate-stats', async (req, res) => {
             });
         });
 
-        const displayVolume = user.totalVolumeSol || 0;
-        let currentTier = "Bronze";
-        let currentRate = 0.40;
-        if (displayVolume >= 100) {
-            currentTier = "Diamond";
-            currentRate = 0.70;
-        } else if (displayVolume >= 25) {
-            currentTier = "Gold";
-            currentRate = 0.60;
-        } else if (displayVolume >= 5) {
-            currentTier = "Silver";
-            currentRate = 0.50;
-        }
-        
+        const botUsername = process.env.BOT_USERNAME || 'sentry_terminalbot';
+
         res.json({
             recruits: user.recruits.length,
-            pendingYieldSol: parseFloat((user.pendingRewardsSol || 0).toFixed(4)),
-            lifetimeEarnedSol: parseFloat(((user.pendingRewardsSol || 0) + totalHistoricalEarned).toFixed(4)),
-            // 🟢 FIX: Hardcoded to your correct bot username to fix the WebApp display
-            referralLink: `https://t.me/sentry_terminalbot?start=${user.referralCode}`,
+            activeCopiers: user.followedBy.length,
+            totalPoints,
             currentTier,
             currentRate,
+            nextTier,
+            nextTierPoints,
+            pendingYieldSol: parseFloat((user.pendingRewardsSol || 0).toFixed(4)),
+            lifetimeEarnedSol: parseFloat(((user.pendingRewardsSol || 0) + tradingFeeEarnedSol + creditEarnedSol + copierLeaderEarnedSol).toFixed(4)),
+            tradingFeeEarnedSol: parseFloat(tradingFeeEarnedSol.toFixed(4)),
+            creditEarnedSol: parseFloat(creditEarnedSol.toFixed(4)),
+            copierLeaderEarnedSol: parseFloat(copierLeaderEarnedSol.toFixed(4)),
+            totalCopierVolumeSol: parseFloat(totalCopierVolumeSol.toFixed(4)),
+            referralLink: `https://t.me/${botUsername}?start=${user.referralCode}`,
+            copierFeedLink: `https://t.me/${botUsername}?start=follow_${user.id}`,
             recruitList,
+            copierList,
             dailyEarnings
         });
 
-    } catch (e) {
+    } catch (e: any) {
+        console.error("🔴 [/api/affiliate-stats] Error:", e.message);
         res.status(500).json({ error: 'Server Error' });
     }
 });
-
-
-
 
 
 async function getLiveBalance(user: any): Promise<string> {
@@ -3426,6 +3506,7 @@ bot.action('btn_withdraw_prompt', async (ctx) => {
 // =========================================================
 // 💰 AFFILIATE SYSTEM (MASSIVE PAYOUTS)
 // =========================================================
+// 🟢 Full replacement for bot.action('menu_affiliate', ...) in src/index.ts
 bot.action('menu_affiliate', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
     const tgId = ctx.from?.id.toString();
@@ -3433,17 +3514,31 @@ bot.action('menu_affiliate', async (ctx) => {
 
     const user = await prisma.user.findUnique({ 
         where: { telegramId: tgId }, 
-        include: { _count: { select: { recruits: true } }, referredBy: true } 
+        include: { 
+            _count: { select: { recruits: true } }, 
+            referredBy: true,
+            followedBy: { 
+                where: { isActive: true }, 
+                include: { follower: { include: { trades: { where: { strategy: 'Copy Trade', status: 'CONFIRMED' } } } } } 
+            }
+        } 
     });
     if (!user) return;
 
     const volumeSol = user.totalVolumeSol || 0;
     const recruitBonus = user._count.recruits * 2000;
-    const totalPoints = (volumeSol * 10000) + recruitBonus;
+    
+    // Connect copy-trading volume & copiers to points calculation
+    let copierVolSol = 0;
+    user.followedBy.forEach(f => {
+        (f.follower.trades || []).forEach(t => copierVolSol += (t.amountInSol || 0));
+    });
+    const copierBonus = (user.followedBy.length * 5000) + (copierVolSol * 5000);
+    const totalPoints = Math.floor((volumeSol * 10000) + recruitBonus + copierBonus);
 
     let currentTier = "🥉 Bronze";
     let nextTier = "Silver (5M PTS)";
-    let rate = "50%";
+    let rate = "50%"; // 🟢 Base starts at 50%!
 
     if (totalPoints >= 25000000) { 
         currentTier = "🥇 Gold"; nextTier = "MAX RANK ACHIEVED"; rate = "70%";
@@ -3452,8 +3547,8 @@ bot.action('menu_affiliate', async (ctx) => {
     }
 
     const text = 
-    `💸 <b>SENTRY PARTNER PROGRAM</b>\n\n` +
-    `Scale your influence to unlock the most aggressive commission structure on Solana. <b>Gold Rank</b> partners earn 70% of all generated fees.\n\n` +
+    `💸 <b>SENTRY PARTNER & SOCIAL ALPHA PROGRAM</b>\n\n` +
+    `Scale your influence to unlock the most aggressive commission structure on Solana. <b>Bronze tier starts at 50%</b>.\n\n` +
     
     `👑 <b>TRADING FEE REV-SHARE:</b>\n` +
     `• 🥉 <b>Bronze:</b> 50% (Base Tier)\n` +
@@ -3461,22 +3556,23 @@ bot.action('menu_affiliate', async (ctx) => {
     `• 🥇 <b>Gold:</b> 70% (at 25M Points)\n\n` +
 
     `🎯 <b>AI CALLER CREDIT REV-SHARE:</b>\n` +
-    `<b>Flat 40% Commission</b>\n` +
-    `Regardless of your medal rank, you earn a fixed 40% share of all SOL spent on AI Caller Credits by your recruits. This remains consistent across all partners.\n\n` +
+    `• <b>Flat 40% Commission</b> on all SOL spent on AI Caller Credits by your recruits.\n\n` +
+
+    `👥 <b>COPY-TRADING LEADER YIELD:</b>\n` +
+    `• <b>50% Platform Fee Share</b> from every trade mirrored by your copiers.\n` +
+    `• <i>Copy-trading volume directly boosts your accumulated Sentry Points!</i>\n\n` +
     
-    `📖 <b>GRADUATION REQUIREMENTS:</b>\n` +
-    `Moving to the next medal requires heavy network volume. <b>1 SOL volume = 10,000 Points.</b>\n` +
-    `• 5M Pts = 500 SOL Volume\n` +
-    `• 25M Pts = 2,500 SOL Volume\n\n` +
-    
-    `📊 <b>YOUR LIVE STATS:</b>\n` +
+    `📊 <b>YOUR LIVE METRICS:</b>\n` +
     `• Current Tier: <b>${currentTier} (${rate} Share)</b>\n` +
     `• Progress to Next: <b>${nextTier}</b>\n` +
-    `• Total Points: <b>${totalPoints.toLocaleString()}</b>\n` +
+    `• Accumulated Points: <b>${totalPoints.toLocaleString()} PTS</b>\n` +
+    `• Active Copiers: <b>${user.followedBy.length}</b> (~${copierVolSol.toFixed(2)} SOL copied)\n` +
+    `• Total Recruits: <b>${user._count.recruits}</b>\n` +
     `• Pending Yield: <b>${user.pendingRewardsSol.toFixed(4)} SOL</b>\n\n` +
     
-    `🔗 <b>Your Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=${user.referralCode}</code>\n\n` +
-    `<i>Minimum claim: 0.1 SOL. Payouts processed instantly in SOL.</i>`;
+    `🔗 <b>Your Affiliate Invite Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=${user.referralCode}</code>\n\n` +
+    `📡 <b>Your Public Copy-Trade Link:</b>\n<code>https://t.me/${ctx.botInfo?.username}?start=follow_${user.id}</code>\n\n` +
+    `<i>Minimum claim: 0.10 SOL. Payouts processed instantly to your W1 vault.</i>`;
 
     await safeEditMessageText(ctx, text, { 
         parse_mode: 'HTML',
@@ -3487,7 +3583,6 @@ bot.action('menu_affiliate', async (ctx) => {
         ]) 
     });
 });
-
 
 bot.action('action_enter_ref_code', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -8687,19 +8782,23 @@ async function bootEcosystem() {
         const info = await bot.telegram.getMe();
         console.log(`🟢 [4/5] HFT BOT ONLINE -> @${info.username}`);
         
-        const launchBot = async (retries = 5) => {
-            try {
-                await bot.launch({ dropPendingUpdates: true });
-                console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
-            } catch (e: any) {
-                const errMsg = e?.message ? e.message : "Network Timeout / Connection Refused";
-                console.error(`🔴 Telegram Bot Launch Attempt Failed (${retries} retries left): ${errMsg}`);
-                if (retries > 0) {
-                    setTimeout(() => launchBot(retries - 1), 8000);
-                }
-            }
-        };
-        launchBot();
+       // 🟢 FIX: Clear existing webhooks before long-polling to prevent bot.launch() hangs & timeouts
+const launchBot = async (retries = 5) => {
+    try {
+        // Delete any webhook registered on Telegram servers from prior runs
+        await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
+
+        await bot.launch({ dropPendingUpdates: true });
+        console.log("🟢 [5/5] ALL SYSTEMS GO. Interface Active.");
+    } catch (e: any) {
+        const errMsg = e?.message ? e.message : "Network Timeout / Connection Refused";
+        console.error(`🔴 Telegram Bot Launch Attempt Failed (${retries} retries left): ${errMsg}`);
+        if (retries > 0) {
+            setTimeout(() => launchBot(retries - 1), 8000);
+        }
+    }
+};
+launchBot();
 
         // 🟢 STAGGER 2: Allow Telegram connection to stabilize before starting gRPC streams
         await new Promise(r => setTimeout(r, 2000));

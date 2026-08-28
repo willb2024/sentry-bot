@@ -101,13 +101,18 @@ export async function consumeSniperCredit(
     return { success: true, remaining: updated!.creditBalance, fallback: false };
 }
 
+// src/services/credits.service.ts
+
 export async function addCredits(
     telegramId: string, 
     packKey: CreditPackKey, 
     txSignature?: string
 ): Promise<{ success: boolean; newBalance: number }> {
     const pack = CREDIT_PACKS[packKey];
-    const user = await prisma.user.findUnique({ where: { telegramId } });
+    const user = await prisma.user.findUnique({ 
+        where: { telegramId },
+        include: { referredBy: true }
+    });
     if (!user) return { success: false, newBalance: 0 };
 
     const updated = await prisma.user.update({
@@ -128,6 +133,28 @@ export async function addCredits(
             txSignature
         }
     });
+
+    // 🟢 40% AFFILIATE REVENUE SHARE ON AI CREDITS
+    if (user.referredById) {
+        try {
+            const { cachedSolUsdPrice } = await import('./grpc.service.js');
+            const solRate = cachedSolUsdPrice || 156.93;
+            const packPriceSol = pack.priceUsd / solRate;
+            const commissionSol = parseFloat((packPriceSol * 0.40).toFixed(4));
+
+            if (commissionSol > 0) {
+                await prisma.user.update({
+                    where: { id: user.referredById },
+                    data: {
+                        pendingRewardsSol: { increment: commissionSol }
+                    }
+                });
+                await redis.incrbyfloat(`affiliate:credit_revenue:${user.referredById}`, commissionSol);
+            }
+        } catch (affErr: any) {
+            console.error("🔴 [CREDITS AFFILIATE] Commission calculation error:", affErr.message);
+        }
+    }
 
     return { success: true, newBalance: updated.creditBalance };
 }

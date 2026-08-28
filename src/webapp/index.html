@@ -168,7 +168,7 @@
         <div class="bg-[#0e131f] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
             <button id="tab-dashboard" onclick="switchView('dashboard')" class="px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Terminal Dashboard</button>
             <button id="tab-leaderboard" onclick="switchView('leaderboard')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
-            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Affiliate Hub</button>
+            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Affiliate & Social Alpha Hub</button>
         </div>
     </div>
 
@@ -435,12 +435,21 @@
         </section>
     </main>
 
-    <!-- VIEW 2: LEADERBOARD -->
+    <!-- VIEW 2: GUILD LEADERBOARD -->
     <main id="view-leaderboard" class="hidden-view max-w-3xl mx-auto px-4 sm:px-6">
         <div class="text-center mt-2 mb-6">
             <div class="inline-block bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-[10px] font-bold tracking-widest border border-emerald-500/20 mb-3" id="lb-badge">VERIFIED GUILD</div>
             <h2 class="text-2xl sm:text-3xl font-bold text-white" id="lb-title">Loading...</h2>
             <p class="mt-2 text-gray-400 text-sm italic" id="lb-desc">Fetching reward structure...</p>
+        </div>
+
+        <div id="lb-chart-card" class="card-flat p-5 mb-4 chart-animated-live" style="display: none;">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide uppercase">Top 10 Operators (GLP)</h3>
+            </div>
+            <div class="h-48 relative w-full">
+                <canvas id="leaderboardChart"></canvas>
+            </div>
         </div>
 
         <div class="bg-[#0e131f] p-4 sm:p-6 rounded-2xl border border-white/10 shadow-2xl">
@@ -456,58 +465,91 @@
         </div>
     </main>
 
-    <!-- VIEW 3: AFFILIATES -->
+    <!-- VIEW 3: AFFILIATES & SOCIAL ALPHA HUB -->
     <main id="view-affiliates" class="hidden-view max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
         <section class="xl:col-span-2 space-y-6">
-            <div class="grid grid-cols-2 gap-3 sm:gap-4">
-                <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-user-plus text-gray-500"></i> Total Recruits</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-jupGreen" id="aff-stat-recruits">0</span>
+            
+            <!-- Points & Tier Banner -->
+            <div class="card-flat p-5 bg-gradient-to-r from-[#0e131f] via-[#121826] to-[#0e131f] border border-white/10">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div>
+                        <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold flex items-center gap-1.5">
+                            <i class="fa-solid fa-gem text-amber-400"></i> Accumulated Sentry Points
+                        </span>
+                        <div class="text-3xl sm:text-4xl font-bold text-white font-mono mt-1" id="aff-stat-points">0 PTS</div>
+                        <span class="text-xs text-gray-500 font-mono" id="aff-stat-next-tier">Progress to next tier</span>
+                    </div>
+                    <div class="text-left sm:text-right">
+                        <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Commission Tier</span>
+                        <div class="text-2xl sm:text-3xl font-bold text-amber-500 font-mono mt-1" id="aff-stat-tier">Bronze (50%)</div>
                     </div>
                 </div>
-                <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-coins text-gray-500"></i> Pending Yield</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="aff-stat-pending">0.0000</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1">SOL</div>
+                <div class="w-full bg-[#1e293b] rounded-full h-2 mt-4 border border-white/5 overflow-hidden">
+                    <div id="aff-points-bar" class="bg-gradient-to-r from-amber-500 via-emerald-400 to-cyan-400 h-full rounded-full transition-all duration-700" style="width: 10%"></div>
+                </div>
+            </div>
+
+            <!-- Revenue Stream KPI Breakdown -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+                <div class="card-flat p-4">
+                    <span class="text-[10px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-1.5"><i class="fa-solid fa-coins text-neonPurple"></i> Pending Yield</span>
+                    <div class="text-xl sm:text-2xl font-bold text-neonPurple font-mono mt-2" id="aff-stat-pending">0.0000 SOL</div>
+                </div>
+                <div class="card-flat p-4">
+                    <span class="text-[10px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-1.5"><i class="fa-solid fa-chart-pie text-jupGreen"></i> Trade Fee Cut</span>
+                    <div class="text-xl sm:text-2xl font-bold text-jupGreen font-mono mt-2" id="aff-stat-trade-fees">0.0000 SOL</div>
+                    <span class="text-[10px] text-gray-500 font-mono">50% - 70% Share</span>
+                </div>
+                <div class="card-flat p-4">
+                    <span class="text-[10px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-1.5"><i class="fa-solid fa-bolt text-amber-400"></i> AI Credit Share</span>
+                    <div class="text-xl sm:text-2xl font-bold text-amber-400 font-mono mt-2" id="aff-stat-credits-rev">0.0000 SOL</div>
+                    <span class="text-[10px] text-gray-500 font-mono">40% Rev-Share</span>
+                </div>
+                <div class="card-flat p-4">
+                    <span class="text-[10px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-1.5"><i class="fa-solid fa-users text-neonBlue"></i> Copier Yield</span>
+                    <div class="text-xl sm:text-2xl font-bold text-neonBlue font-mono mt-2" id="aff-stat-copier-rev">0.0000 SOL</div>
+                    <span class="text-[10px] text-gray-500 font-mono">50% Leader Cut</span>
+                </div>
+            </div>
+
+            <!-- Share Links -->
+            <div class="card-flat p-5 space-y-4">
+                <div>
+                    <h3 class="text-[11px] text-gray-300 font-semibold tracking-wide uppercase mb-2">Your Affiliate Invite Link (50% - 70% Trading + 40% AI Credits)</h3>
+                    <div class="flex items-center gap-3">
+                        <input type="text" id="aff-ref-link" readonly class="w-full bg-[#07090e] text-gray-300 font-mono text-xs sm:text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
+                        <button onclick="copyAffiliateLink('aff-ref-link')" class="glass-btn px-4 py-3 rounded-lg text-xs sm:text-sm font-bold text-white whitespace-nowrap"><i class="fa-solid fa-copy mr-1"></i> Copy</button>
                     </div>
                 </div>
-                <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-chart-line text-gray-500"></i> Lifetime Earned</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="aff-stat-lifetime">0.0000</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1">SOL</div>
-                    </div>
-                </div>
-                <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-trophy text-gray-500"></i> Your Tier</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-amber-500" id="aff-stat-tier">Bronze (40%)</span>
+                <div>
+                    <h3 class="text-[11px] text-gray-300 font-semibold tracking-wide uppercase mb-2">Your Public Copy-Trading Feed Link (50% Leader Rev-Share)</h3>
+                    <div class="flex items-center gap-3">
+                        <input type="text" id="aff-feed-link" readonly class="w-full bg-[#07090e] text-gray-300 font-mono text-xs sm:text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
+                        <button onclick="copyAffiliateLink('aff-feed-link')" class="glass-btn px-4 py-3 rounded-lg text-xs sm:text-sm font-bold text-neonBlue whitespace-nowrap"><i class="fa-solid fa-copy mr-1"></i> Copy</button>
                     </div>
                 </div>
             </div>
 
-            <div class="card-flat p-5">
-                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4">YOUR INVITE LINK</h3>
-                <div class="flex items-center gap-3">
-                    <input type="text" id="aff-ref-link" readonly class="w-full bg-[#07090e] text-gray-300 font-mono text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
-                    <button onclick="copyReferralLink()" class="glass-btn px-4 py-3 rounded-lg text-sm font-bold text-white whitespace-nowrap"><i class="fa-solid fa-copy mr-1"></i> Copy Link</button>
-                </div>
-                <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn up to 70% of their trading fees and AI Credit purchases for life.</p>
-            </div>
-
+            <!-- Toggle List (Recruits vs Copiers) -->
             <div class="space-y-3">
-                <div class="flex items-center justify-between px-1 pt-2 pb-2">
-                    <h3 class="text-sm text-gray-300 font-semibold tracking-wide">ACTIVE RECRUITS</h3>
+                <div class="flex items-center justify-between px-1 pt-2 pb-1">
+                    <div class="flex gap-2">
+                        <button id="btn-show-recruits" onclick="switchAffiliateSubTab('recruits')" class="text-xs font-bold px-3 py-1.5 rounded-md bg-white/10 text-white transition-all shadow">
+                            Recruits (<span id="aff-tab-recruits-count">0</span>)
+                        </button>
+                        <button id="btn-show-copiers" onclick="switchAffiliateSubTab('copiers')" class="text-xs font-bold px-3 py-1.5 rounded-md text-gray-400 hover:text-white transition-all">
+                            Copiers Mirroring You (<span id="aff-tab-copiers-count">0</span>)
+                        </button>
+                    </div>
                 </div>
                 <div id="recruits-container" class="space-y-3"></div>
+                <div id="copiers-container" class="space-y-3" style="display:none;"></div>
             </div>
         </section>
 
         <section class="space-y-6">
             <div class="card-flat p-5">
-                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">AFFILIATE REVENUE</h3>
+                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">AFFILIATE REVENUE HISTORY</h3>
                 <div class="h-64 relative w-full">
                     <canvas id="affiliateChart"></canvas>
                 </div>
@@ -515,7 +557,7 @@
 
             <div class="card-flat p-5">
                 <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4 uppercase">Projected Earnings</h3>
-                <p class="text-xs text-gray-400 mb-4">If your recruits maintain current volume:</p>
+                <p class="text-xs text-gray-400 mb-4">Based on current recruit and copier trading volume:</p>
                 
                 <div class="space-y-4">
                     <div class="flex justify-between items-center bg-[#07090e] p-3 rounded-lg border border-white/5">
@@ -552,7 +594,26 @@
     let currentFilter = '30D'; 
     
     let liveLeaderboardData = { guild: null, members: [] };
-    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
+    let liveAffiliateData = { 
+        recruits: 0, 
+        activeCopiers: 0,
+        totalPoints: 0,
+        currentTier: "Bronze",
+        currentRate: 0.50,
+        nextTier: "Silver (5M PTS)",
+        nextTierPoints: 5000000,
+        pendingYieldSol: 0, 
+        lifetimeEarnedSol: 0,
+        tradingFeeEarnedSol: 0,
+        creditEarnedSol: 0,
+        copierLeaderEarnedSol: 0,
+        totalCopierVolumeSol: 0,
+        referralLink: "", 
+        copierFeedLink: "",
+        recruitList: [], 
+        copierList: [],
+        dailyEarnings: Array(30).fill(0) 
+    };
 
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
@@ -578,11 +639,30 @@
         } else if (view === 'leaderboard') {
             lbView.classList.remove('hidden-view');
             tabLb.className = "px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap";
-            renderLeaderboard();
+            fetchLeaderboardData();
         } else if (view === 'affiliates') {
             affView.classList.remove('hidden-view');
             tabAff.className = "px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap";
-            renderAffiliates();
+            fetchAffiliateData();
+        }
+    }
+
+    function switchAffiliateSubTab(tab) {
+        const recBtn = document.getElementById('btn-show-recruits');
+        const copBtn = document.getElementById('btn-show-copiers');
+        const recContainer = document.getElementById('recruits-container');
+        const copContainer = document.getElementById('copiers-container');
+
+        if (tab === 'recruits') {
+            recBtn.className = "text-xs font-bold px-3 py-1.5 rounded-md bg-white/10 text-white transition-all shadow";
+            copBtn.className = "text-xs font-bold px-3 py-1.5 rounded-md text-gray-400 hover:text-white transition-all";
+            recContainer.style.display = "block";
+            copContainer.style.display = "none";
+        } else {
+            copBtn.className = "text-xs font-bold px-3 py-1.5 rounded-md bg-white/10 text-white transition-all shadow";
+            recBtn.className = "text-xs font-bold px-3 py-1.5 rounded-md text-gray-400 hover:text-white transition-all";
+            copContainer.style.display = "block";
+            recContainer.style.display = "none";
         }
     }
 
@@ -592,6 +672,17 @@
         toast.className = "show";
         if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
         setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 2000);
+    }
+
+    function copyCA(ca) {
+        navigator.clipboard.writeText(ca);
+        showToast("Copied to clipboard!");
+    }
+
+    function copyAffiliateLink(inputId) {
+        const link = document.getElementById(inputId).value;
+        navigator.clipboard.writeText(link);
+        showToast("Link Copied to Clipboard!");
     }
 
     if (tg.initDataUnsafe?.user) {
@@ -850,195 +941,12 @@
         }
     }
 
-    function renderLeaderboard() {
-        const data = liveLeaderboardData;
-        const container = document.getElementById('leaderboard-container');
-        
-        if (!data.guild) {
-            document.getElementById('lb-title').innerText = "Join a Guild";
-            document.getElementById('lb-desc').innerText = "Trade via Sentry to start earning GLP and climb the ranks.";
-            document.getElementById('lb-badge').innerText = "NO ACTIVE GUILD";
-            if (container) {
-                container.innerHTML = `
-                    <div class="text-center py-10 text-gray-500 flex flex-col items-center">
-                        <i class="fa-solid fa-users-slash text-3xl mb-3 opacity-50"></i>
-                        <div class="text-sm font-semibold">You are not in a Guild</div>
-                        <span class="text-xs font-mono mt-1">Use a KOL's invite link to join one.</span>
-                    </div>`;
-            }
-            return;
-        }
-
-        document.getElementById('lb-title').innerText = data.guild.name;
-        document.getElementById('lb-desc').innerText = `"${data.guild.reward}"`;
-        document.getElementById('lb-badge').innerText = `GUILD CODE: ${data.guild.code}`;
-
-        if (!data.members || data.members.length === 0) {
-            if (container) container.innerHTML = `<div class="text-center text-gray-500 py-4">No trading data yet. Be the first to rank!</div>`;
-            return;
-        }
-
-        if (container) {
-            container.innerHTML = data.members.map((row, i) => {
-                const medal = i === 0 ? '<span class="text-2xl">🥇</span>' : i === 1 ? '<span class="text-2xl">🥈</span>' : i === 2 ? '<span class="text-2xl">🥉</span>' : `<span class="text-gray-500 text-lg">#${i+1}</span>`;
-                const airdropTag = row.airdropsReceived > 0 ? `<div class="text-[10px] text-jupGreen bg-jupGreen/10 border border-jupGreen/20 px-2 py-0.5 rounded ml-2 inline-block"><i class="fa-solid fa-gift"></i> ${row.airdropsReceived.toFixed(2)} SOL</div>` : '';
-                
-                return `
-                <div class="flex justify-between items-center bg-[#1a2235] p-4 rounded-xl border border-white/5 transition-transform hover:scale-[1.01]">
-                    <div class="flex items-center gap-3 sm:gap-4">
-                        <div class="w-8 text-center font-bold">${medal}</div>
-                        <div>
-                            <div class="font-bold text-white text-sm sm:text-base">@${row.username} ${airdropTag}</div>
-                            <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue" onclick="copyCA('${row.walletAddress}')">
-                                ${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <div class="font-bold text-emerald-400 text-sm sm:text-base">${row.glp.toLocaleString()} GLP</div>
-                        <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${row.volumeSol.toFixed(2)} SOL Vol</div>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-    }
-
-    function renderAffiliates() {
-        const data = liveAffiliateData;
-        
-        document.getElementById('aff-stat-recruits').innerText = data.recruits;
-        document.getElementById('aff-stat-pending').innerText = data.pendingYieldSol.toFixed(4);
-        document.getElementById('aff-stat-lifetime').innerText = data.lifetimeEarnedSol.toFixed(4);
-        
-        let tier = data.currentTier || "Bronze";
-        let tierRate = ((data.currentRate || 0.40) * 100).toFixed(0) + "%";
-        let tierColor = "text-amber-500";
-
-        const pts = data.totalPoints || 0;
-        if (pts >= 1000000) {
-            tierColor = "text-cyan-400";
-            tier = "Diamond";
-            tierRate = "70%";
-        } else if (pts >= 250000) {
-            tierColor = "text-yellow-400";
-            tier = "Gold";
-            tierRate = "60%";
-        } else if (pts >= 50000) {
-            tierColor = "text-gray-300";
-            tier = "Silver";
-            tierRate = "50%";
-        } else {
-            tier = "Bronze";
-            tierRate = "40%";
-        }
-        
-        const tierEl = document.getElementById('aff-stat-tier');
-        tierEl.innerText = `${tier} (${tierRate})`;
-        tierEl.className = `text-3xl sm:text-4xl font-bold ${tierColor}`;
-        
-        document.getElementById('aff-ref-link').value = data.referralLink || "Link not generated";
-        
-        const container = document.getElementById('recruits-container');
-        if (!data.recruitList || data.recruitList.length === 0) {
-            if (container) {
-                container.innerHTML = `
-                    <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                        <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                        <div class="text-sm font-semibold">No recruits yet</div>
-                        <span class="text-xs font-mono mt-1">Share your link to start earning.</span>
-                    </div>`;
-            }
-        } else if (container) {
-            container.innerHTML = data.recruitList.map(r => {
-                const isActive = r.lastActiveDaysAgo < 7;
-                const dotColor = isActive ? 'bg-jupGreen' : 'bg-gray-600';
-                return `
-                <div class="card-flat overflow-hidden p-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
-                    <div class="flex items-center gap-4">
-                        <div class="relative">
-                            <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
-                                <i class="fa-solid fa-user text-gray-400"></i>
-                            </div>
-                            <span class="absolute bottom-0 right-0 h-3 w-3 rounded-full ${dotColor} border-2 border-[#0e131f]"></span>
-                        </div>
-                        <div>
-                            <h4 class="font-bold text-[15px] text-white">@${r.username}</h4>
-                            <span class="text-[11px] text-gray-500 font-mono">${r.volumeSol.toFixed(2)} SOL Vol</span>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <span class="font-bold text-lg text-jupGreen">+${r.yourEarningSol.toFixed(4)}</span>
-                        <div class="text-[12px] font-semibold text-gray-500 mt-0.5">
-                            SOL Earned
-                        </div>
-                    </div>
-                </div>
-                `;
-            }).join('');
-        }
-        
-        const affCanvas = document.getElementById('affiliateChart');
-        if (affCanvas) {
-            const affCtx = affCanvas.getContext('2d');
-            const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
-            gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.45)'); 
-            gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
-
-            if (affChart) affChart.destroy();
-            
-            const labels = Array.from({length: 30}, (_, i) => {
-                const d = new Date();
-                d.setDate(d.getDate() - (29 - i));
-                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
-            });
-
-            affChart = new Chart(affCtx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        { label: 'SOL Earned', data: data.dailyEarnings, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.32, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }
-                    ]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-                    plugins: { 
-                        legend: { display: false },
-                        tooltip: { backgroundColor: '#0e131f', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
-                    },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
-                    }
-                }
-            });
-        }
-
-        const last7dEarnings = data.dailyEarnings.slice(23).reduce((a, b) => a + b, 0);
-        const dailyAvg = last7dEarnings / 7;
-        
-        document.getElementById('proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
-        document.getElementById('proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
-        document.getElementById('proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
-    }
-
-    function copyReferralLink() {
-        const link = document.getElementById('aff-ref-link').value;
-        navigator.clipboard.writeText(link);
-        showToast("Referral Link Copied!");
-    }
-
     function toggleDrawer(mint) {
         const el = document.getElementById(`drawer-${mint}`);
         const isHidden = el.classList.contains('hidden');
         document.querySelectorAll('[id^="drawer-"]').forEach(d => d.classList.add('hidden'));
         if (isHidden) el.classList.remove('hidden');
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
-    }
-
-    function copyCA(ca) {
-        navigator.clipboard.writeText(ca);
-        showToast("Copied to clipboard!");
     }
 
     function setFilter(timeframe) {
@@ -1094,7 +1002,7 @@
         document.getElementById('header-credits').innerText = '0 Credits';
         document.getElementById('sharpe-ratio').innerText = '--';
         document.getElementById('tca-slippage').innerText = '--%';
-        document.getElementById('cvar-value').innerText = '-- SOL';
+        document.getElementById('cvar-value').innerText = '0.0000 SOL';
         document.getElementById('total-trades-count').innerText = '0';
         document.getElementById('risk-score').innerText = '0%';
         document.getElementById('risk-label').innerText = 'Awaiting Scan...';
@@ -1118,6 +1026,245 @@
         if (pnlChart) pnlChart.destroy();
         if (allocChart) allocChart.destroy();
         initCharts([], [], [], [], []);
+    }
+
+    function renderLeaderboardChart(members) {
+        const chartCard = document.getElementById('lb-chart-card');
+        const canvas = document.getElementById('leaderboardChart');
+        if (!canvas || !members || members.length === 0) {
+            if (chartCard) chartCard.style.display = 'none';
+            return;
+        }
+        if (chartCard) chartCard.style.display = 'block';
+        const ctx = canvas.getContext('2d');
+        if (window.lbChartInst) window.lbChartInst.destroy();
+        const top10 = members.slice(0, 10);
+        window.lbChartInst = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: top10.map(m => '@' + (m.username || 'anon')),
+                datasets: [{ 
+                    label: 'GLP', 
+                    data: top10.map(m => m.glp), 
+                    backgroundColor: 'rgba(16,185,129,0.55)',
+                    borderColor: '#10b981',
+                    borderWidth: 1,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { 
+                    legend: { display: false },
+                    tooltip: { backgroundColor: '#0e131f', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8 }
+                },
+                scales: { 
+                    x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } }, 
+                    y: { ticks: { color: '#cbd5e1', font: { size: 11 } }, grid: { display: false } } 
+                }
+            }
+        });
+    }
+
+    function renderLeaderboard() {
+        const data = liveLeaderboardData;
+        const container = document.getElementById('leaderboard-container');
+        
+        if (!data.guild) {
+            document.getElementById('lb-title').innerText = "Join a Guild";
+            document.getElementById('lb-desc').innerText = "Trade via Sentry to start earning GLP and climb the ranks.";
+            document.getElementById('lb-badge').innerText = "NO ACTIVE GUILD";
+            renderLeaderboardChart([]);
+            if (container) {
+                container.innerHTML = `
+                    <div class="text-center py-10 text-gray-500 flex flex-col items-center">
+                        <i class="fa-solid fa-users-slash text-3xl mb-3 opacity-50"></i>
+                        <div class="text-sm font-semibold">You are not in a Guild</div>
+                        <span class="text-xs font-mono mt-1">Use a KOL's invite link to join one.</span>
+                    </div>`;
+            }
+            return;
+        }
+
+        document.getElementById('lb-title').innerText = data.guild.name;
+        document.getElementById('lb-desc').innerText = `"${data.guild.reward}"`;
+        document.getElementById('lb-badge').innerText = `GUILD CODE: ${data.guild.code}`;
+
+        if (!data.members || data.members.length === 0) {
+            renderLeaderboardChart([]);
+            if (container) container.innerHTML = `<div class="text-center text-gray-500 py-4">No trading data yet. Be the first to rank!</div>`;
+            return;
+        }
+
+        renderLeaderboardChart(data.members);
+
+        if (container) {
+            container.innerHTML = data.members.map((row, i) => {
+                const medal = i === 0 ? '<span class="text-2xl">🥇</span>' : i === 1 ? '<span class="text-2xl">🥈</span>' : i === 2 ? '<span class="text-2xl">🥉</span>' : `<span class="text-gray-500 text-lg">#${i+1}</span>`;
+                const airdropTag = row.airdropsReceived > 0 ? `<div class="text-[10px] text-jupGreen bg-jupGreen/10 border border-jupGreen/20 px-2 py-0.5 rounded ml-2 inline-block"><i class="fa-solid fa-gift"></i> ${row.airdropsReceived.toFixed(2)} SOL</div>` : '';
+                
+                return `
+                <div class="flex justify-between items-center bg-[#1a2235] p-4 rounded-xl border border-white/5 transition-transform hover:scale-[1.01]">
+                    <div class="flex items-center gap-3 sm:gap-4">
+                        <div class="w-8 text-center font-bold">${medal}</div>
+                        <div>
+                            <div class="font-bold text-white text-sm sm:text-base">@${row.username} ${airdropTag}</div>
+                            <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue" onclick="copyCA('${row.walletAddress}')">
+                                ${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div class="font-bold text-emerald-400 text-sm sm:text-base">${row.glp.toLocaleString()} GLP</div>
+                        <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${row.volumeSol.toFixed(2)} SOL Vol</div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+    }
+
+    function renderAffiliates() {
+        const data = liveAffiliateData;
+
+        // 1. Points & Tier Display
+        const points = data.totalPoints || 0;
+        document.getElementById('aff-stat-points').innerText = `${points.toLocaleString()} PTS`;
+        
+        let tierColor = "text-amber-500";
+        let tierLabel = "Bronze (50%)";
+        if (data.currentTier === "Gold") {
+            tierColor = "text-cyan-400";
+            tierLabel = "Gold (70%)";
+        } else if (data.currentTier === "Silver") {
+            tierColor = "text-gray-300";
+            tierLabel = "Silver (60%)";
+        } else {
+            tierColor = "text-amber-500";
+            tierLabel = "Bronze (50%)"; // 🟢 Starts at 50%
+        }
+
+        const tierEl = document.getElementById('aff-stat-tier');
+        tierEl.innerText = tierLabel;
+        tierEl.className = `text-2xl sm:text-3xl font-bold font-mono mt-1 ${tierColor}`;
+
+        const nextTierEl = document.getElementById('aff-stat-next-tier');
+        const progressBar = document.getElementById('aff-points-bar');
+        const nextPts = data.nextTierPoints || 5000000;
+        const progressPct = Math.min(100, Math.max(5, (points / nextPts) * 100));
+        if (progressBar) progressBar.style.width = `${progressPct}%`;
+        if (nextTierEl) nextTierEl.innerText = `${points.toLocaleString()} / ${nextPts.toLocaleString()} PTS to ${data.nextTier || 'Silver'}`;
+
+        // 2. Revenue Breakdown KPIs
+        document.getElementById('aff-stat-pending').innerText = `${(data.pendingYieldSol || 0).toFixed(4)} SOL`;
+        document.getElementById('aff-stat-trade-fees').innerText = `+${(data.tradingFeeEarnedSol || 0).toFixed(4)} SOL`;
+        document.getElementById('aff-stat-credits-rev').innerText = `+${(data.creditEarnedSol || 0).toFixed(4)} SOL`;
+        document.getElementById('aff-stat-copier-rev').innerText = `+${(data.copierLeaderEarnedSol || 0).toFixed(4)} SOL`;
+
+        // 3. Links
+        document.getElementById('aff-ref-link').value = data.referralLink || "Link generating...";
+        document.getElementById('aff-feed-link').value = data.copierFeedLink || "Link generating...";
+        document.getElementById('aff-tab-recruits-count').innerText = data.recruits || 0;
+        document.getElementById('aff-tab-copiers-count').innerText = data.activeCopiers || 0;
+
+        // 4. Render Recruits List
+        const recContainer = document.getElementById('recruits-container');
+        if (!data.recruitList || data.recruitList.length === 0) {
+            recContainer.innerHTML = `
+                <div class="text-center py-8 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                    <i class="fa-solid fa-user-plus text-2xl mb-2 opacity-50"></i>
+                    <div class="text-xs font-semibold">No recruits yet</div>
+                    <span class="text-[10px] font-mono mt-1">Share your invite link to earn 50% - 70% fees + 40% on AI Credits.</span>
+                </div>`;
+        } else {
+            recContainer.innerHTML = data.recruitList.map(r => `
+                <div class="card-flat p-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
+                    <div class="flex items-center gap-3">
+                        <div class="bg-[#1e293b] text-white font-bold rounded-lg h-9 w-9 flex items-center justify-center text-xs border border-white/5">
+                            <i class="fa-solid fa-user text-gray-400"></i>
+                        </div>
+                        <div>
+                            <h4 class="font-bold text-sm text-white">@${r.username}</h4>
+                            <span class="text-[10px] text-gray-500 font-mono">${r.volumeSol.toFixed(2)} SOL Traded</span>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="font-bold text-sm text-jupGreen">+${r.yourEarningSol.toFixed(4)} SOL</span>
+                        <div class="text-[10px] text-gray-500 font-mono">
+                            Fees: +${r.tradingFeeEarningSol.toFixed(3)} | Credits: +${r.creditEarningSol.toFixed(3)}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 5. Render Copiers List
+        const copContainer = document.getElementById('copiers-container');
+        if (!data.copierList || data.copierList.length === 0) {
+            copContainer.innerHTML = `
+                <div class="text-center py-8 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
+                    <i class="fa-solid fa-users text-2xl mb-2 opacity-50 text-neonBlue"></i>
+                    <div class="text-xs font-semibold">No active copiers yet</div>
+                    <span class="text-[10px] font-mono mt-1">Share your Public Trade Feed link to monetize your alpha (50% fee cut).</span>
+                </div>`;
+        } else {
+            copContainer.innerHTML = data.copierList.map(c => `
+                <div class="card-flat p-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
+                    <div class="flex items-center gap-3">
+                        <div class="bg-neonBlue/10 text-neonBlue font-bold rounded-lg h-9 w-9 flex items-center justify-center text-xs border border-neonBlue/20">
+                            <i class="fa-solid fa-tower-broadcast"></i>
+                        </div>
+                        <div>
+                            <h4 class="font-bold text-sm text-white">@${c.username}</h4>
+                            <span class="text-[10px] text-gray-500 font-mono">${c.volumeSol.toFixed(2)} SOL Mirrored</span>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="font-bold text-sm text-neonBlue">+${c.yourEarningSol.toFixed(4)} SOL</span>
+                        <div class="text-[10px] text-gray-500 font-mono">Leader Yield (50%)</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 6. Chart Rendering
+        const affCanvas = document.getElementById('affiliateChart');
+        if (affCanvas) {
+            const affCtx = affCanvas.getContext('2d');
+            const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
+            gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.45)'); 
+            gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+
+            if (affChart) affChart.destroy();
+            const labels = Array.from({length: 30}, (_, i) => {
+                const d = new Date();
+                d.setDate(d.getDate() - (29 - i));
+                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+            });
+
+            affChart = new Chart(affCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{ label: 'SOL Earned', data: data.dailyEarnings || Array(30).fill(0), borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.32, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#0e131f', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8 } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
+                    }
+                }
+            });
+        }
+
+        const last7dEarnings = (data.dailyEarnings || []).slice(23).reduce((a, b) => a + b, 0);
+        const dailyAvg = last7dEarnings / 7;
+        document.getElementById('proj-7d').innerText = `${(dailyAvg * 7).toFixed(4)} SOL`;
+        document.getElementById('proj-30d').innerText = `${(dailyAvg * 30).toFixed(4)} SOL`;
+        document.getElementById('proj-1y').innerText = `${(dailyAvg * 365).toFixed(4)} SOL`;
     }
 
     async function triggerSweepAll() {
@@ -1247,7 +1394,7 @@
                 const tcaEl = document.getElementById('tca-slippage');
                 const cvarEl = document.getElementById('cvar-value');
                 if (tcaEl) tcaEl.innerText = d.institutional.avgSlippage !== undefined ? d.institutional.avgSlippage.toFixed(2) + '%' : '0.11%';
-                if (cvarEl) cvarEl.innerText = d.institutional.cvar ? d.institutional.cvar.toFixed(4) + ' SOL' : '-0.9281 SOL';
+                if (cvarEl) cvarEl.innerText = d.institutional.cvar ? d.institutional.cvar.toFixed(4) + ' SOL' : '0.0000 SOL';
 
                 const totalTradesEl = document.getElementById('total-trades-count');
                 if (totalTradesEl && d.institutional.totalTradesCount !== undefined) {
@@ -1273,6 +1420,34 @@
                 }
             }
 
+        } catch (_) {}
+    }
+
+    async function fetchLeaderboardData() {
+        try {
+            const res = await fetch('/api/my-leaderboard', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
+            });
+            if (res.ok) {
+                liveLeaderboardData = await res.json();
+                renderLeaderboard();
+            }
+        } catch (_) {}
+    }
+
+    async function fetchAffiliateData() {
+        try {
+            const res = await fetch('/api/affiliate-stats', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
+            });
+            if (res.ok) {
+                liveAffiliateData = await res.json();
+                renderAffiliates();
+            }
         } catch (_) {}
     }
 
@@ -1453,10 +1628,15 @@
         }
     }
 
-    // Initial load + single consolidated 10-second polling loop
+    // Initial load + clean background polling loops
     fetchLiveData();
     fetchDashboardBundle();
+    fetchLeaderboardData();
+    fetchAffiliateData();
+
     setInterval(fetchDashboardBundle, 10000);
+    setInterval(fetchLeaderboardData, 15000);
+    setInterval(fetchAffiliateData, 15000);
 </script>
 </body>
 </html>
