@@ -112,3 +112,9 @@ export async function getDynamicAffiliateRate(referrerId: string): Promise<numbe
         return 0.50;
     }
 }
+
+export async function invalidateUserPointsCache(userId: string): Promise<void> {
+    try {
+        await redis.del(`user_points_breakdown:${userId}`);
+    } catch (_) {}
+}
