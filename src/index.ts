@@ -5667,8 +5667,6 @@ bot.hears(/^\/(scan|xray|info) (.+)/i, async (ctx) => {
 // 📤 SECURED WITHDRAWAL COMMAND
 // =========================================================
 
-
-
 // ─── WITHDRAWAL COMMAND HANDLER ────────────────────────
 bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
     const telegramId = ctx.from?.id.toString();
@@ -8687,10 +8685,6 @@ bot.action('toggle_sim_mode', async (ctx) => {
 });
 
 
-
-
-
-
 app.post('/api/toggle-sim', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
@@ -8800,9 +8794,6 @@ app.post('/api/analytics/advanced-stats', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
-
-
-
 
 
 async function bootEcosystem() {
