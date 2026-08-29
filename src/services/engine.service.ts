@@ -100,6 +100,12 @@ export function resolveViaDoh(hostname: string): Promise<string | null> {
     });
 }
 
+// 🟢 Reuses warm TCP+TLS sockets — eliminates 30-60ms handshake penalty on quotes
+export const axiosClient = axios.create({ 
+    httpsAgent: keepAliveHttpsAgent,
+    timeout: 5000 
+});
+
 export async function warmDnsCache(): Promise<void> {
     logger.info('🌐 [DNS] Pre-warming DoH cache for critical endpoints...');
     await Promise.all(CRITICAL_DOMAINS.map(async (domain) => {
@@ -107,12 +113,6 @@ export async function warmDnsCache(): Promise<void> {
         if (ip) logger.info(`  ✅ ${domain} → ${ip}`);
     }));
 }
-
-// 🟢 Reusable Keep-Alive Axios Instance
-export const axiosClient = axios.create({ 
-    httpsAgent: keepAliveHttpsAgent,
-    timeout: 5000 
-});
 
 export async function getDynamicPriorityFee(priorityLevel: string, customPriorityFee: number): Promise<number> {
     if (priorityLevel === 'ECO') return 500_000;
