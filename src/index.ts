@@ -1,5 +1,6 @@
 // src/index.ts
-// src/index.ts
+import dns from 'dns';
+dns.setDefaultResultOrder('ipv4first');
 import { Telegraf, Markup, Context } from 'telegraf';
 import express from 'express';
 import cors from 'cors';
