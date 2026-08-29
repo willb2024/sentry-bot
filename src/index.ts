@@ -58,12 +58,17 @@ import { isSimulationActive, getSimBalance } from './services/simulation.service
 
 
 
-
-
-
-
 const app = express();
 app.use(express.json());
+
+// 🟢 FIX 1: Catch malformed JSON bodies before they crash Express
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err instanceof SyntaxError && 'body' in err) {
+        console.warn(`⚠️ [EXPRESS] Malformed JSON body rejected from ${req.ip} on ${req.path}`);
+        return res.status(400).json({ error: 'Invalid JSON body' });
+    }
+    next(err);
+});
 
 dotenv.config();
 console.log("🟢 [1/5] Booting Sentry Terminal Core...");
@@ -123,16 +128,6 @@ app.use(cors({
 }));
 
 
-app.use(express.json());
-
-// 🟢 FIX 1: Intercept and reject malformed JSON bodies without crashing or spamming error logs
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (err instanceof SyntaxError && 'body' in err) {
-        console.warn(`⚠️ [EXPRESS] Rejected malformed JSON payload from ${req.ip} on ${req.path}`);
-        return res.status(400).json({ error: 'Invalid JSON payload structure' });
-    }
-    next(err);
-});
 
 
 
@@ -8837,13 +8832,21 @@ async function bootEcosystem() {
         const keys = await redis.keys('active_bumper:*');
         if (keys.length > 0) await redis.del(...keys);
 
-        const info = await bot.telegram.getMe();
+        // 1. Guard getMe() with a 15s timeout so network hangs fail fast
+        const info = await Promise.race([
+            bot.telegram.getMe(),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('getMe() timed out after 15000ms')), 15000))
+        ]);
         console.log(`🟢 [4/5] HFT BOT ONLINE -> @${info.username}`);
 
-        // Force-delete any stuck webhook on Telegram's servers before initiating long-polling
-        await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
+        // 2. Force delete any webhook before starting long polling
+        await Promise.race([
+            bot.telegram.deleteWebhook({ drop_pending_updates: false }),
+            new Promise((resolve) => setTimeout(resolve, 10000))
+        ]).catch(() => {});
 
-        const launchTimeoutMs = 30000; // Fail fast at 30s instead of hanging for 90s
+        // 3. Launch with 30s timeout guard
+        const launchTimeoutMs = 30000;
         await Promise.race([
             bot.launch({ 
                 dropPendingUpdates: true,
