@@ -123,7 +123,16 @@ app.use(cors({
 }));
 
 
+app.use(express.json());
 
+// 🟢 FIX 1: Intercept and reject malformed JSON bodies without crashing or spamming error logs
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err instanceof SyntaxError && 'body' in err) {
+        console.warn(`⚠️ [EXPRESS] Rejected malformed JSON payload from ${req.ip} on ${req.path}`);
+        return res.status(400).json({ error: 'Invalid JSON payload structure' });
+    }
+    next(err);
+});
 
 
 
@@ -8822,7 +8831,7 @@ async function bootEcosystem() {
 
     await new Promise(r => setTimeout(r, 1000));
 
-    // 🟢 STAGGER 3: Single-Instance Telegram Long-Polling Launch (No 90s Timeouts)
+    // 🟢 STAGGER 3: Fail-Fast Telegram Long-Polling Launch (No 90s Hang)
     console.log("⏳ [4/5] Connecting to Telegram Bot API...");
     try {
         const keys = await redis.keys('active_bumper:*');
@@ -8831,20 +8840,34 @@ async function bootEcosystem() {
         const info = await bot.telegram.getMe();
         console.log(`🟢 [4/5] HFT BOT ONLINE -> @${info.username}`);
 
-        // Delete any stale webhook registration before starting polling
-        await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-        
-        bot.launch({ 
-            dropPendingUpdates: true,
-            allowedUpdates: ['message', 'callback_query']
-        }).then(() => {
-            console.log("🟢 [5/5] ALL SYSTEMS GO. Core Trading Engine Active.");
-        }).catch((e: any) => {
-            console.error("🔴 Telegram Launch Error:", e?.message || e);
-        });
+        // Force-delete any stuck webhook on Telegram's servers before initiating long-polling
+        await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
+
+        const launchTimeoutMs = 30000; // Fail fast at 30s instead of hanging for 90s
+        await Promise.race([
+            bot.launch({ 
+                dropPendingUpdates: true,
+                allowedUpdates: ['message', 'callback_query']
+            }),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error(`Telegram launch timed out after ${launchTimeoutMs}ms`)), launchTimeoutMs)
+            )
+        ]);
+
+        console.log("🟢 [5/5] ALL SYSTEMS GO. Core Trading Engine Active.");
 
     } catch (err: any) {
-        console.error("🔴 TELEGRAM BOOT FAILED:", err?.message || String(err));
+        console.error(`🔴 Telegram Launch Initial Attempt Failed: ${err?.message || err}`);
+
+        // Bounded single retry after short backoff to handle transient network blips
+        await new Promise((r) => setTimeout(r, 4000));
+        try {
+            await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
+            await bot.launch({ dropPendingUpdates: true, allowedUpdates: ['message', 'callback_query'] });
+            console.log("🟢 [5/5] ALL SYSTEMS GO. Core Trading Engine Active (Connected on retry).");
+        } catch (retryErr: any) {
+            console.error(`🔴 Telegram Launch Retry Failed: ${retryErr?.message || retryErr}`);
+        }
     }
 
     // 🟢 STAGGER 4: Staggered Stream & Background Watcher Activation (Prevents 429 RPC Storm)
