@@ -1893,6 +1893,135 @@ bot.start(async (ctx: Context) => {
 // 🟢 FEATURES 3 & 4: WATCHLIST & CALENDAR COMMANDS
 // =========================================================
 
+
+// =========================================================
+// 🚀 ONBOARDING GATEWAY (MANDATORY TERMS & RISK ACCEPTANCE)
+// =========================================================
+bot.start(async (ctx: Context) => {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    try {
+        let userCheck = await prisma.user.findUnique({ where: { telegramId } });
+        const botName = process.env.BOT_NAME || 'Sentry Terminal';
+        
+        let pendingGuildCode: string | undefined = undefined;
+        let referrerId: string | null = null;
+        let getsDiscount = false;
+
+        // @ts-ignore
+        const payload = ctx.payload || '';
+
+        if (payload) {
+            if (payload.startsWith('guild_')) {
+                pendingGuildCode = payload.replace('guild_', '') || undefined;
+                const guild = await prisma.guild.findUnique({ where: { guildCode: pendingGuildCode } });
+                if (guild) { referrerId = guild.ownerId; getsDiscount = true; }
+            } else {
+                const referrer = await prisma.user.findUnique({ where: { referralCode: payload } });
+                if (referrer) { referrerId = referrer.id; getsDiscount = true; }
+            }
+        }
+
+        if (!userCheck) {
+            const refPrefix = botName.toUpperCase().split(' ')[0];
+            userCheck = await prisma.user.create({
+                data: {
+                    telegramId: telegramId, 
+                    username: ctx.from?.username || "Trader",
+                    referralCode: `${refPrefix}-${telegramId}`, 
+                    referredById: referrerId,
+                    hasReferralDiscount: getsDiscount,
+                    creditBalance: 15,     // 🟢 15 Free Welcome Credits
+                    lifetimeCredits: 15
+                }
+            });
+
+            // Trigger Daily VIP Promo for new recruits
+            if (payload && !payload.startsWith('guild_')) {
+                const result = await checkAndGrantDailyVip(telegramId, payload);
+                if (result.granted) {
+                    await ctx.replyWithHTML(`🎉 <b>PROMO VIP GRANTED!</b>\n\nYou received a free 10-Day VIP Pass via your referral link!`);
+                }
+            }
+        }
+
+        if (pendingGuildCode) {
+            const result = await joinGuild(telegramId, pendingGuildCode);
+            if (result.success) {
+                await ctx.replyWithHTML(
+                    `🏰 <b>GUILD JOINED: ${result.guildName?.toUpperCase()}</b>\n\n` +
+                    `${result.rewardDescription || 'Trade to climb the leaderboard and earn your reward.'}\n\n` +
+                    `📊 Every <b>0.1 SOL</b> you trade earns you <b>10 Guild Loyalty Points (GLP)</b>.\n` +
+                    `🏆 Your KOL will export the top wallets for whitelist / airdrop rewards.\n\n` +
+                    `<i>Keep trading — your rank updates live.</i>`
+                );
+            }
+        }
+
+        // Existing user with initialized vault -> Go straight to main dashboard
+        if (userCheck.vaultAddress) {
+            return await sendOrEditDashboard(ctx, telegramId, false);
+        }
+
+        // 🟢 NEW USER ONBOARDING GATE: Mandatory Terms of Service & Risk Disclosure
+        const termsGateText = 
+            `🛡️ <b>WELCOME TO ${botName.toUpperCase()}</b>\n` +
+            `<i>Institutional Quantitative Terminal for Solana Decentralized Markets</i>\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `⚠️ <b>MANDATORY RISK DISCLOSURE & LEGAL TERMS</b>\n\n` +
+            `Before generating your encrypted self-custodial trading vault, you must read, understand, and agree to the following legally binding terms:\n\n` +
+            `<b>1. Assumption of Total Financial Risk:</b>\n` +
+            `• Cryptocurrency trading, automated mempool sniping, and algorithmic execution carry an extreme risk of capital loss.\n` +
+            `• Smart contract vulnerabilities, token creator exploits, honeypots, RPC latency, network congestion, and MEV sandwich bots can result in the complete loss of your deposited funds.\n\n` +
+            `<b>2. Software Utility (No Financial Advice):</b>\n` +
+            `• Sentry is a self-custodial developer interface. It is <b>NOT</b> an investment fund, broker, exchange, or financial advisor.\n` +
+            `• AI Token Scores (0–100), automated caller alerts, price projections, and backtests are mathematical estimates and do <b>NOT</b> guarantee future profitability.\n\n` +
+            `<b>3. Non-Custodial Architecture:</b>\n` +
+            `• All private keys are generated locally and encrypted via AES-256-GCM. You maintain sole and exclusive ownership of your wallet.\n\n` +
+            `<b>4. Limitation of Liability & Arbitration:</b>\n` +
+            `• Under no circumstances shall Sentry or its operators be liable for trading losses, slippage, or third-party outages.\n` +
+            `• Maximum aggregate liability is strictly capped at $100 USD or fees paid in the last 3 months.\n` +
+            `• <b>You waive all rights to jury trials or class action lawsuits.</b> All disputes are subject to binding individual arbitration.\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `<i>By tapping "I ACCEPT & CREATE VAULT" below, you affirm you are of legal age, accept all financial risks, and agree to these Terms in full.</i>`;
+
+        const gateKeyboard = Markup.inlineKeyboard([
+            [Markup.button.callback('✅ I ACCEPT TERMS & CREATE VAULT', 'action_create_vault')],
+            [Markup.button.callback('📜 View Full 10-Point Legal Contract', 'action_view_full_terms')]
+        ]);
+
+        await ctx.replyWithHTML(termsGateText, gateKeyboard);
+
+    } catch (error: any) { 
+        console.error("🔴 Registration Fault:", error?.message || error); 
+    }
+});
+
+// 🟢 Action: View Expanded Full Legal Contract from the Onboarding Gate
+bot.action('action_view_full_terms', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (_) {}
+    
+    const fullLegalText = 
+        `📜 <b>FULL LEGAL CONTRACT & ARBITRATION WAIVER</b>\n\n` +
+        `<b>1. No Warranty:</b> The Service is provided strictly "AS IS" and "AS AVAILABLE" without warranties of any kind.\n\n` +
+        `<b>2. Probabilistic Models:</b> Automated engines (Sniper, DCA, Copy-Trade, Trailing Stops) rely on probabilistic statistical data. Past performance does not guarantee future results.\n\n` +
+        `<b>3. Third-Party Protocols:</b> We bear no responsibility for outages, exploits, or losses occurring on Solana validators, Jito Block Engines, Jupiter, Raydium, Meteora, or Pump.fun.\n\n` +
+        `<b>4. Indemnification:</b> You agree to indemnify and hold harmless Sentry Terminal and its operators from any claims, losses, or legal fees arising from your use of this software.\n\n` +
+        `<b>5. Self-Custody Responsibility:</b> You are solely responsible for backing up your recovery codes, safeguarding your PIN, and safely managing your exported private keys.\n\n` +
+        `<b>6. Dispute Resolution:</b> Any claim must be settled via individual binding arbitration under international commercial rules, not in public court.\n\n` +
+        `<i>Tap below to accept and proceed to your Vault generation:</i>`;
+
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('✅ I ACCEPT TERMS & CREATE VAULT', 'action_create_vault')],
+        [Markup.button.callback('⬅️ Back to Summary', 'btn_dashboard')]
+    ]);
+
+    await safeEditMessageText(ctx, fullLegalText, keyboard);
+});
+
+
+
 bot.command('calendar', async (ctx) => {
     
     const raw = await redis.get('calendar:launches');

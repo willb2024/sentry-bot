@@ -15,7 +15,9 @@ import { redlock } from '../lib/redlock.js';
 import { getBotInstance } from '../lib/bot-instance.js';
 import { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } from './simulation.service.js';
 import axios from 'axios';
-import { getDynamicAffiliateRate as getAffiliateRateFromPoints } from './points.js';
+import { getDynamicAffiliateRate as getAffiliateRateFromPoints, invalidateUserPointsCache } from './points.js';
+import { getCachedQuote } from './quote-cache.service.js';
+import { keepAliveHttpsAgent } from '../lib/http-agent.js';
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { awardGuildPoints } from './guild.service.js';
@@ -56,7 +58,7 @@ const CRITICAL_DOMAINS = [
     'mainnet.block-engine.jito.wtf'
 ];
 
-function resolveViaDoh(hostname: string): Promise<string | null> {
+export function resolveViaDoh(hostname: string): Promise<string | null> {
     return new Promise(async (resolve) => {
         const cached = dohCache[hostname];
         if (cached && Date.now() < cached.expiresAt) return resolve(cached.ip);
@@ -98,15 +100,6 @@ function resolveViaDoh(hostname: string): Promise<string | null> {
     });
 }
 
-const secureDoHLookup = (hostname: string, options: any, callback: any) => {
-    const cached = dohCache[hostname];
-    if (cached && Date.now() < cached.expiresAt) return callback(null, cached.ip, 4);
-    resolveViaDoh(hostname).then((ip) => {
-        if (ip) return callback(null, ip, 4);
-        dns.lookup(hostname, options, callback);
-    });
-};
-
 export async function warmDnsCache(): Promise<void> {
     logger.info('🌐 [DNS] Pre-warming DoH cache for critical endpoints...');
     await Promise.all(CRITICAL_DOMAINS.map(async (domain) => {
@@ -115,14 +108,9 @@ export async function warmDnsCache(): Promise<void> {
     }));
 }
 
-const activeAgent = new https.Agent({
-    lookup: secureDoHLookup,
-    family: 4,
-    keepAlive: true,
-});
-
+// 🟢 Reusable Keep-Alive Axios Instance
 export const axiosClient = axios.create({ 
-    httpsAgent: activeAgent,
+    httpsAgent: keepAliveHttpsAgent,
     timeout: 5000 
 });
 
@@ -132,7 +120,6 @@ export async function getDynamicPriorityFee(priorityLevel: string, customPriorit
     if (priorityLevel === 'TURBO') return 5_000_000;
     
     const now = Date.now();
-    // Cache for 30s to prevent 429 rate limit spam
     if (now - lastPriorityFeeFetch > 30000) {
         lastPriorityFeeFetch = now;
         const rpcUrl = process.env.HELIUS_RPC_URL || process.env.PRIMARY_RPC_URL;
@@ -145,7 +132,6 @@ export async function getDynamicPriorityFee(priorityLevel: string, customPriorit
                     cachedPriorityFee = Math.max(1_000_000, res.data.result.priorityFeeEstimate);
                 }
             }).catch(() => {
-                // Keep default 1,000,000 lamports on 429 without throwing
                 cachedPriorityFee = 1_000_000;
             });
         }
@@ -523,12 +509,13 @@ export async function runExecutionBenchmark(
         quoteMs = 38.5;
     }
 
-    // 5. Multi-Wallet (Whale Mode) 5-Keypair Batch Sign Benchmark
+    // 5. Multi-Wallet (Whale Mode) 5-Keypair Parallelized Sign Benchmark
     const dummyWallets = Array.from({ length: 5 }, () => Keypair.generate());
+    const recentBlockhash = getCachedBlockhash() || '11111111111111111111111111111111';
+
     const t6 = process.hrtime.bigint();
     try {
-        const recentBlockhash = getCachedBlockhash() || '11111111111111111111111111111111';
-        dummyWallets.forEach((w) => {
+        await Promise.all(dummyWallets.map(async (w) => {
             const msg = new TransactionMessage({
                 payerKey: w.publicKey,
                 recentBlockhash,
@@ -536,7 +523,8 @@ export async function runExecutionBenchmark(
             }).compileToV0Message();
             const tx = new VersionedTransaction(msg);
             tx.sign([w]);
-        });
+            return tx;
+        }));
     } catch (_) {}
     const t7 = process.hrtime.bigint();
     const signMs = parseFloat((Number(t7 - t6) / 1e6).toFixed(2)) || 1.10;
@@ -608,14 +596,16 @@ export interface DexRouteQuote {
 }
 
 async function getIsolatedDexQuote(dexName: string, inputMint: string, outputMint: string, amountRaw: string, slippageBps: number): Promise<DexRouteQuote | null> {
-    try {
-        const res = await axiosClient.get(
-            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountRaw}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}&dexes=${encodeURIComponent(dexName)}`,
-            { headers: API_HEADERS, timeout: 2000 }
-        );
-        if (res.data && res.data.outAmount) return { dex: dexName, outAmount: Number(res.data.outAmount), quoteResponse: res.data };
-    } catch (_) {}
-    return null;
+    return await getCachedQuote(`${dexName}:${outputMint}`, amountRaw, async () => {
+        try {
+            const res = await axiosClient.get(
+                `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountRaw}&autoSlippage=true&maxAutoSlippageBps=${slippageBps}&dexes=${encodeURIComponent(dexName)}`,
+                { headers: API_HEADERS, timeout: 2000 }
+            );
+            if (res.data && res.data.outAmount) return { dex: dexName, outAmount: Number(res.data.outAmount), quoteResponse: res.data };
+        } catch (_) {}
+        return null;
+    });
 }
 
 async function fetchApiTransaction(
@@ -665,7 +655,6 @@ async function fetchApiTransaction(
             
             await new Promise<void>((resolve) => {
                 let settled = 0;
-                // 🟢 SPEED FIX: Lowered from 250ms to 130ms for faster multi-quote consensus
                 const GRACE_MS = 130;
                 let graceTimer: NodeJS.Timeout | null = null;
 
@@ -778,7 +767,7 @@ export async function executeSnipe(
 
     const preloaded = await preloadHotPathCache(telegramId, targetCA);
 
-    // 🟢 SPEED FIX: Skip 400ms MEV check on fast Sniper Engine buys
+    // 🟢 Fast-Mode sniper buys skip 400ms MEV blocking check
     if (side === 'buy' && !isBumper && strategy !== 'Sniper Engine') {
         let isMev = preloaded.mevCache === 'true';
         if (preloaded.mevCache === null) {
@@ -958,7 +947,7 @@ export async function executeSnipe(
 
             walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
 
-            // 🟢 SPEED FIX: Return immediately to user; TCA + DB writes run in background
+            // 🟢 SPEED FIX: Non-blocking instant user response (TCA verification and DB writes happen in background)
             const expectedOutput = apiRes.estimatedOutput || 0;
             (async () => {
                 try {
@@ -1006,8 +995,8 @@ export async function executeSnipe(
 
                     prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: actualSpendPerWallet } } }).catch(() => {});
                     
-                    // 🟢 Invalidate points cache immediately on trade volume update
-                    import('./points.js').then(m => m.invalidateUserPointsCache(user.id)).catch(() => {});
+                    // 🟢 Invalidate points cache instantly on volume update
+                    invalidateUserPointsCache(user.id).catch(() => {});
                     awardGuildPoints(user.telegramId, actualSpendPerWallet).catch(() => {});
                     
                     await prisma.trade.create({
@@ -1145,7 +1134,7 @@ export async function executeExit(
             walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
             await redis.del(`token_acct_balance:${w.publicKey.toBase58()}:${targetCA}`).catch(() => {});
 
-            // 🟢 SPEED FIX: Return immediately to user; TCA + DB writes run in background
+            // 🟢 SPEED FIX: Non-blocking instant user response on exit
             const expectedOutput = apiRes.estimatedOutput || 0;
             (async () => {
                 try {
@@ -1197,8 +1186,8 @@ export async function executeExit(
 
                     prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(() => {});
                     
-                    // 🟢 Invalidate points cache immediately on trade volume update
-                    import('./points.js').then(m => m.invalidateUserPointsCache(user.id)).catch(() => {});
+                    // 🟢 Invalidate points cache instantly on volume update
+                    invalidateUserPointsCache(user.id).catch(() => {});
                     awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
                     
                     await prisma.trade.create({
