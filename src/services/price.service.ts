@@ -144,7 +144,7 @@ export async function getTokenRiskDetails(tokenMint: string): Promise<{
         if (cached) return JSON.parse(cached);
 
         const res = await rugCheckLimiter(() => 
-            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 4000 })
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 400 }) // 🟢 FIX: 4000ms -> 400ms
         );
         
         const data = res.data;
@@ -178,6 +178,7 @@ export function decodePumpCurvePrice(base64Data: string): number {
     }
 }
 
+// 🟢 FIX: Trimmed signatures lookup to limit: 6
 export async function checkRecentMevActivity(tokenMint: string): Promise<boolean> {
     if (!tokenMint || !BASE58_MINT_REGEX.test(tokenMint)) return false;
 
@@ -191,7 +192,7 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
         try { pubkey = new PublicKey(tokenMint); } catch { return true; } 
 
         const sigs = await rpcLimiter.run(() =>
-            connection.getSignaturesForAddress(pubkey, { limit: 10 }).catch(() => null)
+            connection.getSignaturesForAddress(pubkey, { limit: 6 }).catch(() => null)
         );
         if (sigs === null) {
             await redis.set(cacheKey, 'true', 'EX', 30);
@@ -232,6 +233,7 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
     }
 }
 
+// 🟢 FIX: Tightened timeout to 400ms inside rugCheckLimiter
 export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
     const key = `rugcheck:${tokenMint}`;
     try {
@@ -240,7 +242,7 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
         if (cached === 'false') return false;
 
         const res = await rugCheckLimiter(() => 
-            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 4000 })
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 400 })
         );
 
         const data = res.data;
@@ -260,5 +262,46 @@ export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
     } catch (_) {
         await redis.set(key, 'uncertain', 'EX', 45).catch(() => {});
         return true; 
+    }
+}
+
+export async function getTokenPriceUsd(mintAddress: string): Promise<number> {
+    const cacheKey = `price:${mintAddress}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return parseFloat(cached);
+
+    try {
+        const res = await dexScreenerLimiter(() =>
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`, { timeout: 800 })
+        ).catch(() => null);
+
+        const priceUsd = parseFloat(res?.data?.pairs?.[0]?.priceUsd || '0');
+        if (priceUsd > 0) {
+            await redis.set(cacheKey, priceUsd.toString(), 'EX', 10);
+            return priceUsd;
+        }
+        return 0;
+    } catch (_) {
+        return 0;
+    }
+}
+
+export async function getVolatilityAdjustedSlippage(targetCA: string, baseSlippage: number): Promise<number> {
+    try {
+        const res = await dexScreenerLimiter(() =>
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${targetCA}`, { timeout: 500 })
+        ).catch(() => null);
+
+        const pair = res?.data?.pairs?.[0];
+        if (!pair) return baseSlippage;
+
+        const m5Change = Math.abs(parseFloat(pair.priceChange?.m5 || "0"));
+        if (m5Change > 50) return Math.max(baseSlippage, 35.0);
+        if (m5Change > 25) return Math.max(baseSlippage, 25.0);
+        if (m5Change > 10) return Math.max(baseSlippage, 15.0);
+
+        return baseSlippage;
+    } catch (_) {
+        return baseSlippage;
     }
 }

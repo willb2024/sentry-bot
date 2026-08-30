@@ -51,6 +51,24 @@ export interface CallerFilters {
     minLiquidityLockPercent: number;
 }
 
+export interface TriggerBenchmarkResult {
+    creditMs: number;
+    rugCheckMs: number;
+    devRepMs: number;
+    mevCheckMs: number;
+    lpLockMs: number;
+    velocityMs: number;
+    sentimentMs: number;
+    scoreComputeMs: number;
+    totalMs: number;
+    status: 'EXCELLENT' | 'GOOD' | 'NEEDS_OPTIMIZATION';
+    grades: {
+        deepScoring: 'S' | 'A' | 'B' | 'C';
+        credit: 'S' | 'A' | 'B' | 'C';
+    };
+    deepScoringTimeoutRisk: boolean;
+}
+
 export async function getUserCallerFilters(telegramId: string): Promise<CallerFilters> {
     const defaultFilters: CallerFilters = {
         isActive: false, 
@@ -99,7 +117,6 @@ export function getScoreBand(score: number): { label: string; sizeSol: string; r
     return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
 }
 
-
 export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
     try {
@@ -109,9 +126,9 @@ export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean
             if (!parsed.uncertain) return parsed;
         }
 
-        // 🟢 API BAN FIX: Wrap RugCheck in limiter
+        // 🟢 FIX: Tightened timeout to 400ms inside limiter
         const res = await rugCheckLimiter(() =>
-            axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, { timeout: 4000 })
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, { timeout: 400 })
         );
 
         const data = res.data;
@@ -144,7 +161,7 @@ export async function getSentimentScore(tokenSymbol: string): Promise<number> {
     try {
         const res = await axios.get(`https://api.twitter.com/2/tweets/search/recent?query=$${encodeURIComponent(tokenSymbol)}&max_results=10`, {
             headers: { Authorization: `Bearer ${bearerToken}` },
-            timeout: 2000
+            timeout: 400 // 🟢 FIX: 2000ms -> 400ms to avoid blocking pipeline
         });
         const tweetCount = res.data?.meta?.result_count || 0;
         const sentiment = Math.min(1.0, 0.4 + (tweetCount / 20));
@@ -605,6 +622,7 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
         reasons.push(`📈 Positive sentiment +${bonus}`);
     }
 
+    // 🟢 Single LP check evaluation block (Duplicate removed)
     if (stats.lpLock) {
         if (stats.lpLock.burned || stats.lpLock.lockPct > 80) {
             score += 15;
@@ -639,7 +657,6 @@ async function safeDexScreenerFetch(mints: string[]): Promise<any[]> {
     const chunks = chunkArray(mints, 30);
     const allPairs: any[] = [];
     
-    // 🟢 FIX: Run chunks concurrently through dexScreenerLimiter without artificial sleeps
     const results = await Promise.all(chunks.map(chunk =>
         dexScreenerLimiter(() =>
             axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 3500 })
@@ -896,7 +913,6 @@ export async function scoreTokens() {
         }
 
         const stage1Scored: any[] = [];
-        // 🟢 FIX: Increased stage 1 concurrency chunk from 8 to 20
         const stage1Chunks = chunkArray(uniquePairs, 20);
         for (const chunk of stage1Chunks) {
             const results = await Promise.all(chunk.map(async (pair) => {
@@ -916,7 +932,6 @@ export async function scoreTokens() {
 
         const passedStage1 = stage1Scored.filter(t => t.score >= 15).sort((a,b) => b.score - a.score);
         const fullyScored: any[] = [];
-        // 🟢 FIX: Expanded deep audit to top 15 tokens in chunks of 8
         const stage2Chunks = chunkArray(passedStage1.slice(0, 15), 8);
         
         for (const chunk of stage2Chunks) {
@@ -999,7 +1014,6 @@ let isScoring = false;
 export async function startCoinCaller(bot: any) {
     console.log("🎯 [CALLER ENGINE] Initialized. Live loop (12s) & Sim loop (20s) active.");
 
-    // 🟢 FIX: Tightened synthetic sim interval to 20s
     setInterval(async () => {
         try {
             const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
@@ -1032,7 +1046,6 @@ export async function startCoinCaller(bot: any) {
         } catch (_) {}
     }, 20000); 
 
-    // 🟢 FIX: Tightened live mempool interval to 12s
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
@@ -1135,79 +1148,95 @@ export async function pruneCallerHistory(): Promise<void> {
     }
 }
 
+// 🟢 FIX: Tiered evaluation frequency (60s for tokens <1h old, 5m for tokens >1h old)
 export function startCallerEvaluator() {
-    setInterval(async () => {
-        try {
-            const historyMap = await redis.hgetall('caller_history');
-            const now = Date.now();
-
-            for (const [key, val] of Object.entries(historyMap)) {
-                const data = JSON.parse(val);
-                if (data.finalized) continue;
-
-                const ageMs = now - data.alertedAt;
-                const mint = data.mint;
-
-                const priceCacheKey = `caller_price:${mint}`;
-                const cachedPrice = await redis.get(priceCacheKey);
-                let currentPrice = 0;
-                if (cachedPrice !== null) {
-                    currentPrice = parseFloat(cachedPrice);
-                } else {
-                    const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 3000 }).catch(() => null);
-                    currentPrice = parseFloat(res?.data?.pairs?.[0]?.priceUsd || "0");
-                    if (currentPrice > 0) {
-                        await redis.set(priceCacheKey, currentPrice.toString(), 'EX', 60);
-                    }
-                }
-
-                if (currentPrice > 0 && data.priceAtAlert > 0) {
-                    const pctChange = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
-                    if (data.peakPct === undefined || pctChange > data.peakPct) {
-                        data.peakPct = pctChange;
-                        data.peakAtMs = ageMs; 
-                    }
-                    if (ageMs >= 3600000 && data.outcome1h === undefined) data.outcome1h = pctChange;
-                    if (ageMs >= 6 * 3600000 && data.outcome6h === undefined) data.outcome6h = pctChange;
-                    if (ageMs >= 24 * 3600000 && data.outcome24h === undefined) data.outcome24h = pctChange;
-                }
-
-                if (ageMs > 24 * 3600000) { 
-                    data.finalized = true; 
-                    if (data.outcome24h === undefined && currentPrice > 0 && data.priceAtAlert > 0) {
-                        data.outcome24h = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
-                    }
-                    
-                    try {
-                        await prisma.callerPrediction.update({
-                            where: { alertKey: key },
-                            data: {
-                                finalized: true,
-                                peakPct: data.peakPct,
-                                peakAtMs: data.peakAtMs,
-                                outcome1h: data.outcome1h,
-                                outcome6h: data.outcome6h,
-                                outcome24h: data.outcome24h
-                            }
-                        });
-                    } catch(e) {}
-                    
-                    if (data.peakPct !== undefined && data.predictedRangeLow !== undefined && data.predictedRangeHigh !== undefined) {
-                        const withinRange = data.peakPct >= data.predictedRangeLow && data.peakPct <= data.predictedRangeHigh;
-                        await redis.incr(withinRange ? 'projection:hits' : 'projection:misses');
-                    }
-                }
-                
-                await redis.hset('caller_history', key, JSON.stringify(data));
-            }
-
-            await pruneCallerHistory();
-        } catch (e: any) {
-            console.error('🔴 [CALLER EVALUATOR] Loop failed:', e.message);
-        }
-    }, 5 * 60 * 1000);
+    setInterval(() => runCallerEvaluationPass(0, 3600000), 60 * 1000);
+    setInterval(() => runCallerEvaluationPass(3600000, 86400000), 5 * 60 * 1000);
 }
 
+async function runCallerEvaluationPass(minAgeMs: number, maxAgeMs: number) {
+    try {
+        const historyMap = await redis.hgetall('caller_history');
+        if (!historyMap || Object.keys(historyMap).length === 0) return;
+
+        const now = Date.now();
+
+        for (const [key, val] of Object.entries(historyMap)) {
+            let data: any;
+            try {
+                data = JSON.parse(val);
+            } catch {
+                continue;
+            }
+
+            if (data.finalized) continue;
+
+            const ageMs = now - data.alertedAt;
+            if (ageMs < minAgeMs || ageMs >= maxAgeMs) continue;
+
+            const mint = data.mint;
+            const priceCacheKey = `caller_price:${mint}`;
+            const cachedPrice = await redis.get(priceCacheKey);
+            let currentPrice = 0;
+
+            if (cachedPrice !== null) {
+                currentPrice = parseFloat(cachedPrice);
+            } else {
+                const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 3000 }).catch(() => null);
+                currentPrice = parseFloat(res?.data?.pairs?.[0]?.priceUsd || "0");
+                if (currentPrice > 0) {
+                    await redis.set(priceCacheKey, currentPrice.toString(), 'EX', minAgeMs === 0 ? 20 : 60);
+                }
+            }
+
+            if (currentPrice > 0 && data.priceAtAlert > 0) {
+                const pctChange = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
+                if (data.peakPct === undefined || pctChange > data.peakPct) {
+                    data.peakPct = pctChange;
+                    data.peakAtMs = ageMs;
+                }
+                if (ageMs >= 3600000 && data.outcome1h === undefined) data.outcome1h = pctChange;
+                if (ageMs >= 6 * 3600000 && data.outcome6h === undefined) data.outcome6h = pctChange;
+                if (ageMs >= 24 * 3600000 && data.outcome24h === undefined) data.outcome24h = pctChange;
+            }
+
+            if (ageMs > 24 * 3600000) {
+                data.finalized = true;
+                if (data.outcome24h === undefined && currentPrice > 0 && data.priceAtAlert > 0) {
+                    data.outcome24h = ((currentPrice - data.priceAtAlert) / data.priceAtAlert) * 100;
+                }
+                try {
+                    await prisma.callerPrediction.update({
+                        where: { alertKey: key },
+                        data: {
+                            finalized: true,
+                            peakPct: data.peakPct,
+                            peakAtMs: data.peakAtMs,
+                            outcome1h: data.outcome1h,
+                            outcome6h: data.outcome6h,
+                            outcome24h: data.outcome24h
+                        }
+                    });
+                } catch (_) {}
+
+                if (data.peakPct !== undefined && data.predictedRangeLow !== undefined && data.predictedRangeHigh !== undefined) {
+                    const withinRange = data.peakPct >= data.predictedRangeLow && data.peakPct <= data.predictedRangeHigh;
+                    await redis.incr(withinRange ? 'projection:hits' : 'projection:misses');
+                }
+            }
+
+            await redis.hset('caller_history', key, JSON.stringify(data));
+        }
+
+        if (minAgeMs === 0) {
+            await pruneCallerHistory();
+        }
+    } catch (e: any) {
+        console.error('🔴 [CALLER EVALUATOR] Loop failed:', e.message);
+    }
+}
+
+// 🟢 FIX: Parallelized Dev Reputation Analysis (Signatures 8 -> 5 + Promise.all)
 export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean }> {
     if (!creatorWallet) return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
     const cacheKey = `dev_rep:${creatorWallet}`;
@@ -1221,14 +1250,25 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
         }
 
         const sigs = await rpcLimiter.run(() =>
-            connection.getSignaturesForAddress(pubkey, { limit: 8 }).catch(() => [])
+            connection.getSignaturesForAddress(pubkey, { limit: 5 }).catch(() => [])
+        );
+
+        if (!sigs || sigs.length === 0) {
+            const emptyResult = { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
+            await redis.set(cacheKey, JSON.stringify(emptyResult), 'EX', 3600);
+            return emptyResult;
+        }
+
+        const txResults = await Promise.all(
+            sigs.map(s =>
+                rpcLimiter.run(() =>
+                    connection.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null)
+                )
+            )
         );
 
         let rugCount = 0;
-        for (const s of sigs) {
-            const tx = await rpcLimiter.run(() =>
-                connection.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 }).catch(() => null)
-            );
+        for (const tx of txResults) {
             if (!tx?.meta) continue;
             const pre = tx.meta.preBalances?.[0] || 0;
             const post = tx.meta.postBalances?.[0] || 0;
@@ -1269,7 +1309,6 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
         );
         
         const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner ?? '';
-        
         const pct = (top.uiAmount || 0) / (largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1) * 100;
 
         const result = {
@@ -1316,13 +1355,17 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
     }
 }
 
+// 🟢 FIX: Explicit 400ms timeouts on Jupiter simulation quote endpoints
 export async function simulateSellability(mintAddress: string, probeSolSize: number = 0.1): Promise<{ sellable: boolean; estimatedTaxPct: number }> {
     const cacheKey = `sellable:${mintAddress}`;
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
     try {
-        const buyQuote = await axios.get(`https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`).catch(() => null);
+        const buyQuote = await axios.get(
+            `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`,
+            { timeout: 400 }
+        ).catch(() => null);
         
         if (!buyQuote?.data?.outAmount) {
             const result = { sellable: true, estimatedTaxPct: 0 }; 
@@ -1330,7 +1373,10 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
             return result;
         }
 
-        const sellQuote = await axios.get(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`).catch(() => null);
+        const sellQuote = await axios.get(
+            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`,
+            { timeout: 400 }
+        ).catch(() => null);
 
         if (!sellQuote?.data?.outAmount) {
             const result = { sellable: true, estimatedTaxPct: 0 }; 
@@ -1345,4 +1391,91 @@ export async function simulateSellability(mintAddress: string, probeSolSize: num
     } catch (_) {
         return { sellable: true, estimatedTaxPct: 0 }; 
     }
+}
+
+// 🟢 NEW: Scoring Pipeline Speed Benchmark for /speedtest
+export async function runTriggerBenchmark(telegramId: string): Promise<TriggerBenchmarkResult> {
+    const TEST_MINT = 'So11111111111111111111111111111111111111112'; // WSOL
+    const TEST_CREATOR = '11111111111111111111111111111111'; // System program
+
+    const t0 = process.hrtime.bigint();
+    await redis.get(`sim:credits:${telegramId}`).catch(() => null);
+    const t1 = process.hrtime.bigint();
+    const creditMs = parseFloat((Number(t1 - t0) / 1e6).toFixed(2)) || 0.5;
+
+    const t2 = process.hrtime.bigint();
+    const { checkTokenRugRisk, checkRecentMevActivity } = await import('./price.service.js');
+    await checkTokenRugRisk(TEST_MINT).catch(() => true);
+    const t3 = process.hrtime.bigint();
+    const rugCheckMs = parseFloat((Number(t3 - t2) / 1e6).toFixed(2));
+
+    const t4 = process.hrtime.bigint();
+    await getDevReputation(TEST_CREATOR).catch(() => null);
+    const t5 = process.hrtime.bigint();
+    const devRepMs = parseFloat((Number(t5 - t4) / 1e6).toFixed(2));
+
+    const t6 = process.hrtime.bigint();
+    await checkRecentMevActivity(TEST_MINT).catch(() => true);
+    const t7 = process.hrtime.bigint();
+    const mevCheckMs = parseFloat((Number(t7 - t6) / 1e6).toFixed(2));
+
+    const t8 = process.hrtime.bigint();
+    await checkLpLockStatus(TEST_MINT).catch(() => null);
+    const t9 = process.hrtime.bigint();
+    const lpLockMs = parseFloat((Number(t9 - t8) / 1e6).toFixed(2));
+
+    const t10 = process.hrtime.bigint();
+    await trackHolderVelocity(TEST_MINT).catch(() => null);
+    const t11 = process.hrtime.bigint();
+    const velocityMs = parseFloat((Number(t11 - t10) / 1e6).toFixed(2));
+
+    const t12 = process.hrtime.bigint();
+    await getSentimentScore('SOL').catch(() => 0.5);
+    const t13 = process.hrtime.bigint();
+    const sentimentMs = parseFloat((Number(t13 - t12) / 1e6).toFixed(2));
+
+    const t14 = process.hrtime.bigint();
+    computeTokenScore({
+        ageMins: 5,
+        volume24h: 50000,
+        liquidity: 25000,
+        priceChangeM5: 20,
+        hasSocials: true,
+        isRug: false,
+        devRep: { launchCount: 0, avgRugScore: 0, isKnownRugger: false },
+        lpLock: { locked: true, burned: true, lockPct: 100 },
+        velocity: { growthRate: 30, uniqueBuyers5m: 15 },
+        sellability: { sellable: true, estimatedTaxPct: 0 },
+        sentiment: 0.6
+    });
+    const t15 = process.hrtime.bigint();
+    const scoreComputeMs = parseFloat((Number(t15 - t14) / 1e6).toFixed(2)) || 0.05;
+
+    const totalMs = parseFloat((creditMs + rugCheckMs + devRepMs + mevCheckMs + lpLockMs + velocityMs + sentimentMs + scoreComputeMs).toFixed(2));
+    const deepScoringParallelMs = Math.max(rugCheckMs, devRepMs, mevCheckMs);
+    const deepScoringTimeoutRisk = deepScoringParallelMs > 350;
+
+    const grades = {
+        deepScoring: (deepScoringParallelMs < 100 ? 'S' : deepScoringParallelMs < 250 ? 'A' : deepScoringParallelMs < 400 ? 'B' : 'C') as 'S' | 'A' | 'B' | 'C',
+        credit: (creditMs < 5 ? 'S' : creditMs < 15 ? 'A' : 'B') as 'S' | 'A' | 'B' | 'C'
+    };
+
+    let status: 'EXCELLENT' | 'GOOD' | 'NEEDS_OPTIMIZATION' = 'EXCELLENT';
+    if (totalMs > 500 || deepScoringTimeoutRisk) status = 'NEEDS_OPTIMIZATION';
+    else if (totalMs > 250) status = 'GOOD';
+
+    return {
+        creditMs,
+        rugCheckMs,
+        devRepMs,
+        mevCheckMs,
+        lpLockMs,
+        velocityMs,
+        sentimentMs,
+        scoreComputeMs,
+        totalMs,
+        status,
+        grades,
+        deepScoringTimeoutRisk
+    };
 }

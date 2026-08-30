@@ -473,9 +473,16 @@ function connectRaydiumFallbackWatcher(bot: any) {
                     if (recentlySnipedTokens.size > 500) recentlySnipedTokens.clear();
                     recentlySnipedTokens.add(tokenMint);
                     setTimeout(() => recentlySnipedTokens.delete(tokenMint), 60_000);
+                    trackNewMint(tokenMint, "UNKNOWN");
+
+                    // 🟢 FIX: Race poolId extraction with short 150ms timeout to avoid blocking execution
                     const { extractPoolIdFromTx } = await import('./raydium.service.js');
-                    const poolId = await extractPoolIdFromTx(logs.signature);
-                    trackNewMint(tokenMint, "UNKNOWN"); 
+                    const poolIdPromise = extractPoolIdFromTx(logs.signature).catch(() => undefined);
+                    const poolId = await Promise.race([
+                        poolIdPromise,
+                        new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 150))
+                    ]);
+
                     await triggerAutoSnipes(bot, tokenMint, "UNKNOWN", 0, 'RAYDIUM', poolId || undefined);
                 }
             } catch (_) {}
@@ -539,9 +546,10 @@ export async function triggerAutoSnipes(
                 const isSnipeLocked = await redis.set(sniperLockKey, '1', 'EX', 86400, 'NX');
                 if (!isSnipeLocked) return;
 
-                const liveConfig = await prisma.autoSnipeConfig.findUnique({ 
-                    where: { id: sniper.id }, include: { user: true } 
-                });
+                // 🟢 FIX: Use 5s cached auto-snipe config to eliminate sequential DB hits per trigger
+                const { getCachedAutoSnipeConfigFull } = await import('../lib/cache.js');
+                const liveConfigUser = await getCachedAutoSnipeConfigFull(sniper.user.telegramId, 5);
+                const liveConfig = liveConfigUser?.autoSnipeConfig ? { ...liveConfigUser.autoSnipeConfig, user: liveConfigUser } : null;
                 if (!liveConfig || !liveConfig.isActive) { await redis.del(sniperLockKey); return; }
 
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') { await redis.del(sniperLockKey); return; }
@@ -655,6 +663,7 @@ export async function triggerAutoSnipes(
                                 const deepResult = await Promise.race([deepCheckPromise, timeoutPromise]);
             
                                 if (deepResult === 'TIMEOUT') {
+                                    redis.incr('stats:deepscoring_timeouts').catch(() => {});
                                     console.warn(`⚠️ [DEEP-AUDIT TIMEOUT] Skipping snipe on ${mintCa}`);
                                     await redis.del(sniperLockKey);
                                     return;
@@ -680,7 +689,12 @@ export async function triggerAutoSnipes(
                                 sellability = subChecks[2];
                             }
 
-                            const sentiment = await getSentimentScore(symbol);
+                            // 🟢 FIX: Sentiment bounded inside Promise.race to guarantee max 500ms
+                            const sentiment = await Promise.race([
+                                getSentimentScore(symbol),
+                                new Promise<number>(resolve => setTimeout(() => resolve(0.5), 500))
+                            ]);
+
                             const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials: false, isRug, devRep, lpLock, velocity, sellability, sentiment };
                             const heuristicResult = computeTokenScore(stats);
                             score = heuristicResult.score;
@@ -696,7 +710,6 @@ export async function triggerAutoSnipes(
                             }
                         }
 
-                        // 🟢 FIX: Check threshold with raw, unclamped score!
                         const rawScore = score;
                         if (rawScore < liveConfig.minScore) { await redis.del(sniperLockKey); return; } 
                     } catch (e) { await redis.del(sniperLockKey); return; }
@@ -711,7 +724,6 @@ export async function triggerAutoSnipes(
                             liveBal = (await connection.getBalance(vaultPub).catch(() => 0)) / 1_000_000_000;
                         }
                     }
-                    // 🟢 Pass the real, unclamped score to the dynamic scaling math
                     snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice, liveBal);
                 }
 
@@ -727,8 +739,9 @@ export async function triggerAutoSnipes(
                     return; 
                 }
 
+                // 🟢 FIX: 50ms x 10 = 500ms max price wait instead of 1050ms
                 if (!isPriceReady) {
-                    for (let i = 0; i < 7 && !isPriceReady; i++) await new Promise(r => setTimeout(r, 150));
+                    for (let i = 0; i < 10 && !isPriceReady; i++) await new Promise(r => setTimeout(r, 50));
                 }
 
                 const executionSlippage = liveConfig.useDeepScoring ? (liveConfig.user.slippagePercent + 5) : undefined;
@@ -780,7 +793,7 @@ export async function triggerAutoSnipes(
                     try {
                         const finalMsg = buildSniperAuditMessage(
                             mintCa, 
-                            Math.min(100, Math.max(0, Math.round(score))), // Safe 0-100 display
+                            Math.min(100, Math.max(0, Math.round(score))),
                             auditStats,
                             auditReasons, 
                             spent, 

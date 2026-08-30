@@ -16,13 +16,14 @@ export async function getCreditBalance(telegramId: string): Promise<number> {
     return user?.creditBalance || 0;
 }
 
+// 🟢 FIX: 1 Atomic UPDATE...RETURNING for consumeCredit
 export async function consumeCredit(
     telegramId: string,
     type: 'CONSUME_SCAN' | 'CONSUME_CALLER' | 'CONSUME_SNIPER_SCORE',
     tokenMint: string
 ): Promise<{ success: boolean; remaining: number }> {
     
-    // 🟢 SIM FIX: Check if simulation is active first
+    // Check if simulation is active first
     const { isSimulationActive } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
         const currentSimCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
@@ -33,37 +34,45 @@ export async function consumeCredit(
         return { success: true, remaining: newSimCredits };
     }
 
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    if (!user) return { success: false, remaining: 0 };
+    let result: { id: string; creditBalance: number }[];
+    try {
+        result = await prisma.$queryRaw<{ id: string; creditBalance: number }[]>`
+            UPDATE "User"
+            SET "creditBalance" = "creditBalance" - 1
+            WHERE "telegramId" = ${telegramId} AND "creditBalance" > 0
+            RETURNING id, "creditBalance"
+        `;
+    } catch (e) {
+        return { success: false, remaining: 0 };
+    }
 
-    const updateResult = await prisma.user.updateMany({
-        where: { id: user.id, creditBalance: { gt: 0 } },
-        data: { creditBalance: { decrement: 1 } }
-    });
+    if (!result || result.length === 0) {
+        return { success: false, remaining: 0 };
+    }
 
-    if (updateResult.count === 0) return { success: false, remaining: 0 };
+    const { id: userId, creditBalance } = result[0];
 
-    const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { creditBalance: true } });
-
-    await prisma.creditTransaction.create({
+    // Fire-and-forget non-blocking audit logging
+    prisma.creditTransaction.create({
         data: {
-            userId: user.id, 
-            type, 
+            userId,
+            type,
             amount: -1,
-            balanceAfter: updated!.creditBalance, 
+            balanceAfter: creditBalance,
             tokenMint
         }
-    });
+    }).catch(() => {});
 
-    return { success: true, remaining: updated!.creditBalance };
+    return { success: true, remaining: creditBalance };
 }
 
+// 🟢 FIX: Collapsed 4 sequential DB round-trips into 1 atomic UPDATE...RETURNING with non-blocking audit write
 export async function consumeSniperCredit(
     telegramId: string,
     tokenMint: string
 ): Promise<{ success: boolean; remaining: number; fallback: boolean }> {
 
-    // 🟢 SIM FIX: Check if simulation is active
+    // Check if simulation is active
     const { isSimulationActive } = await import('./simulation.service.js');
     if (await isSimulationActive(telegramId)) {
         const currentSimCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
@@ -74,34 +83,37 @@ export async function consumeSniperCredit(
         return { success: true, remaining: newSimCredits, fallback: false };
     }
 
-    const user = await prisma.user.findUnique({ where: { telegramId } });
-    if (!user) return { success: false, remaining: 0, fallback: true };
-
-    const updateResult = await prisma.user.updateMany({
-        where: { id: user.id, creditBalance: { gt: 0 } },
-        data: { creditBalance: { decrement: 1 } }
-    });
-
-    if (updateResult.count === 0) {
+    let result: { id: string; creditBalance: number }[];
+    try {
+        result = await prisma.$queryRaw<{ id: string; creditBalance: number }[]>`
+            UPDATE "User"
+            SET "creditBalance" = "creditBalance" - 1
+            WHERE "telegramId" = ${telegramId} AND "creditBalance" > 0
+            RETURNING id, "creditBalance"
+        `;
+    } catch (e) {
         return { success: false, remaining: 0, fallback: true };
     }
 
-    const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { creditBalance: true } });
+    if (!result || result.length === 0) {
+        return { success: false, remaining: 0, fallback: true };
+    }
 
-    await prisma.creditTransaction.create({
+    const { id: userId, creditBalance } = result[0];
+
+    // Fire-and-forget non-blocking audit write
+    prisma.creditTransaction.create({
         data: {
-            userId: user.id,
+            userId,
             type: 'CONSUME_SNIPER_SCORE',
             amount: -1,
-            balanceAfter: updated!.creditBalance,
+            balanceAfter: creditBalance,
             tokenMint
         }
-    });
+    }).catch(() => {});
 
-    return { success: true, remaining: updated!.creditBalance, fallback: false };
+    return { success: true, remaining: creditBalance, fallback: false };
 }
-
-// src/services/credits.service.ts
 
 export async function addCredits(
     telegramId: string, 

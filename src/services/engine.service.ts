@@ -472,7 +472,9 @@ export async function runExecutionBenchmark(
         quote: 'S' | 'A' | 'B' | 'C';
         sign: 'S' | 'A' | 'B' | 'C';
         relay: 'S' | 'A' | 'B' | 'C';
-    }
+    };
+    quoteFailed: boolean;
+    relayFailed: boolean;
 }> {
     const user = await prisma.user.findUnique({ where: { telegramId } }).catch(() => null);
     const vault = user?.vaultAddress || Keypair.generate().publicKey.toBase58();
@@ -495,18 +497,22 @@ export async function runExecutionBenchmark(
     const t3 = process.hrtime.bigint();
     const mevMs = parseFloat((Number(t3 - t2) / 1e6).toFixed(2)) || 1.20;
 
-    // 4. Live DEX Quote & Route Compilation (Guarded against 429)
+    // 4. Live DEX Quote & Route Compilation (Guarded against 429 & real latency reporting)
     const t4 = process.hrtime.bigint();
-    let quoteMs = 45.0;
+    let quoteMs: number;
+    let quoteFailed = false;
     try {
         const quoteRes = await axiosClient.get(
             `https://lite-api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${sampleCA}&amount=100000000&autoSlippage=true`,
             { headers: API_HEADERS, timeout: 1200 }
         ).catch(() => null);
         const t5 = process.hrtime.bigint();
-        quoteMs = quoteRes ? parseFloat((Number(t5 - t4) / 1e6).toFixed(2)) : 38.5;
+        quoteMs = parseFloat((Number(t5 - t4) / 1e6).toFixed(2));
+        quoteFailed = !quoteRes;
     } catch (_) {
-        quoteMs = 38.5;
+        const tFail = process.hrtime.bigint();
+        quoteMs = parseFloat((Number(tFail - t4) / 1e6).toFixed(2));
+        quoteFailed = true;
     }
 
     // 5. Multi-Wallet (Whale Mode) 5-Keypair Parallelized Sign Benchmark
@@ -549,29 +555,33 @@ export async function runExecutionBenchmark(
 
     // 7. Nozomi / Staked Jito Leader Relay Ping
     const t8 = process.hrtime.bigint();
-    let relayPingMs = 18.5;
+    let relayPingMs: number;
+    let relayFailed = false;
     const targetRelay = process.env.STAKED_JITO_URL || process.env.HELIUS_RPC_URL || 'https://mainnet.block-engine.jito.wtf';
     try {
         const cleanUrl = targetRelay.split('?')[0];
-        await axiosClient.post(cleanUrl, { jsonrpc: "2.0", id: 1, method: "getHealth" }, { timeout: 1000 }).catch(() => null);
+        const relayRes = await axiosClient.post(cleanUrl, { jsonrpc: "2.0", id: 1, method: "getHealth" }, { timeout: 1000 }).catch(() => null);
         const t9 = process.hrtime.bigint();
-        relayPingMs = parseFloat((Number(t9 - t8) / 1e6).toFixed(2)) || 18.5;
+        relayPingMs = parseFloat((Number(t9 - t8) / 1e6).toFixed(2));
+        relayFailed = !relayRes;
     } catch (_) {
-        relayPingMs = 22.0;
+        const tFail = process.hrtime.bigint();
+        relayPingMs = parseFloat((Number(tFail - t8) / 1e6).toFixed(2));
+        relayFailed = true;
     }
 
     const blockhashAgeMs = 150;
     const totalMs = parseFloat((redisMs + quoteMs + signMs + bundlePackMs + relayPingMs).toFixed(2));
 
     const grades = {
-        redis: redisMs < 2.0 ? 'S' : redisMs < 5.0 ? 'A' : 'B',
-        quote: quoteMs < 80.0 ? 'S' : quoteMs < 150.0 ? 'A' : 'B',
-        sign: signMs < 2.0 ? 'S' : signMs < 5.0 ? 'A' : 'B',
-        relay: relayPingMs < 30.0 ? 'S' : relayPingMs < 70.0 ? 'A' : 'B',
-    } as const;
+        redis: (redisMs < 2.0 ? 'S' : redisMs < 5.0 ? 'A' : 'B') as 'S' | 'A' | 'B' | 'C',
+        quote: (quoteFailed ? 'C' : quoteMs < 80.0 ? 'S' : quoteMs < 150.0 ? 'A' : 'B') as 'S' | 'A' | 'B' | 'C',
+        sign: (signMs < 2.0 ? 'S' : signMs < 5.0 ? 'A' : 'B') as 'S' | 'A' | 'B' | 'C',
+        relay: (relayFailed ? 'C' : relayPingMs < 30.0 ? 'S' : relayPingMs < 70.0 ? 'A' : 'B') as 'S' | 'A' | 'B' | 'C',
+    };
 
     let status: 'EXCELLENT' | 'GOOD' | 'NEEDS_OPTIMIZATION' = 'EXCELLENT';
-    if (totalMs > 250 || quoteMs > 180) status = 'NEEDS_OPTIMIZATION';
+    if (totalMs > 250 || quoteMs > 180 || quoteFailed || relayFailed) status = 'NEEDS_OPTIMIZATION';
     else if (totalMs > 120) status = 'GOOD';
 
     return { 
@@ -585,7 +595,9 @@ export async function runExecutionBenchmark(
         totalMs, 
         blockhashAgeMs, 
         status, 
-        grades 
+        grades,
+        quoteFailed,
+        relayFailed
     };
 }
 
@@ -788,21 +800,26 @@ export async function executeSnipe(
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
 
-        let liveBalanceSol = getLiveWalletBalance(user.vaultAddress);
-        if (liveBalanceSol === null) {
-            const vaultPubkey = safePublicKey(user.vaultAddress);
-            if (!vaultPubkey) return { success: false, message: "Invalid Vault Address." };
-            const balanceLamports = await connection.getBalance(vaultPubkey);
-            liveBalanceSol = balanceLamports / LAMPORTS_PER_SOL;
-        }
+        // 🟢 FIX: Run live balance, fee rate, live config, and volatility checks in parallel
+        const vaultPubkey = safePublicKey(user.vaultAddress);
+        if (!vaultPubkey) return { success: false, message: "Invalid Vault Address." };
 
+        const cachedBal = getLiveWalletBalance(user.vaultAddress);
+        const baseSlippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
+        const needsVolatilityCheck = user.enableAdaptiveSlippage && overrideSlippage === undefined;
+
+        const [liveBalanceLamportsOrNull, feeRate, liveConfig, volatilitySlippage] = await Promise.all([
+            cachedBal === null ? connection.getBalance(vaultPubkey).catch(() => 0) : Promise.resolve(null),
+            getPlatformFeeRate(user.telegramId),
+            prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } }),
+            needsVolatilityCheck ? getVolatilityAdjustedSlippage(targetCA, baseSlippage).catch(() => baseSlippage) : Promise.resolve(baseSlippage)
+        ]);
+
+        const liveBalanceSol = cachedBal !== null ? cachedBal : (liveBalanceLamportsOrNull as number) / LAMPORTS_PER_SOL;
         if (liveBalanceSol < amountSol + 0.005) return { success: false, message: "Insufficient Funds." };
 
-        let selectedSlippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
-        if (user.enableAdaptiveSlippage && overrideSlippage === undefined) {
-            const volatileSlippage = await getVolatilityAdjustedSlippage(targetCA, selectedSlippage).catch(() => selectedSlippage);
-            if (volatileSlippage > selectedSlippage) selectedSlippage = volatileSlippage;
-        }
+        let selectedSlippage = baseSlippage;
+        if (needsVolatilityCheck && volatilitySlippage > selectedSlippage) selectedSlippage = volatilitySlippage;
 
         let raydiumPoolIdToUse: string | undefined = raydiumPoolId;
         if (user.enableSOR && !raydiumPoolId) raydiumPoolIdToUse = undefined;
@@ -823,9 +840,7 @@ export async function executeSnipe(
         let walletErrors: string[] = [];
         
         const recentBlockhash = getCachedBlockhash() || (await connection.getLatestBlockhash('processed')).blockhash;
-        const feeRate = await getPlatformFeeRate(user.telegramId);
 
-        const liveConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
         if (liveConfig?.maxLossPercent && liveConfig.maxLossPercent > 0) {
             const lossCheck = await isLiveLossLimitHit(telegramId, liveConfig, user);
             if (lossCheck.hit) {
@@ -947,7 +962,7 @@ export async function executeSnipe(
 
             walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
 
-            // 🟢 SPEED FIX: Non-blocking instant user response (TCA verification and DB writes happen in background)
+            // Non-blocking instant user response (TCA verification and DB writes happen in background)
             const expectedOutput = apiRes.estimatedOutput || 0;
             (async () => {
                 try {
@@ -995,7 +1010,6 @@ export async function executeSnipe(
 
                     prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: actualSpendPerWallet } } }).catch(() => {});
                     
-                    // 🟢 Invalidate points cache instantly on volume update
                     invalidateUserPointsCache(user.id).catch(() => {});
                     awardGuildPoints(user.telegramId, actualSpendPerWallet).catch(() => {});
                     
@@ -1134,7 +1148,7 @@ export async function executeExit(
             walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
             await redis.del(`token_acct_balance:${w.publicKey.toBase58()}:${targetCA}`).catch(() => {});
 
-            // 🟢 SPEED FIX: Non-blocking instant user response on exit
+            // Non-blocking instant user response on exit
             const expectedOutput = apiRes.estimatedOutput || 0;
             (async () => {
                 try {
@@ -1186,7 +1200,6 @@ export async function executeExit(
 
                     prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(() => {});
                     
-                    // 🟢 Invalidate points cache instantly on volume update
                     invalidateUserPointsCache(user.id).catch(() => {});
                     awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
                     

@@ -4441,8 +4441,14 @@ bot.command(['speedtest', 'benchmark'], async (ctx) => {
 
         const ratingLabel = b.status === 'EXCELLENT' ? '🚀 Tier-1 Institutional (&lt;100ms)' : b.status === 'GOOD' ? '⚡ High Speed (&lt;200ms)' : '⚠️ Elevated Latency';
 
+        // 🟢 Outage detection warning banner if a subsystem fails
+        const outageWarning = (b.quoteFailed || b.relayFailed)
+            ? `🚨 <b>LIVE OUTAGE DETECTED:</b> ${b.quoteFailed ? 'DEX Quote API unreachable. ' : ''}${b.relayFailed ? 'Jito relay unreachable.' : ''}\n\n`
+            : '';
+
         const report = 
             `⚡ <b>SENTRY QUANTITATIVE EXECUTION AUDIT</b>\n\n` +
+            outageWarning +
             `• <b>Overall Rating:</b> <b>${ratingLabel}</b>\n` +
             `• <b>Total Pipeline:</b> <code>${b.totalMs}ms</code>\n\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -4464,6 +4470,39 @@ bot.command(['speedtest', 'benchmark'], async (ctx) => {
             });
         } else {
             await ctx.replyWithHTML(report).catch(() => {});
+        }
+
+        // 🟢 NEW: Second Audit Card — Detection & Scoring Pipeline Benchmark (pre-execution)
+        try {
+            const { runTriggerBenchmark } = await import('./services/caller.service.js');
+            const t = await runTriggerBenchmark(tgId);
+
+            const tRatingLabel = t.status === 'EXCELLENT' ? '🚀 Optimal Scoring Speed' : t.status === 'GOOD' ? '⚡ Solid Scoring Speed' : '⚠️ Scoring Latency Risk';
+            const timeoutWarning = t.deepScoringTimeoutRisk 
+                ? `\n\n🚨 <b>WARNING:</b> Deep-scoring parallel checks are within 150ms of the 500ms hard timeout cap — some snipes may be silently skipped.` 
+                : '';
+
+            const triggerReport =
+                `🧠 <b>SENTRY SCORING PIPELINE AUDIT</b>\n\n` +
+                `• <b>Overall Rating:</b> <b>${tRatingLabel}</b>\n` +
+                `• <b>Total Scoring Pipeline:</b> <code>${t.totalMs}ms</code>\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `🔬 <b>SUBSYSTEM BREAKDOWN:</b>\n` +
+                `├ 💳 <b>Credit Check:</b> <code>${t.creditMs}ms</code> [Grade: <b>${t.grades.credit}</b>]\n` +
+                `├ 🛡️ <b>Rug Risk Check:</b> <code>${t.rugCheckMs}ms</code>\n` +
+                `├ 👤 <b>Dev Reputation:</b> <code>${t.devRepMs}ms</code>\n` +
+                `├ 🥪 <b>MEV Activity Check:</b> <code>${t.mevCheckMs}ms</code>\n` +
+                `├ 🔒 <b>LP Lock Check:</b> <code>${t.lpLockMs}ms</code>\n` +
+                `├ 📊 <b>Holder Velocity:</b> <code>${t.velocityMs}ms</code>\n` +
+                `├ 💬 <b>Sentiment Score:</b> <code>${t.sentimentMs}ms</code>\n` +
+                `└ 🧮 <b>Score Computation:</b> <code>${t.scoreComputeMs}ms</code>\n\n` +
+                `⏱️ <b>Deep-Scoring Race (parallel, not summed):</b> Grade <b>${t.grades.deepScoring}</b>` +
+                timeoutWarning + `\n\n` +
+                `<i>(Benchmarked using a safe test mint — WSOL — no credits consumed, no tokens flagged.)</i>`;
+
+            await ctx.replyWithHTML(triggerReport).catch(() => {});
+        } catch (e: any) {
+            console.error('🔴 [/speedtest scoring benchmark error]:', e?.message || e);
         }
     } catch (e: any) {
         console.error("🔴 [/speedtest error]:", e?.message || e);
