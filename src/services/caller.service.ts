@@ -6,6 +6,9 @@ import { getRecentNewMints } from './grpc.service.js';
 import { rpcLimiter } from '../lib/rpc-limiter.js';
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
+import pLimit from 'p-limit';
+
+const callerUserLimit = pLimit(20); // Process 20 users concurrently
 
 // 🟢 API BAN PREVENTION: Import the limiters
 import { dexScreenerLimiter, rugCheckLimiter, pumpFunLimiter } from '../lib/api-limiter.js';
@@ -1012,25 +1015,27 @@ export async function scoreTokens() {
 let isScoring = false;
 
 export async function startCoinCaller(bot: any) {
-    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (12s) & Sim loop (20s) active.");
+    console.log("🎯 [CALLER ENGINE] Initialized. Live loop (12s) & Sim loop (20s) active with pLimit(20) concurrency.");
 
+    // 🟢 Simulation Loop (20s) - Fully Parallelized
     setInterval(async () => {
         try {
             const { isSimulationActive, generateSimCallerAlert } = await import('./simulation.service.js');
             const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
 
-            for (const user of allUsers) {
-                const isSim = await isSimulationActive(user.telegramId);
-                if (!isSim) continue; 
+            await Promise.all(allUsers.map(user => callerUserLimit(async () => {
+                try {
+                    const isSim = await isSimulationActive(user.telegramId);
+                    if (!isSim) return; 
 
-                const filters = await getUserCallerFilters(user.telegramId);
-                if (!filters.isActive) continue; 
+                    const filters = await getUserCallerFilters(user.telegramId);
+                    if (!filters.isActive) return; 
 
-                const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
-                if (matchedToken) {
-                    const projection = await getCalibratedProjection(matchedToken);
-                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: false });
-                    try {
+                    const matchedToken = await generateSimCallerAlert(user.telegramId, filters);
+                    if (matchedToken) {
+                        const projection = await getCalibratedProjection(matchedToken);
+                        const msg = await formatCallerAlertMessage(matchedToken, projection, { isReshow: false });
+                        
                         await bot.telegram.sendMessage(user.telegramId, msg, {
                             parse_mode: 'HTML',
                             reply_markup: {
@@ -1039,13 +1044,14 @@ export async function startCoinCaller(bot: any) {
                                     [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
                                 ]
                             }
-                        });
-                    } catch (_) {}
-                }
-            }
+                        }).catch(() => {});
+                    }
+                } catch (_) {}
+            })));
         } catch (_) {}
     }, 20000); 
 
+    // 🟢 Live Mempool Loop (12s) - Fully Parallelized
     setInterval(async () => {
         if (isScoring) return;
         isScoring = true;
@@ -1057,57 +1063,59 @@ export async function startCoinCaller(bot: any) {
 
             const allUsers = await prisma.user.findMany({ select: { id: true, telegramId: true } });
             
-            for (const user of allUsers) {
-                const isSim = await isSimulationActive(user.telegramId);
-                if (isSim) continue; 
+            await Promise.all(allUsers.map(user => callerUserLimit(async () => {
+                try {
+                    const isSim = await isSimulationActive(user.telegramId);
+                    if (isSim) return; 
 
-                const filters = await getUserCallerFilters(user.telegramId);
-                if (!filters.isActive) continue;
+                    const filters = await getUserCallerFilters(user.telegramId);
+                    if (!filters.isActive) return;
 
-                const { matches: matchingTokens, isRelaxed } = getMatchesWithLadder(tokens, filters);
+                    const { matches: matchingTokens, isRelaxed } = getMatchesWithLadder(tokens, filters);
 
-                let matchedToken = null;
-                for (const t of matchingTokens) {
-                    const alertKey = `caller_alerted:${user.telegramId}:${t.mint}`;
-                    const alreadyAlerted = await redis.get(alertKey);
-                    if (!alreadyAlerted) {
-                        matchedToken = t;
-                        await redis.set(alertKey, '1', 'EX', 180); 
-                        matchedToken.isReshow = false;
-                        break; 
-                    }
-                }
-
-                if (matchedToken && !matchedToken.isReshow) { 
-                    const { consumeCredit } = await import('./credits.service.js');
-                    const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
-                    
-                    if (!creditResult.success) {
-                        const warnKey = `live_caller_credits_warn:${user.telegramId}`;
-                        if (!(await redis.get(warnKey))) {
-                            await redis.set(warnKey, '1', 'EX', 600);
-                            try {
-                                await bot.telegram.sendMessage(user.telegramId, `⚠️ <b>AI CALLER PAUSED — OUT OF CREDITS</b>\nTop up your credit balance to resume alerts.`, { parse_mode: 'HTML' });
-                            } catch (_) {}
+                    let matchedToken = null;
+                    for (const t of matchingTokens) {
+                        const alertKey = `caller_alerted:${user.telegramId}:${t.mint}`;
+                        const alreadyAlerted = await redis.get(alertKey);
+                        if (!alreadyAlerted) {
+                            matchedToken = t;
+                            await redis.set(alertKey, '1', 'EX', 180); 
+                            matchedToken.isReshow = false;
+                            break; 
                         }
-                        continue; 
                     }
 
-                    const projection = await getCalibratedProjection(matchedToken);
-                    const historyData = {
-                        mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
-                        priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
-                        predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
-                    };
-                    const historyKey = `${matchedToken.mint}:${Date.now()}`;
-                    await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
-                    await storePredictionData(matchedToken, projection, historyKey);
+                    if (matchedToken && !matchedToken.isReshow) { 
+                        const { consumeCredit } = await import('./credits.service.js');
+                        const creditResult = await consumeCredit(user.telegramId, 'CONSUME_CALLER', matchedToken.mint);
+                        
+                        if (!creditResult.success) {
+                            const warnKey = `live_caller_credits_warn:${user.telegramId}`;
+                            if (!(await redis.get(warnKey))) {
+                                await redis.set(warnKey, '1', 'EX', 600);
+                                await bot.telegram.sendMessage(
+                                    user.telegramId, 
+                                    `⚠️ <b>AI CALLER PAUSED — OUT OF CREDITS</b>\nTop up your credit balance to resume alerts.`, 
+                                    { parse_mode: 'HTML' }
+                                ).catch(() => {});
+                            }
+                            return; 
+                        }
 
-                    const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed });
-                    const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
-                    const defaultSize = userConfig?.amountSol || 0.1;
-                    
-                    try {
+                        const projection = await getCalibratedProjection(matchedToken);
+                        const historyData = {
+                            mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
+                            priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
+                            predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
+                        };
+                        const historyKey = `${matchedToken.mint}:${Date.now()}`;
+                        await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
+                        await storePredictionData(matchedToken, projection, historyKey);
+
+                        const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed });
+                        const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: user.id } });
+                        const defaultSize = userConfig?.amountSol || 0.1;
+                        
                         await bot.telegram.sendMessage(user.telegramId, msg, {
                             parse_mode: 'HTML',
                             reply_markup: {
@@ -1117,10 +1125,10 @@ export async function startCoinCaller(bot: any) {
                                     [{ text: '⬅️ Manage Caller Settings', callback_data: 'menu_caller' }]
                                 ]
                             }
-                        });
-                    } catch (e: any) {}
-                }
-            }
+                        }).catch(() => {});
+                    }
+                } catch (_) {}
+            })));
         } catch (e: any) {
             console.error("🔴 [CALLER] Engine Error:", e.message);
         } finally {

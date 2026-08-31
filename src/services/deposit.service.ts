@@ -87,18 +87,16 @@ export async function startDepositWatcher(bot: any) {
                     if (newBalanceSol > oldBalanceSol + 0.001) {
                         const depositAmount = newBalanceSol - oldBalanceSol;
                         console.log(`👛 [DEPOSIT DETECTED] +${depositAmount.toFixed(4)} SOL into ${address} (${meta.label})`);
-
-                        try {
-                            await bot.telegram.sendMessage(meta.user.telegramId,
-                                `👛 <b>DEPOSIT CONFIRMED!</b>\n\n` +
-                                `Received: <b>+${depositAmount.toFixed(4)} SOL</b> into <b>${meta.label}</b>.\n` +
-                                `Wallet Balance: <b>${newBalanceSol.toFixed(4)} SOL</b>.\n\n` +
-                                `<i>Ready to trade! Send a Token Address (CA) into this chat to buy, or open the dashboard with /start.</i>`,
-                                { parse_mode: 'HTML' }
-                            );
-                        } catch (tgErr: any) {
-                            console.error(`🔴 [DEPOSIT] Telegram Notification Failed for ${address}:`, tgErr.message);
-                        }
+                    
+                        // 🟢 FIX: Non-blocking fire-and-forget notification
+                        bot.telegram.sendMessage(
+                            meta.user.telegramId,
+                            `👛 <b>DEPOSIT CONFIRMED!</b>\n\n` +
+                            `Received: <b>+${depositAmount.toFixed(4)} SOL</b> into <b>${meta.label}</b>.\n` +
+                            `Wallet Balance: <b>${newBalanceSol.toFixed(4)} SOL</b>.\n\n` +
+                            `<i>Ready to trade! Send a Token Address (CA) into this chat to buy, or open the dashboard with /start.</i>`,
+                            { parse_mode: 'HTML' }
+                        ).catch((tgErr: any) => console.error(`🔴 [DEPOSIT] Telegram Notification Failed for ${address}:`, tgErr.message));
                     }
                     activeListeners.set(address, { subId: cached.subId, lastBalance: newBalanceSol });
                 } else {
