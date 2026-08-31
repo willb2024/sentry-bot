@@ -2292,12 +2292,8 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>Automated Deposit Radar:</b> Sentry monitors on-chain balance deltas in real time. The moment a deposit confirms, you receive an instant push notification.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Unlike conventional Telegram bots that store plaintext keys in centralized relational databases vulnerable to insider exploits and leaks, Sentry's zero-knowledge cryptographic boundary guarantees zero unauthorized fund access.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• In-Memory Decryption & Signing: <code>1.10ms</code>\n` +
-    `• RAM State Purge: <code>&lt;0.01ms</code>\n` +
-    `• Deposit Detection-to-Notification: <code>&lt;250ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
-    `Transfer <code>1.5 SOL</code> to your W1 address. Within seconds, Sentry alerts: <i>"👛 DEPOSIT CONFIRMED! Received +1.5000 SOL."</i> You are now primed for sub-millisecond execution.`,
+    `Transfer <code>1.5 SOL</code> to your W1 address. Within seconds, Sentry alerts: <i>"👛 DEPOSIT CONFIRMED! Received +1.5000 SOL."</i> You are now primed for execution.`,
 
     // PAGE 2: DASHBOARD CONTROL CENTER
     `📖 <b>HOW TO TRADE: DASHBOARD CONTROL CENTER</b> <i>(2/27)</i>\n\n` +
@@ -2309,11 +2305,7 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>🏰 Active Guild:</b> Your connected community tracking volume for loyalty airdrops.\n` +
     `• <b>📊 Protocol Fee:</b> Platform fee rate (VIP status unlocks 0% fees).\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
-    `Standard bots execute serial RPC queries to render dashboards (causing 2–4s UI freezes). Sentry uses single-round-trip pipelined Redis RAM caches to render entire dashboard interfaces in under 2 milliseconds.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Dashboard RAM Pipeline: <code>0.85ms</code>\n` +
-    `• Multi-Wallet Balance Aggregation: <code>1.20ms</code>\n` +
-    `• UI Render Response: <code>&lt;10ms</code>\n\n` +
+    `Standard bots execute serial RPC queries to render dashboards (causing 2–4s UI freezes). Sentry uses single-round-trip pipelined Redis RAM caches to render entire dashboard interfaces in real time.\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Type <code>/start</code> to inspect total portfolio valuation, toggle sub-wallets, or launch automated scanning engines instantly.`,
 
@@ -2328,10 +2320,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>Unprotected Capital Audit:</b> Scans active trailing stops and lists exact tokens lacking stop-loss protection.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Standard bots leave you blind to portfolio concentration. Sentry calculates real-time mark-to-market risk distribution without executing slow RPC round-trips.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Risk Calculation Latency: <code>0.45ms</code>\n` +
-    `• Trailing Stop Cross-Audit: <code>0.80ms</code>\n` +
-    `• Total Risk Summary Assembly: <code>&lt;2.0ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/risk</code> or tap <b>📊 Portfolio Risk Audit</b> inside the Positions menu to inspect unprotected bags and adjust stop-loss allocations.`,
 
@@ -2347,10 +2335,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>🎯 Limit Orders:</b> Returns generated from automated dip-buying fills.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Sentry normalizes historical DB records into unified quantitative strategies, preventing fragmented manual stats and underreported win rates.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Unified DB Aggregation Query: <code>4.20ms</code>\n` +
-    `• In-Memory Strategy Math: <code>0.15ms</code>\n` +
-    `• Cached Redis Response: <code>0.60ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/strategies</code> or tap <b>📊 Strategy Attribution</b> in Settings to see which engine is generating your highest ROI.`,
 
@@ -2366,10 +2350,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>Safety Vectors Checked:</b> Freeze authority, mint authority, honeypot tax logic, Token-2022 transfer fees, top-10 holder concentration, and 5m price momentum.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `While competitors broadcast transactions to public mempools where sandwich bots extract value, Sentry bundles trades directly to private Jito validators.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Pre-Warm DNS Quote Routing: <code>38.50ms</code>\n` +
-    `• Local Jito Bundle Assembly: <code>0.45ms</code>\n` +
-    `• Total Execution Pipeline: <code>&lt;50ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/xray DezXAZ...</code> before buying. Sentry verifies locked liquidity and low holder concentration. Tap Confirm to buy safely.`,
 
@@ -2385,10 +2365,7 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• Compiles and broadcasts all transactions in parallel through private Jito validator bundles.\n` +
     `• Returns a consolidated summary receipt with confirmed Solscan links for every token.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
-    `Execute multi-token entries in parallel across distinct bonding curves in the exact same millisecond.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• 5-Token Parallel Compilation: <code>2.80ms</code>\n` +
-    `• Multi-Bundle Dispatch: <code>18.20ms</code>\n\n` +
+    `Execute multi-token entries in parallel across distinct bonding curves in the exact same block.\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send:\n<code>/batch\nDezXAZ...PB263, 0.2\nEKpQGS...5zcjm, $40\n8fS1CE...9iMCe, 0.1</code>\nSentry executes all 3 snipes simultaneously in parallel blocks.`,
 
@@ -2397,17 +2374,13 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `<i>Access via "🎯 Sniper Module". Automatically listens to incoming mempool transactions and snipes fresh launches in Block-0.</i>\n\n` +
     `<b>CORE SETTINGS EXPLAINED:</b>\n` +
     `• <b>Target Mode:</b> Snipe Pump.fun bonding curves (<code>PUMP</code>), Raydium Liquidity Pools (<code>RAYDIUM</code>), or Both (<code>BOTH</code>).\n` +
-    `• <b>Scoring Mode:</b> <b>Fast</b> (150ms check for Block-0 speed) vs. <b>Deep</b> (thorough on-chain security audit).\n` +
+    `• <b>Scoring Mode:</b> <b>Fast</b> (optimized for speed) vs. <b>Deep</b> (thorough on-chain security audit).\n` +
     `• <b>AI Min Score:</b> Minimum score (0–100) required to trigger a buy (recommended: 55+).\n` +
     `• <b>Max Dev Bag:</b> Aborts snipe if the token creator holds more than your configured percentage of total supply.\n` +
     `• <b>Anti-Dead Shield:</b> Skips tokens where the creator bought zero initial supply (eliminates 98% of abandoned duds).\n` +
     `• <b>Auto-Guard:</b> Automatically arms trailing stop-loss % and take-profit % on every single fill.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
-    `Yellowstone gRPC streaming intercepts listings in under 5ms, firing Block-0 bundles before public RPC nodes index the launch.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• gRPC Detection Latency: <code>&lt;5ms</code>\n` +
-    `• Price Cache Readiness Poll: <code>50ms</code>\n` +
-    `• Detection-to-Broadcast: <code>&lt;95ms</code>\n\n` +
+    `Yellowstone gRPC streaming intercepts listings in real time, firing Block-0 bundles before public RPC nodes index the launch.\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Set Mode: BOTH, Min Score: 60, Anti-Dead: ON, Max Dev: 10%, Delay: 0s. Tap <b>⚡ ARM SNIPER ENGINE</b> to monitor incoming blocks automatically.`,
 
@@ -2421,10 +2394,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>🚨 HARD BLOCKED:</b> Blocked due to severe security flags (Freeze Authority, Honeypot, Mintable, or Serial Rugger Wallet).\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `No more guessing why your sniper missed a token. Sentry logs 8 telemetry metrics for every evaluated token to Redis with 24-hour retention.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Decision Log Retrieval: <code>0.40ms</code>\n` +
-    `• Reason Parser Execution: <code>0.05ms</code>\n` +
-    `• Audit Report Delivery: <code>&lt;15ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/whyskip DezXAZ...PB263</code> to inspect exact reasons (e.g., <i>"⚠️ Thin liquidity: $1.8k"</i> or <i>"🚨 Dev is repeat rugger"</i>).`,
 
@@ -2442,9 +2411,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `  └ <b>3.0 — Exponential Cubic:</b> Allocates heavy size only to top 5% of scored tokens.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Automated capital scaling enforces mathematical edge, capping single buys to <b>2% of virtual pool liquidity</b> and <b>5% of your balance</b>.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• In-Memory Dynamic Sizing Compute: <code>0.02ms</code>\n` +
-    `• Pool Depth Constraint Check: <code>0.10ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Set Base = 0.02 SOL, Max = 5x, Curve = Square: A Score-50 play gets <b>0.025 SOL</b>, while a Score-90 gem receives <b>0.081 SOL</b>.`,
 
@@ -2460,9 +2426,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• If portfolio equity drops 15% below session starting balance, Sentry triggers an emergency halt immediately.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Redlock distributed locks prevent concurrent race conditions across simultaneous snipes, eliminating budget leakage.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Redlock Acquisition & Validation: <code>1.20ms</code>\n` +
-    `• Budget Math & Loss Check: <code>0.30ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Set Max Budget = 2.0 SOL and Max Loss Limit = 15%. If market drawdowns hit 15%, Sentry stops the engine instantly to preserve capital.`,
 
@@ -2478,9 +2441,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>MEV Shield:</b> Blocks tokens with active sandwich-bot transactions in recent blocks.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Processed using <code>pLimit(20)</code> concurrency, evaluating hundreds of active users simultaneously without loop lag.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• 20-User Parallel Loop Pass: <code>&lt;180ms</code>\n` +
-    `• Dual-Stage Filter Ladder: <code>12.40ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/caller</code>, tap <b>🔍 Scan Mainnet Now</b>. Sentry audits active pairs and delivers scored tokens with 1-tap Snipe, Guard, and DCA buttons.`,
 
@@ -2494,10 +2454,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>+20 Stricter Filter:</b> Tests high-conviction institutional filtering (Score: 75).\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Optimize your strategy using verified on-chain history rather than risking real capital on unproven filter settings.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• 30-Day Multi-Tier Simulation: <code>8.50ms</code>\n` +
-    `• 3-Variant Parallel Execution: <code>12.10ms</code>\n` +
-    `• Backtest Cache Delivery: <code>0.75ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/backtest</code> or tap <b>📈 30-Day Strategy Backtest</b> in the Caller menu to determine if raising your minimum score increases net profit.`,
 
@@ -2514,9 +2470,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• 🟢 <b>75–100 (High Conviction):</b> Fully audited setup with low holder concentration.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Tiered 60s early-window evaluation captures true peak prices for training ground-truth rather than sampling noisy 5-minute snapshots.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• ML Ridge Prediction Compute: <code>0.08ms</code>\n` +
-    `• Historical Band Matching: <code>1.40ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Run <code>/callerstats</code> and <code>/projectionstats</code> to inspect verified model hit rates before scaling up position sizes.`,
 
@@ -2530,10 +2483,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>High-Water Peak Tracking:</b> If you buy at $1.00 with a 15% guard and price surges to $2.00, Sentry raises your stop to $1.70, locking in <b>+70% net profit</b>.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Guards monitor WebSocket price feeds directly in RAM memory, firing instant pre-signed Jito bundles the millisecond a threshold crosses.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• RAM Guard Price Check: <code>0.04ms</code>\n` +
-    `• Pre-Signed Bundle Dispatch: <code>&lt;25ms</code>\n` +
-    `• Total Exit Execution: <code>&lt;80ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Tap <b>🎯 AI Recommend Stop / TP</b>, send <code>DezXAZ... 0.5</code>. Sentry audits the token, scores it 82/100, and recommends <b>-20% SL / +60% TP</b>. Tap Deploy to execute immediately.`,
 
@@ -2547,9 +2496,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `4. The emergency sell is bundled with a Turbo validator bribe, <b>landing your exit before the developer's pull transaction confirms</b>.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `While retail traders get rugged after blocks finalize, Sentry executes emergency front-running exits in validator gossip.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Gossip Instruction Interception: <code>&lt;3ms</code>\n` +
-    `• Emergency Pre-Signed Bundle Dispatch: <code>&lt;20ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `A developer attempts an unannounced liquidity pull. Sentry detects the instruction in gossip, fires your emergency exit, and alerts: <i>"🚨 ANTI-RUG SHIELD ACTIVATED!"</i>`,
 
@@ -2564,9 +2510,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `4. A confirmation receipt with Solscan link is sent directly to your chat.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Limit orders execute via sub-second in-memory watchers without custodial escrow deposits — funds remain in your vault until fill.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• In-Memory Price Trigger Check: <code>0.15ms</code>\n` +
-    `• Trigger-to-Jito Broadcast: <code>&lt;40ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/limit DezXAZ... 0.00045 $100</code>. Sentry monitors price in background and executes $100 the instant price touches $0.00045.`,
 
@@ -2581,9 +2524,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• Uses distributed Redis locks to prevent duplicate executions.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `BullMQ queue architecture guarantees deterministic execution even during high-traffic network spikes.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Queue Job Resolution: <code>1.10ms</code>\n` +
-    `• Jito Accumulation Dispatch: <code>&lt;35ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/dca DezXAZ... 30 0.2 15 50 2.0</code>. Sentry buys 0.2 SOL every 30 minutes with a 15% trailing guard until 2.0 SOL total is deployed.`,
 
@@ -2597,10 +2537,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `Every mirrored transaction uses <code>lock:copytrade_sig:$signature</code> deduplication to guarantee you never double-buy during WebSocket reconnects.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Zero-RPC log parsing mirrors whale moves sub-second without polling delays, including built-in sandwich bot filtering.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• On-Chain Log Interception: <code>&lt;15ms</code>\n` +
-    `• Dedupe Lock Resolution: <code>0.35ms</code>\n` +
-    `• Mirrored Trade Execution: <code>&lt;60ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Add whale <code>3yFomL...</code> with size <code>0.25 SOL</code> and a <code>15% guard</code>. When the whale buys, Sentry mirrors the trade in the same block.`,
 
@@ -2617,9 +2553,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• Followers receive read-only transaction signals; they never have access to your keys or funds.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Monetize your trading alpha instantly with automated on-chain fee attribution settled in SOL directly to your affiliate balance.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Social Signal Broadcast: <code>&lt;10ms</code>\n` +
-    `• Fee Split Attribution Compute: <code>0.25ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Send <code>/mytrades</code>, share your link. 25 followers mirror your next trade; you earn a 50% fee commission on all 25 executions instantly.`,
 
@@ -2633,9 +2566,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `4. All sub-wallets buy simultaneously in the exact same millisecond within Block-0 without getting flagged by anti-whale caps.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Atomic Block-0 multi-wallet bundling lets you secure up to 5x maximum supply allocations in a single transaction package.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• 5-Keypair Parallelized Multi-Sign: <code>1.10ms</code>\n` +
-    `• Atomic Bundle Compilation: <code>0.45ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `A launch limits buys to 0.5 SOL per wallet. You activate 4 wallets with 0.5 SOL each. Sentry fires 4 concurrent buys in 1 Jito bundle — securing a 2.0 SOL opening bag.`,
 
@@ -2651,9 +2581,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• Sentry closes up to 18 empty token accounts in a single transaction, returning reclaimed SOL to your balance.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Reclaim locked Solana rent with 1 tap via batched instruction packing rather than manually paying individual gas fees.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• ATA Discovery Scan: <code>12.50ms</code>\n` +
-    `• 18-Account Batched Close Transaction: <code>&lt;35ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `After 30 trades, 30 empty ATAs hold ~0.061 SOL in trapped rent. Tap Sweep to close them and reclaim your 0.061 SOL instantly.`,
 
@@ -2669,9 +2596,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• Sentry market-sells 100% of every open position in parallel, converting all holdings to SOL cash immediately.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Parallel multi-position execution closes your entire portfolio in under 1 second during extreme market sell-offs.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Parallel Position Liquidation: <code>&lt;400ms</code> per batch\n` +
-    `• Balance Cache Update: <code>&lt;10ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Market conditions turn volatile. Send <code>/sweep</code>. Sentry closes all open positions in parallel and confirms total SOL reclaimed.`,
 
@@ -2690,9 +2614,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `8. Logo Image Upload (auto-pinned to IPFS)\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Token creation, dev buys across 4 sub-wallets, and validator tips are packaged into a single atomic Jito bundle, shielding your launch from external snipers.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• IPFS Image & Metadata Pinning: <code>&lt;800ms</code>\n` +
-    `• Block-0 Atomic Bundle Assembly: <code>1.40ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Deploy $ALPHA with a 1.0 SOL dev buy split across 3 wallets and a -15% stop-loss guard in a single Block-0 transaction.`,
 
@@ -2709,9 +2630,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `Guild owners earn <b>50% of all platform fees</b> generated by their members' trades.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Filter out sybil bot accounts and track verified on-chain trading volume with automated CSV export for airdrops.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• GLP Attribution Processing: <code>0.30ms</code>\n` +
-    `• Rank Cache Refresh: <code>&lt;25ms</code> (Batch of 50)\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Create <code>GUILD-ALPHA-01</code>. Share your link. As members trade, their GLP points update live and 50% of platform fees accrue to your balance.`,
 
@@ -2729,9 +2647,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• Unlocks 0% platform fees, Turbo Jito priority routing, and VIP leaderboard badges.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Affiliate commissions are credited instantly after every block confirmation and claimable directly to your W1 vault in under 3 seconds.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Instant Commission Credit: <code>&lt;5ms</code>\n` +
-    `• Automated Payout Dispatch: <code>&lt;1200ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Open <b>💰 Affiliates</b> → tap <b>💸 Claim Unclaimed Yield</b> to withdraw accrued commissions directly to your spendable balance.`,
 
@@ -2749,9 +2664,6 @@ export const TRADE_GUIDE_PAGES: string[] = [
     `• <b>3-Strike Lockout:</b> Entering 3 incorrect PIN or recovery attempts triggers an automatic <b>60-minute hardware lockout</b>.\n\n` +
     `⚡ <b>GLOBAL ADVANTAGE:</b>\n` +
     `Non-custodial withdrawal security with cryptographic Scrypt salted hashes and brute-force protection.\n\n` +
-    `🚀 <b>SPEED BENCHMARK:</b>\n` +
-    `• Scrypt Constant-Time Verification: <code>18.20ms</code>\n` +
-    `• Lockout State Verification: <code>0.10ms</code>\n\n` +
     `💡 <b>PRACTICAL WALKTHROUGH:</b>\n` +
     `Set your PIN and record your recovery code offline. Send <code>/withdraw [ADDRESS] ALL</code>, enter your PIN, and funds are swept to your external wallet immediately.`,
 
