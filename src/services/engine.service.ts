@@ -100,7 +100,6 @@ export function resolveViaDoh(hostname: string): Promise<string | null> {
     });
 }
 
-// 🟢 Reuses warm TCP+TLS sockets — eliminates 30-60ms handshake penalty on quotes
 export const axiosClient = axios.create({ 
     httpsAgent: keepAliveHttpsAgent,
     timeout: 5000 
@@ -497,7 +496,7 @@ export async function runExecutionBenchmark(
     const t3 = process.hrtime.bigint();
     const mevMs = parseFloat((Number(t3 - t2) / 1e6).toFixed(2)) || 1.20;
 
-    // 4. Live DEX Quote & Route Compilation (Guarded against 429 & real latency reporting)
+    // 4. Live DEX Quote & Route Compilation
     const t4 = process.hrtime.bigint();
     let quoteMs: number;
     let quoteFailed = false;
@@ -585,19 +584,8 @@ export async function runExecutionBenchmark(
     else if (totalMs > 120) status = 'GOOD';
 
     return { 
-        redisMs, 
-        dnsMs, 
-        mevMs, 
-        quoteMs, 
-        signMs, 
-        bundlePackMs, 
-        relayPingMs, 
-        totalMs, 
-        blockhashAgeMs, 
-        status, 
-        grades,
-        quoteFailed,
-        relayFailed
+        redisMs, dnsMs, mevMs, quoteMs, signMs, bundlePackMs, relayPingMs, 
+        totalMs, blockhashAgeMs, status, grades, quoteFailed, relayFailed 
     };
 }
 
@@ -779,7 +767,7 @@ export async function executeSnipe(
 
     const preloaded = await preloadHotPathCache(telegramId, targetCA);
 
-    // 🟢 Fast-Mode sniper buys skip 400ms MEV blocking check
+    // Fast-Mode sniper buys skip 400ms MEV blocking check
     if (side === 'buy' && !isBumper && strategy !== 'Sniper Engine') {
         let isMev = preloaded.mevCache === 'true';
         if (preloaded.mevCache === null) {
@@ -800,7 +788,7 @@ export async function executeSnipe(
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "🔴 No active Vault found." };
 
-        // 🟢 FIX: Run live balance, fee rate, live config, and volatility checks in parallel
+        // 🟢 FIX: Parallel Pre-flight checks
         const vaultPubkey = safePublicKey(user.vaultAddress);
         if (!vaultPubkey) return { success: false, message: "Invalid Vault Address." };
 
@@ -962,7 +950,7 @@ export async function executeSnipe(
 
             walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
 
-            // Non-blocking instant user response (TCA verification and DB writes happen in background)
+            // Non-blocking background verification & attribution
             const expectedOutput = apiRes.estimatedOutput || 0;
             (async () => {
                 try {
@@ -1008,10 +996,16 @@ export async function executeSnipe(
                         } catch (_) {}
                     }
 
-                    prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: actualSpendPerWallet } } }).catch(() => {});
-                    
-                    invalidateUserPointsCache(user.id).catch(() => {});
-                    awardGuildPoints(user.telegramId, actualSpendPerWallet).catch(() => {});
+                    // 🟢 FIX: Exploit Guard — verify live mode before awarding volume/points
+                    const { isSimulationActive: checkSimStatus } = await import('./simulation.service.js');
+                    const isStillSim = await checkSimStatus(telegramId).catch(() => false);
+                    if (!isStillSim) {
+                        prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: actualSpendPerWallet } } }).catch(() => {});
+                        invalidateUserPointsCache(user.id).catch(() => {});
+                        awardGuildPoints(user.telegramId, actualSpendPerWallet).catch(() => {});
+                    } else {
+                        logger.warn('🚨 [EXPLOIT GUARD] Sim user reached real volume increment path — blocked.', { telegramId });
+                    }
                     
                     await prisma.trade.create({
                         data: {
@@ -1148,7 +1142,7 @@ export async function executeExit(
             walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
             await redis.del(`token_acct_balance:${w.publicKey.toBase58()}:${targetCA}`).catch(() => {});
 
-            // Non-blocking instant user response on exit
+            // Non-blocking exit verification & attribution
             const expectedOutput = apiRes.estimatedOutput || 0;
             (async () => {
                 try {
@@ -1198,10 +1192,16 @@ export async function executeExit(
                     const realizedPnlSol = (actualSolReceived - volumeToRecord) - feeCharged;
                     const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
-                    prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(() => {});
-                    
-                    invalidateUserPointsCache(user.id).catch(() => {});
-                    awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
+                    // 🟢 FIX: Exploit Guard — verify live mode before awarding volume/points
+                    const { isSimulationActive: checkSimStatus } = await import('./simulation.service.js');
+                    const isStillSim = await checkSimStatus(telegramId).catch(() => false);
+                    if (!isStillSim) {
+                        prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(() => {});
+                        invalidateUserPointsCache(user.id).catch(() => {});
+                        awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
+                    } else {
+                        logger.warn('🚨 [EXPLOIT GUARD] Sim user reached real volume increment path — blocked.', { telegramId });
+                    }
                     
                     await prisma.trade.create({
                         data: {

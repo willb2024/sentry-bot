@@ -1304,20 +1304,28 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
     const STREAMFLOW_PROGRAM = "strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m";
 
     try {
-        const largest = await rpcLimiter.run(() => 
-            connection.getTokenLargestAccounts(new PublicKey(mintAddress)).catch(()=>null)
-        );
-        
-        if (!largest || !largest.value[0]) return { locked: false, burned: false, lockPct: 0 };
+        let pubkey: PublicKey;
+        try { pubkey = new PublicKey(mintAddress); } catch { return { locked: false, burned: false, lockPct: 0 }; }
 
+        // Fast parallel fetch with 400ms timeout
+        const largestPromise = rpcLimiter.run(() => connection.getTokenLargestAccounts(pubkey).catch(() => null));
+        const largest = await Promise.race([
+            largestPromise,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 400))
+        ]);
+
+        if (!largest || !largest.value[0]) return { locked: false, burned: false, lockPct: 0 };
         const top = largest.value[0];
-        
-        const ownerInfo = await rpcLimiter.run(() => 
-            connection.getParsedAccountInfo(top.address).catch(()=>null)
-        );
-        
+
+        const ownerInfoPromise = rpcLimiter.run(() => connection.getParsedAccountInfo(top.address).catch(() => null));
+        const ownerInfo = await Promise.race([
+            ownerInfoPromise,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 400))
+        ]);
+
         const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner ?? '';
-        const pct = (top.uiAmount || 0) / (largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1) * 100;
+        const totalAmount = largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1;
+        const pct = ((top.uiAmount || 0) / totalAmount) * 100;
 
         const result = {
             burned: owner === BURN_ADDRESS,
@@ -1330,7 +1338,6 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
         return { locked: false, burned: false, lockPct: 0 };
     }
 }
-
 export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
     const cacheKey = `velocity_cache:${mintAddress}`;
     const cached = await redis.get(cacheKey);
@@ -1486,4 +1493,68 @@ export async function runTriggerBenchmark(telegramId: string): Promise<TriggerBe
         grades,
         deepScoringTimeoutRisk
     };
+}
+
+// ─────────────────────────────────────────────
+// DECISION EXPLAINABILITY (/whyskip)
+// ─────────────────────────────────────────────
+export async function getSnipeDecisionExplanation(telegramId: string, mint: string): Promise<any | null> {
+    const raw = await redis.get(`snipe_decision:${telegramId}:${mint}`);
+    return raw ? JSON.parse(raw) : null;
+}
+
+// ─────────────────────────────────────────────
+// BACKTESTING SANDBOX ENGINE
+// ─────────────────────────────────────────────
+export interface BacktestConfig {
+    minScore: number;
+    lookbackDays: number;
+    positionSizeSol: number;
+}
+
+export interface BacktestResult {
+    totalCandidates: number;
+    wouldHaveTraded: number;
+    winRate: number;
+    avgReturnPct: number;
+    totalHypotheticalPnlSol: number;
+    bestTrade: { mint: string; outcome24h: number } | null;
+    worstTrade: { mint: string; outcome24h: number } | null;
+}
+
+export async function runBacktest(config: BacktestConfig): Promise<BacktestResult> {
+    const cacheKey = `backtest:${config.minScore}:${config.lookbackDays}:${config.positionSizeSol}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    const cutoff = new Date(Date.now() - config.lookbackDays * 24 * 60 * 60 * 1000);
+    const predictions = await prisma.callerPrediction.findMany({
+        where: { finalized: true, alertedAt: { gte: cutoff }, outcome24h: { not: null } }
+    });
+
+    const eligible = predictions.filter(p => p.score >= config.minScore);
+    let wins = 0, totalReturnPct = 0, totalPnlSol = 0;
+    let best: any = null, worst: any = null;
+
+    for (const p of eligible) {
+        const outcome = p.outcome24h!;
+        if (outcome > 0) wins++;
+        totalReturnPct += outcome;
+        totalPnlSol += config.positionSizeSol * (outcome / 100);
+        if (!best || outcome > best.outcome24h) best = { mint: p.mint, outcome24h: outcome };
+        if (!worst || outcome < worst.outcome24h) worst = { mint: p.mint, outcome24h: outcome };
+    }
+
+    const result: BacktestResult = {
+        totalCandidates: predictions.length,
+        wouldHaveTraded: eligible.length,
+        winRate: eligible.length > 0 ? parseFloat(((wins / eligible.length) * 100).toFixed(1)) : 0,
+        avgReturnPct: eligible.length > 0 ? parseFloat((totalReturnPct / eligible.length).toFixed(2)) : 0,
+        totalHypotheticalPnlSol: parseFloat(totalPnlSol.toFixed(4)),
+        bestTrade: best,
+        worstTrade: worst
+    };
+
+    await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
+    return result;
 }

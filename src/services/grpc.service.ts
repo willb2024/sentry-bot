@@ -546,7 +546,7 @@ export async function triggerAutoSnipes(
                 const isSnipeLocked = await redis.set(sniperLockKey, '1', 'EX', 86400, 'NX');
                 if (!isSnipeLocked) return;
 
-                // 🟢 FIX: Use 5s cached auto-snipe config to eliminate sequential DB hits per trigger
+                // 🟢 FIX: 5s cached auto-snipe config to eliminate sequential DB round-trips
                 const { getCachedAutoSnipeConfigFull } = await import('../lib/cache.js');
                 const liveConfigUser = await getCachedAutoSnipeConfigFull(sniper.user.telegramId, 5);
                 const liveConfig = liveConfigUser?.autoSnipeConfig ? { ...liveConfigUser.autoSnipeConfig, user: liveConfigUser } : null;
@@ -671,6 +671,14 @@ export async function triggerAutoSnipes(
             
                                 const [isRugRes, devRepRes, hasMevRes] = deepResult as [boolean, any, boolean];
                                 if (isRugRes || devRepRes?.isKnownRugger) {
+                                    // 🟢 Log Hard Block decision for /whyskip
+                                    redis.set(`snipe_decision:${liveConfig.user.telegramId}:${mintCa}`, JSON.stringify({
+                                        score: 0,
+                                        minScoreRequired: liveConfig.minScore,
+                                        reasons: [isRugRes ? '🚨 Rug risk flagged by deep scan' : '', devRepRes?.isKnownRugger ? '🚨 Serial rugger dev wallet' : ''].filter(Boolean),
+                                        decision: 'SKIPPED_HARD_BLOCK',
+                                        timestamp: Date.now()
+                                    }), 'EX', 86400).catch(() => {});
                                     await redis.del(sniperLockKey);
                                     return;
                                 }
@@ -701,18 +709,34 @@ export async function triggerAutoSnipes(
                             auditReasons = heuristicResult.reasons || [];
                             auditStats = { ageMins, volume: volUsd, liquidity: liqUsd, priceChangeM5, socials: true, lpLock: lpLock || { lockPct: 100, burned: true } };
 
-                            if (score < liveConfig.minScore) { await redis.del(sniperLockKey); return; }
-                            
                             const useML = creditResult.success && !creditResult.fallback;
-                            if (useML) {
+                            if (useML && score >= liveConfig.minScore) {
                                 const mlScore = await getModelScore(mintCa, stats);
                                 if (mlScore !== null) score = mlScore;
                             }
                         }
 
+                        // 🟢 Log decision for /whyskip
+                        redis.set(`snipe_decision:${liveConfig.user.telegramId}:${mintCa}`, JSON.stringify({
+                            score: Math.round(score),
+                            minScoreRequired: liveConfig.minScore,
+                            reasons: auditReasons,
+                            decision: score < liveConfig.minScore ? 'SKIPPED_LOW_SCORE' : 'PASSED',
+                            ageMins: Math.round(ageMins),
+                            volume: Math.round(volUsd),
+                            liquidity: Math.round(liqUsd),
+                            timestamp: Date.now()
+                        }), 'EX', 86400).catch(() => {});
+
                         const rawScore = score;
-                        if (rawScore < liveConfig.minScore) { await redis.del(sniperLockKey); return; } 
-                    } catch (e) { await redis.del(sniperLockKey); return; }
+                        if (rawScore < liveConfig.minScore) { 
+                            await redis.del(sniperLockKey); 
+                            return; 
+                        } 
+                    } catch (e) { 
+                        await redis.del(sniperLockKey); 
+                        return; 
+                    }
                 }
 
                 let snipeAmount = liveConfig.amountSol;

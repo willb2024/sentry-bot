@@ -2,6 +2,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
 import { prisma } from '../lib/prisma.js';
+import { redis } from '../lib/redis.js';
 import { executeSnipe, executeExit, getCachedTokenPrice } from './engine.service.js'; 
 import { addTrailingStopToMemory } from './order.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
@@ -11,7 +12,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const activeWsListeners = new Map<string, number>();
+export const activeWsListeners = new Map<string, number>();
 
 export function shutdownCopyTradeWatchers() {
     console.log("🛑 [COPY-TRADE] Cleaning up orphaned WebSocket listeners...");
@@ -84,6 +85,12 @@ export async function syncCopyTradeListeners(bot: any) {
                         if (!isRelevant) return;
 
                         const signature = logs.signature;
+
+                        // 🟢 FIX: Dedupe signature lock preventing double execution during WebSocket reconnects/resyncs
+                        const dedupeKey = `lock:copytrade_sig:${signature}`;
+                        const isFirstProcess = await redis.set(dedupeKey, '1', 'EX', 120, 'NX');
+                        if (!isFirstProcess) return;
+
                         const txDetails = await connection.getParsedTransaction(signature, {
                             maxSupportedTransactionVersion: 0,
                             commitment: 'confirmed'

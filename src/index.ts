@@ -3,6 +3,7 @@ import dns from 'dns';
 dns.setDefaultResultOrder('ipv4first');
 import { Telegraf, Markup, Context } from 'telegraf';
 import express from 'express';
+import { logger } from './lib/logger.js';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import bs58 from 'bs58';
@@ -1122,7 +1123,103 @@ bot.action('start_token_wizard', async (ctx) => {
 });
 
 
+// ─── 1. /risk COMMAND ─────────────────────────────────
+bot.command('risk', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+    try {
+        const { getPortfolioRiskSummary, buildRiskSummaryMessage } = await import('./services/risk-dashboard.service.js');
+        const summary = await getPortfolioRiskSummary(tgId);
+        await ctx.replyWithHTML(buildRiskSummaryMessage(summary));
+    } catch (e: any) {
+        console.error('🔴 [/risk error]:', e?.message);
+        await ctx.reply('Failed to load risk summary. Try again shortly.');
+    }
+});
 
+// ─── 2. /strategies COMMAND ───────────────────────────
+bot.command('strategies', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+    try {
+        const { getStrategyComparison, buildStrategyComparisonMessage } = await import('./services/risk-dashboard.service.js');
+        const breakdown = await getStrategyComparison(tgId);
+        await ctx.replyWithHTML(buildStrategyComparisonMessage(breakdown));
+    } catch (e: any) {
+        console.error('🔴 [/strategies error]:', e?.message);
+        await ctx.reply('Failed to load strategy comparison.');
+    }
+});
+
+// ─── 3. /whyskip COMMAND ──────────────────────────────
+bot.command('whyskip', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    const args = ctx.message.text.split(' ').slice(1);
+    if (!tgId || !args[0]) {
+        return ctx.reply('Usage: /whyskip <token_contract_address>');
+    }
+    try {
+        const { getSnipeDecisionExplanation } = await import('./services/caller.service.js');
+        const decision = await getSnipeDecisionExplanation(tgId, args[0]);
+        if (!decision) {
+            return ctx.replyWithHTML(`No decision record found for <code>${args[0]}</code>. Records expire after 24h.`);
+        }
+
+        const decisionLabel = decision.decision === 'PASSED' 
+            ? '✅ SNIPED' 
+            : decision.decision === 'SKIPPED_HARD_BLOCK' 
+                ? '🚨 HARD BLOCKED (RUG/DEV)' 
+                : '⚠️ SKIPPED — SCORE BELOW MINIMUM';
+
+        const msg =
+            `🔍 <b>SNIPE DECISION AUDIT</b>\n\n` +
+            `• <b>Token:</b> <code>${args[0]}</code>\n` +
+            `• <b>Outcome:</b> <b>${decisionLabel}</b>\n` +
+            `• <b>Score:</b> <code>${decision.score}/100</code> (Required: <code>${decision.minScoreRequired}+</code>)\n\n` +
+            `<b>Audit Factors:</b>\n${(decision.reasons || []).map((r: string) => `• ${r}`).join('\n') || '• No specific flags'}\n\n` +
+            `<i>Evaluated ${Math.max(1, Math.round((Date.now() - decision.timestamp) / 60000))}m ago.</i>`;
+
+        await ctx.replyWithHTML(msg);
+    } catch (e: any) {
+        console.error('🔴 [/whyskip error]:', e?.message);
+        await ctx.reply('Failed to load decision explanation.');
+    }
+});
+
+// ─── 4. /backtest & CALLER BACKTEST ACTION ────────────
+bot.command('backtest', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const loader = await ctx.replyWithHTML("<i>⏳ Simulating historical performance over last 30 days...</i>");
+    try {
+        const { getUserCallerFilters, runBacktest } = await import('./services/caller.service.js');
+        const filters = await getUserCallerFilters(tgId);
+        const currentMinScore = filters.minScore || 55;
+
+        const [current, plus10, plus20] = await Promise.all([
+            runBacktest({ minScore: currentMinScore, lookbackDays: 30, positionSizeSol: 0.1 }),
+            runBacktest({ minScore: currentMinScore + 10, lookbackDays: 30, positionSizeSol: 0.1 }),
+            runBacktest({ minScore: currentMinScore + 20, lookbackDays: 30, positionSizeSol: 0.1 }),
+        ]);
+
+        const row = (label: string, r: any) =>
+            `<b>${label}</b>\n├ Trades: <b>${r.wouldHaveTraded}/${r.totalCandidates}</b> | Win Rate: <b>${r.winRate}%</b>\n└ Avg Return: <b>${r.avgReturnPct > 0 ? '+' : ''}${r.avgReturnPct}%</b> | Sim PnL: <b>${r.totalHypotheticalPnlSol > 0 ? '+' : ''}${r.totalHypotheticalPnlSol} SOL</b>\n`;
+
+        const msg =
+            `📈 <b>AI CALLER 30-DAY BACKTEST</b>\n` +
+            `<i>Simulated on 0.1 SOL/trade across all recorded mainnet breakouts.</i>\n\n` +
+            row(`Current Settings (Min Score: ${currentMinScore})`, current) + '\n' +
+            row(`+10 Stricter (Min Score: ${currentMinScore + 10})`, plus10) + '\n' +
+            row(`+20 Stricter (Min Score: ${currentMinScore + 20})`, plus20) + '\n' +
+            `<i>(Backtest reflects historical verified tokens — past data is not a guarantee of future outcomes).</i>`;
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { parse_mode: 'HTML' });
+    } catch (e: any) {
+        console.error('🔴 [/backtest error]:', e?.message);
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 'Backtest simulation failed.');
+    }
+});
 
 bot.action('menu_vault', async (ctx) => { 
     try{await ctx.answerCbQuery();}catch(e){} 
@@ -1586,6 +1683,7 @@ async function sendCallerMenu(ctx: any, tgId: string, isEdit = false) {
             Markup.button.callback(`✏️ Min Score (${filters.minScore})`, 'edit_caller_score'), 
             Markup.button.callback(filters.blockMev ? '🛡️ MEV Block: ON' : '⚠️ MEV Block: OFF', 'toggle_caller_mev')
         ],
+        [Markup.button.callback('📈 30-Day Strategy Backtest', 'caller_backtest')], // 🟢 NEW BUTTON
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 
@@ -1651,9 +1749,100 @@ bot.command('batch', async (ctx) => {
 
 
 
+// ─── 1. RISK AUDIT BUTTON HANDLER ─────────────────────
+bot.action('action_view_risk', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
 
+    const loader = await ctx.replyWithHTML("<i>⏳ Calculating portfolio drawdown stress-tests...</i>");
+    try {
+        const { getPortfolioRiskSummary, buildRiskSummaryMessage } = await import('./services/risk-dashboard.service.js');
+        const summary = await getPortfolioRiskSummary(tgId);
+        const msg = buildRiskSummaryMessage(summary);
+        
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Positions', 'menu_positions')]])
+        });
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, "🔴 Failed to load risk audit.", { parse_mode: 'HTML' });
+    }
+});
 
+// ─── 2. STRATEGY ATTRIBUTION BUTTON HANDLER ───────────
+bot.action('action_view_strategies', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
 
+    const loader = await ctx.replyWithHTML("<i>⏳ Compiling multi-strategy performance metrics...</i>");
+    try {
+        const { getStrategyComparison, buildStrategyComparisonMessage } = await import('./services/risk-dashboard.service.js');
+        const breakdown = await getStrategyComparison(tgId);
+        const msg = buildStrategyComparisonMessage(breakdown);
+        
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Settings', 'menu_settings')]])
+        });
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, "🔴 Failed to load strategy breakdown.", { parse_mode: 'HTML' });
+    }
+});
+
+// ─── 3. WHY SKIP PROMPT BUTTON HANDLER ────────────────
+bot.action('action_prompt_whyskip', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    await redis.set(`state:whyskip:${tgId}`, 'AWAITING', 'EX', 120);
+    await ctx.replyWithHTML(
+        `🔍 <b>AUDIT SKIPPED TOKEN</b>\n\n` +
+        `Reply with the contract address (CA) of the token you want to inspect.\n\n` +
+        `<i>Sentry will show you the exact score, filter results, and whether it was blocked due to low score or security flags.</i>\n\n` +
+        `<i>Type /cancel to abort.</i>`
+    );
+});
+
+// ─── 4. CALLER BACKTEST BUTTON HANDLER ────────────────
+bot.action('caller_backtest', async (ctx) => {
+    try { await ctx.answerCbQuery("Simulating 30-day history..."); } catch(e){}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const loader = await ctx.replyWithHTML("<i>⏳ Running 30-day historical simulation across all mainnet breakouts...</i>");
+    try {
+        const { getUserCallerFilters, runBacktest } = await import('./services/caller.service.js');
+        const filters = await getUserCallerFilters(tgId);
+        const currentMinScore = filters.minScore || 55;
+
+        const [current, plus10, plus20] = await Promise.all([
+            runBacktest({ minScore: currentMinScore, lookbackDays: 30, positionSizeSol: 0.1 }),
+            runBacktest({ minScore: currentMinScore + 10, lookbackDays: 30, positionSizeSol: 0.1 }),
+            runBacktest({ minScore: currentMinScore + 20, lookbackDays: 30, positionSizeSol: 0.1 }),
+        ]);
+
+        const row = (label: string, r: any) =>
+            `<b>${label}</b>\n├ Trades: <b>${r.wouldHaveTraded}/${r.totalCandidates}</b> | Win Rate: <b>${r.winRate}%</b>\n└ Avg Return: <b>${r.avgReturnPct > 0 ? '+' : ''}${r.avgReturnPct}%</b> | Sim PnL: <b>${r.totalHypotheticalPnlSol > 0 ? '+' : ''}${r.totalHypotheticalPnlSol} SOL</b>\n`;
+
+        const msg =
+            `📈 <b>AI CALLER 30-DAY BACKTEST</b>\n` +
+            `<i>Simulated on 0.1 SOL/trade across all recorded mainnet breakouts.</i>\n\n` +
+            row(`Current (Min Score: ${currentMinScore})`, current) + '\n' +
+            row(`+10 Stricter (Min Score: ${currentMinScore + 10})`, plus10) + '\n' +
+            row(`+20 Stricter (Min Score: ${currentMinScore + 20})`, plus20) + '\n' +
+            `<i>(Backtest reflects historical verified tokens — past data is not a guarantee of future outcomes).</i>`;
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Caller Settings', 'menu_caller')]])
+        });
+    } catch (e: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, "🔴 Backtest simulation failed.", { parse_mode: 'HTML' });
+    }
+});
 
 
 
@@ -3821,26 +4010,26 @@ async function sendOrEditSettings(ctx: any, telegramId: string, isEdit: boolean 
         `🚀 <b>JITO PRIORITY EXPLAINED:</b>\n` +
         `<i>This is your bribe to the validator. Higher priority fees guarantee your transaction lands in the next block.</i>`;
 
-    const UI = Markup.inlineKeyboard([
-        [
-            Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
-            Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
-            Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
-        ],
-        [
-            Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed'),
-            Markup.button.callback(hideWallets ? '👁️ Show Wallets' : '🙈 Hide Wallets', 'toggle_hide_wallets')
-        ],
-        [
-            Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage')
-        ],
-        // 🟢 NEW ROW: Execution Engines Toggle
-        [
-            Markup.button.callback(`⚡ SOR: ${sorStatus}`, 'toggle_sor'),
-            Markup.button.callback(`📈 Adaptive: ${adaptiveStatus}`, 'toggle_adaptive_slippage')
-        ],
-        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-    ]);
+        const UI = Markup.inlineKeyboard([
+            [
+                Markup.button.callback(level === 'ECO' ? '🟢 Eco 🍃' : 'Eco 🍃', 'set_speed_ECO'),
+                Markup.button.callback(level === 'FAST' ? '🟢 Fast 🐎' : 'Fast 🐎', 'set_speed_FAST'),
+                Markup.button.callback(level === 'TURBO' ? '🟢 Turbo ⚡' : 'Turbo ⚡', 'set_speed_TURBO')
+            ],
+            [
+                Markup.button.callback(level === 'CUSTOM' ? `🟢 Custom: ${user.customPriorityFee} SOL` : 'Custom ⚙️', 'action_edit_custom_speed'),
+                Markup.button.callback(hideWallets ? '👁️ Show Wallets' : '🙈 Hide Wallets', 'toggle_hide_wallets')
+            ],
+            [
+                Markup.button.callback('✏️ Edit Slippage', 'action_edit_slippage'),
+                Markup.button.callback('📊 Strategy Attribution', 'action_view_strategies') // 🟢 NEW BUTTON
+            ],
+            [
+                Markup.button.callback(`⚡ SOR: ${sorStatus}`, 'toggle_sor'),
+                Markup.button.callback(`📈 Adaptive: ${adaptiveStatus}`, 'toggle_adaptive_slippage')
+            ],
+            [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+        ]);
 
     if (isEdit) await safeEditMessageText(ctx, levelText, UI);
     else await ctx.replyWithHTML(levelText, UI);
@@ -4081,7 +4270,10 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
         [Markup.button.callback(`📈 Curve: ${curveDesc}`, 'edit_scaling_exponent')],
         [Markup.button.callback(`📊 MC Filter (${mcDisplay})`, 'edit_snipe_mc')],
         [Markup.button.callback(`✏️ Guard (-${config.autoTrailingDropPercent}%)`, 'edit_snipe_sl'), Markup.button.callback(`🎯 TP (${tpDisplay})`, 'edit_snipe_tp')],
-        [Markup.button.callback(`⏱️ Delay (${config.snipeDelaySeconds}s)`, 'edit_snipe_delay')],
+        [
+            Markup.button.callback(`⏱️ Delay (${config.snipeDelaySeconds}s)`, 'edit_snipe_delay'),
+            Markup.button.callback('🔍 Audit Skipped Token', 'action_prompt_whyskip') // 🟢 NEW BUTTON
+        ],
         [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
 
@@ -4559,6 +4751,23 @@ bot.command(['speedtest', 'benchmark'], async (ctx) => {
     }
 });
 
+bot.command('qacheck', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
+
+    const parts = (ctx.message as any).text.trim().split(/\s+/);
+    const targetId = parts[1] || tgId;
+
+    const loader = await ctx.replyWithHTML("<i>🧪 Running automated QA harness assertions...</i>");
+    try {
+        const { runQAHarness, buildQAReportMessage } = await import('./services/qa-harness.service.js');
+        const results = await runQAHarness(targetId);
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, buildQAReportMessage(targetId, results), { parse_mode: 'HTML' });
+    } catch (err: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>QA Harness Error:</b> ${err.message}`, { parse_mode: 'HTML' });
+    }
+});
+
 // =========================================================
 // 💼 POSITIONS & DUST SWEEPER ENGINE
 // =========================================================
@@ -4595,11 +4804,16 @@ bot.action('menu_positions', async (ctx) => {
             });
         }
 
-        buttons.push([
-            Markup.button.callback('🔄 Refresh', 'menu_positions'),
-            Markup.button.callback('⬅️ Back', 'btn_dashboard')
-        ]);
 
+       // Inside bot.action('menu_positions', ...)
+buttons.push([
+    Markup.button.callback('📊 Portfolio Risk Audit', 'action_view_risk'),
+    Markup.button.callback('🧹 Sweep All to Cash', 'action_sweep_all')
+]);
+buttons.push([
+    Markup.button.callback('🔄 Refresh', 'menu_positions'),
+    Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')
+]);
         const loader = await ctx.reply("<i>⏳ Scanning simulation vault...</i>", { parse_mode: 'HTML' });
         await new Promise(r => setTimeout(r, 400)); 
         await safeEditMessageText(ctx, posText, {
@@ -6805,6 +7019,37 @@ bot.on("text", async (ctx, next) => {
         await sendOrEditSniper(ctx, telegramId, false);
         return;
     }
+    const isWhySkip = await redis.get(`state:whyskip:${telegramId}`);
+    if (isWhySkip) {
+        await redis.del(`state:whyskip:${telegramId}`);
+        const mint = text.trim();
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
+            return ctx.reply("🔴 Invalid Solana contract address.");
+        }
+    
+        const { getSnipeDecisionExplanation } = await import('./services/caller.service.js');
+        const decision = await getSnipeDecisionExplanation(telegramId, mint);
+    
+        if (!decision) {
+            return ctx.replyWithHTML(`No evaluation record found for <code>${mint}</code>. Records expire after 24h.`);
+        }
+    
+        const decisionLabel = decision.decision === 'PASSED' 
+            ? '✅ SNIPED' 
+            : decision.decision === 'SKIPPED_HARD_BLOCK' 
+                ? '🚨 HARD BLOCKED (RUG/DEV)' 
+                : '⚠️ SKIPPED — SCORE BELOW MINIMUM';
+    
+        const msg =
+            `🔍 <b>SNIPE DECISION AUDIT</b>\n\n` +
+            `• <b>Token:</b> <code>${mint}</code>\n` +
+            `• <b>Outcome:</b> <b>${decisionLabel}</b>\n` +
+            `• <b>Score:</b> <code>${decision.score}/100</code> (Required: <code>${decision.minScoreRequired}+</code>)\n\n` +
+            `<b>Audit Factors:</b>\n${(decision.reasons || []).map((r: string) => `• ${r}`).join('\n') || '• No specific flags'}\n\n` +
+            `<i>Evaluated ${Math.max(1, Math.round((Date.now() - decision.timestamp) / 60000))}m ago.</i>`;
+    
+        return ctx.replyWithHTML(msg, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Sniper', 'menu_sniper')]]));
+    }
 
     // 1. AI Guard Token Analysis State Handler
     const aiGuardState = await redis.get(`state:ai_guard:${telegramId}`);
@@ -7846,6 +8091,25 @@ bot.action(/^confirm_watch_(.+)$/, async (ctx) => {
 });
 
 // Inside src/index.ts
+
+bot.command(['accuracy', 'accuracytest'], async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) {
+        return ctx.replyWithHTML("🔴 <b>Access Denied:</b> This command is restricted to administrators.");
+    }
+
+    const loader = await ctx.replyWithHTML("<i>📊 Computing accuracy against production database...</i>");
+    try {
+        const { runAccuracyBenchmark, buildAccuracyReportMessage } = await import('./services/accuracy-benchmark.service.js');
+        const report = await runAccuracyBenchmark();
+        const msg = buildAccuracyReportMessage(report);
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, { parse_mode: 'HTML' });
+    } catch (e: any) {
+        console.error("🔴 [/accuracy error]:", e?.message || e);
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Accuracy audit failed: ${e.message}`, { parse_mode: 'HTML' });
+    }
+});
 
 bot.command('exporttrades', async (ctx) => {
     const tgId = ctx.from?.id.toString();
@@ -9109,6 +9373,23 @@ async function bootEcosystem() {
     runGuardModelTrainingScheduler();
 
     // 🟢 Background Jobs & Maintenance Intervals
+
+    // Audit Redis lock keys every 5 minutes to catch stuck locks lacking TTL
+setInterval(async () => {
+    try {
+        const lockPatterns = ['lock:autosnipe:*', 'lock:budget:*', 'lock:copytrade_sig:*', 'lock:withdraw:*'];
+        for (const pattern of lockPatterns) {
+            const keys = await redis.keys(pattern);
+            for (const key of keys) {
+                const ttl = await redis.ttl(key);
+                if (ttl === -1) {
+                    logger.error('🚨 [LOCK AUDIT] Found lock key with NO TTL — releasing stuck key:', { key });
+                    await redis.del(key); // Safely release stuck lock
+                }
+            }
+        }
+    } catch (_) {}
+}, 5 * 60 * 1000);
 
     // Guild rank refresh interval (runs every 25s)
     setInterval(async () => {
