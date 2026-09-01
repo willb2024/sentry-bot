@@ -7837,44 +7837,59 @@ bot.on("text", async (ctx, next) => {
         try {
             await redis.set(`sim:active:${telegramId}`, 'true');
 
-            const wins = parseInt(parsedData['WINS']) || 1276;
-            const losses = parseInt(parsedData['LOSSES']) || 1913;
-            const credits = parseInt(parsedData['CREDITS']) || 5420;
-            const balance = parseFloat(parsedData['BALANCE_SOL']) || 1173.9692; 
-            const volume = parseFloat(parsedData['VOL']) || 14895.4648;
-            const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '350');
-            const spend = parseFloat(parsedData['SPEND'] || '350');
-            const days = parseInt(parsedData['DAYS'] || '93');
-            const risk = parseInt(parsedData['RISK_SCORE'] || '18');
-            const slippage = parseFloat((parsedData['SLIPPAGE'] || '0.11').replace('%', '')) || 0.11;
+            const wins = parseInt(parsedData['WINS']) || 1397;
+            const losses = parseInt(parsedData['LOSSES']) || 1003;
+            const credits = parseInt(parsedData['CREDITS']) || 5000;
+            const balance = parseFloat(parsedData['BALANCE_SOL']) || 620.8628; 
+            const volume = parseFloat(parsedData['VOL']) || 7450.8250;
+            const maxBudget = parseFloat(parsedData['MAX_BUDGET'] || '500');
+            const spend = parseFloat(parsedData['SPEND'] || '85');
+            const days = parseInt(parsedData['DAYS'] || '121');
+            const risk = parseInt(parsedData['RISK_SCORE'] || '24');
+            const slippage = parseFloat((parsedData['SLIPPAGE'] || '0.12').replace('%', '')) || 0.12;
+            const sharpe = parseFloat(parsedData['SHARPE'] || '38.45');
+            const drawdown = parseFloat(parsedData['DRAWDOWN'] || '-1.8500');
+            const profitFactor = parseFloat(parsedData['PROFIT_FACTOR'] || '3.42');
 
-            const startingBalanceSol = parseFloat(parsedData['STARTING_BAL_SOL'] || '63.7227');
+            const startingBalanceSol = parseFloat(parsedData['STARTING_BAL_SOL'] || '31.8613');
 
-            const manualParts = (parsedData['MANUAL_24H'] || '0 | 0').split('|').map(s => parseFloat(s.trim()));
-            const autoParts = (parsedData['AUTO_24H'] || '16 | 49.9442').split('|').map(s => parseFloat(s.trim()));
-            const manual24hCount = manualParts[0] || 0;
-            const manual24hPnl = manualParts[1] || 0;
-            const auto24hCount = autoParts[0] || 16;
-            const auto24hPnl = autoParts[1] || 49.9442;
+            const manualParts = (parsedData['MANUAL_24H'] || '2 | 2.4500').split('|').map(s => parseFloat(s.trim()));
+            const autoParts = (parsedData['AUTO_24H'] || '18 | 14.8500').split('|').map(s => parseFloat(s.trim()));
+            const manual24hCount = manualParts[0] || 2;
+            const manual24hPnl = manualParts[1] || 2.4500;
+            const auto24hCount = autoParts[0] || 18;
+            const auto24hPnl = autoParts[1] || 14.8500;
 
-            const stratStats: Record<string, { pnl: number, volume: number }> = {};
+            const stratStats: Record<string, { totalPnl: number, totalVolume: number, count: number, pnl: number, volume: number }> = {
+                'Sniper Engine': { totalPnl: 956.1076, totalVolume: volume * 0.81, count: Math.round(wins * 0.81), pnl: 956.1076, volume: volume * 0.81 },
+                'Manual / Direct': { totalPnl: 141.6456, totalVolume: volume * 0.12, count: Math.round(wins * 0.12), pnl: 141.6456, volume: volume * 0.12 },
+                'Copy Trade': { totalPnl: 59.0190, totalVolume: volume * 0.05, count: Math.round(wins * 0.05), pnl: 59.0190, volume: volume * 0.05 },
+                'DCA Engine': { totalPnl: 23.6076, totalVolume: volume * 0.02, count: Math.round(wins * 0.02), pnl: 23.6076, volume: volume * 0.02 },
+                'Limit Order': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 }
+            };
+
             let totalStratPnl = 0;
-
             for (const [key, val] of Object.entries(parsedData)) {
                 if (key.startsWith('STRAT')) {
                     const parts = val.split('|').map(s => s.trim());
                     if (parts.length >= 2) {
                         const name = parts[0];
                         const pnl = parseFloat(parts[1]) || 0;
-                        stratStats[name] = { pnl, volume: 0 };
+                        if (stratStats[name]) {
+                            stratStats[name].totalPnl = pnl;
+                            stratStats[name].pnl = pnl;
+                        } else {
+                            stratStats[name] = { totalPnl: pnl, totalVolume: 0, count: 10, pnl, volume: 0 };
+                        }
                         totalStratPnl += pnl;
                     }
                 }
             }
 
-            if (totalStratPnl === 0) totalStratPnl = 1633.4800; 
+            if (totalStratPnl === 0) totalStratPnl = 1180.3798;
 
-            const hourlyChart = (parsedData['HOURLY_CHART'] || '').split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+            const hourlyChart = (parsedData['HOURLY_CHART'] || '0.8, 1.4, -0.2, 2.1, 3.5, 0.0, 5.2, 2.4, -0.5, 1.8, 2.9, 4.1, 0.9, 1.6, -0.3, 3.1, 1.2, 2.3, -0.8, 1.1, 3.0, 4.5, 0.5, 2.2')
+                .split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
             const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
             await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
@@ -7888,7 +7903,8 @@ bot.on("text", async (ctx, next) => {
 
             const forgedPayload = {
                 risk, manual24hCount, manual24hPnl, auto24hCount, auto24hPnl, stratStats,
-                hourlyChart, firstTradeAt, slippage, maxBudget, spend, startingBalanceSol, totalStratPnl
+                hourlyChart, firstTradeAt, slippage, maxBudget, spend, startingBalanceSol, totalStratPnl,
+                sharpe, drawdown, profitFactor
             };
             await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
 
@@ -7902,52 +7918,33 @@ bot.on("text", async (ctx, next) => {
 
             const now = Date.now();
             const syntheticTrades = [];
-
             const sampleMints = [
-                '8fS1CEAPoM4TzVU4EoHEpgzq1VV7AbicfhtW4xC9iMCe', 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
-                'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm', 'CzLSujWBLFsSjncfkh59rQDqvJgCSwUiW3De5Y87dUXZ',
-                '2qEHjAscRwFa9TrCFddz5BEJwue5VT3Ce2EUPUzypump'
+                'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+                '8fS1CEAPoM4TzVU4EoHEpgzq1VV7AbicfhtW4xC9iMCe',
+                'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
+                'CzLSujWBLFsSjncfkh59rQDqvJgCSwUiW3De5Y87dUXZ'
             ];
 
-            const totalGrossLoss = 860.85;
-            const totalGrossWin = totalStratPnl + totalGrossLoss;
-
-            const avgWinSol = totalGrossWin / wins;
-            const avgLossSol = totalGrossLoss / losses;
-
-            for (let i = 0; i < 16; i++) {
-                const isWin = i < 11;
-                const pnlPct = isWin ? +(28.0 + Math.random() * 5) : -(9.0 + Math.random() * 2);
+            // 1. Generate 18 recent 24h trades
+            for (let i = 0; i < 18; i++) {
+                const isWin = i < 14;
+                const pnlPct = isWin ? +(25.0 + Math.random() * 8) : -(8.0 + Math.random() * 3);
                 const size = 1.709 + (i % 2 === 1 ? 0.097 : 0);
-                const tradePnl = isWin ? (auto24hPnl / 11) * (0.9 + Math.random() * 0.2) : -((auto24hPnl * 0.15) / 5);
+                const tradePnl = isWin ? (auto24hPnl / 14) * (0.9 + Math.random() * 0.2) : -((auto24hPnl * 0.15) / 4);
                 syntheticTrades.push({
-                    createdAt: new Date(now - (i * 40 + Math.random() * 20) * 60000).toISOString(),
+                    createdAt: new Date(now - (i * 35 + Math.random() * 15) * 60000).toISOString(),
                     isBuy: false, amountInSol: parseFloat(size.toFixed(3)), profitPercent: parseFloat(pnlPct.toFixed(1)),
                     realizedPnlSol: parseFloat(tradePnl.toFixed(4)), strategy: 'Sniper Engine', mint: sampleMints[i % sampleMints.length],
                     slippagePercent: slippage
                 });
             }
 
-            for (let i = 0; i < wins - 11; i++) {
-                const pnlPercent = 45.0 + Math.random() * 75.0; 
-                const amt = 2.5 + Math.random() * 2.0;
-                const realizedPnlSol = avgWinSol * (0.7 + Math.random() * 0.6);
+            // 2. Generate 2 manual 24h trades
+            for (let i = 0; i < 2; i++) {
                 syntheticTrades.push({
-                    createdAt: new Date(now - 86400000 - Math.random() * (days - 1) * 86400000).toISOString(),
-                    isBuy: false, amountInSol: parseFloat(amt.toFixed(4)), profitPercent: parseFloat(pnlPercent.toFixed(1)),
-                    realizedPnlSol: parseFloat(realizedPnlSol.toFixed(4)), strategy: 'Sniper Engine', mint: sampleMints[i % sampleMints.length],
-                    slippagePercent: slippage
-                });
-            }
-
-            for (let i = 0; i < losses - 5; i++) {
-                const pnlPercent = -(12.0 + Math.random() * 6.0); 
-                const amt = 2.5 + Math.random() * 2.0;
-                const realizedPnlSol = -avgLossSol * (0.7 + Math.random() * 0.6);
-                syntheticTrades.push({
-                    createdAt: new Date(now - 86400000 - Math.random() * (days - 1) * 86400000).toISOString(),
-                    isBuy: false, amountInSol: parseFloat(amt.toFixed(4)), profitPercent: parseFloat(pnlPercent.toFixed(1)),
-                    realizedPnlSol: parseFloat(realizedPnlSol.toFixed(4)), strategy: 'Sniper Engine', mint: sampleMints[i % sampleMints.length],
+                    createdAt: new Date(now - (i * 120 + 45) * 60000).toISOString(),
+                    isBuy: false, amountInSol: 1.5, profitPercent: 45.0,
+                    realizedPnlSol: 1.225, strategy: 'Manual / Direct', mint: sampleMints[i],
                     slippagePercent: slippage
                 });
             }
@@ -7969,14 +7966,14 @@ bot.on("text", async (ctx, next) => {
             const roiPercent = ((totalStratPnl / startingBalanceSol) * 100).toFixed(2);
 
             return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
-                `✅ <b>SIMULATION SYNCHRONIZED TO EXACT SPECIFICATIONS</b>\n\n` +
+                `✅ <b>SIMULATION MATRIX SYNCHRONIZED</b>\n\n` +
                 `• <b>Net Worth:</b> <b>$${(balance * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})}</b> (${balance.toFixed(4)} SOL)\n` +
-                `• <b>Net Realized Profit:</b> <b>+$${(totalStratPnl * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})}</b> (+${totalStratPnl.toFixed(4)} SOL)\n` +
-                `• <b>Cumulative ROI:</b> <b>+${roiPercent}%</b> (Started with $10,000.00 / ${startingBalanceSol.toFixed(2)} SOL)\n` +
-                `• <b>Total Trades:</b> <b>${totalTrades.toLocaleString()}</b> (${wins}W / ${losses}L — 40.0% Win Rate)\n` +
-                `• <b>Trading Volume:</b> <b>${volume.toFixed(4)} SOL</b>\n` +
-                `• <b>Trading Days:</b> <b>${days} Days</b>\n\n` +
-                `<i>Refresh your WebApp terminal to view the updated metrics.</i>`,
+                `• <b>Realized Profit:</b> <b>+$${(totalStratPnl * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})}</b> (+${totalStratPnl.toFixed(4)} SOL)\n` +
+                `• <b>ROI:</b> <b>+${roiPercent}%</b> (Started with $${(startingBalanceSol * solUsdRate).toFixed(2)})\n` +
+                `• <b>Win Rate:</b> <b>58.2%</b> (${wins}W / ${losses}L — ${totalTrades} trades)\n` +
+                `• <b>Sharpe Ratio:</b> <b>${sharpe}</b> | <b>Risk Score:</b> <b>${risk}%</b>\n` +
+                `• <b>Strategies:</b> Sniper (81%) · Manual (12%) · Copy (5%) · DCA (2%)\n\n` +
+                `<i>Refresh your WebApp terminal to view the fully animated charts!</i>`,
                 { parse_mode: 'HTML' }
             );
         } catch (e: any) {
@@ -8798,124 +8795,388 @@ app.get('/g/:guildCode', async (req, res) => {
     } catch (e) { res.status(500).send("Error loading leaderboard."); }
 });
 
-
-
-
-
-// 🟢 FIXED: /api/risk-score with Sim Mode Redis evaluation
-app.post('/api/risk-score', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        if (await isSimulationActive(telegramId)) {
-            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                if (f.risk !== undefined && f.risk !== null) {
-                    const score = f.risk;
-                    return res.json({ score, riskLevel: score > 70 ? 'High' : score > 40 ? 'Medium' : 'Safe', details: { topConcentration: 0, rugCount: 0 } });
-                }
-            }
-            const simPosRaw = await redis.get(`sim:positions:${telegramId}`);
-            const simPos = simPosRaw ? JSON.parse(simPosRaw) : [];
-            if (simPos.length === 0) return res.json({ score: 34, riskLevel: 'Safe', details: { topConcentration: 0.2, rugCount: 0 } });
-        }
-
-        const positions = await getUserPositions(telegramId);
-        if (!positions || positions.length === 0) return res.json({ score: 0, riskLevel: 'Safe', details: { topConcentration: 0, rugCount: 0 } });
-
-        const { getTokenRiskDetails } = await import('./services/price.service.js');
-        let totalValue = 0; let rugCount = 0;
-
-        const enriched = await Promise.all(positions.map(async (p: any) => {
-            const rug = await getTokenRiskDetails(p.mint);
-            totalValue += p.valueUsd;
-            if (rug.isUnsafe) rugCount++;
-            return { ...p, rug };
-        }));
-
-        const topConcentration = Math.max(...enriched.map((t: any) => t.valueUsd / (totalValue || 1)));
-        let score = 0;
-        if (topConcentration > 0.50) score += 30;
-        if (topConcentration > 0.80) score += 15;
-        if (rugCount > 0) score += 40;
-
-        const riskLevel = score > 70 ? 'High' : score > 40 ? 'Medium' : 'Safe';
-        res.json({ score: Math.min(100, score), riskLevel, details: { topConcentration, rugCount } });
-    } catch (e) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// 🟢 FIXED: /api/performance (Restored so Active Strategies never show +0.000 SOL)
+// 🟢 1. Strategy Attribution Endpoint (Fixes Active Strategies +0.0000 SOL & Doughnut Chart)
 app.post('/api/performance', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const telegramId = extractTelegramId(req.body.initData);
         if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-        const strategyStats: Record<string, { totalPnl: number, totalVolume: number, count: number }> = {
-            'Sniper Engine': { totalPnl: 0, totalVolume: 0, count: 0 },
-            'Manual / Direct': { totalPnl: 0, totalVolume: 0, count: 0 },
-            'DCA Engine': { totalPnl: 0, totalVolume: 0, count: 0 },
-            'Copy Trade': { totalPnl: 0, totalVolume: 0, count: 0 },
-            'Limit Order': { totalPnl: 0, totalVolume: 0, count: 0 }
-        };
-
         const { isSimulationActive } = await import('./services/simulation.service.js');
         const isSim = await isSimulationActive(telegramId);
 
         if (isSim) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                const f = JSON.parse(forgedRaw);
+                if (f.stratStats && Object.keys(f.stratStats).length > 0) {
+                    return res.json(f.stratStats);
+                }
+            }
             const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
+            const stats: Record<string, { totalPnl: number, totalVolume: number, count: number, pnl: number, volume: number }> = {
+                'Sniper Engine': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+                'Manual / Direct': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+                'Copy Trade': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+                'DCA Engine': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+                'Limit Order': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 }
+            };
             simTrades.forEach((t: any) => {
                 if (!t.isBuy) {
-                    let s = t.strategy || 'Sniper Engine';
-                    if (s === 'MANUAL') s = 'Manual / Direct';
-                    if (s === 'SNIPER') s = 'Sniper Engine';
-                    if (s === 'COPY_TRADE') s = 'Copy Trade';
-                    if (s === 'DCA') s = 'DCA Engine';
-                    if (s === 'LIMIT') s = 'Limit Order';
-
-                    if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
-                    strategyStats[s].totalPnl += (t.realizedPnlSol || 0);
-                    strategyStats[s].totalVolume += (t.amountInSol || 0);
-                    strategyStats[s].count += 1;
+                    const s = t.strategy || 'Sniper Engine';
+                    if (!stats[s]) stats[s] = { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 };
+                    stats[s].totalPnl += (t.realizedPnlSol || 0);
+                    stats[s].pnl += (t.realizedPnlSol || 0);
+                    stats[s].totalVolume += (t.amountInSol || 0);
+                    stats[s].volume += (t.amountInSol || 0);
+                    stats[s].count += 1;
                 }
             });
-        } else {
-            const user = await prisma.user.findUnique({ where: { telegramId } });
-            if (user) {
-                const trades = await prisma.trade.findMany({
-                    where: { userId: user.id, isBuy: false, status: 'CONFIRMED' },
-                    select: { strategy: true, realizedPnlSol: true, amountInSol: true }
-                });
-                trades.forEach(t => {
-                    let s = t.strategy || 'Manual / Direct';
-                    if (s === 'MANUAL') s = 'Manual / Direct';
-                    if (s === 'SNIPER') s = 'Sniper Engine';
-                    if (s === 'COPY_TRADE') s = 'Copy Trade';
-                    if (s === 'DCA') s = 'DCA Engine';
-                    if (s === 'LIMIT') s = 'Limit Order';
-
-                    if (!strategyStats[s]) strategyStats[s] = { totalPnl: 0, totalVolume: 0, count: 0 };
-                    strategyStats[s].totalPnl += (t.realizedPnlSol || 0);
-                    strategyStats[s].totalVolume += (t.amountInSol || 0);
-                    strategyStats[s].count += 1;
-                });
-            }
+            return res.json(stats);
         }
 
-        res.json(strategyStats);
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        const liveStats: Record<string, { totalPnl: number, totalVolume: number, count: number, pnl: number, volume: number }> = {
+            'Sniper Engine': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+            'Manual / Direct': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+            'Copy Trade': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+            'DCA Engine': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+            'Limit Order': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 }
+        };
+        if (user) {
+            const trades = await prisma.trade.findMany({
+                where: { userId: user.id, isBuy: false, status: 'CONFIRMED' },
+                select: { strategy: true, realizedPnlSol: true, amountInSol: true }
+            });
+            trades.forEach(t => {
+                let s = t.strategy || 'Manual / Direct';
+                if (s === 'MANUAL') s = 'Manual / Direct';
+                if (s === 'SNIPER') s = 'Sniper Engine';
+                if (s === 'COPY_TRADE') s = 'Copy Trade';
+                if (s === 'DCA') s = 'DCA Engine';
+                if (s === 'LIMIT') s = 'Limit Order';
+
+                if (!liveStats[s]) liveStats[s] = { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 };
+                liveStats[s].totalPnl += (t.realizedPnlSol || 0);
+                liveStats[s].pnl += (t.realizedPnlSol || 0);
+                liveStats[s].totalVolume += (t.amountInSol || 0);
+                liveStats[s].volume += (t.amountInSol || 0);
+                liveStats[s].count += 1;
+            });
+        }
+        res.json(liveStats);
     } catch (e) {
         res.status(500).json({ error: 'Server error' });
     }
 });
 
+// 🟢 Live & Simulation Portfolio Risk Score Endpoint
+app.post('/api/risk-score', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
 
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) {
+            return res.status(400).json({ error: 'Invalid ID' });
+        }
 
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(telegramId);
+
+        // ─────────────────────────────────────────────
+        // 1. SIMULATION MODE (Reads from /simedit or fallback)
+        // ─────────────────────────────────────────────
+        if (isSim) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            let score = 24; // Default baseline risk score
+
+            if (forgedRaw) {
+                try {
+                    const f = JSON.parse(forgedRaw);
+                    if (f.risk !== undefined && f.risk !== null) {
+                        score = parseInt(f.risk, 10);
+                    }
+                } catch (_) {}
+            }
+
+            const riskLevel = score > 70 ? 'High Risk' : score > 40 ? 'Moderate Risk' : 'Safe Risk';
+
+            return res.json({ 
+                score, 
+                riskScore: score,
+                riskPercent: score,
+                riskLevel,
+                details: { 
+                    topConcentration: 0.18, 
+                    rugCount: 0 
+                } 
+            });
+        }
+
+        // ─────────────────────────────────────────────
+        // 2. LIVE MAINNET MODE (Evaluates real positions)
+        // ─────────────────────────────────────────────
+        const positions = await getUserPositions(telegramId);
+        if (!positions || positions.length === 0) {
+            return res.json({ 
+                score: 0, 
+                riskScore: 0, 
+                riskPercent: 0, 
+                riskLevel: 'Safe Risk', 
+                details: { 
+                    topConcentration: 0, 
+                    rugCount: 0 
+                } 
+            });
+        }
+
+        const { getTokenRiskDetails } = await import('./services/price.service.js');
+        let totalValueUsd = 0;
+        let rugCount = 0;
+
+        const enrichedPositions = await Promise.all(positions.map(async (p: any) => {
+            const val = p.valueUsd || 0;
+            totalValueUsd += val;
+            const rug = await getTokenRiskDetails(p.mint).catch(() => ({ isUnsafe: false }));
+            if (rug.isUnsafe) rugCount++;
+            return { ...p, rug, valueUsd: val };
+        }));
+
+        // Calculate largest single-token concentration %
+        const topConcentration = totalValueUsd > 0 
+            ? Math.max(...enrichedPositions.map(t => t.valueUsd / totalValueUsd))
+            : 0;
+
+        let calculatedScore = 0;
+
+        // Portfolio Concentration penalties
+        if (topConcentration > 0.80) calculatedScore += 45;
+        else if (topConcentration > 0.50) calculatedScore += 30;
+        else if (topConcentration > 0.35) calculatedScore += 15;
+
+        // Severe Honeypot / Rug exposure penalties
+        if (rugCount > 0) {
+            calculatedScore += (rugCount * 40);
+        }
+
+        const finalScore = Math.max(0, Math.min(100, Math.round(calculatedScore)));
+        const riskLevel = finalScore > 70 ? 'High Risk' : finalScore > 40 ? 'Moderate Risk' : 'Safe Risk';
+
+        return res.json({ 
+            score: finalScore, 
+            riskScore: finalScore,
+            riskPercent: finalScore,
+            riskLevel, 
+            details: { 
+                topConcentration: parseFloat(topConcentration.toFixed(2)), 
+                rugCount 
+            } 
+        });
+
+    } catch (e: any) {
+        console.error('🔴 [/api/risk-score error]:', e?.message || e);
+        return res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// 🟢 Strategy Attribution & Yield Breakdown Endpoint (Live & Simulation)
+app.post('/api/performance', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) {
+            return res.status(400).json({ error: 'Invalid ID' });
+        }
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(telegramId);
+
+        // ─────────────────────────────────────────────
+        // 1. SIMULATION MODE
+        // ─────────────────────────────────────────────
+        if (isSim) {
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                try {
+                    const f = JSON.parse(forgedRaw);
+                    if (f.stratStats && Object.keys(f.stratStats).length > 0) {
+                        return res.json(f.stratStats);
+                    }
+                } catch (_) {}
+            }
+
+            // Dynamic aggregation from simulated trades if not forged
+            const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
+            const stats: Record<string, { totalPnl: number, totalVolume: number, count: number, pnl: number, volume: number }> = {
+                'Sniper Engine': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+                'Manual / Direct': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+                'Copy Trade': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+                'DCA Engine': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+                'Limit Order': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 }
+            };
+
+            simTrades.forEach((t: any) => {
+                if (!t.isBuy) {
+                    let s = t.strategy || 'Sniper Engine';
+                    if (s === 'MANUAL' || s === 'manual') s = 'Manual / Direct';
+                    if (s === 'SNIPER') s = 'Sniper Engine';
+                    if (s === 'COPY_TRADE') s = 'Copy Trade';
+                    if (s === 'DCA') s = 'DCA Engine';
+                    if (s === 'LIMIT') s = 'Limit Order';
+
+                    if (!stats[s]) stats[s] = { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 };
+                    const pnl = parseFloat((t.realizedPnlSol || 0).toFixed(4));
+                    const vol = parseFloat((t.amountInSol || 0).toFixed(4));
+
+                    stats[s].totalPnl += pnl;
+                    stats[s].pnl += pnl;
+                    stats[s].totalVolume += vol;
+                    stats[s].volume += vol;
+                    stats[s].count += 1;
+                }
+            });
+
+            return res.json(stats);
+        }
+
+        // ─────────────────────────────────────────────
+        // 2. LIVE MAINNET MODE
+        // ─────────────────────────────────────────────
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        const liveStats: Record<string, { totalPnl: number, totalVolume: number, count: number, pnl: number, volume: number }> = {
+            'Sniper Engine': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+            'Manual / Direct': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+            'Copy Trade': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+            'DCA Engine': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 },
+            'Limit Order': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 }
+        };
+
+        if (user) {
+            const trades = await prisma.trade.findMany({
+                where: { userId: user.id, isBuy: false, status: 'CONFIRMED' },
+                select: { strategy: true, realizedPnlSol: true, amountInSol: true }
+            });
+
+            trades.forEach(t => {
+                let s = t.strategy || 'Manual / Direct';
+                if (s === 'MANUAL' || s === 'manual') s = 'Manual / Direct';
+                if (s === 'SNIPER') s = 'Sniper Engine';
+                if (s === 'COPY_TRADE') s = 'Copy Trade';
+                if (s === 'DCA') s = 'DCA Engine';
+                if (s === 'LIMIT') s = 'Limit Order';
+
+                if (!liveStats[s]) liveStats[s] = { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 };
+                const pnl = parseFloat((t.realizedPnlSol || 0).toFixed(4));
+                const vol = parseFloat((t.amountInSol || 0).toFixed(4));
+
+                liveStats[s].totalPnl += pnl;
+                liveStats[s].pnl += pnl;
+                liveStats[s].totalVolume += vol;
+                liveStats[s].volume += vol;
+                liveStats[s].count += 1;
+            });
+        }
+
+        return res.json(liveStats);
+
+    } catch (e: any) {
+        console.error('🔴 [/api/performance error]:', e?.message || e);
+        return res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// 🟢 24-Hour UTC Hourly Performance Histogram Endpoint (Live & Simulation)
+app.post('/api/analytics/hourly', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) {
+            return res.status(400).json({ error: 'Invalid ID' });
+        }
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(telegramId);
+
+        // ─────────────────────────────────────────────
+        // 1. SIMULATION MODE
+        // ─────────────────────────────────────────────
+        if (isSim) {
+            // A. Check for custom /simedit HOURLY_CHART configuration
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                try {
+                    const f = JSON.parse(forgedRaw);
+                    if (f.hourlyChart && Array.isArray(f.hourlyChart) && f.hourlyChart.length > 0) {
+                        const result = [];
+                        for (let h = 0; h < 24; h++) {
+                            const pnl = f.hourlyChart[h % f.hourlyChart.length] || 0;
+                            // Realistic win-rate distribution based on hour's PnL
+                            const winRate = pnl >= 0 ? 58.2 : 38.5;
+                            result.push({
+                                hour: h,
+                                totalPnlSol: parseFloat(pnl.toFixed(4)),
+                                winRate: parseFloat(winRate.toFixed(1))
+                            });
+                        }
+                        return res.json(result);
+                    }
+                } catch (_) {}
+            }
+
+            // B. Real-time dynamic aggregation from sim:trades
+            const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
+            const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
+
+            const hourlyMap = new Map<number, { totalPnlSol: number; winCount: number; tradeCount: number }>();
+            for (let h = 0; h < 24; h++) {
+                hourlyMap.set(h, { totalPnlSol: 0, winCount: 0, tradeCount: 0 });
+            }
+
+            trades.forEach((t: any) => {
+                if (!t.isBuy) {
+                    const hour = new Date(t.createdAt).getUTCHours();
+                    const entry = hourlyMap.get(hour);
+                    if (entry) {
+                        entry.totalPnlSol += (t.realizedPnlSol || 0);
+                        entry.tradeCount += 1;
+                        if ((t.realizedPnlSol || 0) > 0) entry.winCount += 1;
+                    }
+                }
+            });
+
+            const result = [];
+            for (let h = 0; h < 24; h++) {
+                const d = hourlyMap.get(h)!;
+                const winRate = d.tradeCount > 0 ? (d.winCount / d.tradeCount) * 100 : 0;
+                result.push({
+                    hour: h,
+                    totalPnlSol: parseFloat(d.totalPnlSol.toFixed(4)),
+                    winRate: parseFloat(winRate.toFixed(1))
+                });
+            }
+            return res.json(result);
+        }
+
+        // ─────────────────────────────────────────────
+        // 2. LIVE MAINNET MODE
+        // ─────────────────────────────────────────────
+        const { getHourlyPerformance } = await import('./services/analytics.service.js');
+        const hourly = await getHourlyPerformance(telegramId);
+        return res.json(hourly);
+
+    } catch (e: any) {
+        console.error('🔴 [/api/analytics/hourly error]:', e?.message || e);
+        return res.status(500).json({ error: 'Server error' });
+    }
+});
 
 // 🟢 FIXED: /simedit command with CREDITS support and 4 Strategies
 bot.command('simedit', async (ctx) => {
@@ -9114,102 +9375,6 @@ app.post('/api/toggle-sim', async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Server Error' }); }
 });
 
-
-
-
-// 🟢 FIX: Connects /simedit HOURLY_CHART to the Bar Chart
-// 🟢 FIX: Connects /simedit HOURLY_CHART to the Bar Chart
-app.post('/api/analytics/hourly', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        const isSim = await isSimulationActive(telegramId);
-        
-        if (isSim) {
-            // 1. If the user has manually forged stats, use those
-            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
-            if (forgedRaw) {
-                const f = JSON.parse(forgedRaw);
-                if (f.hourlyChart && Array.isArray(f.hourlyChart)) {
-                    const result = [];
-                    for(let h = 0; h < 24; h++) {
-                        const pnl = f.hourlyChart[h % f.hourlyChart.length] || 0;
-                        const winRate = pnl > 0 ? 60 + Math.random() * 30 : 20 + Math.random() * 30;
-                        result.push({ hour: h, totalPnlSol: pnl, winRate: winRate });
-                    }
-                    return res.json(result);
-                }
-            }
-
-            // 2. Fallback: Calculate Hourly Data from REAL sim:trades
-            const tradesRaw = await redis.get(`sim:trades:${telegramId}`);
-            const trades = tradesRaw ? JSON.parse(tradesRaw) : [];
-            
-            const hourlyMap = new Map<number, { totalPnlSol: number, winCount: number, tradeCount: number }>();
-            for (let h = 0; h < 24; h++) hourlyMap.set(h, { totalPnlSol: 0, winCount: 0, tradeCount: 0 });
-
-            trades.forEach((t: any) => {
-                if (!t.isBuy) {
-                    const hour = new Date(t.createdAt).getUTCHours();
-                    const entry = hourlyMap.get(hour);
-                    if (entry) {
-                        entry.totalPnlSol += (t.realizedPnlSol || 0);
-                        entry.tradeCount += 1;
-                        if ((t.realizedPnlSol || 0) > 0) entry.winCount += 1;
-                    }
-                }
-            });
-
-            const result = [];
-            for (let h = 0; h < 24; h++) {
-                const d = hourlyMap.get(h);
-                const winRate = d && d.tradeCount > 0 ? (d.winCount / d.tradeCount) * 100 : 0;
-                result.push({
-                    hour: h,
-                    totalPnlSol: d ? d.totalPnlSol : 0,
-                    winRate: parseFloat(winRate.toFixed(1))
-                });
-            }
-            return res.json(result);
-        }
-        
-        const { getHourlyPerformance } = await import('./services/analytics.service.js');
-        const hourly = await getHourlyPerformance(telegramId);
-        res.json(hourly);
-    } catch (e) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-app.post('/api/analytics/advanced-stats', async (req, res) => {
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const { getAdvancedStats, computeSimTradeStats } = await import('./services/analytics.service.js');
-        const stats = await getAdvancedStats(telegramId);
-
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        if (await isSimulationActive(telegramId)) {
-            const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
-            const dynamicStats = computeSimTradeStats(simTrades);
-            
-            stats.sharpeRatio = dynamicStats.sharpeRatio;
-            stats.maxDrawdown = dynamicStats.maxDrawdown;
-            stats.profitFactor = dynamicStats.profitFactor;
-            stats.totalTrades = simTrades.length;
-            stats.totalInvestedSol = dynamicStats.totalInvestedSol;
-        }
-
-        res.json(stats);
-    } catch (e) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
 
 
 async function bootEcosystem() {
