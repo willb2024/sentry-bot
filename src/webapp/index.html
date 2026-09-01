@@ -1334,6 +1334,89 @@
             if (statsSimEl) statsSimEl.innerText = `Auto: ${auto.count} trades (${auto.pnl >= 0 ? '+' : ''}${parseFloat(auto.pnl).toFixed(4)} SOL)`;
         }
 
+        // 4. 🟢 FIX: Active Strategy Values (Matched to exact HTML Element IDs)
+        if (d.institutional && d.institutional.stratStats) {
+            const stratMap = d.institutional.stratStats;
+            const updateStratUI = (elementId, pnlValue) => {
+                const el = document.getElementById(elementId);
+                if (el) {
+                    const val = typeof pnlValue === 'number' ? pnlValue : parseFloat(pnlValue) || 0;
+                    const sign = val >= 0 ? '+' : '';
+                    el.innerText = `${sign}${val.toFixed(4)} SOL`;
+                    el.className = val >= 0 ? 'text-emerald-400 font-mono font-bold' : 'text-rose-400 font-mono font-bold';
+                }
+            };
+
+            updateStratUI('strat-pnl-sniper', stratMap['Sniper Engine']?.pnl ?? stratMap['Sniper Engine']?.totalPnl ?? 0);
+            updateStratUI('strat-pnl-manual', stratMap['Manual / Direct']?.pnl ?? stratMap['Manual / Direct']?.totalPnl ?? 0);
+            updateStratUI('strat-pnl-copy', stratMap['Copy Trade']?.pnl ?? stratMap['Copy Trade']?.totalPnl ?? 0);
+            updateStratUI('strat-pnl-dca', stratMap['DCA Engine']?.pnl ?? stratMap['DCA Engine']?.totalPnl ?? 0);
+            updateStratUI('strat-pnl-limit', stratMap['Limit Order']?.pnl ?? stratMap['Limit Order']?.totalPnl ?? 0);
+        }
+
+        // 5. Strategy Attribution Doughnut Chart
+        if (d.institutional && d.institutional.stratStats && window.allocChart) {
+            const strat = d.institutional.stratStats;
+            const values = [
+                Math.max(0, strat['Sniper Engine']?.pnl ?? strat['Sniper Engine']?.totalPnl ?? 0),
+                Math.max(0, strat['Manual / Direct']?.pnl ?? strat['Manual / Direct']?.totalPnl ?? 0),
+                Math.max(0, strat['Copy Trade']?.pnl ?? strat['Copy Trade']?.totalPnl ?? 0),
+                Math.max(0, strat['DCA Engine']?.pnl ?? strat['DCA Engine']?.totalPnl ?? 0),
+                Math.max(0, strat['Limit Order']?.pnl ?? strat['Limit Order']?.totalPnl ?? 0)
+            ];
+            window.allocChart.data.datasets[0].data = values;
+            window.allocChart.update();
+        }
+
+        // 6. 24-Hour Hourly Histogram Bar Chart
+        if (d.hourly && Array.isArray(d.hourly) && window.hourlyChart) {
+            const pnlData = d.hourly.map(h => h.totalPnlSol || 0);
+            window.hourlyChart.data.datasets[0].data = pnlData;
+            window.hourlyChart.update();
+        }
+
+    } catch (e) {
+        console.error('Failed to load dashboard bundle:', e);
+    }
+}
+    try {
+        const res = await fetch('/api/dashboard-bundle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: window.Telegram.WebApp.initData })
+        });
+        const d = await res.json();
+        if (!d) return;
+
+        // 1. Risk Score Gauge & Assessment Label
+        if (d.riskScore) {
+            const score = d.riskScore.score !== undefined ? d.riskScore.score : (d.riskScore.riskScore || 0);
+            const riskScoreEl = document.getElementById('risk-score');
+            const riskBarEl = document.getElementById('risk-bar');
+            const riskLabelEl = document.getElementById('risk-label');
+            
+            if (riskScoreEl) riskScoreEl.innerText = score + '%';
+            if (riskBarEl) riskBarEl.style.width = Math.min(100, Math.max(0, score)) + '%';
+            if (riskLabelEl) riskLabelEl.innerText = 'Assessment: ' + (d.riskScore.riskLevel || 'Safe Risk');
+        }
+
+        // 2. Sharpe Ratio
+        if (d.institutional && d.institutional.sharpeRatio !== undefined) {
+            const sharpeEl = document.getElementById('sharpe-ratio');
+            if (sharpeEl) sharpeEl.innerText = parseFloat(d.institutional.sharpeRatio).toFixed(2);
+        }
+
+        // 3. 24-Hour Rolling Activity Text
+        if (d.statsWindow) {
+            const manual = d.statsWindow.manual || { count: 0, pnl: 0 };
+            const auto = d.statsWindow.auto || { count: 0, pnl: 0 };
+            const statsLiveEl = document.getElementById('stats-live');
+            const statsSimEl = document.getElementById('stats-sim');
+            
+            if (statsLiveEl) statsLiveEl.innerText = `Manual: ${manual.count} trades (${manual.pnl >= 0 ? '+' : ''}${parseFloat(manual.pnl).toFixed(4)} SOL)`;
+            if (statsSimEl) statsSimEl.innerText = `Auto: ${auto.count} trades (${auto.pnl >= 0 ? '+' : ''}${parseFloat(auto.pnl).toFixed(4)} SOL)`;
+        }
+
         // 4. Strategy Attribution Values (Active Strategies List at Bottom)
         if (d.institutional && d.institutional.stratStats) {
             const stratMap = d.institutional.stratStats;
@@ -1376,6 +1459,71 @@
 
     } catch (e) {
         console.error('Failed to load dashboard bundle:', e);
+    }
+
+    function initCharts() {
+    // 1. Doughnut Chart (Expose to window.allocChart)
+    const allocCanvas = document.getElementById('allocChart');
+    if (allocCanvas) {
+        const allocCtx = allocCanvas.getContext('2d');
+        if (window.allocChart) window.allocChart.destroy();
+        window.allocChart = new Chart(allocCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'],
+                datasets: [{
+                    data: [81, 12, 5, 2, 0],
+                    backgroundColor: ['#10B981', '#F59E0B', '#3B82F6', '#8B5CF6', '#EC4899'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '72%',
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    }
+
+    // 2. 🟢 FIX: 24-Hour Hourly Histogram Chart (Expose to window.hourlyChart)
+    const hourlyCanvas = document.getElementById('hourlyChart');
+    if (hourlyCanvas) {
+        const hourlyCtx = hourlyCanvas.getContext('2d');
+        if (window.hourlyChart) window.hourlyChart.destroy();
+        window.hourlyChart = new Chart(hourlyCtx, {
+            type: 'bar',
+            data: {
+                labels: Array.from({ length: 24 }, (_, h) => `${h}:00`),
+                datasets: [{
+                    label: 'PnL (SOL)',
+                    data: Array(24).fill(0),
+                    backgroundColor: (context) => {
+                        const val = context.raw || 0;
+                        return val >= 0 ? 'rgba(16, 185, 129, 0.85)' : 'rgba(239, 68, 68, 0.85)';
+                    },
+                    borderRadius: 3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: '#0e131f',
+                        padding: 10,
+                        cornerRadius: 8
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { font: { size: 8 }, maxTicksLimit: 12, color: '#6B7280' } },
+                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { font: { size: 9 }, color: '#6B7280' } }
+                }
+            }
+        });
     }
 }
 
