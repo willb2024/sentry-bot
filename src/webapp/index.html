@@ -1294,153 +1294,90 @@
         }
     }
 
+  
     async function fetchDashboardBundle() {
-        try {
-            const res = await fetch('/api/dashboard-bundle', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
-            });
-            if (!res.ok) return;
-            const d = await res.json();
+    try {
+        const res = await fetch('/api/dashboard-bundle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: window.Telegram.WebApp.initData })
+        });
+        const d = await res.json();
+        if (!d) return;
 
-            // 1. Networth UI
-            if (d.networth) {
-                const cashEl = document.getElementById('stat-cash');
-                const depEl = document.getElementById('stat-deployed');
-                if (cashEl) cashEl.innerText = '$' + (d.networth.cashUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-                if (depEl) depEl.innerText = '$' + (d.networth.positionsValueUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            }
+        // 1. Risk Score Gauge & Assessment Label
+        if (d.riskScore) {
+            const score = d.riskScore.score !== undefined ? d.riskScore.score : (d.riskScore.riskScore || 0);
+            const riskScoreEl = document.getElementById('risk-score');
+            const riskBarEl = document.getElementById('risk-bar');
+            const riskLabelEl = document.getElementById('risk-label');
+            
+            if (riskScoreEl) riskScoreEl.innerText = score + '%';
+            if (riskBarEl) riskBarEl.style.width = Math.min(100, Math.max(0, score)) + '%';
+            if (riskLabelEl) riskLabelEl.innerText = 'Assessment: ' + (d.riskScore.riskLevel || 'Safe Risk');
+        }
 
-            // 2. Sizing Cap UI
-            if (d.sizingCap) {
-                const card = document.getElementById('sizing-cap-card');
-                const el = document.getElementById('sizing-cap-count');
-                if (d.sizingCap.count > 0 && card && el) {
-                    card.style.display = 'flex';
-                    el.innerText = `${d.sizingCap.count} time${d.sizingCap.count !== 1 ? 's' : ''}`;
-                } else if (card) {
-                    card.style.display = 'none';
+        // 2. Sharpe Ratio
+        if (d.institutional && d.institutional.sharpeRatio !== undefined) {
+            const sharpeEl = document.getElementById('sharpe-ratio');
+            if (sharpeEl) sharpeEl.innerText = parseFloat(d.institutional.sharpeRatio).toFixed(2);
+        }
+
+        // 3. 24-Hour Rolling Activity Text
+        if (d.statsWindow) {
+            const manual = d.statsWindow.manual || { count: 0, pnl: 0 };
+            const auto = d.statsWindow.auto || { count: 0, pnl: 0 };
+            const statsLiveEl = document.getElementById('stats-live');
+            const statsSimEl = document.getElementById('stats-sim');
+            
+            if (statsLiveEl) statsLiveEl.innerText = `Manual: ${manual.count} trades (${manual.pnl >= 0 ? '+' : ''}${parseFloat(manual.pnl).toFixed(4)} SOL)`;
+            if (statsSimEl) statsSimEl.innerText = `Auto: ${auto.count} trades (${auto.pnl >= 0 ? '+' : ''}${parseFloat(auto.pnl).toFixed(4)} SOL)`;
+        }
+
+        // 4. Strategy Attribution Values (Active Strategies List at Bottom)
+        if (d.institutional && d.institutional.stratStats) {
+            const stratMap = d.institutional.stratStats;
+            const updateStratUI = (elementId, pnlValue) => {
+                const el = document.getElementById(elementId);
+                if (el) {
+                    const sign = pnlValue >= 0 ? '+' : '';
+                    el.innerText = `${sign}${parseFloat(pnlValue).toFixed(4)} SOL`;
+                    el.className = pnlValue >= 0 ? 'text-emerald-400 font-mono font-bold' : 'text-rose-400 font-mono font-bold';
                 }
-            }
+            };
 
-            // 3. Sniper Settings UI
-            if (d.sniperSettings) {
-                const lossEl = document.getElementById('max-loss-limit');
-                if (lossEl) {
-                    if (d.sniperSettings.maxLossPercent && d.sniperSettings.maxLossPercent > 0) {
-                        lossEl.innerText = `-${d.sniperSettings.maxLossPercent}%`;
-                        lossEl.className = 'text-xs font-bold font-mono text-neonRed';
-                    } else {
-                        lossEl.innerText = 'OFF (0%)';
-                        lossEl.className = 'text-xs font-bold font-mono text-gray-500';
-                    }
-                }
-            }
+            updateStratUI('strat-sniper-pnl', stratMap['Sniper Engine']?.pnl ?? stratMap['Sniper Engine']?.totalPnl ?? 0);
+            updateStratUI('strat-manual-pnl', stratMap['Manual / Direct']?.pnl ?? stratMap['Manual / Direct']?.totalPnl ?? 0);
+            updateStratUI('strat-copy-pnl', stratMap['Copy Trade']?.pnl ?? stratMap['Copy Trade']?.totalPnl ?? 0);
+            updateStratUI('strat-dca-pnl', stratMap['DCA Engine']?.pnl ?? stratMap['DCA Engine']?.totalPnl ?? 0);
+            updateStratUI('strat-limit-pnl', stratMap['Limit Order']?.pnl ?? stratMap['Limit Order']?.totalPnl ?? 0);
+        }
 
-            // 4. Stats Window UI
-            if (d.statsWindow) {
-                const liveEl = document.getElementById('stats-live');
-                const simEl = document.getElementById('stats-sim');
-                if (d.statsWindow.manual && liveEl) {
-                    liveEl.innerText = `Manual: ${d.statsWindow.manual.count} trades (${d.statsWindow.manual.pnl >= 0 ? '+' : ''}${d.statsWindow.manual.pnl.toFixed(4)} SOL)`;
-                }
-                if (d.statsWindow.auto && simEl) {
-                    simEl.innerText = `Auto: ${d.statsWindow.auto.count} trades (${d.statsWindow.auto.pnl >= 0 ? '+' : ''}${d.statsWindow.auto.pnl.toFixed(4)} SOL)`;
-                }
-            }
+        // 5. Strategy Attribution Doughnut Chart
+        if (d.institutional && d.institutional.stratStats && window.allocChart) {
+            const strat = d.institutional.stratStats;
+            const values = [
+                Math.max(0, strat['Sniper Engine']?.pnl || strat['Sniper Engine']?.totalPnl || 0),
+                Math.max(0, strat['Manual / Direct']?.pnl || strat['Manual / Direct']?.totalPnl || 0),
+                Math.max(0, strat['Copy Trade']?.pnl || strat['Copy Trade']?.totalPnl || 0),
+                Math.max(0, strat['DCA Engine']?.pnl || strat['DCA Engine']?.totalPnl || 0),
+                Math.max(0, strat['Limit Order']?.pnl || strat['Limit Order']?.totalPnl || 0)
+            ];
+            window.allocChart.data.datasets[0].data = values;
+            window.allocChart.update();
+        }
 
-            // 5. Hourly Chart UI
-            if (d.hourly && Array.isArray(d.hourly)) {
-                const hourlyCanvas = document.getElementById('hourlyChart');
-                if (hourlyCanvas) {
-                    const ctx = hourlyCanvas.getContext('2d');
-                    if (window.hourlyChartInst) window.hourlyChartInst.destroy();
-                    window.hourlyChartInst = new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: d.hourly.map(item => item.hour + ':00'),
-                            datasets: [
-                                { 
-                                    label: 'PnL (SOL)', 
-                                    data: d.hourly.map(item => item.totalPnlSol), 
-                                    backgroundColor: d.hourly.map(item => item.totalPnlSol >= 0 ? 'rgba(16,185,129,0.55)' : 'rgba(239,68,68,0.55)'), 
-                                    borderWidth: 0, 
-                                    yAxisID: 'y' 
-                                },
-                                { 
-                                    label: 'Win Rate %', 
-                                    data: d.hourly.map(item => item.winRate), 
-                                    type: 'line', 
-                                    borderColor: '#3b82f6', 
-                                    borderWidth: 2, 
-                                    pointRadius: 1, 
-                                    fill: false, 
-                                    yAxisID: 'y1' 
-                                }
-                            ]
-                        },
-                        options: { 
-                            responsive: true, 
-                            maintainAspectRatio: false, 
-                            plugins: { legend: { display: false } }, 
-                            scales: { 
-                                x: { ticks: { color: '#64748b' }, grid: { display: false } }, 
-                                y: { display: false }, 
-                                y1: { display: false } 
-                            } 
-                        }
-                    });
-                }
-            }
+        // 6. 24-Hour Hourly Histogram Chart
+        if (d.hourly && Array.isArray(d.hourly) && window.hourlyChart) {
+            const pnlData = d.hourly.map(h => h.totalPnlSol || 0);
+            window.hourlyChart.data.datasets[0].data = pnlData;
+            window.hourlyChart.update();
+        }
 
-            // 6. Institutional Stats UI & Strategy Attribution Ring Update
-            if (d.institutional) {
-                const tcaEl = document.getElementById('tca-slippage');
-                const cvarEl = document.getElementById('cvar-value');
-                if (tcaEl) tcaEl.innerText = d.institutional.avgSlippage !== undefined ? d.institutional.avgSlippage.toFixed(2) + '%' : '0.11%';
-                if (cvarEl) cvarEl.innerText = d.institutional.cvar ? d.institutional.cvar.toFixed(4) + ' SOL' : '0.0000 SOL';
-
-                const totalTradesEl = document.getElementById('total-trades-count');
-                if (totalTradesEl && d.institutional.totalTradesCount !== undefined) {
-                    totalTradesEl.innerText = d.institutional.totalTradesCount.toLocaleString();
-                }
-
-                const spend = d.institutional.currentSpend || 0;
-                const budget = d.institutional.maxBudget || 0;
-                const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
-                const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
-
-                const gauge = document.getElementById('risk-budget-bar');
-                const gaugeText = document.getElementById('risk-budget-text');
-                const remainingEl = document.getElementById('risk-budget-remaining');
-
-                if (gauge) gauge.style.width = pct + '%';
-                if (gaugeText) {
-                    gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
-                }
-                if (remainingEl) {
-                    remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
-                    remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
-                }
-
-                if (d.institutional.stratStats && allocChart) {
-                    const s = d.institutional.stratStats;
-                    const sniperVol = s['Sniper Engine']?.volume || s['Sniper Engine']?.pnl || 0;
-                    const manualVol = s['Manual / Direct']?.volume || s['Manual / Direct']?.pnl || 0;
-                    const copyVol = s['Copy Trade']?.volume || s['Copy Trade']?.pnl || 0;
-                    const dcaVol = s['DCA Engine']?.volume || s['DCA Engine']?.pnl || 0;
-                    const limitVol = s['Limit Order']?.volume || s['Limit Order']?.pnl || 0;
-
-                    if (sniperVol > 0 || manualVol > 0 || copyVol > 0 || dcaVol > 0 || limitVol > 0) {
-                        allocChart.data.datasets[0].data = [sniperVol, manualVol, copyVol, dcaVol, limitVol];
-                        allocChart.update();
-                    }
-                }
-            }
-
-        } catch (_) {}
+    } catch (e) {
+        console.error('Failed to load dashboard bundle:', e);
     }
+}
 
     async function fetchLeaderboardData() {
         try {
