@@ -521,7 +521,6 @@ app.post('/api/wallet-balance', async (req, res) => {
     }
 });
 
-// Inside src/index.ts — /api/sim-stats Endpoint (56.4% Win Rate & +$256k Profit)
 
 // 🟢 FIXED: /api/sim-stats endpoint — Real computed trade stats by default, no hardcoded fallbacks
 // 🟢 Simulation Stats Endpoint (Direct Redis Check + Live Compounding)
