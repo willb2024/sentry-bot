@@ -1273,7 +1273,7 @@
     }
 
 
-    async function fetchDashboardBundle() {
+
   try {
     const res = await fetch('/api/dashboard-bundle', {
       method: 'POST',
@@ -1403,8 +1403,141 @@
   } catch (e) {
     console.error('Failed to load dashboard bundle:', e);
   }
-}
 
+
+  async function fetchDashboardBundle() {
+  try {
+    const res = await fetch('/api/dashboard-bundle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData: tg.initData || "" })
+    });
+    const d = await res.json();
+    if (!d) return;
+
+    console.log('[DEBUG] fetchDashboardBundle received:', d);
+
+    // 1. Risk Score
+    if (d.riskScore) {
+      const score = d.riskScore.score || 0;
+      document.getElementById('risk-score').innerText = score + '%';
+      document.getElementById('risk-bar').style.width = Math.min(100, Math.max(0, score)) + '%';
+      document.getElementById('risk-label').innerText = 'Assessment: ' + (d.riskScore.riskLevel || 'Safe Risk');
+    }
+
+    // 2. Sharpe Ratio
+    if (d.institutional && d.institutional.sharpeRatio !== undefined) {
+      document.getElementById('sharpe-ratio').innerText = parseFloat(d.institutional.sharpeRatio).toFixed(2);
+    }
+
+    // 3. CVaR / Total Trades / Slippage
+    if (d.institutional) {
+      const cvarEl = document.getElementById('cvar-value');
+      if (cvarEl && d.institutional.cvar !== undefined) cvarEl.innerText = `${parseFloat(d.institutional.cvar).toFixed(4)} SOL`;
+      const slipEl = document.getElementById('tca-slippage');
+      if (slipEl && d.institutional.avgSlippage !== undefined) slipEl.innerText = `${parseFloat(d.institutional.avgSlippage).toFixed(2)}%`;
+      const tradesEl = document.getElementById('total-trades-count');
+      if (tradesEl && d.institutional.totalTradesCount !== undefined) tradesEl.innerText = d.institutional.totalTradesCount.toLocaleString();
+    }
+
+    // 4. 24-Hour Rolling Activity
+    if (d.statsWindow) {
+      const manual = d.statsWindow.manual || { count: 0, pnl: 0 };
+      const auto = d.statsWindow.auto || { count: 0, pnl: 0 };
+      document.getElementById('stats-live').innerText = `Manual: ${manual.count} trades (${manual.pnl >= 0 ? '+' : ''}${parseFloat(manual.pnl).toFixed(4)} SOL)`;
+      document.getElementById('stats-sim').innerText = `Auto: ${auto.count} trades (${auto.pnl >= 0 ? '+' : ''}${parseFloat(auto.pnl).toFixed(4)} SOL)`;
+    }
+
+    // 5. Active Strategy Values
+    if (d.institutional && d.institutional.stratStats) {
+      const stratMap = d.institutional.stratStats;
+      const updateStratUI = (elementId, pnlValue) => {
+        const el = document.getElementById(elementId);
+        if (el) {
+          const val = typeof pnlValue === 'number' ? pnlValue : parseFloat(pnlValue) || 0;
+          const sign = val >= 0 ? '+' : '';
+          el.innerText = `${sign}${val.toFixed(4)} SOL`;
+          el.className = val >= 0 ? 'text-emerald-400 font-mono font-bold' : 'text-rose-400 font-mono font-bold';
+        }
+      };
+      updateStratUI('strat-pnl-sniper', stratMap['Sniper Engine']?.pnl ?? stratMap['Sniper Engine']?.totalPnl ?? 0);
+      updateStratUI('strat-pnl-manual', stratMap['Manual / Direct']?.pnl ?? stratMap['Manual / Direct']?.totalPnl ?? 0);
+      updateStratUI('strat-pnl-copy', stratMap['Copy Trade']?.pnl ?? stratMap['Copy Trade']?.totalPnl ?? 0);
+      updateStratUI('strat-pnl-dca', stratMap['DCA Engine']?.pnl ?? stratMap['DCA Engine']?.totalPnl ?? 0);
+      updateStratUI('strat-pnl-limit', stratMap['Limit Order']?.pnl ?? stratMap['Limit Order']?.totalPnl ?? 0);
+    }
+
+    // 6. Strategy Attribution Doughnut Chart
+    if (d.institutional && d.institutional.stratStats && window.allocChart) {
+      const strat = d.institutional.stratStats;
+      const values = [
+        Math.max(0, strat['Sniper Engine']?.pnl ?? strat['Sniper Engine']?.totalPnl ?? 0),
+        Math.max(0, strat['Manual / Direct']?.pnl ?? strat['Manual / Direct']?.totalPnl ?? 0),
+        Math.max(0, strat['Copy Trade']?.pnl ?? strat['Copy Trade']?.totalPnl ?? 0),
+        Math.max(0, strat['DCA Engine']?.pnl ?? strat['DCA Engine']?.totalPnl ?? 0),
+        Math.max(0, strat['Limit Order']?.pnl ?? strat['Limit Order']?.totalPnl ?? 0)
+      ];
+      window.allocChart.data.datasets[0].data = values;
+      window.allocChart.update();
+    }
+
+    // 7. 24-Hour Hourly Histogram
+    if (d.hourly && Array.isArray(d.hourly) && window.hourlyChart) {
+      const pnlData = d.hourly.map(h => h.totalPnlSol || 0);
+      window.hourlyChart.data.datasets[0].data = pnlData;
+      window.hourlyChart.update();
+    }
+
+    // 8. Exposure Limit (Budget) UI
+    if (d.institutional) {
+      const spend = d.institutional.currentSpend || 0;
+      const budget = d.institutional.maxBudget || 0;
+      const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
+      const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
+      document.getElementById('risk-budget-bar').style.width = pct + '%';
+      document.getElementById('risk-budget-text').innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
+      const remainingEl = document.getElementById('risk-budget-remaining');
+      if (remainingEl) {
+        remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
+        remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
+      }
+    }
+
+    // 9. Sizing Cap Card
+    if (d.sizingCap) {
+      const card = document.getElementById('sizing-cap-card');
+      const el = document.getElementById('sizing-cap-count');
+      if (d.sizingCap.count > 0 && card && el) {
+        card.style.display = 'flex';
+        el.innerText = `${d.sizingCap.count} time${d.sizingCap.count !== 1 ? 's' : ''}`;
+      } else if (card) {
+        card.style.display = 'none';
+      }
+    }
+
+    // 10. Max Loss Limit
+    if (d.sniperSettings) {
+      const lossEl = document.getElementById('max-loss-limit');
+      if (lossEl) {
+        if (d.sniperSettings.maxLossPercent && d.sniperSettings.maxLossPercent > 0) {
+          lossEl.innerText = `-${d.sniperSettings.maxLossPercent}%`;
+          lossEl.className = 'text-xs font-bold font-mono text-neonRed';
+        } else {
+          lossEl.innerText = 'OFF (0%)';
+          lossEl.className = 'text-xs font-bold font-mono text-gray-500';
+        }
+      }
+    }
+
+    // 11. Net Worth (Cash vs Deployed)
+    if (d.networth) {
+      document.getElementById('stat-cash').innerText = '$' + (d.networth.cashUsd || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      document.getElementById('stat-deployed').innerText = '$' + (d.networth.positionsValueUsd || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+  } catch (e) {
+    console.error('Failed to load dashboard bundle:', e);
+  }
+}
     async function triggerSweepAll() {
         if (!confirm('Are you sure you want to market-sell 100% of all open positions to cash?')) return;
         showToast('Sweeping positions to cash...');
