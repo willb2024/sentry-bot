@@ -79,7 +79,7 @@
             border-color: rgba(255, 255, 255, 0.22);
         }
 
-        /* Continuous RGB Glowing Chart Borders */
+        /* Continuous Glowing RGB Borders */
         @keyframes continuousRgbBorder {
             0% { border-color: rgba(239, 68, 68, 0.85); box-shadow: 0 0 16px rgba(239, 68, 68, 0.35); }
             25% { border-color: rgba(245, 158, 11, 0.85); box-shadow: 0 0 16px rgba(245, 158, 11, 0.35); }
@@ -388,7 +388,7 @@
         </section>
 
         <section class="space-y-6">
-            <!-- Continuous Glowing Live Chart 1 (PnL Flow Analytics) -->
+            <!-- Flow Analytics Chart -->
             <div class="card-flat p-5 chart-animated-live" id="pnl-chart-wrapper">
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center gap-2">
@@ -407,7 +407,7 @@
                 </div>
             </div>
 
-            <!-- Continuous Glowing Live Chart 2 (Strategy Attribution Yield) -->
+            <!-- Strategy Attribution Yield Doughnut Chart -->
             <div class="card-flat p-5 chart-animated-live" id="alloc-chart-wrapper">
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center gap-2">
@@ -419,7 +419,7 @@
                 </div>
             </div>
 
-            <!-- Continuous Glowing Live Chart 3 (Hourly Performance Histogram) -->
+            <!-- 24-Hour Hourly Histogram Chart -->
             <div class="card-flat p-5 chart-animated-live" id="hourly-chart-wrapper">
                 <div class="flex items-center justify-between mb-4">
                     <div class="flex items-center gap-2">
@@ -590,6 +590,7 @@
     let pnlChart = null;
     let allocChart = null;
     let affChart = null;
+    let hourlyChart = null;
     let tickerPrices = { SOL: 156.93, WIF: 3.09, BONK: 0.00002807, JUP: 1.08, POPCAT: 0.45, TREMP: 0.86 };
     
     let userTrades = []; 
@@ -757,7 +758,6 @@
         return { labels, profitData, lossData };
     }
 
-    // 🟢 RENDER CHARTS WITH CONTINUOUS COLOR PALETTE & ALWAYS-ACTIVE STRATEGY RING
     function initCharts(labels, profitData, lossData, allocLabels, allocData) {
         Chart.defaults.color = '#64748b';
         Chart.defaults.font.family = "'Inter', sans-serif";
@@ -846,7 +846,7 @@
         if (hourlyCanvas) {
             const hourlyCtx = hourlyCanvas.getContext('2d');
             if (window.hourlyChart) window.hourlyChart.destroy();
-            window.hourlyChart = new Chart(hourlyCtx, {
+            window.hourlyChart = hourlyChart = new Chart(hourlyCtx, {
                 type: 'bar',
                 data: {
                     labels: Array.from({ length: 24 }, (_, h) => `${h}:00`),
@@ -1331,7 +1331,7 @@
             const res = await fetch('/api/dashboard-bundle', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: window.Telegram.WebApp.initData })
+                body: JSON.stringify({ initData: window.Telegram.WebApp.initData || "" })
             });
             const d = await res.json();
             if (!d) return;
@@ -1373,7 +1373,7 @@
                 if (statsSimEl) statsSimEl.innerText = `Auto: ${auto.count} trades (${auto.pnl >= 0 ? '+' : ''}${parseFloat(auto.pnl).toFixed(4)} SOL)`;
             }
 
-            // 5. Active Strategy Values
+            // 5. Active Strategy Values (Mapped to exact HTML element IDs)
             if (d.institutional && d.institutional.stratStats) {
                 const stratMap = d.institutional.stratStats;
                 const updateStratUI = (elementId, pnlValue) => {
@@ -1406,7 +1406,7 @@
                 window.allocChart.update();
             }
 
-            // 7. 24-Hour Hourly Histogram
+            // 7. 24-Hour Hourly Histogram Bar Chart
             if (d.hourly && Array.isArray(d.hourly) && window.hourlyChart) {
                 const pnlData = d.hourly.map(h => h.totalPnlSol || 0);
                 window.hourlyChart.data.datasets[0].data = pnlData;
