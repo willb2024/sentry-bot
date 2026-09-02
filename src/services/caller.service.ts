@@ -40,19 +40,6 @@ export interface TokenStats {
     observedVol?: number;
 }
 
-export interface CallerFilters {
-    isActive: boolean;
-    minScore: number;
-    maxAgeMins: number;
-    minPctChange: number;
-    maxPctChange: number;
-    minLiquidity: number; 
-    minVolume24h: number; 
-    blockMev: boolean;
-    minHolders: number;
-    maxSupply: number;
-    minLiquidityLockPercent: number;
-}
 
 export interface TriggerBenchmarkResult {
     creditMs: number;
@@ -113,12 +100,6 @@ export function humanizeMs(ms: number): string {
     return `~${(mins / 1440).toFixed(1)} Days`;
 }
 
-export function getScoreBand(score: number): { label: string; sizeSol: string; risk: string } {
-    if (score < 40) return { label: '🔵 Too Early', sizeSol: '0.01-0.02 SOL (watchlist only)', risk: 'Unproven — no real signal yet' };
-    if (score < 60) return { label: '🟡 Speculative', sizeSol: '0.02-0.05 SOL', risk: 'Weak confirmation — lottery-ticket sizing' };
-    if (score < 75) return { label: '🟠 Developing', sizeSol: '0.05-0.1 SOL', risk: 'Multiple signals confirmed' };
-    return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across categories' };
-}
 
 export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
@@ -491,42 +472,121 @@ export async function getCalibratedProjection(token: any) {
     };
 }
 
+// Add / update these functions in src/services/caller.service.ts
+
+export interface CallerFilters {
+    isActive: boolean;
+    minScore: number;
+    maxAgeMins: number;
+    minPctChange: number;
+    maxPctChange: number;
+    minLiquidity: number;
+    minVolume24h: number;
+    blockMev: boolean;
+    minHolders?: number;
+    maxSupply?: number;
+    minLiquidityLockPercent?: number;
+}
+
+/**
+ * 🟢 Progressive relaxation ladder: tries strict filters first,
+ * then loosens criteria in 3 tiers so users receive the best available setups.
+ */
+export function getMatchesWithLadder(
+    tokens: any[],
+    filters: CallerFilters
+): { matches: any[]; isRelaxed: boolean; tier: number } {
+    if (!Array.isArray(tokens) || tokens.length === 0) {
+        return { matches: [], isRelaxed: false, tier: 0 };
+    }
+
+    const ABSOLUTE_MIN_LIQUIDITY_USD = 1000;
+
+    const apply = (f: Partial<CallerFilters>) => tokens.filter((t: any) => {
+        const score = t.totalScore ?? t.score ?? 0;
+        const age = t.ageMins ?? 0;
+        const mom = t.priceChangeM5 ?? 0;
+        const liq = t.liquidity ?? 0;
+        const vol = t.volume ?? t.volume24h ?? 0;
+
+        if (t.isRug === true) return false;
+        if (filters.blockMev && (t.mevRisk ?? 0) > 0.5) return false;
+        if (score < (f.minScore ?? filters.minScore)) return false;
+        if (age > (f.maxAgeMins ?? filters.maxAgeMins)) return false;
+        if (mom < (f.minPctChange ?? filters.minPctChange)) return false;
+        if (mom > (f.maxPctChange ?? filters.maxPctChange)) return false;
+        if (liq < (f.minLiquidity ?? filters.minLiquidity)) return false;
+        if (vol < (f.minVolume24h ?? filters.minVolume24h)) return false;
+        return true;
+    });
+
+    const tiers = [
+        { f: {}, relaxed: false },
+        { f: { minScore: Math.max(20, filters.minScore - 10), maxAgeMins: filters.maxAgeMins * 1.5, minLiquidity: Math.max(ABSOLUTE_MIN_LIQUIDITY_USD, filters.minLiquidity * 0.75) }, relaxed: true },
+        { f: { minScore: Math.max(15, filters.minScore - 20), maxAgeMins: filters.maxAgeMins * 2.0, minLiquidity: Math.max(ABSOLUTE_MIN_LIQUIDITY_USD, filters.minLiquidity * 0.5), minPctChange: Math.min(0, filters.minPctChange) }, relaxed: true }
+    ];
+
+    for (let i = 0; i < tiers.length; i++) {
+        const m = apply(tiers[i].f);
+        if (m.length > 0) return { matches: m, isRelaxed: tiers[i].relaxed, tier: i };
+    }
+    return { matches: [], isRelaxed: false, tier: -1 };
+}
+
+export function getScoreBand(score: number): { label: string; sizeSol: string; risk: string } {
+    if (score < 40) return { label: '🔵 Too Early', sizeSol: '0.01-0.02 SOL (Watchlist only)', risk: 'Unproven — no real signal yet' };
+    if (score < 60) return { label: '🟡 Speculative', sizeSol: '0.02-0.05 SOL', risk: 'Weak confirmation — lottery-ticket sizing' };
+    if (score < 75) return { label: '🟠 Developing', sizeSol: '0.05-0.1 SOL', risk: 'Multiple signals confirmed' };
+    return { label: '🟢 High Conviction', sizeSol: '0.1-0.2 SOL', risk: 'Strong confirmation across all categories' };
+}
+
+/**
+ * 🟢 Universal message formatter for both manual scans and automated caller feeds.
+ */
 export async function formatCallerAlertMessage(
-    matchedToken: any,
-    projection: Awaited<ReturnType<typeof getCalibratedProjection>>,
-    opts: { isRelaxed?: boolean; isReshow?: boolean } = {}
+    token: any,
+    projection: { target: string; timeframe: string; volatility?: string; sampleSize?: number },
+    opts: { isRelaxed?: boolean; isReshow?: boolean; isSim?: boolean } = {}
 ): Promise<string> {
-    const band = getScoreBand(matchedToken.totalScore ?? matchedToken.score);
-    const projLabel = projection.sampleSize >= 8
-        ? '🔮 <b>AI PROJECTION (Calibrated)</b>'
-        : '🔮 <b>AI PROJECTION (Uncalibrated Estimate)</b>';
+    const score = Math.round(token.totalScore ?? token.score ?? 0);
+    const band = getScoreBand(score);
 
-    let historicalContext = "";
-    try {
-        const historyMap = await redis.hgetall('caller_history');
-        const calls = Object.values(historyMap).map((v: any) => JSON.parse(v)).filter((c: any) => c.finalized && c.score >= 75);
-        if (calls.length >= 5) {
-            const hits = calls.filter((c: any) => Math.max(c.outcome1h ?? -100, c.outcome6h ?? -100, c.outcome24h ?? -100) >= 20).length;
-            const winRate = ((hits / calls.length) * 100).toFixed(1);
-            historicalContext = `<i>(Based on ${calls.length} verified alerts, coins scoring 75+ have a ${winRate}% win rate hitting +20%).</i>\n\n`;
-        }
-    } catch (_) {}
+    const liq = token.liquidity ?? 0;
+    const vol = token.volume ?? token.volume24h ?? 0;
+    const mom = token.priceChangeM5 ?? 0;
+    const age = Math.floor(token.ageMins ?? 0);
 
-    const relaxNote = opts.isRelaxed ? `⚠️ <i>Filters temporarily relaxed to find this match.</i>\n\n` : '';
-    const reshowNote = opts.isReshow ? `⚠️ <i>Showing previously seen top match (waiting for new tokens).</i>\n\n` : '';
+    let msg = `🎯 <b>AI COIN CALLER — MATCH FOUND</b>`;
+    if (opts.isSim) msg += ` 🧪 <i>(Simulation)</i>`;
+    msg += `\n\n`;
 
-    return `🎯 <b>SOLANA BREAKOUT DETECTED!</b>\n\n` +
-        reshowNote + relaxNote +
-        `<b>Token:</b> $${matchedToken.symbol} (<code>${matchedToken.mint}</code>)\n` +
-        `<b>Score:</b> ${matchedToken.totalScore ?? matchedToken.score}/100 ⭐\n\n` +
-        `${band.label} — Suggested size: <b>${band.sizeSol}</b>\n<i>${band.risk}</i>\n\n` +
-        `${projLabel}\n` +
-        `• Confidence: <b>${projection.volatility}</b>\n` +
-        `• Target Peak: <b>${projection.target}</b>\n` +
-        `• Est. Timeframe: <b>${projection.timeframe}</b>\n\n` +
-        `<b>Audit Trail:</b>\n${(matchedToken.reasons || []).map((r: string) => `✅ ${r}`).join('\n')}\n\n` +
-        historicalContext +
-        `<i>Click below to buy instantly via Jito:</i>`;
+    if (opts.isRelaxed) msg += `<i>⚠️ No coin cleared strict filters — displaying closest match with relaxed parameters.</i>\n\n`;
+    if (opts.isReshow) msg += `<i>🔁 Re-showing most recent match (waiting on fresh mempool listings).</i>\n\n`;
+
+    msg += `<b>Token:</b> $${token.symbol || 'UNKNOWN'}\n`;
+    msg += `<code>${token.mint}</code>\n\n`;
+    msg += `<b>Score:</b> <b>${score}/100</b> ⭐ (${band.label})\n`;
+    msg += `<b>Suggested Size:</b> <code>${band.sizeSol}</code>\n`;
+    msg += `<b>Age:</b> ${age}m | <b>5m Mom:</b> ${mom >= 0 ? '+' : ''}${Number(mom).toFixed(1)}%\n`;
+    msg += `<b>Liquidity:</b> $${(liq / 1000).toFixed(1)}k | <b>24h Vol:</b> $${(vol / 1000).toFixed(1)}k\n\n`;
+
+    if (Array.isArray(token.reasons) && token.reasons.length > 0) {
+        msg += `<b>Audit Trail:</b>\n`;
+        token.reasons.slice(0, 8).forEach((r: string) => { msg += `✅ ${r}\n`; });
+        msg += `\n`;
+    }
+
+    const projLabel = (projection.sampleSize || 0) >= 8
+        ? '🔮 <b>AI PROJECTION (Calibrated ML Model)</b>'
+        : '🔮 <b>AI PROJECTION (Statistical Estimate)</b>';
+
+    msg += `${projLabel}\n`;
+    msg += `• Target Peak: <b>${projection.target}</b>\n`;
+    msg += `• Timeframe: <b>${projection.timeframe}</b>\n`;
+    if (projection.volatility) msg += `• Confidence: <i>${projection.volatility}</i>\n`;
+    msg += `\n⚠️ <i>Projections are probabilistic estimates. Not financial advice.</i>`;
+
+    return msg;
 }
 
 export function buildAuditTrailMessage(
@@ -552,28 +612,7 @@ export function buildAuditTrailMessage(
            `Take Profit: <b>${typeof takeProfit === 'number' ? '+' + takeProfit + '%' : takeProfit}</b>`;
 }
 
-export function getMatchesWithLadder(tokens: any[], filters: CallerFilters): { matches: any[]; isRelaxed: boolean } {
-    const ABSOLUTE_MIN_LIQUIDITY_USD = 1000; 
-    const steps = [
-        filters,
-        { ...filters, minScore: Math.max(20, filters.minScore - 10), maxAgeMins: filters.maxAgeMins * 1.25, minLiquidity: Math.max(ABSOLUTE_MIN_LIQUIDITY_USD, filters.minLiquidity * 0.75), minVolume24h: filters.minVolume24h * 0.75 },
-        { ...filters, minScore: Math.max(15, filters.minScore - 20), maxAgeMins: filters.maxAgeMins * 1.6,  minLiquidity: Math.max(ABSOLUTE_MIN_LIQUIDITY_USD, filters.minLiquidity * 0.4),  minVolume24h: filters.minVolume24h * 0.4  },
-    ];
-    for (let i = 0; i < steps.length; i++) {
-        const f = steps[i];
-        const matches = tokens.filter((t: any) =>
-            t.totalScore >= f.minScore &&
-            t.ageMins <= f.maxAgeMins &&
-            (t.sourceQuality === 'onchain-only' || (t.priceChangeM5 >= f.minPctChange && t.priceChangeM5 <= f.maxPctChange)) &&
-            ((t.sourceQuality !== 'onchain-only' && t.volume >= f.minVolume24h) || (t.sourceQuality === 'onchain-only' && t.liquidity >= f.minLiquidity)) &&
-            t.liquidity >= f.minLiquidity &&
-            (!f.blockMev || (t?.breakdown?.mevRisk !== undefined && t.breakdown.mevRisk >= 0)) &&
-            (f.minLiquidityLockPercent === 0 || (t.stats?.lpLock?.lockPct >= f.minLiquidityLockPercent))
-        );
-        if (matches.length > 0) return { matches, isRelaxed: i > 0 };
-    }
-    return { matches: [], isRelaxed: false };
-}
+
 
 export function computeTokenScore(stats: TokenStats & { sentiment?: number }): { score: number; reasons: string[] } {
     if (stats.isRug) {

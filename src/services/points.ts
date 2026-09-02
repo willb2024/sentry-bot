@@ -16,16 +16,10 @@ export interface UserPointsBreakdown {
 export const TIER_CONFIG = {
     BRONZE: { name: 'Bronze' as const, rate: 0.50, minPoints: 0, nextTier: 'Silver', nextPoints: 5_000_000 },
     SILVER: { name: 'Silver' as const, rate: 0.60, minPoints: 5_000_000, nextTier: 'Gold', nextPoints: 25_000_000 },
-    GOLD:   { name: 'Gold' as const,   rate: 0.70, minPoints: 25_000_000, nextTier: 'Max Tier', nextPoints: 25_000_000 }
+    GOLD:   { name: 'Gold' as const,   rate: 0.70, minPoints: 25_000_000, nextTier: 'Max Rank', nextPoints: 25_000_000 }
 };
 
-export async function getUserTotalPoints(userId: string): Promise<UserPointsBreakdown> {
-    const cacheKey = `user_points_breakdown:${userId}`;
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-        return JSON.parse(cached);
-    }
-
+export async function refreshPointsCache(userId: string): Promise<UserPointsBreakdown> {
     const user = await prisma.user.findUnique({
         where: { id: userId },
         include: {
@@ -55,7 +49,7 @@ export async function getUserTotalPoints(userId: string): Promise<UserPointsBrea
             currentTier: 'Bronze',
             currentRate: 0.50,
             nextTier: 'Silver',
-            nextTierPoints: 5_000_000
+            nextTierPoints: 5_000_000 // 🟢 Fixed: nextTierPoints
         };
     }
 
@@ -65,7 +59,7 @@ export async function getUserTotalPoints(userId: string): Promise<UserPointsBrea
     let totalCopierVolSol = 0;
     user.followedBy.forEach((f) => {
         (f.follower.trades || []).forEach((t) => {
-            totalCopierVolSol += t.amountInSol || 0;
+            totalCopierVolSol += (t.amountInSol || 0);
         });
     });
 
@@ -100,8 +94,20 @@ export async function getUserTotalPoints(userId: string): Promise<UserPointsBrea
         nextTierPoints
     };
 
-    await redis.set(cacheKey, JSON.stringify(result), 'EX', 15);
+    if (user.telegramId) {
+        await redis.zadd('global_points_lb', totalPoints, user.telegramId);
+    }
+    await redis.set(`user_points_breakdown:${userId}`, JSON.stringify(result), 'EX', 300);
+
     return result;
+}
+
+export async function getUserTotalPoints(userId: string): Promise<UserPointsBreakdown> {
+    const cached = await redis.get(`user_points_breakdown:${userId}`);
+    if (cached) {
+        return JSON.parse(cached);
+    }
+    return await refreshPointsCache(userId);
 }
 
 export async function getDynamicAffiliateRate(referrerId: string): Promise<number> {

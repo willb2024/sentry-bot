@@ -136,15 +136,7 @@ export function pushGuardToCacheImmediately(guard: TrailingOrder) {
     cachedActiveGuards.push(guard);
 }
 
-export async function presignGuardImmediately(guard: TrailingOrder) {
-    try {
-        const { generatePreSignedExitTxMulti } = await import('./engine.service.js');
-        const payloads = await generatePreSignedExitTxMulti(guard.telegramId, guard.tokenAddress);
-        if (payloads.length > 0) {
-            await redis.set(`presigned_exit_multi:${guard.id}`, JSON.stringify(payloads), 'EX', 4);
-        }
-    } catch (_) {}
-}
+
 
 export async function releaseGuardSubscription(tokenAddress: string) {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
@@ -196,7 +188,13 @@ async function fetchLiveEntryPrice(tokenAddress: string): Promise<number> {
     return 0;
 }
 
+// Replace triggerInstantExit in src/services/grpc.service.ts:
 async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: boolean; signature?: string; message?: string }> {
+    const { isSimulationActive, simExecuteExit } = await import('./simulation.service.js');
+    if (await isSimulationActive(guard.telegramId)) {
+        return await simExecuteExit(guard.telegramId, guard.tokenAddress, 100, undefined, guard.strategy || 'Manual / Direct');
+    }
+
     try {
         const cachedPayload = await redis.get(`presigned_exit_multi:${guard.id}`);
         if (cachedPayload) {
@@ -226,6 +224,20 @@ async function triggerInstantExit(guard: TrailingOrder): Promise<{ success: bool
 
     const { executeExit } = await import('./engine.service.js');
     return await executeExit(guard.telegramId, guard.tokenAddress, 100, false, guard.strategy || 'Manual / Direct');
+}
+
+// Replace presignGuardImmediately in src/services/grpc.service.ts:
+export async function presignGuardImmediately(guard: TrailingOrder) {
+    try {
+        const { isSimulationActive } = await import('./simulation.service.js');
+        if (await isSimulationActive(guard.telegramId)) return; // 🟢 Skip pre-signing on sim guards
+
+        const { generatePreSignedExitTxMulti } = await import('./engine.service.js');
+        const payloads = await generatePreSignedExitTxMulti(guard.telegramId, guard.tokenAddress);
+        if (payloads.length > 0) {
+            await redis.set(`presigned_exit_multi:${guard.id}`, JSON.stringify(payloads), 'EX', 4);
+        }
+    } catch (_) {}
 }
 
 async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNative: number, bot: any) {
@@ -276,6 +288,14 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     await redis.del(`balance_cache:${guard.telegramId}`);
+            
+                    // 🟢 FUNC-8 Fix: Record outcome to train Guard ML Model
+                    try {
+                        const { recordGuardOutcome } = await import('./guard_ai.service.js');
+                        const peakPct = entryPrice > 0 ? ((guard.highestSeenPrice - entryPrice) / entryPrice) * 100 : profitPercent;
+                        await recordGuardOutcome(guard.telegramId, guard.tokenAddress, profitPercent, peakPct);
+                    } catch (_) {}
+            
                     try {
                         await bot.telegram.sendMessage(guard.telegramId, `🎯 <b>TAKE PROFIT TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\nNet Profit: <b>+${profitPercent.toFixed(1)}%</b>\n🔗 <a href="https://solscan.io/tx/${res.signature || ''}">View on Solscan</a>`, { parse_mode: 'HTML' });
                     } catch (e) {}
@@ -296,11 +316,19 @@ async function checkAndTriggerGuard(guardSnapshot: TrailingOrder, currentPriceNa
                 (async () => {
                     await cancelAllGuardsForToken(guard.telegramId, guard.tokenAddress);
                     await redis.del(`balance_cache:${guard.telegramId}`);
+            
+                    // 🟢 FUNC-8 Fix: Record outcome to train Guard ML Model
+                    try {
+                        const { recordGuardOutcome } = await import('./guard_ai.service.js');
+                        const peakPct = entryPrice > 0 ? ((guard.highestSeenPrice - entryPrice) / entryPrice) * 100 : 0;
+                        await recordGuardOutcome(guard.telegramId, guard.tokenAddress, totalPnlPercent, peakPct);
+                    } catch (_) {}
+            
                     try {
                         await bot.telegram.sendMessage(guard.telegramId, `🚨 <b>TRAILING GUARD TRIGGERED!</b>\n\nToken: <code>${guard.tokenAddress.substring(0, 8)}...</code>\nRealized PnL: <b>${totalPnlPercent >= 0 ? '+' : ''}${totalPnlPercent.toFixed(1)}%</b>\n🔗 <a href="https://solscan.io/tx/${res.signature || ''}">View on Solscan</a>`, { parse_mode: 'HTML' });
                     } catch (e) {}
                 })();
-            } else {
+            }else {
                 await redis.del(exitLockKey); 
             }
         }

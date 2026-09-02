@@ -72,12 +72,13 @@ export async function runQAHarness(telegramId: string): Promise<QACheckResult[]>
         detail: membership ? `GLP: ${membership.loyaltyPoints} | Guild Volume: ${membership.totalVolumeSol} SOL.` : 'No active guild membership.'
     });
 
+   // Replace Check 7 in src/services/qa-harness.service.ts:
     // ── Check 7: Trailing Stop Memory Coverage ──
-    const guardKeys = await redis.keys(`order:trail:${telegramId}:*`).catch(() => []);
+    const guardIds = await redis.smembers(`user_guards:${telegramId}`).catch(() => []);
     results.push({
         name: 'Trailing Guard Coverage',
         passed: true,
-        detail: `${guardKeys.length} active trailing stop(s) found in Redis memory.`
+        detail: `${guardIds.length} active trailing stop(s) found in Redis memory for user.`
     });
 
     // ── Check 8: Active DCA Schedule (ActiveOrder model) ──

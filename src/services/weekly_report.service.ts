@@ -1,6 +1,7 @@
 // src/services/weekly_report.service.ts
 import { redis } from '../lib/redis.js';
 import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton
+import { getUserTotalPoints } from './points.js';
 
 export interface WeeklyStats {
     telegramId: string;
@@ -19,6 +20,9 @@ export interface WeeklyStats {
     weeklyPnlSol: number;
 }
 
+// Replace computeWeeklyStats in src/services/weekly_report.service.ts:
+
+
 export async function computeWeeklyStats(telegramId: string, precomputedRank?: number, totalUsersCount?: number): Promise<WeeklyStats | null> {
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
@@ -26,13 +30,13 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
         where: { telegramId },
         include: {
             trades: {
-                where: { createdAt: { gte: cutoff } },
+                where: { createdAt: { gte: cutoff }, status: 'CONFIRMED' },
                 orderBy: { createdAt: 'desc' }
             },
             recruits: {
                 include: {
                     trades: {
-                        where: { createdAt: { gte: cutoff } }
+                        where: { createdAt: { gte: cutoff }, status: 'CONFIRMED' }
                     }
                 }
             }
@@ -44,7 +48,7 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
     const weekTrades = user.trades || [];
     const sellTrades = weekTrades.filter(t => !t.isBuy);
 
-    const totalVolumeSol = weekTrades.reduce((sum, t) => sum + t.amountInSol, 0);
+    const totalVolumeSol = weekTrades.reduce((sum, t) => sum + (t.amountInSol || 0), 0);
     const totalFeesPaidSol = weekTrades.reduce((sum, t) => sum + (t.feeChargedSol || 0), 0);
 
     let wins = 0, losses = 0, weeklyPnlSol = 0;
@@ -73,23 +77,13 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
     let affiliateEarnedSol = 0;
     user.recruits.forEach(r => {
         r.trades.forEach(t => {
-            affiliateEarnedSol += t.affiliateCutSol || 0;
+            affiliateEarnedSol += (t.affiliateCutSol || 0);
         });
     });
 
-    const sentryPoints = Math.floor((user.totalVolumeSol || 0) * 10000);
-
-    let pointsRank = precomputedRank;
-    let totalUsers = totalUsersCount;
-
-    if (pointsRank === undefined || totalUsers === undefined) {
-        const allUsers = await prisma.user.findMany({ select: { telegramId: true, totalVolumeSol: true } });
-        const sorted = allUsers
-            .map(u => ({ telegramId: u.telegramId, points: Math.floor((u.totalVolumeSol || 0) * 10000) }))
-            .sort((a, b) => b.points - a.points);
-        pointsRank = sorted.findIndex(u => u.telegramId === telegramId) + 1;
-        totalUsers = allUsers.length;
-    }
+    // 🟢 CANONICAL POINTS: Single source of truth from points.ts
+    const pointsBreakdown = await getUserTotalPoints(user.id);
+    const sentryPoints = pointsBreakdown.totalPoints;
 
     return {
         telegramId,
@@ -103,8 +97,8 @@ export async function computeWeeklyStats(telegramId: string, precomputedRank?: n
         totalFeesPaidSol: parseFloat(totalFeesPaidSol.toFixed(4)),
         affiliateEarnedSol: parseFloat(affiliateEarnedSol.toFixed(4)),
         sentryPoints,
-        pointsRank,
-        totalUsers,
+        pointsRank: precomputedRank || 1,
+        totalUsers: totalUsersCount || 1,
         weeklyPnlSol: parseFloat(weeklyPnlSol.toFixed(4))
     };
 }

@@ -131,15 +131,36 @@ export async function joinGuild(telegramId: string, guildCode: string): Promise<
 export async function awardGuildPoints(telegramId: string, volumeSol: number): Promise<void> {
     if (volumeSol <= 0) return;
     try {
+        const { isSimulationActive } = await import('./simulation.service.js');
+        const isSim = await isSimulationActive(telegramId);
+
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user) return;
 
-        // 🟢 FIX: Only credit the user's ACTIVE guild membership
         const memberships = await prisma.guildMembership.findMany({ where: { userId: user.id, isActive: true } });
         if (memberships.length === 0) return;
 
         const points = (volumeSol / 0.1) * 10;
 
+        if (isSim) {
+            // 🟢 Simulation Ledger: Isolated in DB and Redis
+            await prisma.$transaction(
+                memberships.map(m => prisma.guildMembership.update({
+                    where: { id: m.id },
+                    data: {
+                        simLoyaltyPoints: { increment: points },
+                        simTotalVolumeSol: { increment: volumeSol },
+                        lastActiveAt: new Date()
+                    }
+                }))
+            );
+            const pipe = redis.pipeline();
+            memberships.forEach(m => pipe.zincrby(`guild_lb_sim:${m.guildId}`, points, user.id));
+            await pipe.exec();
+            return;
+        }
+
+        // 🟢 Live Ledger: Real GLP points
         await prisma.$transaction(
             memberships.map(m => prisma.guildMembership.update({
                 where: { id: m.id },
@@ -150,35 +171,29 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
                 }
             }))
         );
-
         const pipeline = redis.pipeline();
         memberships.forEach(m => pipeline.zincrby(`guild_lb:${m.guildId}`, points, user.id));
         await pipeline.exec();
-
         memberships.forEach(m => {
-            redis.del(`guild_lb_cache:${m.guildId}:50`).catch(() => {});
-            redis.del(`guild_lb_cache:${m.guildId}:10`).catch(() => {});
-            redis.del(`guild_lb_cache:${m.guildId}:3`).catch(() => {});
+            [3, 10, 50, 500].forEach(n => redis.del(`guild_lb_cache:${m.guildId}:${n}`).catch(() => {}));
         });
     } catch (e) {}
 }
 
-export interface LeaderboardMember {
-    rank: number;
-    username: string;
-    walletAddress: string;
-    glp: number;
-    volumeSol: number;
-    airdropsReceived?: number;
-}
-
-export async function getLeaderboard(guildId: string, limit: number = 50): Promise<LeaderboardMember[]> {
-    const cacheKey = `guild_lb_cache:${guildId}:${limit}`;
+// Replace getLeaderboard in src/services/guild.service.ts:
+export async function getLeaderboard(
+    guildId: string, 
+    limit: number = 50, 
+    mode: 'live' | 'sim' = 'live'
+): Promise<LeaderboardMember[]> {
+    const zsetKey = mode === 'sim' ? `guild_lb_sim:${guildId}` : `guild_lb:${guildId}`;
+    const cacheKey = `guild_lb_cache:${mode}:${guildId}:${limit}`;
+    
     try {
         const cached = await redis.get(cacheKey);
         if (cached) return JSON.parse(cached);
 
-        const rawLb = await redis.zrevrange(`guild_lb:${guildId}`, 0, limit - 1, 'WITHSCORES');
+        const rawLb = await redis.zrevrange(zsetKey, 0, limit - 1, 'WITHSCORES');
         if (rawLb.length === 0) return [];
 
         const userIds: string[] = [];
@@ -202,12 +217,17 @@ export async function getLeaderboard(guildId: string, limit: number = 50): Promi
         userIds.forEach((userId) => {
             const member = memberMap.get(userId);
             if (member) {
+                // 🟢 Type-safe resolution for sim vs live volume
+                const volumeSol = mode === 'sim' 
+                    ? Number((member as any).simTotalVolumeSol ?? member.totalVolumeSol ?? 0)
+                    : Number(member.totalVolumeSol ?? 0);
+
                 results.push({
                     rank: results.length + 1,
                     username: member.user.username || member.user.telegramId,
                     walletAddress: member.user.vaultAddress || "Unknown",
                     glp: scoreMap[userId] || 0,
-                    volumeSol: member.totalVolumeSol,
+                    volumeSol: parseFloat(volumeSol.toFixed(4)),
                     airdropsReceived: member.airdropsReceivedSol || 0
                 });
             }
@@ -219,6 +239,18 @@ export async function getLeaderboard(guildId: string, limit: number = 50): Promi
         return [];
     }
 }
+
+
+export interface LeaderboardMember {
+    rank: number;
+    username: string;
+    walletAddress: string;
+    glp: number;
+    volumeSol: number;
+    airdropsReceived?: number;
+}
+
+
 
 // 🟢 FIX: Live rank lookup directly from Redis sorted set
 export async function getUserGuildRank(guildId: string, userId: string): Promise<number | null> {

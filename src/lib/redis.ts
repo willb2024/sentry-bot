@@ -11,8 +11,7 @@ if (!redisUrl) {
 const redisOptions: RedisOptions = {
   maxRetriesPerRequest: null,
   retryStrategy(times) {
-    const delay = Math.min(times * 200, 3000);
-    return delay;
+    return Math.min(times * 200, 3000);
   },
   reconnectOnError() {
     return true; 
@@ -26,19 +25,18 @@ const redisOptions: RedisOptions = {
 
 export const redis = new Redis(redisUrl as string, redisOptions);
 
-redis.on('connect', () => console.log('🟢 [2/5] Redis In-Memory Matrix Connected!'));
-redis.on('ready', () => console.log('✅ [REDIS] Ready for operations'));
-redis.on('error', (err: any) => {
-  console.error('🔴 [REDIS FAULT]:', err.message);
-});
-redis.on('close', () => {
-  console.warn('⚠️ [REDIS] Connection closed – will auto-reconnect');
-});
-redis.on('reconnecting', () => {
-  console.warn('🔄 [REDIS] Attempting to reconnect...');
+// 🟢 DEDICATED NON-PIPELINED CLIENT FOR SAFE WATCH/MULTI & REDLOCK
+export const redisTx = new Redis(redisUrl as string, {
+  ...redisOptions,
+  enableAutoPipelining: false
 });
 
-// 🟢 EXPORT checkRedisHealth (Resolves ts(2305) & ts(2339) in index.ts)
+redis.on('connect', () => console.log('🟢 [2/5] Redis In-Memory Matrix Connected!'));
+redis.on('error', (err: any) => console.error('🔴 [REDIS FAULT]:', err.message));
+
+redisTx.on('connect', () => console.log('🟢 Redis TX (non-pipelined) Connected!'));
+redisTx.on('error', (err: any) => console.error('🔴 [REDIS-TX FAULT]:', err.message));
+
 export async function checkRedisHealth(): Promise<boolean> {
   try {
     const pong = await redis.ping();
@@ -48,7 +46,11 @@ export async function checkRedisHealth(): Promise<boolean> {
   }
 }
 
-// 🟢 Keep connection alive with 30s heartbeat ping
-setInterval(async () => {
-  try { await redis.ping(); } catch (_) {}
-}, 30000);
+// 🟢 Track heartbeat interval in global registry for clean process shutdown
+if (!(global as any)._sentryIntervals) (global as any)._sentryIntervals = [];
+(global as any)._sentryIntervals.push(setInterval(async () => {
+  try { 
+    await redis.ping();
+    await redisTx.ping();
+  } catch (_) {}
+}, 30000));

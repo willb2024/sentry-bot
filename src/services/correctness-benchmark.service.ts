@@ -58,9 +58,7 @@ export interface PositionCorrectnessResult {
     divergentPositions: { telegramId: string; mint: string; webappEntry: number; telegramEntry: number }[];
 }
 
-/**
- * 🟢 Cross-checks WebApp trade entry price vs Telegram trailing guard entry price
- */
+// In src/services/correctness-benchmark.service.ts:
 export async function runPositionCorrectnessCheck(sampleUserCount: number = 20): Promise<PositionCorrectnessResult> {
     const users = await prisma.user.findMany({ 
         select: { id: true, telegramId: true }, 
@@ -68,16 +66,20 @@ export async function runPositionCorrectnessCheck(sampleUserCount: number = 20):
     });
 
     const divergent: PositionCorrectnessResult['divergentPositions'] = [];
+    const { cachedSolUsdPrice } = await import('./grpc.service.js');
+    const solRate = cachedSolUsdPrice || 156.93;
 
     for (const u of users) {
-        const trailKeys = await redis.keys(`order:trail:${u.telegramId}:*`).catch(() => []);
-        for (const key of trailKeys) {
-            const guardRaw = await redis.get(key).catch(() => null);
+        const guardIds = await redis.smembers(`user_guards:${u.telegramId}`).catch(() => []);
+        if (guardIds.length === 0) continue;
+
+        const raws = await redis.mget(guardIds.map(id => `order:trail:${id}`));
+        for (const guardRaw of raws) {
             if (!guardRaw) continue;
             let guard: any;
             try { guard = JSON.parse(guardRaw); } catch { continue; }
 
-            const mint = key.split(':').pop();
+            const mint = guard.tokenAddress;
             if (!mint) continue;
 
             const lastBuy = await prisma.trade.findFirst({
@@ -85,14 +87,14 @@ export async function runPositionCorrectnessCheck(sampleUserCount: number = 20):
                 orderBy: { createdAt: 'desc' }
             }).catch(() => null);
 
-            // Safe cast to avoid schema type mismatch
-            const webappEntry = (lastBuy as any)?.executedPriceUsd ?? 0;
-            const telegramEntry = guard.entryPrice ?? 0;
+            const webappEntryUsd = (lastBuy as any)?.executedPriceUsd ?? 0;
+            // 🟢 NEW-6 FIX: Convert SOL-denominated guard price to USD before comparison
+            const telegramEntryUsd = guard.entryPriceUsd ?? ((guard.entryPrice ?? 0) * solRate);
 
-            if (webappEntry > 0 && telegramEntry > 0) {
-                const deltaPct = Math.abs((webappEntry - telegramEntry) / webappEntry) * 100;
+            if (webappEntryUsd > 0 && telegramEntryUsd > 0) {
+                const deltaPct = Math.abs((webappEntryUsd - telegramEntryUsd) / webappEntryUsd) * 100;
                 if (deltaPct > 1) {
-                    divergent.push({ telegramId: u.telegramId, mint, webappEntry, telegramEntry });
+                    divergent.push({ telegramId: u.telegramId, mint, webappEntry: webappEntryUsd, telegramEntry: telegramEntryUsd });
                 }
             }
         }

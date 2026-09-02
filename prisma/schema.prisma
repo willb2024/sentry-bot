@@ -10,86 +10,6 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-model User {
-  id                    String   @id @default(uuid())
-  telegramId            String   @unique
-  username              String?
-  
-  autoSnipeConfig       AutoSnipeConfig?
-  firstTradeAt          DateTime?
-  
-  activeWallets         Int      @default(1)
-  vault2                String?  @unique
-  pk2                   String?  @unique
-  vault3                String?  @unique
-  pk3                   String?  @unique
-  vault4                String?  @unique
-  pk4                   String?  @unique
-  vault5                String?  @unique
-  pk5                   String?  @unique
-
-  priorityLevel         String   @default("FAST") 
-  customPriorityFee     Float    @default(0.001) 
-
-  ownedGuild            Guild?            @relation("GuildOwner")
-  guildMemberships      GuildMembership[] @relation("GuildMemberships")
-
-  vaultAddress          String?  @unique
-  wasEverPromoGranted   Boolean  @default(false)
-  
-  turnkeySubOrgId       String?  @unique
-
-  referralCode          String   @unique
-  referredById          String?  
-  referredBy            User?    @relation("AffiliateTree", fields: [referredById], references: [id])
-  recruits              User[]   @relation("AffiliateTree")
-
-  totalVolumeSol        Float    @default(0.0) 
-  isLoyaltyUnlocked     Boolean  @default(false) 
-  hasReferralDiscount   Boolean  @default(false) 
-
-  enableSOR             Boolean  @default(true)
-  enableAdaptiveSlippage Boolean @default(true)
-
-  isVip                 Boolean   @default(false)
-  vipTier               String?
-  vipExpiresAt          DateTime?
-  vipSource             String?
-  vipTxSignature        String?
-  vipPurchasedAt        DateTime?
-  isDevSuiteUnlocked    Boolean   @default(false)
-  
-  withdrawalPin         String?   
-  withdrawalPinRecovery String?   // 🟢 Hashed 8-character recovery code for self-service PIN reset
-  
-  slippagePercent       Float    @default(20.0)
-  pendingRewardsSol     Float    @default(0.0)
-
-  creditBalance         Int      @default(25)  
-  lifetimeCredits       Int      @default(25)
-  creditTxs             CreditTransaction[]
-
-  reactionGifsEnabled   Boolean  @default(true)
-
-  trades                Trade[]
-  activeOrders          ActiveOrder[] 
-  copyTrades            CopyTradeConfig[] 
-  launchedTokens        LaunchedToken[] 
-
-  followedBy            CopyTradeFollow[] @relation("Leader")
-  following             CopyTradeFollow[] @relation("Follower")
-
-  simState              SimState?
-  simTrades             SimTrade[]
-
-  webhookConfigs        WebhookConfig[]
-
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-
-  @@index([telegramId])
-  @@index([referralCode])
-}
 
 
 model SimState {
@@ -196,6 +116,32 @@ model CreditTransaction {
   @@index([userId, createdAt])
 }
 
+model ActiveOrder {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  tokenAddress      String
+  orderType         String 
+  amountSol         Float
+  targetPriceUsd    Float?   
+  trailingPercent   Float?   
+  takeProfitPercent Float?   
+  dcaIntervalMins   Int?     
+  maxBudgetSol      Float?   
+  
+  maxHoldMinutes    Int?     
+  maxBuys           Int?     
+  strategy          String   @default("Manual / Direct") // 🟢 FUNC-2 Fix
+
+  totalSpentSol     Float    @default(0.0)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId, isActive])
+  @@index([tokenAddress])
+}
+
 model LaunchedToken {
   id                String   @id @default(uuid())
   userId            String
@@ -210,6 +156,7 @@ model LaunchedToken {
   walletCount       Int
   totalVolumeBumped Float    @default(0.0)
   
+  isSimulated       Boolean  @default(false) // 🟢 FUNC-7 Fix
   isActive          Boolean  @default(true)
   
   @@index([userId])
@@ -255,30 +202,6 @@ model CopyTradeFollow {
   @@index([followerId])
 }
 
-model ActiveOrder {
-  id                String   @id @default(uuid())
-  userId            String
-  user              User     @relation(fields:[userId], references: [id])
-  tokenAddress      String
-  orderType         String 
-  amountSol         Float
-  targetPriceUsd    Float?   
-  trailingPercent   Float?   
-  takeProfitPercent Float?   
-  dcaIntervalMins   Int?     
-  maxBudgetSol      Float?   
-  
-  maxHoldMinutes    Int?     
-  maxBuys           Int?     
-
-  totalSpentSol     Float    @default(0.0)
-  isActive          Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  @@index([userId, isActive])
-  @@index([tokenAddress])
-}
 
 model AutoSnipeConfig {
   id                      String   @id @default(uuid())
@@ -350,14 +273,98 @@ model Guild {
   @@index([guildCode])
 }
 
+model User {
+  id                    String   @id @default(uuid())
+  telegramId            String   @unique
+  username              String?
+  
+  autoSnipeConfig       AutoSnipeConfig?
+  firstTradeAt          DateTime?
+  
+  activeWallets         Int      @default(1)
+  vault2                String?  @unique
+  pk2                   String?  @unique
+  vault3                String?  @unique
+  pk3                   String?  @unique
+  vault4                String?  @unique
+  pk4                   String?  @unique
+  vault5                String?  @unique
+  pk5                   String?  @unique
+
+  priorityLevel         String   @default("FAST") 
+  customPriorityFee     Float    @default(0.001) 
+
+  ownedGuild            Guild?            @relation("GuildOwner")
+  guildMemberships      GuildMembership[] @relation("GuildMembers") // 🟢 Exact match with GuildMembership.user
+
+  vaultAddress          String?  @unique
+  wasEverPromoGranted   Boolean  @default(false)
+  turnkeySubOrgId       String?  @unique
+
+  referralCode          String   @unique
+  referredById          String?  
+  referredBy            User?    @relation("AffiliateTree", fields: [referredById], references: [id])
+  recruits              User[]   @relation("AffiliateTree")
+
+  totalVolumeSol        Float    @default(0.0) 
+  isLoyaltyUnlocked     Boolean  @default(false) 
+  hasReferralDiscount   Boolean  @default(false) 
+
+  enableSOR             Boolean  @default(true)
+  enableAdaptiveSlippage Boolean @default(true)
+
+  isVip                 Boolean   @default(false)
+  vipTier               String?
+  vipExpiresAt          DateTime?
+  vipSource             String?
+  vipTxSignature        String?
+  vipPurchasedAt        DateTime?
+  isDevSuiteUnlocked    Boolean   @default(false)
+  
+  withdrawalPin         String?   
+  withdrawalPinRecovery String?   
+  
+  slippagePercent       Float    @default(20.0)
+  pendingRewardsSol     Float    @default(0.0)
+  lifetimeEarnedSol     Float    @default(0.0)
+
+  creditBalance         Int      @default(25)  
+  lifetimeCredits       Int      @default(25)
+  creditTxs             CreditTransaction[]
+
+  reactionGifsEnabled   Boolean  @default(true)
+
+  trades                Trade[]
+  activeOrders          ActiveOrder[] 
+  copyTrades            CopyTradeConfig[] 
+  launchedTokens        LaunchedToken[] 
+  affiliateEarnings     AffiliateEarning[]
+
+  followedBy            CopyTradeFollow[] @relation("Leader")
+  following             CopyTradeFollow[] @relation("Follower")
+
+  simState              SimState?
+  simTrades             SimTrade[]
+
+  webhookConfigs        WebhookConfig[]
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([telegramId])
+  @@index([referralCode])
+}
+
 model GuildMembership {
   id                  String   @id @default(uuid())
   guildId             String
-  guild               Guild    @relation(fields: [guildId], references: [id])
+  guild               Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade)
   userId              String
-  user                User     @relation("GuildMemberships", fields: [userId], references: [id])
+  user                User     @relation("GuildMembers", fields: [userId], references: [id], onDelete: Cascade) // 🟢 Exact match with User.guildMemberships
   loyaltyPoints       Float    @default(0.0)   
   totalVolumeSol      Float    @default(0.0)   
+  simLoyaltyPoints    Float    @default(0.0)
+  simTotalVolumeSol   Float    @default(0.0)
   rank                Int?                            
   airdropsReceivedSol Float    @default(0.0)
   isActive            Boolean  @default(true) 
@@ -366,6 +373,18 @@ model GuildMembership {
 
   @@unique([guildId, userId])               
   @@index([guildId, loyaltyPoints])
+}
+
+model AffiliateEarning {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amountSol   Float
+  source      String   // 'TRADE_FEE' | 'CREDIT' | 'COPY'
+  fromUser    String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
 }
 
 model DailyVipPromo {

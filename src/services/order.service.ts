@@ -127,22 +127,32 @@ export async function updateEntryPrice(orderId: string, entryPrice: number) {
     await updateGuardSafe(orderId, (order) => { order.entryPrice = entryPrice; });
 }
 
+// Replace addTrailingStopToMemory in src/services/order.service.ts:
 export async function addTrailingStopToMemory(
-    telegramId: string, tokenAddress: string, trailingPercent: number, 
-    amountInSol: number, currentPrice: number, takeProfitPercent?: number,
+    telegramId: string, 
+    tokenAddress: string, 
+    trailingPercent: number, 
+    amountInSol: number, 
+    currentPrice: number, 
+    takeProfitPercent?: number,
     maxHoldMinutes?: number,
     strategy: string = 'Manual / Direct'
 ): Promise<string> {
     const orderId = crypto.randomUUID();
     const order: TrailingOrder = { 
-        id: orderId, telegramId, tokenAddress, trailingPercent, 
-        highestSeenPrice: currentPrice, amountInSol, entryPrice: currentPrice, takeProfitPercent,
-        maxHoldMinutes, createdAt: Date.now(),
+        id: orderId, 
+        telegramId, 
+        tokenAddress, 
+        trailingPercent, 
+        highestSeenPrice: currentPrice, 
+        amountInSol, 
+        entryPrice: currentPrice, 
+        takeProfitPercent,
+        maxHoldMinutes, 
+        createdAt: Date.now(),
         strategy
     };
 
-    // 🟢 SIM FIX: This now executes identically for Simulation users, placing
-    // real guards in memory tracking real token prices!
     await redis.set(`order:trail:${orderId}`, JSON.stringify(order));
     await redis.sadd(`active_guards_global`, orderId); 
     await redis.sadd(`user_guards:${telegramId}`, orderId);
@@ -155,13 +165,23 @@ export async function addTrailingStopToMemory(
         if (user) {
             await prisma.activeOrder.create({
                 data: {
-                    id: orderId, userId: user.id, tokenAddress, orderType: ORDER_TYPES.GUARD,
-                    amountSol: amountInSol, trailingPercent, takeProfitPercent: takeProfitPercent || null,
-                    targetPriceUsd: currentPrice, isActive: true, maxHoldMinutes: maxHoldMinutes || null
-                } as any
+                    id: orderId, 
+                    userId: user.id, 
+                    tokenAddress, 
+                    orderType: ORDER_TYPES.GUARD,
+                    amountSol: amountInSol, 
+                    trailingPercent, 
+                    takeProfitPercent: takeProfitPercent || null,
+                    targetPriceUsd: currentPrice, 
+                    isActive: true, 
+                    maxHoldMinutes: maxHoldMinutes || null,
+                    strategy // 🟢 FUNC-2 Fix: Persisted properly without 'as any'
+                }
             });
         }
-    } catch (e: any) {}
+    } catch (e: any) {
+        console.error("🔴 [GUARD DB CREATE ERROR]:", e.message);
+    }
 
     pushGuardToCacheImmediately(order);
     presignGuardImmediately(order).catch(() => {});

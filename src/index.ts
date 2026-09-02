@@ -35,6 +35,15 @@ import {
     markUserActive 
 } from './lib/cache.js';
 
+import { 
+    isDevnetEligible, 
+    isDevnetActive, 
+    setDevnetMode, 
+    requestDevnetAirdrop,
+    getDevnetConnection, 
+    DEVNET_UNSUPPORTED_MSG 
+} from './lib/devnet.js';
+
 // 🟢 Platform Services
 import { executeSnipe, executeExit, warmDnsCache, getCachedTokenPrice } from './services/engine.service.js';
 import { startCopyTradeWatcher, syncCopyTradeListeners } from './services/copytrade.service.js';
@@ -86,7 +95,6 @@ const bot = new Telegraf(BOT_TOKEN);
 setBotInstance(bot);
 
 
-dotenv.config();
 
 const requiredEnv = [
     'BOT_TOKEN',
@@ -191,6 +199,16 @@ export function hashPin(pin: string): string {
     return `${salt}:${hash}`;
 }
 
+export function escapeHtml(s: string | null | undefined): string {
+    if (!s) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 export function verifyPin(pin: string, stored: string): boolean {
     const [salt, hash] = stored.split(':');
     const verifyHash = crypto.scryptSync(pin, salt, 64);
@@ -230,18 +248,6 @@ export async function safeSendMessage(tgId: string, text: string, options: any =
 // =========================================================
 // 🔒 SECURITY: STRICT PRIVATE CHAT LOCK
 // =========================================================
-bot.use(async (ctx, next) => {
-    if (ctx.chat && ctx.chat.type !== 'private') {
-        if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
-            try { 
-                await ctx.reply("🛡️ <b>Security Alert:</b> Sentry Terminal is a secure financial application. For your safety, I only operate in direct private messages (DMs). I am leaving this public group.");
-                await ctx.leaveChat(); 
-            } catch (e) {} 
-        }
-        return; 
-    }
-    return next();
-});
 
 
 
@@ -332,10 +338,19 @@ app.post('/api/sol-price', (req, res) => {
 });
 
 
-// 🟢 FIX: Secure Admin Health Endpoint
 app.get('/admin/health', async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || authHeader !== `Bearer ${process.env.ADMIN_API_KEY}`) {
+    const key = process.env.ADMIN_API_KEY;
+    if (!key || key.length < 32) {
+        return res.status(503).json({ error: 'Admin API disabled: Set ADMIN_API_KEY with min 32 chars.' });
+    }
+    
+    const authHeader = req.headers.authorization || '';
+    const expected = `Bearer ${key}`;
+    
+    if (
+        authHeader.length !== expected.length ||
+        !crypto.timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected))
+    ) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -361,68 +376,7 @@ async function measureRpcLatency(): Promise<number> {
 
 
 
-app.post('/api/analytics', async (req, res) => {
-    if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-    const tgId = extractTelegramId(req.body.initData);
-    if (!tgId) return res.status(401).json({ error: "Invalid initData" });
 
-
-
-    try {
-        const { isSimulationActive } = await import('./services/simulation.service.js');
-        const isSim = await isSimulationActive(tgId);
-
-        if (isSim) {
-            const rawTrades = await redis.get(`sim:trades:${tgId}`);
-            const trades = rawTrades ? JSON.parse(rawTrades) : [];
-            const { computeUniversalStats } = await import('./utils/math.utils.js');
-            const stats = computeUniversalStats(trades);
-            const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0');
-
-            return res.json({
-                trades: trades.slice(0, 50).map((t: any) => ({
-                    createdAt: t.createdAt,
-                    isBuy: t.isBuy,
-                    amountInSol: t.amountInSol,
-                    tokenAddress: t.mint || t.tokenAddress,
-                    strategy: t.strategy,
-                    profitPercent: t.profitPercent || 0,
-                    realizedPnlSol: t.realizedPnlSol || 0
-                })),
-                stats: { ...stats, credits }
-            });
-        }
-
-        const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-        if (!user) return res.json({ trades: [], stats: null });
-
-        const trades = await prisma.trade.findMany({
-            where: { userId: user.id },
-            orderBy: { createdAt: 'desc' },
-            take: 50
-        });
-
-        const mappedTrades = trades.map((t: any) => ({
-            createdAt: t.createdAt,
-            isBuy: t.isBuy,
-            amountInSol: t.amountInSol,
-            tokenAddress: t.tokenAddress,
-            strategy: t.strategy,
-            profitPercent: t.profitPercent || 0,
-            realizedPnlSol: t.realizedPnlSol || 0
-        }));
-
-        const { getAdvancedStats } = await import('./services/analytics.service.js');
-        const stats = await getAdvancedStats(tgId);
-        
-        res.json({ 
-            trades: mappedTrades, 
-            stats: { ...stats, credits: user.creditBalance || 0 } 
-        });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
 
 app.post('/api/sim-trades', async (req, res) => {
     try {
@@ -703,11 +657,12 @@ app.get('/pnl-img/:imgId', async (req, res) => {
 app.get('/share/:imgId', async (req, res) => {
     try {
         const imgId = req.params.imgId;
-        const botName = process.env.BOT_NAME || 'Sentry Terminal';
-        // 🟢 FIX: Add a reliable fallback username
-        const botUsername = process.env.BOT_USERNAME || 'SentryTerminalBot';
+        const botName = escapeHtml(process.env.BOT_NAME || 'Sentry Terminal');
+        const botUsername = (process.env.BOT_USERNAME || 'SentryTerminalBot').replace(/[^a-zA-Z0-9_]/g, '');
         
-        const referralCode = req.query.ref ? `?start=${req.query.ref}` : '';
+        const rawRef = typeof req.query.ref === 'string' ? req.query.ref : '';
+        const safeRef = /^[A-Za-z0-9_\-]{1,64}$/.test(rawRef) ? rawRef : '';
+        const referralCode = safeRef ? `?start=${encodeURIComponent(safeRef)}` : '';
         const hostUrl = process.env.WEBAPP_URL || 'http://localhost:3001';
 
         const html = `
@@ -718,10 +673,10 @@ app.get('/share/:imgId', async (req, res) => {
             <meta name="twitter:card" content="summary_large_image">
             <meta name="twitter:title" content="${botName} — Trade Executed Successfully">
             <meta name="twitter:description" content="Secured block execution using zero-latency Jito bundle protection.">
-            <meta name="twitter:image" content="${hostUrl}/pnl-img/${imgId}">
+            <meta name="twitter:image" content="${hostUrl}/pnl-img/${encodeURIComponent(imgId)}">
             <meta property="og:title" content="${botName} — Trade Executed Successfully">
             <meta property="og:description" content="Secured block execution using zero-latency Jito bundle protection.">
-            <meta property="og:image" content="${hostUrl}/pnl-img/${imgId}">
+            <meta property="og:image" content="${hostUrl}/pnl-img/${encodeURIComponent(imgId)}">
             <meta property="og:type" content="website">
             <title>${botName}</title>
             <script>
@@ -742,7 +697,6 @@ app.get('/share/:imgId', async (req, res) => {
         res.status(500).send("Error generating share page");
     }
 });
-
 
 
 
@@ -781,191 +735,172 @@ app.post('/api/positions', async (req, res) => {
     }
 });
 
+// 🟢 NEW ENDPOINT: Live Guild Leaderboard Data for WebApp
+app.post('/api/guild-stats', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(401).json({ error: 'Invalid initData' });
+
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const mode = (await isSimulationActive(telegramId)) ? 'sim' : 'live';
+
+        const user = await prisma.user.findUnique({
+            where: { telegramId },
+            include: { guildMemberships: { where: { isActive: true }, include: { guild: true } } }
+        });
+        if (!user || user.guildMemberships.length === 0) {
+            return res.json({ inGuild: false, guilds: [] });
+        }
+
+        const { getLeaderboard, getUserGuildRank } = await import('./services/guild.service.js');
+        const active = user.guildMemberships[0];
+        const board = await getLeaderboard(active.guildId, 50, mode);
+        const myRank = await getUserGuildRank(active.guildId, user.id);
+
+        res.json({
+            inGuild: true,
+            mode,
+            guildName: active.guild.name,
+            guildCode: active.guild.guildCode,
+            memberCount: board.length,
+            myRank: myRank || 1,
+            myPoints: mode === 'sim' ? active.simLoyaltyPoints : active.loyaltyPoints,
+            myVolume: mode === 'sim' ? active.simTotalVolumeSol : active.totalVolumeSol,
+            totalGuildVolume: board.reduce((s, m) => s + (m.volumeSol || 0), 0),
+            leaderboard: board.slice(0, 50).map((m, i) => ({
+                rank: i + 1, 
+                username: m.username || 'Anon',
+                walletAddress: m.walletAddress,
+                glp: Math.round(m.glp || 0), 
+                volumeSol: m.volumeSol || 0
+            })),
+            guilds: user.guildMemberships.map(m => ({
+                id: m.guildId, name: m.guild.name, isActive: m.guildId === active.guildId
+            }))
+        });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 🟢 UPDATED ENDPOINT: Authenticated Affiliate Hub with Points Caching & 30-Day History
 app.post('/api/affiliate-stats', async (req, res) => {
     try {
-        const { initData, telegramId: rawTelegramId } = req.body;
-        let telegramId = rawTelegramId;
-
-        // 🟢 1. Self-contained Telegram WebApp InitData Parser
-        if (initData) {
-            try {
-                const params = new URLSearchParams(initData);
-                const userStr = params.get('user');
-                if (userStr) {
-                    const parsedUser = JSON.parse(userStr);
-                    if (parsedUser?.id) {
-                        telegramId = parsedUser.id.toString();
-                    }
-                }
-            } catch (_) {}
-        }
-
-        if (!telegramId) {
-            return res.status(401).json({ error: 'Unauthorized: missing operator identifier' });
-        }
+        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
+        const telegramId = extractTelegramId(req.body.initData);
+        if (!telegramId) return res.status(401).json({ error: 'Invalid initData' });
 
         const user = await prisma.user.findUnique({
             where: { telegramId },
             include: {
-                recruits: {
-                    include: {
-                        trades: {
-                            where: { status: 'CONFIRMED' },
-                            select: { amountInSol: true, feeChargedSol: true, affiliateCutSol: true, createdAt: true }
-                        },
-                        creditTxs: {
-                            where: { type: 'PURCHASE' },
-                            select: { amount: true, createdAt: true }
-                        }
-                    }
-                },
-                followedBy: {
-                    where: { isActive: true },
-                    include: {
-                        follower: {
-                            include: {
-                                trades: {
-                                    where: { strategy: 'Copy Trade', status: 'CONFIRMED' },
-                                    select: { amountInSol: true, feeChargedSol: true, createdAt: true }
-                                }
-                            }
-                        }
-                    }
-                }
+                recruits: { select: { telegramId: true, username: true, totalVolumeSol: true, createdAt: true } },
+                followedBy: { include: { follower: { select: { telegramId: true, username: true, totalVolumeSol: true } } } }
             }
         });
+        if (!user) return res.status(404).json({ error: 'User not found' });
 
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+        const { getUserTotalPoints } = await import('./services/points.js');
+        const points = await getUserTotalPoints(user.id);
+        const rank = await redis.zrevrank('global_points_lb', user.telegramId).then(r => r === null ? 1 : r + 1).catch(() => 1);
+
+        const since = new Date(Date.now() - 30 * 86400_000);
+        const earnings = await prisma.affiliateEarning.findMany({
+            where: { userId: user.id, createdAt: { gte: since } },
+            select: { amountSol: true, source: true, createdAt: true }
+        }).catch(() => []);
+
+        const daily: Record<string, number> = {};
+        for (let i = 29; i >= 0; i--) {
+            daily[new Date(Date.now() - i * 86400_000).toISOString().slice(0, 10)] = 0;
+        }
+        let tradeFeeCut = 0, creditShare = 0, copierYield = 0;
+        for (const e of earnings) {
+            const d = e.createdAt.toISOString().slice(0, 10);
+            if (daily[d] !== undefined) daily[d] += e.amountSol;
+            if (e.source === 'CREDIT') creditShare += e.amountSol;
+            else if (e.source === 'COPY') copierYield += e.amountSol;
+            else tradeFeeCut += e.amountSol;
         }
 
-        // 🟢 2. Canonical Points & Tier Calculation (Single Source of Truth)
-        const { getUserTotalPoints } = await import('./services/points.js');
-        const pointsBreakdown = await getUserTotalPoints(user.id);
-        const { totalPoints, currentTier, currentRate, nextTier, nextTierPoints } = pointsBreakdown;
-
-        // 🟢 3. Revenue Stream Aggregations
-        let tradingFeeEarnedSol = 0;
-        let creditEarnedSol = 0;
-        let copierLeaderEarnedSol = 0;
-        let totalCopierVolumeSol = 0;
-
-        const recruitList = user.recruits.map(r => {
-            const rVolume = r.trades.reduce((sum, t) => sum + (t.amountInSol || 0), 0);
-            const rTradeFees = r.trades.reduce((sum, t) => sum + (t.affiliateCutSol || 0), 0);
-            
-            // 40% Rev-Share on AI credit packages (estimated ~0.0005 SOL per credit base value)
-            const rCreditsPurchased = r.creditTxs.reduce((sum, c) => sum + (c.amount || 0), 0);
-            const rCreditSol = parseFloat(((rCreditsPurchased * 0.0005) * 0.40).toFixed(4));
-
-            tradingFeeEarnedSol += rTradeFees;
-            creditEarnedSol += rCreditSol;
-
-            const lastTrade = r.trades[0]?.createdAt || r.createdAt;
-            const daysAgo = Math.floor((Date.now() - new Date(lastTrade).getTime()) / (1000 * 60 * 60 * 24));
-
-            return {
-                username: r.username || r.telegramId.substring(0, 6) + '...',
-                volumeSol: parseFloat(rVolume.toFixed(2)),
-                tradingFeeEarningSol: parseFloat(rTradeFees.toFixed(4)),
-                creditEarningSol: rCreditSol,
-                yourEarningSol: parseFloat((rTradeFees + rCreditSol).toFixed(4)),
-                lastActiveDaysAgo: daysAgo
-            };
-        });
-
-        const copierList = user.followedBy.map(f => {
-            const fTrades = f.follower.trades || [];
-            const cVol = fTrades.reduce((sum, t) => sum + (t.amountInSol || 0), 0);
-            const cFees = fTrades.reduce((sum, t) => sum + ((t.feeChargedSol || 0) * 0.50), 0); // 50% Leader Cut
-
-            totalCopierVolumeSol += cVol;
-            copierLeaderEarnedSol += cFees;
-
-            return {
-                username: f.follower.username || f.follower.telegramId.substring(0, 6) + '...',
-                volumeSol: parseFloat(cVol.toFixed(2)),
-                yourEarningSol: parseFloat(cFees.toFixed(4))
-            };
-        });
-
-        // 🟢 4. 30-Day Rolling Daily Earnings Matrix
-        const dailyEarnings = Array(30).fill(0);
-        const now = Date.now();
-
-        user.recruits.forEach(r => {
-            r.trades.forEach(t => {
-                const diffDays = Math.floor((now - new Date(t.createdAt).getTime()) / (1000 * 60 * 60 * 24));
-                if (diffDays >= 0 && diffDays < 30) {
-                    dailyEarnings[29 - diffDays] += (t.affiliateCutSol || 0);
-                }
-            });
-        });
-
-        user.followedBy.forEach(f => {
-            f.follower.trades.forEach(t => {
-                const diffDays = Math.floor((now - new Date(t.createdAt).getTime()) / (1000 * 60 * 60 * 24));
-                if (diffDays >= 0 && diffDays < 30) {
-                    dailyEarnings[29 - diffDays] += ((t.feeChargedSol || 0) * 0.50);
-                }
-            });
-        });
-
         const botUsername = process.env.BOT_USERNAME || 'SentryTerminalBot';
-        const referralLink = `https://t.me/${botUsername}?start=${user.referralCode}`;
-        const copierFeedLink = `https://t.me/${botUsername}?start=follow_${user.referralCode}`;
-
-        return res.json({
-            recruits: user.recruits.length,
-            activeCopiers: user.followedBy.length,
-            totalPoints,
-            currentTier,
-            currentRate,
-            nextTier,
-            nextTierPoints,
-            pendingYieldSol: parseFloat((user.pendingRewardsSol || 0).toFixed(4)),
-            lifetimeEarnedSol: parseFloat((tradingFeeEarnedSol + creditEarnedSol + copierLeaderEarnedSol).toFixed(4)),
-            tradingFeeEarnedSol: parseFloat(tradingFeeEarnedSol.toFixed(4)),
-            creditEarnedSol: parseFloat(creditEarnedSol.toFixed(4)),
-            copierLeaderEarnedSol: parseFloat(copierLeaderEarnedSol.toFixed(4)),
-            totalCopierVolumeSol: parseFloat(totalCopierVolumeSol.toFixed(2)),
-            referralLink,
-            copierFeedLink,
-            recruitList,
-            copierList,
-            dailyEarnings: dailyEarnings.map(v => parseFloat(v.toFixed(4)))
+        res.json({
+            totalPoints: points.totalPoints,
+            selfPoints: points.selfPoints,
+            recruitPoints: points.recruitPoints,
+            copierPoints: points.copierPoints,
+            currentTier: points.currentTier,
+            currentRate: points.currentRate,
+            nextTier: points.nextTier,
+            nextTierPoints: points.nextTierPoints,
+            globalRank: rank,
+            pendingYieldSol: user.pendingRewardsSol || 0,
+            lifetimeEarnedSol: user.lifetimeEarnedSol || 0,
+            tradeFeeCut, 
+            creditShare, 
+            copierYield,
+            referralLink: `https://t.me/${botUsername}?start=${user.referralCode}`,
+            copierFeedLink: `https://t.me/${botUsername}?start=follow_${user.id}`,
+            recruitList: user.recruits.map(r => ({
+                username: r.username || 'Operator_' + r.telegramId.slice(-4), 
+                volumeSol: r.totalVolumeSol || 0, 
+                joinedAt: r.createdAt
+            })),
+            copierList: user.followedBy.map(f => ({
+                username: f.follower.username || 'Trader_' + f.follower.telegramId.slice(-4), 
+                volumeSol: f.follower.totalVolumeSol || 0
+            })),
+            dailyEarnings: Object.values(daily).map(v => parseFloat(v.toFixed(4)))
         });
-
     } catch (e: any) {
-        console.error('🔴 [/api/affiliate-stats] Error:', e.message);
-        return res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ error: e.message });
     }
 });
 
 
+// Replace getLiveBalance in src/index.ts:
 async function getLiveBalance(user: any): Promise<string> {
+    // 1. Simulation Mode Intercept
+    const { isSimulationActive, getSimBalance } = await import('./services/simulation.service.js');
     if (await isSimulationActive(user.telegramId)) {
         return await getSimBalance(user.telegramId);
     }
     
     if (!user || !user.vaultAddress) return "0.0000";
+
+    // 2. Devnet Mode Intercept (Direct Devnet RPC Multi-Wallet aggregation)
+    const { isDevnetActive, getDevnetConnection } = await import('./lib/devnet.js');
+    if (await isDevnetActive(user.telegramId)) {
+        try {
+            const pubkeys = [new PublicKey(user.vaultAddress)];
+            if (user.activeWallets >= 2 && user.vault2) pubkeys.push(new PublicKey(user.vault2));
+            if (user.activeWallets >= 3 && user.vault3) pubkeys.push(new PublicKey(user.vault3));
+            if (user.activeWallets >= 4 && user.vault4) pubkeys.push(new PublicKey(user.vault4));
+            if (user.activeWallets >= 5 && user.vault5) pubkeys.push(new PublicKey(user.vault5));
+            const accts = await getDevnetConnection().getMultipleAccountsInfo(pubkeys).catch(() => []);
+            const total = (accts || []).reduce((s: number, a: any) => s + (a?.lamports || 0), 0);
+            return (total / 1e9).toFixed(4);
+        } catch (_) {
+            return "0.0000";
+        }
+    }
     
-    // 1. Instant RAM balance
+    // 3. Instant RAM balance from Deposit Watcher
     const liveDepositBal = getLiveWalletBalance(user.vaultAddress);
     if (liveDepositBal !== null && liveDepositBal > 0) {
         return liveDepositBal.toFixed(4);
     }
 
-    // 2. Instant Redis cache
+    // 4. Redis Cache lookup (<2ms)
     const cacheKey = `balance_cache:${user.telegramId}`;
     const cachedBalance = await redis.get(cacheKey);
     if (cachedBalance) return parseFloat(cachedBalance).toFixed(4);
 
-    // 3. 🟢 FIX: Stale fallback returned immediately instead of showing "0.0000" while fetching
+    // 5. Stale Fallback cache
     const staleKey = `balance_cache_stale:${user.telegramId}`;
     const stale = await redis.get(staleKey);
 
-    // 4. Background fetch with strict 3s timeout
+    // 6. Background asynchronous fetch across all active multi-wallets (W1-W5)
     (async () => {
         try {
             const pubkeys = [new PublicKey(user.vaultAddress)];
@@ -985,7 +920,7 @@ async function getLiveBalance(user: any): Promise<string> {
                 accounts.forEach((acc: any) => { if (acc) totalLamports += acc.lamports; });
                 const finalBal = (totalLamports / 1_000_000_000).toFixed(4);
                 await redis.set(cacheKey, finalBal, 'EX', 30);
-                await redis.set(staleKey, finalBal, 'EX', 3600); // 🟢 Long-lived fallback
+                await redis.set(staleKey, finalBal, 'EX', 3600);
             }
         } catch (_) {}
     })();
@@ -1010,7 +945,6 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     const user = await getCachedUser(telegramId, 30);
     if (!user) return;
 
-    // 🟢 1. Single Pipelined Redis Round-Trip for all secondary dashboard states (<2ms)
     const pipeline = redis.pipeline();
     pipeline.get(`sim:active:${telegramId}`);
     pipeline.get(`sim:balance:${telegramId}`);
@@ -1027,13 +961,11 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     const cachedLiveBal = results?.[4]?.[1] as string | null;
     const staleLiveBal = results?.[5]?.[1] as string | null;
 
-    // 🟢 2. Parallel VIP & Guild checks from memory cache
     const [vipStatus, userGuilds] = await Promise.all([
         getCachedVipStatus(telegramId, 30).catch(() => null),
         getCachedGuildMemberships(telegramId, 30).catch(() => [])
     ]);
 
-    // 🟢 3. Instant Zero-Latency Balance Resolution
     let liveBalance = "0.0000";
     if (isSimMode) {
         liveBalance = simBal ? parseFloat(simBal).toFixed(4) : "0.0000";
@@ -1067,9 +999,10 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
     const balanceNum = parseFloat(liveBalance) || 0;
     const usdValue = balanceNum * (cachedSolUsdPrice || 156.93);
     const usdBalanceFormatted = usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  
+    const vipTag = vipStatus?.isVip ? ` 👑 [${(vipStatus.tier || 'VIP').toUpperCase()}]` : '';
+
     const layoutTxt = 
-        `⚡ <b>${botName.toUpperCase()}</b> ⚡\n` +
+        `⚡ <b>${botName.toUpperCase()}${vipTag}</b> ⚡\n` +
         `<i>The Quantitative Terminal for Solana Memecoins</i>\n\n` +
         `<i>Routing: Pump.fun | Raydium | Meteora DLMM</i>\n\n` +
         
@@ -1084,8 +1017,8 @@ async function sendOrEditDashboard(ctx: any, telegramId: string, isEdit: boolean
         `${guildDisplay}\n` +
         
         `📊 <b>Your Economics:</b>\n` +
-        `• Protocol Fee: <b>${process.env.PLATFORM_FEE_PERCENT || '1.00'}%</b>\n` +
-        `└ <i>VIPs pay 0% fees. Invite friends to earn up to 40%-70% of their fees forever.</i>\n\n` +
+        `• Protocol Fee: <b>${vipStatus?.isVip ? '0.00% (VIP WAIVED)' : (process.env.PLATFORM_FEE_PERCENT || '1.00') + '%'}</b>\n` +
+        `└ <i>Invite friends to earn up to 40%-70% of their fees forever.</i>\n\n` +
         
         `<i>Forward a call, paste a Token CA, or select a module below.\n(All inputs accept SOL or $USD).</i>`;
 
@@ -1212,6 +1145,102 @@ bot.command('whyskip', async (ctx) => {
         console.error('🔴 [/whyskip error]:', e?.message);
         await ctx.reply('Failed to load decision explanation.');
     }
+});
+
+
+// ─── 1. /devnet TOGGLE COMMAND ─────────────────────────
+bot.command('devnet', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isDevnetEligible(tgId)) return; // Silent for non-admins
+
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    if (await isSimulationActive(tgId!)) {
+        return ctx.replyWithHTML(`🔴 Please disable simulation mode first using <code>/sim</code> before enabling Devnet.`);
+    }
+
+    const active = await isDevnetActive(tgId);
+    const next = !active;
+    await setDevnetMode(tgId!, next);
+
+    // Purge cached mainnet balances
+    await redis.del(`balance_cache:${tgId}`, `balance_cache_stale:${tgId}`, `positions_cache:${tgId}`);
+    await invalidateUserCache(tgId!);
+
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+
+    await ctx.replyWithHTML(
+        `🧪 <b>DEVNET TESTING HARNESS: ${next ? '🟢 ENABLED' : '🔴 DISABLED (MAINNET ACTIVE)'}</b>\n\n` +
+        (next
+            ? `All wallet balances, transfers, withdrawals, and payouts now execute on <b>Solana Devnet</b> with test SOL.\n\n` +
+              `👛 <b>Your W1 Address:</b> <code>${user?.vaultAddress || 'No vault'}</code>\n\n` +
+              `Run <code>/devnetfund</code> to airdrop 2 test SOL to your wallets.\n\n` +
+              `⚠️ <i>Swaps, guards, and token launches are unavailable on Devnet. Use <code>/sim</code> for swap testing.</i>`
+            : `Terminal restored to <b>Solana Mainnet</b>. Real fund execution is active.`),
+        Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]])
+    );
+});
+
+// ─── 2. /devnetfund FAUCET COMMAND ─────────────────────
+bot.command('devnetfund', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isDevnetEligible(tgId)) return;
+
+    if (!(await isDevnetActive(tgId))) {
+        return ctx.replyWithHTML(`🔴 Devnet mode is currently off. Run <code>/devnet</code> first to activate.`);
+    }
+
+    const parts = (ctx.message as any).text.split(/\s+/);
+    const amount = Math.min(5, Math.max(0.1, parseFloat(parts[1] || '2')));
+
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+    if (!user?.vaultAddress) return ctx.replyWithHTML(`🔴 No vault found. Send /start first.`);
+
+    const loader = await ctx.replyWithHTML(`<i>⏳ Requesting ${amount} Devnet SOL from the Solana faucet...</i>`);
+
+    const targets: Array<{ label: string; addr: string }> = [{ label: 'W1 (Main)', addr: user.vaultAddress }];
+    if (user.activeWallets >= 2 && user.vault2) targets.push({ label: 'W2', addr: user.vault2 });
+    if (user.activeWallets >= 3 && user.vault3) targets.push({ label: 'W3', addr: user.vault3 });
+    if (user.activeWallets >= 4 && user.vault4) targets.push({ label: 'W4', addr: user.vault4 });
+    if (user.activeWallets >= 5 && user.vault5) targets.push({ label: 'W5', addr: user.vault5 });
+
+    let out = `🧪 <b>DEVNET FAUCET DISPATCH</b>\n\n`;
+    for (const t of targets) {
+        const r = await requestDevnetAirdrop(t.addr, amount);
+        out += `${r.ok ? '✅' : '🔴'} <b>${t.label}:</b> ${r.msg}\n`;
+        await new Promise(r2 => setTimeout(r2, 1200)); // Rate limit pause
+    }
+    await redis.del(`balance_cache:${tgId}`, `balance_cache_stale:${tgId}`);
+
+    await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+        out + `\n<i>Open /start to view your updated test balance.</i>`, { parse_mode: 'HTML' });
+});
+
+// ─── 3. /devnetstatus STATUS COMMAND ───────────────────
+bot.command('devnetstatus', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isDevnetEligible(tgId)) return;
+
+    const active = await isDevnetActive(tgId);
+    const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+    const conn = getDevnetConnection();
+
+    let balances = '';
+    const wallets = [
+        ['W1', user?.vaultAddress], ['W2', user?.vault2], ['W3', user?.vault3],
+        ['W4', user?.vault4], ['W5', user?.vault5]
+    ].filter(([, a]) => !!a) as [string, string][];
+
+    for (const [label, addr] of wallets) {
+        const lam = await conn.getBalance(new PublicKey(addr)).catch(() => 0);
+        balances += `• <b>${label}:</b> <code>${(lam / 1e9).toFixed(4)} SOL</code>\n`;
+    }
+
+    await ctx.replyWithHTML(
+        `🧪 <b>DEVNET STATUS HARNESS</b>\n\n` +
+        `• Harness State: <b>${active ? '🟢 ACTIVE' : '🔴 INACTIVE'}</b>\n` +
+        `• Target RPC: <code>${process.env.DEVNET_RPC_URL || 'https://api.devnet.solana.com'}</code>\n\n` +
+        `<b>Devnet On-Chain Balances:</b>\n${balances || '<i>No active wallets found.</i>'}`
+    );
 });
 
 // ─── 4. /backtest & CALLER BACKTEST ACTION ────────────
@@ -1573,19 +1602,6 @@ bot.action(/^quick_buy_(.+)$/, async (ctx) => {
     await executeManualSnipePrompt(ctx, tgId, mint);
 });
 
-// Extract this helper function:
-async function executeManualSnipePrompt(ctx: any, telegramId: string, possibleCA: string) {
-    let tradeAmountSol = 0.01; 
-    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
-    if (user?.autoSnipeConfig?.amountSol) tradeAmountSol = user.autoSnipeConfig.amountSol;
-
-    const spamLockKey = `lock:manual_snipe:${telegramId}`;
-    if (!(await redis.set(spamLockKey, 'LOCKED', 'EX', 3, 'NX'))) return ctx.reply("⚠️ <b>Please wait a moment before sending another snipe command.</b>", { parse_mode: 'HTML' });
-
-    const loader = await ctx.replyWithHTML(`⚡ <b>SNIPE ENGAGED</b>\n\nTarget: <code>${possibleCA.substring(0,8)}...</code>\nAmount: <b>${tradeAmountSol} SOL</b>\n<i>⏳ Fetching Info...</i>`);
-    // ... rest of your token info / confirm_buy block goes here ...
-    await redis.set(`pending_buy:${telegramId}:${possibleCA}`, tradeAmountSol.toString(), 'EX', 120);
-}
 
 bot.action(/^watch_remove_(.+)$/, async (ctx) => {
     try { await ctx.answerCbQuery('❌ Alert removed'); } catch(e){}
@@ -2026,8 +2042,9 @@ bot.action(/^export_guild_(.+)$/, async (ctx) => {
 
 // Inside src/index.ts
 
+// Replace BOTH existing bot.start() blocks in src/index.ts with this single authoritative handler:
 bot.start(async (ctx: Context) => {
-    const telegramId = ctx.from?.id.toString();
+    const telegramId = ctx.from?.id?.toString();
     if (!telegramId) return;
 
     try {
@@ -2046,6 +2063,9 @@ bot.start(async (ctx: Context) => {
                 pendingGuildCode = payload.replace('guild_', '') || undefined;
                 const guild = await prisma.guild.findUnique({ where: { guildCode: pendingGuildCode } });
                 if (guild) { referrerId = guild.ownerId; getsDiscount = true; }
+            } else if (payload.startsWith('follow_')) {
+                const leaderId = payload.replace('follow_', '');
+                await redis.set(`pending_follow:${telegramId}`, leaderId, 'EX', 600);
             } else {
                 const referrer = await prisma.user.findUnique({ where: { referralCode: payload } });
                 if (referrer) { referrerId = referrer.id; getsDiscount = true; }
@@ -2061,13 +2081,13 @@ bot.start(async (ctx: Context) => {
                     referralCode: `${refPrefix}-${telegramId}`, 
                     referredById: referrerId,
                     hasReferralDiscount: getsDiscount,
-                    creditBalance: 15,     // 🟢 15 Free Welcome Credits
+                    creditBalance: 15,     // 15 Free AI Welcome Credits
                     lifetimeCredits: 15
                 }
             });
 
-            // Trigger Daily VIP Promo for new recruits
-            if (payload && !payload.startsWith('guild_')) {
+            // Trigger Daily VIP Promo for new recruits if active
+            if (payload && !payload.startsWith('guild_') && !payload.startsWith('follow_')) {
                 const result = await checkAndGrantDailyVip(telegramId, payload);
                 if (result.granted) {
                     await ctx.replyWithHTML(`🎉 <b>PROMO VIP GRANTED!</b>\n\nYou received a free 10-Day VIP Pass via your referral link!`);
@@ -2088,101 +2108,15 @@ bot.start(async (ctx: Context) => {
             }
         }
 
-        if (userCheck.vaultAddress) return await sendOrEditDashboard(ctx, telegramId, false);
-
-        const welcomeText = `🛡️ <b>WELCOME TO ${botName.toUpperCase()}</b>\n\n` +
-            `Sentry is a secure, high-efficiency programmatic developer utility interface for decentralized markets. ` +
-            `All trades are routed defensive-only via private Jito Block-0 validator paths to prevent public mempool exploitation.\n\n` +
-            `🎁 <b>Welcome Gift:</b> 25 Free AI Caller Credits loaded into your account!\n` +
-            `✅ <b>Zero-Latency Memory Execution:</b> Localized non-custodial parameters.\n` +
-            `✅ <b>Jito MEV Shield:</b> Bypass congested nodes to protect cost basis.\n` +
-            `✅ <b>Risk Controls:</b> Multi-wallet balance delegation and trailing stop-losses.\n\n` +
-            `⚠️ <b>REGULATORY & RISK DISCLAIMER:</b>\n` +
-            `By proceeding, you agree that Sentry is a decentralized self-custodial software tool. You retain exclusive control over your generated private keys. ` +
-            `The operators of this software do not hold user funds, do not provide financial advice, and make no guarantees of trading returns or token launch outcomes. ` +
-            `Trading cryptocurrencies carries a high risk of financial loss. You are solely responsible for compliance with the laws of your local jurisdiction.\n\n` +
-            `<i>Click below to authorize vault creation and agree to these self-custodial terms:</i>`;
-
-        await ctx.replyWithHTML(welcomeText, Markup.inlineKeyboard([[Markup.button.callback('✅ I AGREE & CREATE VAULT', 'action_create_vault')]]));
-    } catch (error) { console.error("🔴 Registration Fault:", error); }
-});
-
-// =========================================================
-// 🟢 FEATURES 3 & 4: WATCHLIST & CALENDAR COMMANDS
-// =========================================================
-
-
-// =========================================================
-// 🚀 ONBOARDING GATEWAY (MANDATORY TERMS & RISK ACCEPTANCE)
-// =========================================================
-bot.start(async (ctx: Context) => {
-    const telegramId = ctx.from?.id.toString();
-    if (!telegramId) return;
-
-    try {
-        let userCheck = await prisma.user.findUnique({ where: { telegramId } });
-        const botName = process.env.BOT_NAME || 'Sentry Terminal';
-        
-        let pendingGuildCode: string | undefined = undefined;
-        let referrerId: string | null = null;
-        let getsDiscount = false;
-
-        // @ts-ignore
-        const payload = ctx.payload || '';
-
-        if (payload) {
-            if (payload.startsWith('guild_')) {
-                pendingGuildCode = payload.replace('guild_', '') || undefined;
-                const guild = await prisma.guild.findUnique({ where: { guildCode: pendingGuildCode } });
-                if (guild) { referrerId = guild.ownerId; getsDiscount = true; }
-            } else {
-                const referrer = await prisma.user.findUnique({ where: { referralCode: payload } });
-                if (referrer) { referrerId = referrer.id; getsDiscount = true; }
-            }
-        }
-
-        if (!userCheck) {
-            const refPrefix = botName.toUpperCase().split(' ')[0];
-            userCheck = await prisma.user.create({
-                data: {
-                    telegramId: telegramId, 
-                    username: ctx.from?.username || "Trader",
-                    referralCode: `${refPrefix}-${telegramId}`, 
-                    referredById: referrerId,
-                    hasReferralDiscount: getsDiscount,
-                    creditBalance: 15,     // 🟢 15 Free Welcome Credits
-                    lifetimeCredits: 15
-                }
-            });
-
-            // Trigger Daily VIP Promo for new recruits
-            if (payload && !payload.startsWith('guild_')) {
-                const result = await checkAndGrantDailyVip(telegramId, payload);
-                if (result.granted) {
-                    await ctx.replyWithHTML(`🎉 <b>PROMO VIP GRANTED!</b>\n\nYou received a free 10-Day VIP Pass via your referral link!`);
-                }
-            }
-        }
-
-        if (pendingGuildCode) {
-            const result = await joinGuild(telegramId, pendingGuildCode);
-            if (result.success) {
-                await ctx.replyWithHTML(
-                    `🏰 <b>GUILD JOINED: ${result.guildName?.toUpperCase()}</b>\n\n` +
-                    `${result.rewardDescription || 'Trade to climb the leaderboard and earn your reward.'}\n\n` +
-                    `📊 Every <b>0.1 SOL</b> you trade earns you <b>10 Guild Loyalty Points (GLP)</b>.\n` +
-                    `🏆 Your KOL will export the top wallets for whitelist / airdrop rewards.\n\n` +
-                    `<i>Keep trading — your rank updates live.</i>`
-                );
-            }
-        }
+        // Process Social Follow
+        await processPendingFollow(ctx, telegramId);
 
         // Existing user with initialized vault -> Go straight to main dashboard
         if (userCheck.vaultAddress) {
             return await sendOrEditDashboard(ctx, telegramId, false);
         }
 
-        // 🟢 NEW USER ONBOARDING GATE: Mandatory Terms of Service & Risk Disclosure
+        // Mandatory Terms of Service & Risk Disclosure Onboarding Gate
         const termsGateText = 
             `🛡️ <b>WELCOME TO ${botName.toUpperCase()}</b>\n` +
             `<i>Institutional Quantitative Terminal for Solana Decentralized Markets</i>\n\n` +
@@ -2215,6 +2149,16 @@ bot.start(async (ctx: Context) => {
         console.error("🔴 Registration Fault:", error?.message || error); 
     }
 });
+
+// =========================================================
+// 🟢 FEATURES 3 & 4: WATCHLIST & CALENDAR COMMANDS
+// =========================================================
+
+
+// =========================================================
+// 🚀 ONBOARDING GATEWAY (MANDATORY TERMS & RISK ACCEPTANCE)
+// =========================================================
+
 
 // 🟢 Action: View Expanded Full Legal Contract from the Onboarding Gate
 bot.action('action_view_full_terms', async (ctx) => {
@@ -3039,9 +2983,9 @@ bot.action('menu_trailing', async (ctx) => {
     await safeEditMessageText(ctx, text, UI);
 });
 
+// Update bot.action('menu_dca') in src/index.ts:
 bot.action('menu_dca', async (ctx) => { 
-    try{await ctx.answerCbQuery();}catch(e){} 
-    await safeEditMessageText(ctx, '<i>⏳ Loading DCA & Limit Engine...</i>', {});
+    try { await ctx.answerCbQuery(); } catch (_) {} 
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
     
@@ -3052,8 +2996,9 @@ bot.action('menu_dca', async (ctx) => {
     const UI = Markup.inlineKeyboard([
         [Markup.button.callback('🎯 New Limit Order', 'action_deploy_limit')],
         [Markup.button.callback('➕ New DCA Schedule', 'action_deploy_dca')],
+        [Markup.button.callback('🧠 AI Recommended Stop / TP', 'ai_recommend_guard')],
         [Markup.button.callback('🛑 Cancel All', 'action_cancel_dca')], 
-        [Markup.button.callback('⬅️ Back', 'btn_dashboard')]
+        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
     ]);
     await safeEditMessageText(ctx, dcaText, UI);
 });
@@ -3302,214 +3247,202 @@ bot.action('onboard_step3', async (ctx) => {
 // =========================================================
 
 
-// 🟢 AI PROJECTION CALCULATOR
-function calculateAIProjection(token: any) {
-    const score = token.score || token.totalScore || 50;
-    const liq = token.liquidity || 5000;
-    const mom = token.priceChangeM5 || 10;
-    const age = token.ageMins || 10;
-
-    // 1. Volatility Index
-    let volIndex = "Extreme 🌪️";
-    if (liq > 20000) volIndex = "High 🌊";
-    if (liq > 50000) volIndex = "Moderate 📊";
-
-    // 2. Peak Calculation (Lower liq + higher score = higher multiplier)
-    let baseMultiplier = (score / 100) * 4.5; 
-    let liqMultiplier = Math.max(0.5, 20000 / Math.max(liq, 1000)); 
-    let momMultiplier = 1 + (Math.min(mom, 300) / 100); 
-
-    let minPeak = baseMultiplier * liqMultiplier * momMultiplier * 100;
-    
-    // Add some organic variance
-    minPeak = minPeak * (0.8 + (Math.random() * 0.4));
-    let maxPeak = minPeak * (1.3 + Math.random() * 0.5); 
-
-    // Cap ridiculous numbers to keep it realistic
-    if (minPeak > 5000) minPeak = 3500 + Math.random() * 1000;
-    if (maxPeak > 10000) maxPeak = 7000 + Math.random() * 2000;
-    if (minPeak < 20) { minPeak = 20; maxPeak = 50 + Math.random() * 50; }
-
-    // 3. Timeframe
-    let timeframe = "1 - 4 Hours";
-    if (age < 15 && mom > 50) timeframe = "10 - 30 Minutes";
-    else if (age < 60) timeframe = "30 - 90 Minutes";
-    else if (liq > 50000) timeframe = "12 - 24 Hours";
-
-    return {
-        target: `+${Math.floor(minPeak).toLocaleString()}% to +${Math.floor(maxPeak).toLocaleString()}%`,
-        timeframe,
-        volatility: volIndex
-    };
-}
-
-
-
 // 🟢 Handles the manual "Scan Mainnet Now" button with real-time reassurance frames
 // Replace the existing bot.action('trigger_caller_scan', ...) block in index.ts with this:
 
 bot.action('trigger_caller_scan', async (ctx) => {
-    try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch(e){}
-    const tgId = ctx.from?.id.toString()!;
+    try { await ctx.answerCbQuery("🔍 Scanning Solana mainnet..."); } catch (_) {}
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
 
-    try {
-        const { getCalibratedProjection, getScoreBand } = await import('./services/caller.service.js');
-
-    
-
-        // Inside src/index.ts -> bot.action('trigger_caller_scan', ...)
-
-     // =========================================================
-    // 🎮 SIMULATION INTERCEPT
-    // =========================================================
-    const { isSimulationActive } = await import('./services/simulation.service.js');
-    if (tgId && await isSimulationActive(tgId)) {
-        const { getSimWallets } = await import('./services/simulation.service.js');
-        const simWallets = await getSimWallets(tgId);
-        const simPositions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
-        
-        // 🟢 CRITICAL UI FIX: Corrected mismatched HTML tags (<b> closed properly)
-        let posText = `💼 <b>YOUR CURRENT BAGS</b>\n\n`;
-        const buttons: any[] = [];
-        
-        if (simPositions.length === 0) {
-            posText += `<i>No active simulation positions. Use the sniper or paste a CA to simulate a buy.</i>`;
-        } else {
-            simPositions.forEach((p: any, i: number) => {
-                const pnlPercent = ((p.priceUsd - (p.entryPrice * 150)) / (p.entryPrice * 150) * 100).toFixed(2);
-                const solPnl = p.amountInSol * (parseFloat(pnlPercent) / 100); 
-                const sign = parseFloat(pnlPercent) >= 0 ? '+' : '';
-                
-                posText += `${i+1}. <b>$${p.symbol}</b>: <b>$${p.valueUsd.toFixed(2)}</b>\n   PnL: <b>${parseFloat(pnlPercent) >= 0 ? '📈' : '📉'} ${sign}${parseFloat(pnlPercent).toFixed(2)}% (${sign}${solPnl.toFixed(4)} SOL)</b>\n`;
-                buttons.push([
-                    Markup.button.callback(`25%`, `sell_25_${p.mint}`),
-                    Markup.button.callback(`50%`, `sell_50_${p.mint}`),
-                    Markup.button.callback(`💥 100%`, `sell_100_${p.mint}`)
-                ]);
-            });
-        }
-
-        buttons.push([
-            Markup.button.callback('🔄 Refresh', 'menu_positions'),
-            Markup.button.callback('⬅️ Back', 'btn_dashboard')
-        ]);
-
-        const loader = await ctx.reply("<i>⏳ Scanning simulation vault...</i>", { parse_mode: 'HTML' });
-        await new Promise(r => setTimeout(r, 800)); 
-        
-        // 🟢 CRITICAL UI FIX: Use safeEditMessageText
-        await safeEditMessageText(ctx, posText, {
-            reply_markup: { inline_keyboard: buttons }
-        });
-        await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
+    const scanLock = await redis.set(`lock:caller_scan:${tgId}`, '1', 'EX', 5, 'NX');
+    if (!scanLock) {
+        try { await ctx.answerCbQuery("⏳ Scan already running...", { show_alert: false }); } catch (_) {}
         return;
     }
-       
-        // --- END SIMULATION INTERCEPT ---
 
-        await safeEditMessageText(ctx, `🔍 <b>SENTRY RADAR ACTIVE</b>\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`, { parse_mode: 'HTML' });
-        
-        const { getUserCallerFilters, scoreTokens } = await import('./services/caller.service.js');
+    try {
+        const { getUserCallerFilters, scoreTokens, getMatchesWithLadder,
+                formatCallerAlertMessage, getCalibratedProjection } =
+            await import('./services/caller.service.js');
+        const { isSimulationActive, generateSimCallerAlert } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+
         const filters = await getUserCallerFilters(tgId);
-        
-        let topTokens = await redis.get('caller:hot_scored_tokens').then(res => res ? JSON.parse(res) : []);
-        
-        if (topTokens.length === 0) {
-            const scanPromise = scoreTokens();
-            const timeoutPromise = new Promise<any>((resolve) => setTimeout(() => resolve('TIMEOUT'), 6000)); 
-            const result = await Promise.race([scanPromise, timeoutPromise]);
-            if (result === 'TIMEOUT') {
-                return safeEditMessageText(ctx, `🔴 <b>Scan Timed Out</b>\n\nThe scanner is taking longer than expected. Try again in a moment.`, {
-                    parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
-                });
-            }
-            topTokens = result;
-        }
 
-        // 🟢 FIX 0.2: Progressive Ladder
-        const { getMatchesWithLadder, formatCallerAlertMessage } = await import('./services/caller.service.js');
-        const { matches, isRelaxed } = getMatchesWithLadder(topTokens, filters);
-        let matchingTokens = matches;
-
-        // Sort them highest score first to ensure "gems" pop up instantly
-        matchingTokens.sort((a: any, b: any) => b.totalScore - a.totalScore);
-
-        let matchedToken = null;
-        for (const t of matchingTokens) {
-            const seenKey = `caller_alerted:${tgId}:${t.mint}`;
-            const seen = await redis.get(seenKey);
-            if (!seen) {
-                matchedToken = t;
-                await redis.set(seenKey, '1', 'EX', 180); 
-                break;
-            }
-        }
-
-        let isReshow = false;
-        if (!matchedToken && matchingTokens.length > 0) {
-            matchedToken = matchingTokens[0]; 
-            isReshow = true;
-        }
-
-        if (matchedToken) {
-            // 🟢 FIX 0.5: Charge credits for manual scans too!
-            const { consumeCredit } = await import('./services/credits.service.js');
-            const creditResult = await consumeCredit(tgId, 'CONSUME_SCAN', matchedToken.mint);
-            if (!creditResult.success) {
-                return safeEditMessageText(ctx, `⚠️ <b>OUT OF CREDITS</b>\n\nBuy more with /credits to keep scanning.`, {
-                    parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]] }
-                });
-            }
-
-            const projection = await getCalibratedProjection(matchedToken); 
-            
-            const historyData = {
-                mint: matchedToken.mint, symbol: matchedToken.symbol, score: matchedToken.totalScore,
-                priceAtAlert: matchedToken.price, alertedAt: Date.now(), tokenAgeAtAlertMins: matchedToken.ageMins,
-                predictedRangeLow: projection.rawLow, predictedRangeHigh: projection.rawHigh, predictedTimeframeMins: projection.rawTimeMins
-            };
-            // 🟢 FIX 0.4: Unique Key
-            const historyKey = `${matchedToken.mint}:${Date.now()}`;
-            await redis.hset(`caller_history`, historyKey, JSON.stringify(historyData));
-
-            // 🟢 FIX 0.1: Universal Formatter
-            const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed, isReshow });
-
-            // 🟢 FIX C.2: Dynamic Button Size
-            const userConfig = await prisma.autoSnipeConfig.findUnique({ where: { userId: (await prisma.user.findUnique({where:{telegramId:tgId}}))!.id } });
-            const defaultSize = userConfig?.amountSol || 0.1;
-
-            await safeEditMessageText(ctx, msg, {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: `⚡ Snipe ${defaultSize} SOL`, callback_data: `forcebuy_${matchedToken.mint}_${defaultSize}` }, { text: '📊 DexScreener', url: `https://dexscreener.com/solana/${matchedToken.mint}` }],
-                        [{ text: '🛡️ Deploy Guard', callback_data: `caller_guard_${matchedToken.mint}` }, { text: '⏳ Start DCA', callback_data: `caller_dca_${matchedToken.mint}` }],
-                        [{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }],
-                        [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]
-                    ]
-                }
-            });
+        // 1. Credit Check before scan
+        let credits = 0;
+        if (isSim) {
+            credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0', 10);
         } else {
-            await safeEditMessageText(ctx,
-                `❌ <b>No Breakouts Found</b>\n\n` +
-                `Scanned ${topTokens.length} tokens but none cleared your filters:\n` +
-                `• Min Score: <b>${filters.minScore}+</b>\n` +
-                `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
-                `• Min Liq/Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n\n` +
-                `<i>Try lowering your minimums, or check back shortly!</i>\n` +
-                `<code>Last checked: ${new Date().toLocaleTimeString()}</code>`, 
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Again', callback_data: 'trigger_caller_scan' }], [{ text: '⬅️ Back to Caller Menu', callback_data: 'menu_caller' }]] } }
+            const user = await prisma.user.findUnique({ where: { telegramId: tgId }, select: { creditBalance: true } });
+            credits = user?.creditBalance || 0;
+        }
+
+        if (credits <= 0) {
+            return safeEditMessageText(ctx,
+                `⚠️ <b>OUT OF CREDITS</b>\n\n` +
+                `You need at least 1 credit to scan mainnet. Sentry pay-per-result alerts only deduct on confirmed delivery.`,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback('💳 Buy Credits', 'menu_credits')],
+                    [Markup.button.callback('⬅️ Back to Caller', 'menu_caller')]
+                ])
             );
         }
 
+        await safeEditMessageText(ctx,
+            `🔍 <b>SENTRY RADAR ACTIVE</b>${isSim ? ' 🧪' : ''}\n\n<i>Calibrating on-chain telemetry & scanning Helius streams...</i>\n\n[░░░░░░░░░░] 0%`,
+            {}
+        );
+
+        let matchedToken: any = null;
+        let isRelaxed = false;
+        let isReshow = false;
+
+        if (isSim) {
+            // 🟢 Simulation Mode: Score real mainnet telemetry and execute against mock wallet
+            matchedToken = await generateSimCallerAlert(tgId, filters);
+        } else {
+            let topTokens: any[] = await redis.get('caller:hot_scored_tokens')
+                .then(r => r ? JSON.parse(r) : []).catch(() => []);
+
+            if (topTokens.length === 0) {
+                const result = await Promise.race([
+                    scoreTokens(),
+                    new Promise<'TIMEOUT'>(r => setTimeout(() => r('TIMEOUT'), 8000))
+                ]);
+                if (result === 'TIMEOUT') {
+                    return safeEditMessageText(ctx,
+                        `⏳ <b>Scanner Warming Up</b>\n\nThe mempool index is still caching new listings. Please tap scan again in 15 seconds.`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('🔍 Retry Scan', 'trigger_caller_scan')],
+                            [Markup.button.callback('⬅️ Back to Caller', 'menu_caller')]
+                        ])
+                    );
+                }
+                topTokens = Array.isArray(result) ? result : [];
+            }
+
+            if (topTokens.length === 0) {
+                return safeEditMessageText(ctx,
+                    `❌ <b>No Token Data Available</b>\n\n<i>The scanner is currently waiting for new pairs to register. Try again shortly.</i>`,
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback('🔍 Retry Scan', 'trigger_caller_scan')],
+                        [Markup.button.callback('⬅️ Back to Caller', 'menu_caller')]
+                    ])
+                );
+            }
+
+            const ladder = getMatchesWithLadder(topTokens, filters);
+            isRelaxed = ladder.isRelaxed;
+            const sorted = [...ladder.matches].sort((a, b) => (b.totalScore ?? 0) - (a.totalScore ?? 0));
+
+            for (const t of sorted) {
+                const seenKey = `caller_alerted:${tgId}:${t.mint}`;
+                if (!(await redis.get(seenKey))) {
+                    matchedToken = t;
+                    await redis.set(seenKey, '1', 'EX', 180);
+                    break;
+                }
+            }
+
+            if (!matchedToken && sorted.length > 0) {
+                matchedToken = sorted[0];
+                isReshow = true;
+            }
+        }
+
+        if (!matchedToken) {
+            return safeEditMessageText(ctx,
+                `❌ <b>No Breakouts Found Matching Filters</b>\n\n` +
+                `Scanned fresh mainnet tokens, but none cleared your criteria:\n` +
+                `• Min Score: <b>${filters.minScore}+</b>\n` +
+                `• Max Age: <b>${filters.maxAgeMins}m</b>\n` +
+                `• Min Liq/Vol: <b>$${filters.minLiquidity.toLocaleString()} / $${filters.minVolume24h.toLocaleString()}</b>\n\n` +
+                `<i>No credit was deducted. Try lowering your minimums in settings.</i>`,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback('🔍 Scan Again', 'trigger_caller_scan')],
+                    [Markup.button.callback('⚙️ Caller Settings', 'menu_caller')]
+                ])
+            );
+        }
+
+        // 2. Build projection and message payload
+        const projection = await getCalibratedProjection(matchedToken);
+        const msg = await formatCallerAlertMessage(matchedToken, projection, { isRelaxed, isReshow, isSim });
+
+        // 3. Deduct credit ONLY after successful alert compilation, and never for duplicate re-shows
+        if (!isReshow) {
+            if (isSim) {
+                await redis.set(`sim:credits:${tgId}`, Math.max(0, credits - 1).toString());
+            } else {
+                const { consumeCredit } = await import('./services/credits.service.js');
+                const creditResult = await consumeCredit(tgId, 'CONSUME_SCAN', matchedToken.mint);
+                if (!creditResult.success) {
+                    return safeEditMessageText(ctx,
+                        `⚠️ <b>OUT OF CREDITS</b>\n\nA breakout was identified, but your credit balance is 0.`,
+                        Markup.inlineKeyboard([[Markup.button.callback('💳 Buy Credits', 'menu_credits')]])
+                    );
+                }
+            }
+        }
+
+        // 4. Record durable prediction in PostgreSQL for ML training
+        if (!isSim && !isReshow) {
+            prisma.callerPrediction.create({
+                data: {
+                    alertKey: `${matchedToken.mint}:${Date.now()}`,
+                    mint: matchedToken.mint,
+                    symbol: matchedToken.symbol || 'UNKNOWN',
+                    score: Math.round(matchedToken.totalScore ?? 0),
+                    ageMins: matchedToken.ageMins ?? 0,
+                    liquidity: matchedToken.liquidity ?? 0,
+                    volume24h: matchedToken.volume ?? 0,
+                    priceChangeM5: matchedToken.priceChangeM5 ?? 0,
+                    hasSocials: !!(matchedToken.socials?.length || matchedToken.stats?.hasSocials),
+                    isRug: false,
+                    predictedLow: projection.rawLow ?? 0,
+                    predictedHigh: projection.rawHigh ?? 0,
+                    predictedTimeMins: projection.rawTimeMins ?? 0,
+                    alertedAt: new Date()
+                }
+            }).catch(() => {});
+        }
+
+        const userCfg = await prisma.autoSnipeConfig.findFirst({ where: { user: { telegramId: tgId } } });
+        const defaultSize = userCfg?.amountSol || 0.1;
+
+        await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
+            [
+                Markup.button.callback(`⚡ Snipe ${defaultSize} SOL`, `forcebuy_${matchedToken.mint}_${defaultSize}`),
+                Markup.button.url('📊 DexScreener', `https://dexscreener.com/solana/${matchedToken.mint}`)
+            ],
+            [
+                Markup.button.callback('🛡️ Deploy Guard', `caller_guard_${matchedToken.mint}`),
+                Markup.button.callback('⏳ Start DCA', `caller_dca_${matchedToken.mint}`)
+            ],
+            [
+                Markup.button.callback('🧠 AI Recommended Stop / TP', `caller_ai_stop_${matchedToken.mint}`)
+            ],
+            [
+                Markup.button.callback('🔍 Scan Again', 'trigger_caller_scan'),
+                Markup.button.callback('⬅️ Back to Caller Menu', 'menu_caller')
+            ]
+        ]));
+
     } catch (e: any) {
-        console.error("🔴 [CALLER SCAN] Unhandled failure:", e.message);
+        console.error("🔴 [CALLER SCAN] Unhandled failure:", e?.message, e?.stack);
         try {
-            await safeEditMessageText(ctx, `🔴 <b>Scan Aborted:</b> Engine hiccup, please tap again.`, {
-                parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back', callback_data: 'menu_caller' }]] }
-            });
+            await safeEditMessageText(ctx,
+                `🔴 <b>Scan Aborted:</b> <code>${(e?.message || 'Unknown error').substring(0, 100)}</code>\n\n<i>No credit was deducted.</i>`,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback('🔍 Retry Scan', 'trigger_caller_scan')],
+                    [Markup.button.callback('⬅️ Back to Caller', 'menu_caller')]
+                ])
+            );
         } catch (_) {}
+    } finally {
+        await redis.del(`lock:caller_scan:${tgId}`).catch(() => {});
     }
 });
 
@@ -4218,27 +4151,28 @@ async function sendOrEditSniper(ctx: any, telegramId: string, isEdit: boolean = 
     if (config.sniperMode === 'RAYDIUM') modeBtnText = '🟢 Mode: Raydium LPs 🧪';
     else if (config.sniperMode === 'BOTH') modeBtnText = '🟢 Mode: BOTH 🔥';
 
-    const UI = Markup.inlineKeyboard([
-        [Markup.button.callback(isCurrentlyActive ? '🛑 SHUT DOWN ENGINE' : '⚡ ARM SNIPER ENGINE', 'toggle_autosnipe')],
-        [Markup.button.callback(modeBtnText, 'toggle_sniper_mode')],
-        [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score'), Markup.button.callback(`🧠 Mode: ${config.useDeepScoring ? '🔍 Deep' : '⚡ Fast'}`, 'toggle_snipe_deep_score')],
-        [Markup.button.callback(`👻 Anti-Dead: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
-        [Markup.button.callback(`✏️ Static Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol || 'Off'})`, 'edit_snipe_budget')],
-        [Markup.button.callback(`🛑 Loss Limit (${lossLimitDisplay})`, 'edit_snipe_loss_limit')],
-        [Markup.button.callback(config.enableDynamicScaling ? '📊 Sizing: ON' : '📊 Sizing: OFF', 'toggle_dynamic_scaling')],
-        [
-            Markup.button.callback(`💵 Base: ${config.baseRiskUnitSol} SOL`, 'edit_base_risk'),
-            Markup.button.callback(`🔺 Max: ${config.maxRiskMultiplier}x`, 'edit_max_multiplier')
-        ],
-        [Markup.button.callback(`📈 Curve: ${curveDesc}`, 'edit_scaling_exponent')],
-        [Markup.button.callback(`📊 MC Filter (${mcDisplay})`, 'edit_snipe_mc')],
-        [Markup.button.callback(`✏️ Guard (-${config.autoTrailingDropPercent}%)`, 'edit_snipe_sl'), Markup.button.callback(`🎯 TP (${tpDisplay})`, 'edit_snipe_tp')],
-        [
-            Markup.button.callback(`⏱️ Delay (${config.snipeDelaySeconds}s)`, 'edit_snipe_delay'),
-            Markup.button.callback('🔍 Audit Skipped Token', 'action_prompt_whyskip') // 🟢 NEW BUTTON
-        ],
-        [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
-    ]);
+  // Inside sendOrEditSniper in src/index.ts, update the UI keyboard:
+  const UI = Markup.inlineKeyboard([
+    [Markup.button.callback(isCurrentlyActive ? '🛑 SHUT DOWN ENGINE' : '⚡ ARM SNIPER ENGINE', 'toggle_autosnipe')],
+    [Markup.button.callback(modeBtnText, 'toggle_sniper_mode')],
+    [Markup.button.callback(`⭐ AI Min Score (${scoreDisplay})`, 'edit_snipe_score'), Markup.button.callback(`🧠 Mode: ${config.useDeepScoring ? '🔍 Deep' : '⚡ Fast'}`, 'toggle_snipe_deep_score')],
+    [Markup.button.callback(`👻 Anti-Dead: ${antiDeadObj}`, 'toggle_antidead'), Markup.button.callback(`🐋 Dev Limit (${devBagDisplay})`, 'edit_snipe_dev')],
+    [Markup.button.callback(`✏️ Static Spend (${config.amountSol} SOL)`, 'edit_snipe_amt'), Markup.button.callback(`💳 Budget (${config.maxBudgetSol ? config.maxBudgetSol + ' SOL' : 'Off'})`, 'edit_snipe_budget')],
+    [Markup.button.callback(`🛑 Loss Limit (${lossLimitDisplay})`, 'edit_snipe_loss_limit'), Markup.button.callback('🔄 Reset Spend (0 SOL)', 'reset_session_spend')], // 🟢 DASH-2 Fix
+    [Markup.button.callback(config.enableDynamicScaling ? '📊 Sizing: ON' : '📊 Sizing: OFF', 'toggle_dynamic_scaling')],
+    [
+        Markup.button.callback(`💵 Base: ${config.baseRiskUnitSol} SOL`, 'edit_base_risk'),
+        Markup.button.callback(`🔺 Max: ${config.maxRiskMultiplier}x`, 'edit_max_multiplier')
+    ],
+    [Markup.button.callback(`📈 Curve: ${curveDesc}`, 'edit_scaling_exponent')],
+    [Markup.button.callback(`📊 MC Filter (${mcDisplay})`, 'edit_snipe_mc')],
+    [Markup.button.callback(`✏️ Guard (-${config.autoTrailingDropPercent}%)`, 'edit_snipe_sl'), Markup.button.callback(`🎯 TP (${tpDisplay})`, 'edit_snipe_tp')],
+    [
+        Markup.button.callback(`⏱️ Delay (${config.snipeDelaySeconds}s)`, 'edit_snipe_delay'),
+        Markup.button.callback('🔍 Audit Skipped Token', 'action_prompt_whyskip')
+    ],
+    [Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')]
+]);
 
     if (isEdit) await safeEditMessageText(ctx, sniperText, UI);
     else await ctx.replyWithHTML(sniperText, UI);
@@ -4336,13 +4270,9 @@ bot.action('toggle_autosnipe', async (ctx) => {
 
     const { isSimulationActive, toggleSimAutoSnipe } = await import('./services/simulation.service.js');
     const isSim = await isSimulationActive(tgId);
-    
-    // 🟢 DEBUG LOGS TO DIAGNOSE SIM ENGINE
-    console.log(`[DEBUG] toggle_autosnipe: tgId=${tgId} isSim=${isSim}`);
 
     if (isSim) {
-        const result = await toggleSimAutoSnipe(tgId, bot);
-        console.log(`[DEBUG] sim autosnipe toggled to: ${result}`);
+        await toggleSimAutoSnipe(tgId, bot);
         await sendOrEditSniper(ctx, tgId!, true);
         return;
     }
@@ -4359,23 +4289,23 @@ bot.action('toggle_autosnipe', async (ctx) => {
         await redis.del(`autosnipe:session_spend:live:${tgId}`);
         await redis.del(`live:session_trades:${sessionId}`);
 
-        // 🟢 Store starting balance baseline for Live Max Loss Circuit Breaker
+        // 🟢 FUNC-16 Fix: Reset totalSpentSol so dynamic sizing calculates cleanly against maxBudget
+        await prisma.autoSnipeConfig.update({
+            where: { id: user.autoSnipeConfig.id },
+            data: { isActive: true, totalSpentSol: 0 }
+        });
+
         const balance = await getLiveBalance(user);
         await redis.set(`sniper:starting_balance:${tgId}`, balance.toString(), 'EX', 86400);
+    } else {
+        await prisma.autoSnipeConfig.update({
+            where: { id: user.autoSnipeConfig.id },
+            data: { isActive: false }
+        });
     }
 
-    await prisma.autoSnipeConfig.update({ where: { id: user.autoSnipeConfig.id }, data: { isActive: newState } });
-    
-    if (newState) {
-        try { 
-            await ctx.telegram.sendMessage(ctx.chat!.id, `📡 <b>SNIPER ARMED & SCANNING MEMPOOL</b>\n\nYour engine is now actively listening to Solana block transitions.`, { parse_mode: 'HTML' }); 
-        } catch(e) {}
-    }
-    
     await sendOrEditSniper(ctx, tgId!, true);
 });
-
-
 
 bot.action('toggle_antidead', async (ctx) => {
     try { await ctx.answerCbQuery("👻 Anti-Dead Coin Shield Toggled!"); } catch(e){}
@@ -4769,12 +4699,16 @@ bot.action('menu_positions', async (ctx) => {
 
 
        // Inside bot.action('menu_positions', ...)
+// Inside bot.action('menu_positions') in src/index.ts, update the footer buttons:
 buttons.push([
     Markup.button.callback('📊 Portfolio Risk Audit', 'action_view_risk'),
-    Markup.button.callback('🧹 Sweep All to Cash', 'action_sweep_all')
+    Markup.button.callback('🧠 AI Recommended Stop / TP', 'ai_recommend_guard')
 ]);
 buttons.push([
-    Markup.button.callback('🔄 Refresh', 'menu_positions'),
+    Markup.button.callback('🧹 Sweep All to Cash', 'action_sweep_all'),
+    Markup.button.callback('🔄 Refresh', 'menu_positions')
+]);
+buttons.push([
     Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')
 ]);
         const loader = await ctx.reply("<i>⏳ Scanning simulation vault...</i>", { parse_mode: 'HTML' });
@@ -4870,12 +4804,26 @@ const guardData = await Promise.all(topPositions.map(async (p: any) => {
 // 🏰 SENTRY GUILDS (B2B LOYALTY ENGINE)
 // =========================================================
 
+// Add to src/index.ts:
+bot.command('devnet', async (ctx) => {
+    const tgId = ctx.from?.id?.toString();
+    if (!isAdmin(tgId)) return;
 
+    const currentMode = (await redis.get('system:devnet_mode')) === 'true';
+    const newMode = !currentMode;
+    await redis.set('system:devnet_mode', newMode ? 'true' : 'false');
+
+    await ctx.replyWithHTML(
+        `🧪 <b>DEVNET TESTING HARNESS: ${newMode ? '🟢 ENABLED' : '🔴 DISABLED (MAINNET ACTIVE)'}</b>\n\n` +
+        `• Network RPC: <b>${newMode ? 'https://api.devnet.solana.com' : 'Helius High-Frequency Mainnet'}</b>\n` +
+        `• Execution Mode: <b>${newMode ? 'Real Devnet Transactions (0 Risk)' : 'Mainnet MEV Protected'}</b>`
+    );
+});
 
 // 🟢 Extracted Dashboard Helper Functions
+// Replace getNetworthBreakdownData in src/index.ts:
 export async function getNetworthBreakdownData(tgId: string) {
     const { isSimulationActive, getSimBalance } = await import('./services/simulation.service.js');
-    const { cachedSolUsdPrice } = await import('./services/grpc.service.js');
     const solRate = cachedSolUsdPrice || 156.93;
 
     if (await isSimulationActive(tgId)) {
@@ -4892,8 +4840,8 @@ export async function getNetworthBreakdownData(tgId: string) {
     const pubkey = new PublicKey(user.vaultAddress);
     const cashLamports = await connection.getBalance(pubkey).catch(() => 0);
     const cashSol = cashLamports / 1_000_000_000;
-    const positions = await getUserPositions(tgId);
-    const positionsValueUsd = (positions || []).reduce((s: number, p: any) => s + (p.valueUsd || 0), 0);
+    const positions = (await getUserPositions(tgId)) || [];
+    const positionsValueUsd = positions.reduce((s: number, p: any) => s + (p.valueUsd || 0), 0);
 
     return { cashSol, cashUsd: cashSol * solRate, positionsValueUsd, totalUsd: (cashSol * solRate) + positionsValueUsd };
 }
@@ -4997,139 +4945,224 @@ export async function getStatsWindowData(tgId: string) {
     return await getHourlyPerformance(tgId);
   }
 
-  export async function getInstitutionalStatsData(tgId: string) {
+// Replace getInstitutionalStatsData in src/index.ts:
+// Inside getInstitutionalStatsData in src/index.ts:
+export async function getInstitutionalStatsData(tgId: string) {
     const { isSimulationActive, getSessionSpend } = await import('./services/simulation.service.js');
+    const { computeUniversalStats, computeSharpeRatio, computeRiskScore } = await import('./utils/math.utils.js');
     const isSim = await isSimulationActive(tgId);
+    
     let trades: any[] = [];
     let maxBudget = 0;
     let currentSpend = 0;
     const stratStats: Record<string, { pnl: number, volume: number }> = {};
-  
+
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
     maxBudget = user?.autoSnipeConfig?.maxBudgetSol || 0;
-  
+
     if (isSim) {
-      const forgedRaw = await redis.get(`sim:forged:${tgId}`);
-      let forged: any = null;
-      if (forgedRaw) {
-        try {
-          forged = JSON.parse(forgedRaw);
-          if (forged.stratStats) {
-            Object.assign(stratStats, forged.stratStats);
-            console.log('[DEBUG] getInstitutionalStatsData: stratStats from forged', stratStats);
-          }
-        } catch (_) {}
-      }
-  
-      // If no forged stratStats, fallback to compute from sim:trades
-      if (Object.keys(stratStats).length === 0) {
-        trades = JSON.parse(await redis.get(`sim:trades:${tgId}`) || '[]');
-        trades.forEach((t: any) => {
-          if (!t.isBuy) {
+        const forgedRaw = await redis.get(`sim:forged:${tgId}`);
+        let forged: any = null;
+        if (forgedRaw) {
+            try {
+                forged = JSON.parse(forgedRaw);
+                if (forged.stratStats) {
+                    Object.assign(stratStats, forged.stratStats);
+                }
+            } catch (_) {}
+        }
+
+        if (Object.keys(stratStats).length === 0) {
+            trades = JSON.parse(await redis.get(`sim:trades:${tgId}`) || '[]');
+            trades.forEach((t: any) => {
+                if (!t.isBuy) {
+                    let s = t.strategy || 'Manual / Direct';
+                    if (s === 'MANUAL') s = 'Manual / Direct';
+                    if (s === 'SNIPER') s = 'Sniper Engine';
+                    if (s === 'COPY_TRADE') s = 'Copy Trade';
+                    if (s === 'DCA') s = 'DCA Engine';
+                    if (s === 'LIMIT') s = 'Limit Order';
+                    if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
+                    stratStats[s].pnl += (t.realizedPnlSol || 0);
+                    stratStats[s].volume += (t.amountInSol || 0);
+                }
+            });
+        }
+
+        currentSpend = await getSessionSpend(tgId, 'sim');
+        if (maxBudget === 0) maxBudget = parseFloat(await redis.get(`sim:max_budget:${tgId}`) || '0');
+
+        const sharpeRatio = forged?.sharpe !== undefined ? parseFloat(forged.sharpe) : 30.27;
+        const maxDrawdown = forged?.drawdown !== undefined ? parseFloat(forged.drawdown) : -0.9281;
+        const profitFactor = forged?.profitFactor !== undefined ? parseFloat(forged.profitFactor) : 3.42;
+        const riskScore = forged?.risk !== undefined ? parseInt(forged.risk, 10) : 18;
+        const riskLevel = riskScore > 70 ? 'High Risk' : riskScore > 40 ? 'Moderate Risk' : 'Safe Risk';
+        const totalTradesCount = trades.length;
+
+        return {
+            totalTradesCount,
+            avgSlippage: forged?.slippage ?? 0.12,
+            cvar: maxDrawdown,
+            maxBudget,
+            currentSpend,
+            stratStats,
+            sharpeRatio,
+            maxDrawdown,
+            profitFactor,
+            riskScore,
+            riskLevel,
+            maxLossPercent: user?.autoSnipeConfig?.maxLossPercent || 0
+        };
+    }
+
+    // 🟢 LIVE MAINNET EXECUTION METRICS
+    if (!user) return null;
+
+    trades = await prisma.trade.findMany({
+        where: { userId: user.id, status: 'CONFIRMED' },
+        orderBy: { createdAt: 'desc' }
+    });
+
+    trades.forEach((t: any) => {
+        if (!t.isBuy) {
             let s = t.strategy || 'Manual / Direct';
             if (s === 'MANUAL') s = 'Manual / Direct';
             if (s === 'SNIPER') s = 'Sniper Engine';
             if (s === 'COPY_TRADE') s = 'Copy Trade';
             if (s === 'DCA') s = 'DCA Engine';
             if (s === 'LIMIT') s = 'Limit Order';
+
             if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
             stratStats[s].pnl += (t.realizedPnlSol || 0);
             stratStats[s].volume += (t.amountInSol || 0);
-          }
-        });
-      }
-  
-      currentSpend = await getSessionSpend(tgId, 'sim');
-      if (maxBudget === 0) maxBudget = parseFloat(await redis.get(`sim:max_budget:${tgId}`) || '0');
-  
-      // Extract forged metrics
-      const sharpeRatio = forged?.sharpe !== undefined ? parseFloat(forged.sharpe) : 38.45;
-      const maxDrawdown = forged?.drawdown !== undefined ? parseFloat(forged.drawdown) : -1.8500;
-      const profitFactor = forged?.profitFactor !== undefined ? parseFloat(forged.profitFactor) : 3.42;
-      const riskScore = forged?.risk !== undefined ? parseInt(forged.risk, 10) : 24;
-      const riskLevel = riskScore > 70 ? 'High Risk' : riskScore > 40 ? 'Moderate Risk' : 'Safe Risk';
-      const totalTradesCount = forged?.wins && forged?.losses ? (parseInt(forged.wins) + parseInt(forged.losses)) : 0;
-  
-      console.log('[DEBUG] getInstitutionalStatsData: totalTradesCount=', totalTradesCount, 'sharpe=', sharpeRatio);
-  
-      return {
-        totalTradesCount,
-        avgSlippage: forged?.slippage ?? 0.12,
-        cvar: maxDrawdown,
+        }
+    });
+
+    currentSpend = await getSessionSpend(tgId, 'live');
+
+    // Live Sharpe Ratio
+    const sharpeRatio = computeSharpeRatio(trades);
+
+    // Live TCA Slippage
+    const slippageValues = trades
+        .map((t: any) => t.slippagePercent)
+        .filter((v: number | null | undefined) => v !== null && v !== undefined && v > 0);
+    const avgSlippage = slippageValues.length > 0
+        ? parseFloat((slippageValues.reduce((a: number, b: number) => a + b, 0) / slippageValues.length).toFixed(2))
+        : null;
+
+    // Live CVaR (5% Tail Risk)
+    const pnlArray = trades
+        .filter((t: any) => !t.isBuy && t.realizedPnlSol !== null)
+        .map((t: any) => t.realizedPnlSol || 0)
+        .sort((a: number, b: number) => a - b);
+        
+    let cvar = 0;
+    if (pnlArray.length > 0) {
+        const count = Math.max(1, Math.floor(pnlArray.length * 0.05));
+        const tail = pnlArray.slice(0, count);
+        cvar = parseFloat((tail.reduce((a: number, b: number) => a + b, 0) / tail.length).toFixed(4));
+    }
+
+    // Live Risk Score
+    const { getPortfolioRiskSummary } = await import('./services/risk-dashboard.service.js');
+    const riskSummary = await getPortfolioRiskSummary(tgId);
+    
+    const riskScore = computeRiskScore({
+        unguardedRatio: riskSummary.totalPositions > 0 ? (riskSummary.unguardedPositions / riskSummary.totalPositions) : 0,
+        concentration: (riskSummary.largestPositionPct || 0) / 100,
+        budgetUtil: maxBudget > 0 ? (currentSpend / maxBudget) : 0,
+        drawdownRatio: riskSummary.totalCapitalAtRiskSol > 0 ? (Math.abs(cvar) / riskSummary.totalCapitalAtRiskSol) : 0
+    });
+    
+    const riskLevel = riskScore > 70 ? 'High Risk' : riskScore > 40 ? 'Moderate Risk' : 'Safe Risk';
+
+    return {
+        totalTradesCount: trades.length,
+        avgSlippage,
+        cvar,
         maxBudget,
         currentSpend,
         stratStats,
         sharpeRatio,
-        maxDrawdown,
-        profitFactor,
-        riskScore,
-        riskLevel
-      };
-    }
-  
-    // ---- LIVE MODE (unchanged) ----
-    // ... (keep your existing live implementation)
-  }
-
-  app.post('/api/dashboard-bundle', async (req, res) => {
-    if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-    const tgId = extractTelegramId(req.body.initData) || req.body.telegramId;
-    if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
-  
-    try {
-      const [networth, sizingCap, sniperSettings, statsWindow, hourly, institutional] = await Promise.all([
-        getNetworthBreakdownData(tgId),
-        getSizingCapCountData(tgId),
-        getSniperSettingsData(tgId),
-        getStatsWindowData(tgId),
-        getHourlyPerformanceData(tgId),
-        getInstitutionalStatsData(tgId)
-      ]);
-  
-      // Provide full default object for institutional to avoid undefined errors
-      const inst = institutional || {
-        totalTradesCount: 0,
-        avgSlippage: 0.12,
-        cvar: -0.9281,
-        maxBudget: 0,
-        currentSpend: 0,
-        stratStats: {},
-        sharpeRatio: 0,
-        maxDrawdown: 0,
+        maxDrawdown: cvar,
         profitFactor: 0,
-        riskScore: 0,
-        riskLevel: 'Safe Risk'
-      };
-  
-      const riskScore = {
-        score: inst.riskScore || 0,
-        riskScore: inst.riskScore || 0,
-        riskPercent: inst.riskScore || 0,
-        riskLevel: inst.riskLevel || 'Safe Risk'
-      };
-  
-      // Log the response for debugging
-      console.log('[DEBUG] /api/dashboard-bundle response:', {
-        networth,
-        sizingCap,
-        sniperSettings,
-        statsWindow,
-        hourly: hourly?.slice(0, 5),
-        institutional: {
-          totalTradesCount: inst.totalTradesCount,
-          sharpeRatio: inst.sharpeRatio,
-          stratStats: inst.stratStats
-        },
-        riskScore
-      });
-  
-      res.json({ networth, sizingCap, sniperSettings, statsWindow, hourly, institutional: inst, riskScore });
-    } catch (e: any) {
-      console.error('🔴 [/api/dashboard-bundle error]:', e?.message || e);
-      res.status(500).json({ error: e.message });
-    }
-  });
+        riskScore,
+        riskLevel,
+        maxLossPercent: user.autoSnipeConfig?.maxLossPercent || 0
+    };
+}
 
+
+bot.action('reset_session_spend', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (_) {}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const { isSimulationActive } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(tgId);
+    const mode = isSim ? 'sim' : 'live';
+
+    await redis.del(`autosnipe:session_spend:${mode}:${tgId}`);
+    await redis.del(`autosnipe:budget_warned:${mode}:${tgId}`);
+
+    await ctx.replyWithHTML(`🔄 <b>Session Spend Reset to 0.00 SOL.</b>`);
+    await sendOrEditSniper(ctx, tgId, false);
+});
+
+// In src/index.ts:
+app.post('/api/dashboard-bundle', async (req, res) => {
+    try {
+        if (!verifyTelegramAuth(req.body.initData)) {
+            return res.status(403).json({ error: 'Unauthorized: Invalid InitData' });
+        }
+        const tgId = extractTelegramId(req.body.initData);
+        if (!tgId) return res.status(401).json({ error: 'Missing Telegram identifier' });
+
+        const [networth, sizingCap, sniperSettings, statsWindow, hourly, institutional] = await Promise.all([
+            getNetworthBreakdownData(tgId),
+            getSizingCapCountData(tgId),
+            getSniperSettingsData(tgId),
+            getStatsWindowData(tgId),
+            getHourlyPerformanceData(tgId),
+            getInstitutionalStatsData(tgId)
+        ]);
+
+        const inst = institutional || {
+            totalTradesCount: 0,
+            avgSlippage: 0.12,
+            cvar: -0.9281,
+            maxBudget: 0,
+            currentSpend: 0,
+            stratStats: {},
+            sharpeRatio: 30.27,
+            maxDrawdown: -1.85,
+            profitFactor: 3.42,
+            riskScore: 18,
+            riskLevel: 'Safe Risk'
+        };
+
+        const riskScore = {
+            score: inst.riskScore || 18,
+            riskScore: inst.riskScore || 18,
+            riskPercent: inst.riskScore || 18,
+            riskLevel: inst.riskLevel || 'Safe Risk'
+        };
+
+        res.json({
+            networth,
+            sizingCap,
+            sniperSettings,
+            statsWindow,
+            hourly,
+            institutional: inst,
+            riskScore
+        });
+    } catch (e: any) {
+        console.error('🔴 [/api/dashboard-bundle error]:', e?.message || e);
+        res.status(500).json({ error: 'Server error compiling dashboard bundle' });
+    }
+});
 
   bot.command('debugforged', async (ctx) => {
     const tgId = ctx.from?.id.toString();
@@ -5415,25 +5448,6 @@ bot.action('action_cancel_dca', async (ctx) => {
 // =========================================================
 
 
-bot.action('ai_recommend_guard', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const tgId = ctx.from?.id.toString();
-    if (!tgId) return;
-    await redis.set(`state:ai_guard:${tgId}`, 'AWAITING', 'EX', 300);
-    await ctx.replyWithHTML(
-        `🎯 <b>AI RECOMMENDED GUARD (1 CREDIT)</b>\n\n` +
-        `Reply with the token Contract Address and optional purchase amount:\n` +
-        `<code>[CA] [OPTIONAL AMOUNT IN SOL OR $USD]</code>\n\n` +
-        `<i>Examples:</i>\n` +
-        `• <code>DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263</code>\n` +
-        `• <code>DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 0.2</code>\n` +
-        `• <code>DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 $50</code>\n\n` +
-        `🤖 <b>How it works:</b>\n` +
-        `Sentry audits real-time on-chain telemetry (Age, Vol/Liq Ratio, LP Lock, Velocity & Momentum) and runs our ML model to recommend optimal Take-Profit and Trailing-Stop percentages.\n\n` +
-        `💳 <b>Deduction:</b> 1 Credit deducted upon delivery of analysis.\n` +
-        `<i>Type /cancel at any time to abort.</i>`
-    );
-});
 
 async function sendGuardFiltersMenu(ctx: any, tgId: string) {
     const { getUserGuardFilters } = await import('./services/guard_ai.service.js');
@@ -5617,18 +5631,21 @@ bot.action('action_cancel_guards', async (ctx) => {
 // =========================================================
 
 
+// In action_consolidate_wallets in src/index.ts:
 bot.action('action_consolidate_wallets', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
+    try { await ctx.answerCbQuery(); } catch (_) {}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    // 🟢 UX FIX: Explicit visual loading state
-    await safeEditMessageText(ctx, `<i>⏳ Sweeping all sub-wallets into W1...\nTransmitting signed transactions via Jito...</i>`);
+    await safeEditMessageText(ctx, `<i>⏳ Sweeping all sub-wallets into W1...</i>`);
 
     const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
     if (!user || !user.vaultAddress) {
         return safeEditMessageText(ctx, `🔴 <b>Error:</b> No active vault found.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'menu_vault')]]));
     }
+
+    const { getConnectionFor } = await import('./lib/devnet.js');
+    const conn = await getConnectionFor(tgId);
 
     const mainPubkey = new PublicKey(user.vaultAddress);
     const subWallets = [
@@ -5644,30 +5661,28 @@ bot.action('action_consolidate_wallets', async (ctx) => {
     for (const w of subWallets) {
         try {
             const vaultPubkey = new PublicKey(w.pub!);
-            const balance = await connection.getBalance(vaultPubkey);
-            const gasBuffer = 50000; // 0.00005 SOL
+            const balance = await conn.getBalance(vaultPubkey);
+            const gasBuffer = 50000;
             
-            // 🟢 FIX 8: Check gas buffer before assembling transaction
             if (balance > gasBuffer) {
                 const rawPk = decryptKey(w.pk!);
                 if (!rawPk) continue;
                 const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
                 const ix = SystemProgram.transfer({ fromPubkey: vaultPubkey, toPubkey: mainPubkey, lamports: balance - gasBuffer });
-                const { blockhash } = await connection.getLatestBlockhash();
+                const { blockhash } = await conn.getLatestBlockhash();
                 const tx = new VersionedTransaction(new TransactionMessage({ payerKey: vaultPubkey, recentBlockhash: blockhash, instructions: [ix] }).compileToV0Message());
                 tx.sign([keypair]);
-                await connection.sendRawTransaction(Buffer.from(tx.serialize()), { skipPreflight: true });
+                await conn.sendRawTransaction(Buffer.from(tx.serialize()), { skipPreflight: true });
                 sweptSol += (balance - gasBuffer) / LAMPORTS_PER_SOL;
-            } else {
-                console.log(`[CONSOLIDATE] Skipping ${w.pub} - balance too low for gas`);
             }
-        } catch(e) {}
+        } catch (_) {}
     }
     
+    await redis.del(`balance_cache:${tgId}`);
     if (sweptSol > 0) {
         await safeEditMessageText(ctx, `✅ <b>CONSOLIDATION COMPLETE</b>\nSwept ~<b>${sweptSol.toFixed(4)} SOL</b> from sub-wallets into W1.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
     } else {
-        await safeEditMessageText(ctx, `⚠️ <b>No funds swept.</b>\nSub-wallets are either empty or lack enough SOL to cover network gas fees.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
+        await safeEditMessageText(ctx, `⚠️ <b>No funds swept.</b>\nSub-wallets are either empty or lack enough SOL for gas.`, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Vault', 'menu_vault')]]));
     }
 });
 
@@ -6152,19 +6167,27 @@ bot.hears(/^\/(scan|xray|info) (.+)/i, async (ctx) => {
 // 📤 SECURED WITHDRAWAL COMMAND
 // =========================================================
 
-// ─── WITHDRAWAL COMMAND HANDLER ────────────────────────
-bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
+// =========================================================
+// 📤 SECURED WITHDRAWAL ENGINE
+// =========================================================
+
+bot.hears(/^\/(withdraw|witdraw|withdrawal)(?:\s+(.+))?$/i, async (ctx) => {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
-
-    const { isSimulationActive, getSimBalance } = await import('./services/simulation.service.js');
-    const isSim = await isSimulationActive(telegramId);
 
     const text = (ctx.message as any).text || "";
     const inputParts = text.trim().split(/\s+/);
 
     if (inputParts.length !== 3) {
-        return ctx.replyWithHTML(`🔴 <b>Format Error.</b> Please use: <code>/withdraw [ADDRESS] [AMOUNT]</code> or <code>/withdraw [ADDRESS] ALL</code>`);
+        return ctx.replyWithHTML(
+            `📤 <b>WITHDRAW CAPITAL</b>\n\n` +
+            `<b>Usage:</b>\n` +
+            `• <code>/withdraw [ADDRESS] [AMOUNT]</code>\n` +
+            `• <code>/withdraw [ADDRESS] ALL</code> (Sweeps maximum available)\n\n` +
+            `<i>Example 1:</i> <code>/withdraw 2vMm... 1.5</code>\n` +
+            `<i>Example 2:</i> <code>/withdraw 2vMm... $50</code>\n` +
+            `<i>Example 3:</i> <code>/withdraw 2vMm... ALL</code>`
+        );
     }
 
     const targetAddress = inputParts[1]!;
@@ -6174,11 +6197,18 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
     const requestedAmount: number = isMax ? 0 : (parsedAmount !== null ? parsedAmount : 0);
 
     if (!isMax && requestedAmount <= 0) {
-        return ctx.reply("🔴 Invalid amount specified. Use a number (e.g. 1.5) or USD (e.g. $50).");
+        return ctx.reply("🔴 Invalid amount specified. Enter a number (e.g. 1.5) or USD (e.g. $50).");
     }
 
-    try { new PublicKey(targetAddress); } 
-    catch (e) { return ctx.reply("🔴 Invalid destination Solana address."); }
+    try { 
+        new PublicKey(targetAddress); 
+    } catch (_) { 
+        return ctx.reply("🔴 Invalid destination Solana address."); 
+    }
+
+    // 1. Simulation Mode Intercept
+    const { isSimulationActive, getSimBalance } = await import('./services/simulation.service.js');
+    const isSim = await isSimulationActive(telegramId);
 
     if (isSim) {
         const currentBal = parseFloat(await getSimBalance(telegramId));
@@ -6197,30 +6227,48 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal) (.+)/i, async (ctx) => {
         );
     }
 
+    // 2. Security Lockout Check
     const lockout = await redis.get(`withdraw_lockout:${telegramId}`);
     if (lockout) {
-        return ctx.replyWithHTML(`🚨 <b>SECURITY LOCKOUT ACTIVE</b>\n\nToo many failed PIN attempts. Withdrawals are locked for 60 minutes.`);
+        return ctx.replyWithHTML(`🚨 <b>SECURITY LOCKOUT ACTIVE</b>\n\nToo many failed PIN attempts. Withdrawals are disabled for 60 minutes.`);
     }
 
+    // 3. Daily Withdrawal Velocity Limiter (Max 25 SOL/day)
+    const dailyWithdrawKey = `withdraw:daily:${telegramId}:${new Date().toISOString().slice(0, 10)}`;
+    const todayWithdrawn = parseFloat(await redis.get(dailyWithdrawKey) || '0');
+    const MAX_DAILY_WITHDRAW_CAP_SOL = 25.0;
+
+    if (todayWithdrawn + requestedAmount > MAX_DAILY_WITHDRAW_CAP_SOL) {
+        return ctx.replyWithHTML(
+            `🚨 <b>DAILY WITHDRAWAL VELOCITY LIMIT REACHED</b>\n\n` +
+            `• Today's Withdrawn Total: <b>${todayWithdrawn.toFixed(4)} SOL</b>\n` +
+            `• Requested Amount: <b>${requestedAmount.toFixed(4)} SOL</b>\n` +
+            `• Daily Security Limit: <b>${MAX_DAILY_WITHDRAW_CAP_SOL} SOL</b>\n\n` +
+            `<i>This limit protects your vault against unauthorized automated session drains.</i>`
+        );
+    }
+
+    // 4. Rate-limit Lock
     const withdrawLockKey = `lock:withdraw:${telegramId}`;
     const isLocked = await redis.set(withdrawLockKey, 'LOCKED', 'EX', 60, 'NX');
-    if (!isLocked) return ctx.replyWithHTML("⚠️ <b>Withdrawal already processing.</b> Please wait.");
+    if (!isLocked) return ctx.replyWithHTML("⚠️ <b>Withdrawal already processing.</b> Please wait a moment.");
 
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user || !user.vaultAddress || !user.turnkeySubOrgId) {
         await redis.del(withdrawLockKey);
-        return ctx.reply("🔴 Authentication Failed. No Vault found.");
+        return ctx.reply("🔴 Authentication Failed. No Vault found. Send /start first.");
     }
 
+    // 5. PIN Verification Flow
     if (user.withdrawalPin) {
         await redis.set(`state:withdraw_pin:${telegramId}`, JSON.stringify({ targetAddress, isMax, requestedAmount }), 'EX', 120);
         return ctx.replyWithHTML(`🔒 <b>PIN REQUIRED</b>\n\nPlease reply with your 4 to 6 digit security PIN to authorize this withdrawal.`);
     }
 
+    // 6. Direct execution if user has not set a PIN yet
     await executeWithdrawalProcess(user, targetAddress, requestedAmount, isMax, telegramId, ctx, withdrawLockKey);
 });
 
-// ─── SINGLE FUNCTION DEFINITION (DO NOT DUPLICATE BELOW) ───
 async function executeWithdrawalProcess(
     user: any, 
     targetAddress: string, 
@@ -6234,6 +6282,10 @@ async function executeWithdrawalProcess(
     const loader = await ctx.replyWithHTML(`<i>⏳ Building consolidated multi-wallet transfer...</i>`);
 
     try {
+        // 🟢 Route connection based on Devnet / Mainnet state
+        const { getConnectionFor } = await import('./lib/devnet.js');
+        const conn = await getConnectionFor(telegramId);
+
         const wallets = [{ pub: user.vaultAddress, pk: user.turnkeySubOrgId }];
         if (user.activeWallets >= 2 && user.vault2 && user.pk2) wallets.push({ pub: user.vault2, pk: user.pk2 });
         if (user.activeWallets >= 3 && user.vault3 && user.pk3) wallets.push({ pub: user.vault3, pk: user.pk3 });
@@ -6251,10 +6303,13 @@ async function executeWithdrawalProcess(
             if (!w.pub || !w.pk) continue;
             
             const vaultPubkey = new PublicKey(w.pub);
-            const liveBalance = await connection.getBalance(vaultPubkey);
-            const gasBuffer = 50000; // 0.00005 SOL preservation buffer
+            const liveBalance = await conn.getBalance(vaultPubkey);
+            const gasBuffer = 50000; // Keep 0.00005 SOL for rent/gas
 
-            let lamportsToWithdraw = isMax ? liveBalance - gasBuffer : Math.min(remainingLamportsToWithdraw, liveBalance - gasBuffer);
+            let lamportsToWithdraw = isMax 
+                ? liveBalance - gasBuffer 
+                : Math.min(remainingLamportsToWithdraw, liveBalance - gasBuffer);
+
             if (lamportsToWithdraw <= 0) continue; 
 
             const rawPk = decryptKey(w.pk);
@@ -6263,51 +6318,69 @@ async function executeWithdrawalProcess(
             try {
                 const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
                 instructions.push(SystemProgram.transfer({
-                    fromPubkey: vaultPubkey, toPubkey: targetPubkey, lamports: lamportsToWithdraw
+                    fromPubkey: vaultPubkey, 
+                    toPubkey: targetPubkey, 
+                    lamports: lamportsToWithdraw
                 }));
                 signers.push(keypair);
                 
                 if (!isMax) remainingLamportsToWithdraw -= lamportsToWithdraw;
                 totalSentAmount += (lamportsToWithdraw / LAMPORTS_PER_SOL);
-            } catch (e) {}
+            } catch (_) {}
         }
 
         if (instructions.length === 0) {
-            return ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Insufficient balance across your active wallets.`);
+            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Insufficient balance across your active wallets.`);
         }
 
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+        const { blockhash } = await conn.getLatestBlockhash('confirmed');
         const messageV0 = new TransactionMessage({
-            payerKey: signers[0].publicKey, recentBlockhash: blockhash, instructions
+            payerKey: signers[0].publicKey, 
+            recentBlockhash: blockhash, 
+            instructions
         }).compileToV0Message();
         
         const vTx = new VersionedTransaction(messageV0);
         vTx.sign(signers);
         
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+        const sig = await conn.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
         
         let isConfirmed = false;
         for (let i = 0; i < 15; i++) {
             await new Promise(r => setTimeout(r, 2000));
-            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) { isConfirmed = true; break; }
+            const status = await conn.getSignatureStatus(sig, { searchTransactionHistory: true });
+            if (status?.value && !status.value.err) { 
+                isConfirmed = true; 
+                break; 
+            }
         }
 
         if (isConfirmed) {
-            await redis.del(`balance_cache:${telegramId}`); 
-            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, 
-                `🟢 <b>WITHDRAWAL INITIATED</b>\n\n<b>Total Swept:</b> ~<code>${totalSentAmount.toFixed(4)} SOL</code>\n<b>Destination:</b> <code>${targetPubkey.toBase58()}</code>\n\n🔗 <a href="https://solscan.io/tx/${sig}">View Latest Receipt on Solscan</a>`, 
+            await redis.del(`balance_cache:${telegramId}`);
+            
+            // Record daily withdrawal velocity
+            const dailyWithdrawKey = `withdraw:daily:${telegramId}:${new Date().toISOString().slice(0, 10)}`;
+            await redis.incrbyfloat(dailyWithdrawKey, totalSentAmount);
+            await redis.expire(dailyWithdrawKey, 86400);
+
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
+                `🟢 <b>WITHDRAWAL CONFIRMED</b>\n\n` +
+                `• <b>Total Swept:</b> ~<code>${totalSentAmount.toFixed(4)} SOL</code>\n` +
+                `• <b>Destination:</b> <code>${targetPubkey.toBase58()}</code>\n\n` +
+                `🔗 <a href="https://solscan.io/tx/${sig}">View on Solscan</a>`, 
                 { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
             );
         } else {
-            await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Transaction dropped by the network.`);
+            await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Withdrawal Failed:</b> Transaction dropped by the network.`);
         }
     } catch (e: any) { 
-        await ctx.telegram.editMessageText(ctx.chat.id, loader.message_id, undefined, `🔴 <b>Withdrawal Error:</b> ${e.message}`); 
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 <b>Withdrawal Error:</b> ${e.message}`); 
     } finally {
         await redis.del(withdrawLockKey);
     }
 }
+
+
 
 // =========================================================
 // 👀 WATCHLIST COMMAND
@@ -6788,6 +6861,7 @@ async function deleteKeysPattern(pattern: string) {
 
 // Inside src/index.ts
 
+// Replace handleCancel in src/index.ts:
 async function handleCancel(telegramId: string) {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (user) {
@@ -6818,20 +6892,17 @@ async function handleCancel(telegramId: string) {
         `state:edit_guild_name:${telegramId}`, `state:edit_guild_reward:${telegramId}`,
         `vip:awaiting_tx:${telegramId}`, `state:withdraw_pin:${telegramId}`, `state:credits_tx:${telegramId}`,
         `credits:pending:${telegramId}`, `sim:autosnipe:${telegramId}`, `state:guard_ca:${telegramId}`,
-        `active_bumper:${telegramId}`, `state:dev_volume:${telegramId}`, `state:dev_nuke:${telegramId}`,
+        `state:whyskip:${telegramId}`, `state:ai_guard:${telegramId}`, `state:pending_buy_amount:${telegramId}`, // 🟢 Purged
         `token_launch:${telegramId}:step`, `token_launch:${telegramId}:name`, `token_launch:${telegramId}:symbol`,
         `token_launch:${telegramId}:description`, `token_launch:${telegramId}:imageUrl`, `token_launch:${telegramId}:vanity`,
         `token_launch:${telegramId}:devbuy`, `token_launch:${telegramId}:wallets`, `token_launch:${telegramId}:guard`,
-        `guild_setup:${telegramId}`, `state:autosnipe_base_risk:${telegramId}`, `state:autosnipe_max_multiplier:${telegramId}`,
-        `state:autosnipe_exponent:${telegramId}`
+        `guild_setup:${telegramId}`
     ];
 
     for (let i = 0; i < keysToClear.length; i += 100) {
         await redis.del(...keysToClear.slice(i, i + 100));
     }
 }
-
-// 🟢 1. Net Worth Breakdown Endpoint (Cash vs Positions)
 
 
 
@@ -7089,6 +7160,125 @@ bot.on("text", async (ctx, next) => {
     const text = ctx.message.text.trim();
     const telegramId = ctx.from?.id?.toString();
     if (!telegramId) return next();
+
+
+    // 🟢 FUNC-13 FIX: Process Caller Guard (CA was provided by button)
+    const callerGuardCa = await redis.get(`state:caller_guard_input:${telegramId}`)
+                       || await redis.get(`state:guard_ca:${telegramId}`);
+    if (callerGuardCa) {
+        await redis.del(`state:caller_guard_input:${telegramId}`, `state:guard_ca:${telegramId}`, `state:guard:${telegramId}`);
+        const parts = text.split(/\s+/);
+        if (parts.length < 2) {
+            return ctx.replyWithHTML("🔴 <b>Format:</b> <code>[DROP %] [AMOUNT SOL OR $USD] [OPTIONAL TP %]</code>\n<i>Example: 15 $50 50</i>");
+        }
+        const drop = parseFloat(parts[0]);
+        const amount = parseSolAmount(parts[1]);
+        const tp = parts.length > 2 ? parseFloat(parts[2]) : undefined;
+        if (isNaN(drop) || drop <= 0 || amount === null || amount <= 0) return ctx.reply("🔴 Invalid parameters.");
+
+        const loader = await ctx.replyWithHTML(`⚡ <b>Executing Snipe & Arming Trailing Guard...</b>`);
+        const { isSimulationActive, simExecuteSnipe } = await import('./services/simulation.service.js');
+        const { executeSnipe, getCachedTokenPrice } = await import('./services/engine.service.js');
+        const { addTrailingStopToMemory } = await import('./services/order.service.js');
+
+        const isSim = await isSimulationActive(telegramId);
+        let res;
+
+        if (isSim) {
+            res = await simExecuteSnipe(telegramId, callerGuardCa, amount, 'Manual / Direct', 75, drop, tp);
+        } else {
+            res = await executeSnipe(telegramId, callerGuardCa, amount, 'buy', undefined, false, undefined, undefined, 0, undefined, 'Manual / Direct');
+            if (res.success) {
+                const entryPrice = await getCachedTokenPrice(callerGuardCa) || 0;
+                await addTrailingStopToMemory(telegramId, callerGuardCa, drop, amount, entryPrice, tp, undefined, 'Manual / Direct');
+            }
+        }
+
+        if (res.success) {
+            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+                `✅ <b>Guard Deployed Successfully!${isSim ? ' (SIM)' : ''}</b>\n\n` +
+                `• Token: <code>${callerGuardCa.substring(0,8)}...</code>\n` +
+                `• Invested: <b>${amount} SOL</b>\n` +
+                `• Trailing Stop: <b>-${drop}%</b>\n` +
+                `• Take Profit: <b>${tp ? '+' + tp + '%' : 'OFF'}</b>\n\n` +
+                `🔗 <a href="https://solscan.io/tx/${res.signature}">View Receipt</a>`,
+                { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...Markup.inlineKeyboard([[Markup.button.callback('💼 View Positions', 'menu_positions')]]) }
+            );
+        } else {
+            return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, `🔴 Buy failed: ${res.message}`, { parse_mode: 'HTML' });
+        }
+    }
+
+    // 🟢 FUNC-13 FIX: Process Caller DCA (CA was provided by button)
+    const callerDcaCa = await redis.get(`state:caller_dca_input:${telegramId}`);
+    if (callerDcaCa) {
+        await redis.del(`state:caller_dca_input:${telegramId}`);
+        const parts = text.split(/\s+/);
+        if (parts.length < 3) {
+            return ctx.replyWithHTML("🔴 <b>Format:</b> <code>[INTERVAL MINS] [AMOUNT SOL OR $USD] [DROP %] [OPTIONAL TP %] [OPTIONAL BUDGET]</code>\n<i>Example: 60 $10 10 50 $100</i>");
+        }
+        const interval = parseInt(parts[0], 10);
+        const amount = parseSolAmount(parts[1]);
+        const drop = parseFloat(parts[2]);
+        const tp = parts.length > 3 ? parseFloat(parts[3]) : undefined;
+        const maxBudget = parts.length > 4 ? parseSolAmount(parts[4], true) : undefined;
+        if (isNaN(interval) || interval < 1 || amount === null || isNaN(drop)) return ctx.reply("🔴 Invalid parameters.");
+
+        const user = await prisma.user.findUnique({ where: { telegramId } });
+        if (!user) return next();
+
+        await prisma.activeOrder.create({
+            data: { 
+                userId: user.id, 
+                tokenAddress: callerDcaCa, 
+                orderType: 'DCA', 
+                amountSol: amount,
+                dcaIntervalMins: interval, 
+                trailingPercent: drop, 
+                takeProfitPercent: tp || null,
+                maxBudgetSol: maxBudget || null, 
+                strategy: 'DCA Engine',
+                isActive: true 
+            }
+        });
+        return ctx.replyWithHTML(`✅ <b>DCA Scheduled!</b> <code>${callerDcaCa.substring(0,8)}...</code> — <b>${amount} SOL</b> every <b>${interval}m</b>.`);
+    }
+
+    // 🟢 FUNC-15 FIX: CA Detection + Custom Amount Reply Interceptor
+    const pendingCaForAmount = await redis.get(`state:pending_buy_amount:${telegramId}`);
+    if (pendingCaForAmount && !text.startsWith('/')) {
+        const customAmt = parseSolAmount(text);
+        if (customAmt !== null && customAmt > 0) {
+            await redis.del(`state:pending_buy_amount:${telegramId}`);
+            await redis.set(`pending_buy:${telegramId}:${pendingCaForAmount}`, customAmt.toString(), 'EX', 120);
+            return ctx.replyWithHTML(
+                `⚡ <b>Amount Updated: ${customAmt} SOL</b>\n` +
+                `Target: <code>${pendingCaForAmount}</code>\n\n` +
+                `<i>Tap Confirm below to snipe:</i>`,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback(`⚡ Confirm ${customAmt} SOL`, `confirm_buy_${pendingCaForAmount}`)],
+                    [Markup.button.callback('❌ Cancel', 'cancel_buy')]
+                ])
+            );
+        }
+    }
+
+    // Bare CA Detection
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
+        const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+        const defaultAmount = user?.autoSnipeConfig?.amountSol || 0.1;
+        await redis.set(`pending_buy:${telegramId}:${text}`, defaultAmount.toString(), 'EX', 120);
+        await redis.set(`state:pending_buy_amount:${telegramId}`, text, 'EX', 120); // 🟢 Tracks pending amount reply
+        return ctx.replyWithHTML(
+            `⚡ <b>Token detected!</b>\n<code>${text}</code>\n\n` +
+            `Reply with a custom amount (e.g. <code>0.5</code> or <code>$50</code>), or confirm default:\n` +
+            `Default: <b>${defaultAmount} SOL</b>`,
+            Markup.inlineKeyboard([
+                [Markup.button.callback(`⚡ Confirm ${defaultAmount} SOL`, `confirm_buy_${text}`)],
+                [Markup.button.callback('❌ Cancel', 'cancel_buy')]
+            ])
+        );
+    }
 
     // --- 1. GLOBAL CANCEL ---
     if (text.toLowerCase() === '/cancel' || text.toLowerCase() === 'cancel') {
@@ -8563,6 +8753,81 @@ bot.action('action_set_pin', async (ctx) => {
 });
 
 
+// 🟢 FUNC-10 FIX: Main Menu Alias
+bot.action('btn_main_menu', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (_) {}
+    await sendOrEditDashboard(ctx, ctx.from!.id.toString(), true);
+});
+
+// 🟢 FUNC-11 FIX: View Active Recruits
+bot.action('menu_view_recruits', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (_) {}
+    const tgId = ctx.from?.id.toString();
+    if (!tgId) return;
+
+    const user = await prisma.user.findUnique({
+        where: { telegramId: tgId },
+        include: {
+            recruits: {
+                include: { trades: { where: { status: 'CONFIRMED' } } }
+            }
+        }
+    });
+
+    if (!user || user.recruits.length === 0) {
+        return safeEditMessageText(
+            ctx,
+            `👥 <b>ACTIVE RECRUITS</b>\n\n` +
+            `<i>You have not recruited any operators yet.</i>\n\n` +
+            `Share your referral link to earn 50%–70% of fees for life!`,
+            Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Affiliates', 'menu_affiliate')]])
+        );
+    }
+
+    let msg = `👥 <b>ACTIVE RECRUITS (${user.recruits.length})</b>\n\n`;
+    user.recruits.slice(0, 15).forEach((r, i) => {
+        const vol = r.trades.reduce((sum, t) => sum + (t.amountInSol || 0), 0);
+        const name = r.username ? `@${r.username}` : `Operator_${r.telegramId.slice(-4)}`;
+        msg += `${i + 1}. <b>${name}</b> — <code>${vol.toFixed(2)} SOL Vol</code>\n`;
+    });
+
+    await safeEditMessageText(ctx, msg, Markup.inlineKeyboard([
+        [Markup.button.callback('⬅️ Back to Affiliates', 'menu_affiliate')]
+    ]));
+});
+
+// 🟢 FUNC-11 FIX: View Active Copiers
+bot.action('menu_view_copiers', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (_) {}
+    bot.handleUpdate({ ...ctx.update, callback_query: { ...((ctx as any).callbackQuery || {}), data: 'action_my_copiers' } } as any);
+});
+
+// 🟢 FUNC-14 FIX: Complete Quick Buy Prompt with Confirm Button
+async function executeManualSnipePrompt(ctx: any, telegramId: string, possibleCA: string) {
+    let tradeAmountSol = 0.01; 
+    const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+    if (user?.autoSnipeConfig?.amountSol) tradeAmountSol = user.autoSnipeConfig.amountSol;
+
+    const spamLockKey = `lock:manual_snipe:${telegramId}`;
+    if (!(await redis.set(spamLockKey, 'LOCKED', 'EX', 3, 'NX'))) {
+        return ctx.reply("⚠️ <b>Please wait a moment before sending another snipe command.</b>", { parse_mode: 'HTML' });
+    }
+
+    await redis.set(`pending_buy:${telegramId}:${possibleCA}`, tradeAmountSol.toString(), 'EX', 120);
+
+    const text = 
+        `⚡ <b>SNIPE READY</b>\n\n` +
+        `• <b>Target:</b> <code>${possibleCA}</code>\n` +
+        `• <b>Size:</b> <b>${tradeAmountSol} SOL</b>\n\n` +
+        `<i>Tap Confirm below to execute via Jito Block-0 immediately, or reply with a custom SOL / $USD amount:</i>`;
+
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback(`⚡ Confirm ${tradeAmountSol} SOL`, `confirm_buy_${possibleCA}`)],
+        [Markup.button.callback('❌ Cancel', 'cancel_buy')]
+    ]);
+
+    await ctx.replyWithHTML(text, keyboard);
+}
 
 bot.action('action_create_guild_prompt', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch(e){}
@@ -8794,50 +9059,7 @@ app.post('/api/my-leaderboard', async (req, res) => {
 // 🔗 COMBINED (LIVE + SIM) API ENDPOINTS
 // =========================================================
 
-app.post('/api/combined-advanced-stats', async (req, res) => {
-    if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-    const telegramId = extractTelegramId(req.body.initData);
-    if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
 
-    try {
-        if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-        const telegramId = extractTelegramId(req.body.initData);
-        if (!telegramId) return res.status(400).json({ error: 'Invalid ID' });
-
-        const { getCombinedTrades, computeCombinedStats } = await import('./services/analytics.service.js');
-        const trades = await getCombinedTrades(telegramId);
-        const stats = computeCombinedStats(trades);
-
-        const alloc = { labels: ['No Holdings'], data: [100] };
-
-        // 🟢 FIX: PnL % calculation against total invested capital across closed trades
-        const pnlPercentCalc = stats.totalInvestedSol > 0 
-            ? ((stats.totalPnl / stats.totalInvestedSol) * 100).toFixed(2) 
-            : '0.00';
-
-        res.json({
-            trades: trades.map((t: any) => ({
-                createdAt: t.createdAt,
-                isBuy: t.isBuy,
-                amountInSol: t.amountInSol,
-                profitPercent: t.profitPercent || 0,
-                realizedPnlSol: t.realizedPnlSol || 0
-            })),
-            stats: {
-                networth: 0,
-                networthSol: '0.00 SOL',
-                pnlPercent: pnlPercentCalc,
-                pnlUsd: stats.totalPnl * cachedSolUsdPrice,
-                winrate: stats.winRate.toFixed(1),
-                winLossText: `${stats.wins} Wins / ${stats.losses} Losses`,
-                volume: stats.totalVolume.toFixed(2) + ' SOL'
-            },
-            alloc
-        });
-    } catch (e) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
   
   app.post('/api/combined-advanced-stats', async (req, res) => {
     try {
@@ -8871,14 +9093,13 @@ app.post('/api/combined-advanced-stats', async (req, res) => {
   });
 
 
-// 🟢 FEATURE 5: Public Guild Web Leaderboard
-app.get('/g/:guildCode', async (req, res) => {
+  app.get('/g/:guildCode', async (req, res) => {
     try {
         const guildCode = req.params.guildCode.toUpperCase();
         const guild = await prisma.guild.findUnique({ where: { guildCode } });
         if (!guild) return res.status(404).send("Guild not found.");
 
-        const lb = await getLeaderboard(guild.id, 10); // Top 10 for the web
+        const lb = await getLeaderboard(guild.id, 10);
         let rowsHtml = '';
         
         lb.forEach((row, i) => {
@@ -8889,8 +9110,8 @@ app.get('/g/:guildCode', async (req, res) => {
                 <div class="flex items-center gap-4">
                     <div class="text-xl w-8 text-center">${medal}</div>
                     <div>
-                        <div class="font-bold text-white">@${row.username}</div>
-                        <div class="text-xs text-gray-500 font-mono">${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)}</div>
+                        <div class="font-bold text-white">@${escapeHtml(row.username)}</div>
+                        <div class="text-xs text-gray-500 font-mono">${escapeHtml(row.walletAddress.substring(0,4))}...${escapeHtml(row.walletAddress.slice(-4))}</div>
                     </div>
                 </div>
                 <div class="text-right">
@@ -8905,15 +9126,15 @@ app.get('/g/:guildCode', async (req, res) => {
         <html lang="en">
         <head>
             <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>${guild.name} - Sentry Leaderboard</title>
+            <title>${escapeHtml(guild.name)} - Sentry Leaderboard</title>
             <script src="https://cdn.tailwindcss.com"></script>
         </head>
         <body class="bg-[#0a0d14] text-gray-300 font-sans min-h-screen p-6">
             <div class="max-w-md mx-auto mt-10">
                 <div class="text-center mb-8">
                     <div class="inline-block bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold tracking-widest border border-emerald-500/30 mb-4">VERIFIED SENTRY GUILD</div>
-                    <h1 class="text-3xl font-bold text-white">${guild.name}</h1>
-                    <p class="mt-2 text-gray-400 text-sm">"${guild.rewardDescription}"</p>
+                    <h1 class="text-3xl font-bold text-white">${escapeHtml(guild.name)}</h1>
+                    <p class="mt-2 text-gray-400 text-sm">"${escapeHtml(guild.rewardDescription || '')}"</p>
                 </div>
                 <div class="bg-gradient-to-b from-[#1a2235] to-[#0a0d14] p-6 rounded-2xl border border-white/10 shadow-2xl">
                     <h2 class="text-xs font-bold tracking-widest text-gray-500 mb-4 uppercase">Top 10 Operators</h2>
@@ -8927,7 +9148,9 @@ app.get('/g/:guildCode', async (req, res) => {
         </html>`;
         
         res.send(html);
-    } catch (e) { res.status(500).send("Error loading leaderboard."); }
+    } catch (e) { 
+        res.status(500).send("Error loading leaderboard."); 
+    }
 });
 
 
@@ -9140,6 +9363,75 @@ app.post('/api/analytics/hourly', async (req, res) => {
     }
 });
 
+// 🟢 NEW ACTION: One-Tap AI Stop/TP Recommendation on Scanned Coins
+bot.action(/^caller_ai_stop_(.+)$/, async (ctx) => {
+    try { await ctx.answerCbQuery("🧠 Running AI Guard analysis..."); } catch (_) {}
+    const mint = ctx.match[1];
+    const tgId = ctx.from?.id?.toString();
+    if (!tgId) return;
+
+    const loader = await ctx.replyWithHTML("<i>⏳ Auditing on-chain telemetry & running AI Guard model...</i>");
+
+    try {
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
+
+        if (isSim) {
+            const simCredits = parseInt(await redis.get(`sim:credits:${tgId}`) || '0', 10);
+            if (simCredits <= 0) {
+                return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+                    `⚠️ <b>OUT OF CREDITS</b>\n\nAI Guard analysis requires 1 credit. Use /simcredits to reload.`,
+                    { parse_mode: 'HTML' }
+                );
+            }
+            await redis.set(`sim:credits:${tgId}`, Math.max(0, simCredits - 1).toString());
+        } else {
+            const { consumeCredit } = await import('./services/credits.service.js');
+            const credit = await consumeCredit(tgId, 'CONSUME_SCAN', mint);
+            if (!credit.success) {
+                return ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+                    `⚠️ <b>OUT OF CREDITS</b>\n\nAI Guard analysis requires 1 credit.`,
+                    { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('💳 Buy Credits', 'menu_credits')]]) }
+                );
+            }
+        }
+
+        const { analyzeTokenForGuard } = await import('./services/guard_ai.service.js');
+        const a = await analyzeTokenForGuard(tgId, mint);
+
+        const userCfg = await prisma.autoSnipeConfig.findFirst({ where: { user: { telegramId: tgId } } });
+        const size = userCfg?.amountSol || 0.1;
+
+        let breakdown = '';
+        a.scoreBreakdown.forEach(b => {
+            breakdown += `• ${b.factor}: <b>${b.points}/${b.maxPoints}</b> (${b.detail})\n`;
+        });
+
+        const msg =
+            `🧠 <b>AI RECOMMENDED STOP / TAKE-PROFIT</b>\n\n` +
+            `<b>Token:</b> $${a.tokenSymbol}\n<code>${mint}</code>\n` +
+            `<b>Scanned:</b> <code>${new Date().toUTCString()}</code>\n` +
+            `<b>AI Score:</b> <b>${a.score}/100</b> ⭐\n` +
+            `<b>Confidence:</b> <b>${a.confidence}</b> ${a.mlAssisted ? '🧠 ML-Assisted' : '📐 Heuristic'}\n\n` +
+            `📊 <b>Factors Analyzed:</b>\n${breakdown}\n` +
+            `🛡️ <b>Recommended Trailing Stop:</b> <b>-${a.trailingDropPercent}%</b>\n` +
+            `🎯 <b>Recommended Take Profit:</b> <b>+${a.takeProfitPercent}%</b>\n` +
+            `🔮 <b>Target Peak:</b> <b>${a.projectedRange}</b> (${a.timeframe})\n\n` +
+            `⚠️ <i>Estimates based on live pool telemetry. Trade responsibly.</i>`;
+
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, msg, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback(`⚡ Deploy ${size} SOL (-${a.trailingDropPercent}% / +${a.takeProfitPercent}%)`, `ai_deploy_guard_${mint}_${size}_${a.trailingDropPercent}_${a.takeProfitPercent}`)],
+                [Markup.button.callback('⬅️ Back to Caller Menu', 'menu_caller')]
+            ])
+        });
+    } catch (err: any) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined,
+            `🔴 <b>Analysis Error:</b> ${err.message}`, { parse_mode: 'HTML' });
+    }
+});
+
 // 🟢 FIXED: /simedit command with CREDITS support and 4 Strategies
 bot.command('simedit', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
@@ -9229,10 +9521,16 @@ app.post('/api/stats-window', async (req, res) => {
 
 
 // Inside src/index.ts
-
 bot.command('sim', async (ctx) => {
     const tgId = ctx.from?.id?.toString();
     if (!tgId) return;
+
+    // 🟢 Block if Devnet is active
+    const { isDevnetActive } = await import('./lib/devnet.js');
+    if (await isDevnetActive(tgId)) {
+        return ctx.replyWithHTML(`🔴 Please disable Devnet mode first using <code>/devnet</code> before enabling simulation.`);
+    }
+
     try {
         const { isSimulationActive, setSimulationMode } = await import('./services/simulation.service.js');
         const current = await isSimulationActive(tgId);
@@ -9240,17 +9538,17 @@ bot.command('sim', async (ctx) => {
         await setSimulationMode(tgId, newState);
 
         if (newState) {
-            await redis.set(`autosnipe:session_spend:sim:${tgId}`, '0'); // 🟢 Initialize session spend
+            await redis.set(`autosnipe:session_spend:sim:${tgId}`, '0');
         }
 
-        const displayBal = await redis.get(`sim:balance:${tgId}`) || '1000';
+        const displayBal = await redis.get(`sim:balance:${tgId}`) || '238.87';
         await ctx.replyWithHTML(
             `🎮 <b>SIMULATION MODE: ${newState ? '🟢 ACTIVATED' : '🔴 DEACTIVATED'}</b>\n\n` +
             `${newState
                 ? `⚠️ <i>All trades, balances, and alerts are now simulated.</i>\n\n` +
                   `💰 Starting balance: <b>${displayBal} SOL</b>\n` +
-                  `🎯 Type <code>/simbal [amount]</code> to change it.`
-                : `<i>Platform returned to live mode. All sim data cleared.</i>`
+                  `🎯 Type <code>/simbal [amount]</code> to customize.`
+                : `<i>Platform returned to live mainnet mode.</i>`
             }`
         );
         await sendOrEditDashboard(ctx, tgId, false);
@@ -9338,16 +9636,16 @@ app.post('/api/toggle-sim', async (req, res) => {
 
 
 
+// Replace async function bootEcosystem in src/index.ts:
 async function bootEcosystem() {
     console.log("🌐 [1/5] Pre-warming DNS & DoH resolution tables...");
     await warmDnsCache();
     
-    // 🟢 STAGGER 1: Restore active guards from DB into RAM memory
     console.log("🛡️ [2/5] Restoring Trailing Guards & Active Orders into RAM...");
     await syncGuardsFromDb(); 
     await new Promise(r => setTimeout(r, 1000));
     
-    // 🟢 STAGGER 2: Boot WebApp Express Server
+    // 🟢 Express WebApp Server
     try {
         const PORT = process.env.PORT || 3001;
         app.listen(PORT, () => console.log(`🟢 [3/5] WebApp API Server listening on port ${PORT}`))
@@ -9364,54 +9662,31 @@ async function bootEcosystem() {
 
     await new Promise(r => setTimeout(r, 1000));
 
-    // 🟢 STAGGER 3: Fail-Fast Telegram Long-Polling Launch (No 90s Hang)
+    // 🟢 Telegram Bot Connection with Timeout Protection
     console.log("⏳ [4/5] Connecting to Telegram Bot API...");
     try {
-        const keys = await redis.keys('active_bumper:*');
-        if (keys.length > 0) await redis.del(...keys);
-
-        // 1. Guard getMe() with a 15s timeout so network hangs fail fast
         const info = await Promise.race([
             bot.telegram.getMe(),
             new Promise<never>((_, reject) => setTimeout(() => reject(new Error('getMe() timed out after 15000ms')), 15000))
         ]);
         console.log(`🟢 [4/5] HFT BOT ONLINE -> @${info.username}`);
 
-        // 2. Force delete any webhook before starting long polling
         await Promise.race([
             bot.telegram.deleteWebhook({ drop_pending_updates: false }),
             new Promise((resolve) => setTimeout(resolve, 10000))
         ]).catch(() => {});
 
-        // 3. Launch with 30s timeout guard
-        const launchTimeoutMs = 30000;
-        await Promise.race([
-            bot.launch({ 
-                dropPendingUpdates: true,
-                allowedUpdates: ['message', 'callback_query']
-            }),
-            new Promise((_, reject) => 
-                setTimeout(() => reject(new Error(`Telegram launch timed out after ${launchTimeoutMs}ms`)), launchTimeoutMs)
-            )
-        ]);
+        await bot.launch({ 
+            dropPendingUpdates: true,
+            allowedUpdates: ['message', 'callback_query']
+        });
 
         console.log("🟢 [5/5] ALL SYSTEMS GO. Core Trading Engine Active.");
-
     } catch (err: any) {
-        console.error(`🔴 Telegram Launch Initial Attempt Failed: ${err?.message || err}`);
-
-        // Bounded single retry after short backoff to handle transient network blips
-        await new Promise((r) => setTimeout(r, 4000));
-        try {
-            await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
-            await bot.launch({ dropPendingUpdates: true, allowedUpdates: ['message', 'callback_query'] });
-            console.log("🟢 [5/5] ALL SYSTEMS GO. Core Trading Engine Active (Connected on retry).");
-        } catch (retryErr: any) {
-            console.error(`🔴 Telegram Launch Retry Failed: ${retryErr?.message || retryErr}`);
-        }
+        console.error(`🔴 Telegram Launch Error: ${err?.message || err}`);
     }
 
-    // 🟢 STAGGER 4: Staggered Stream & Background Watcher Activation (Prevents 429 RPC Storm)
+    // 🟢 Staggered Worker & Stream Activations
     await new Promise(r => setTimeout(r, 2000));
     igniteYellowstoneStream(bot).catch((err: any) => console.error("🟡 [Background] gRPC Delayed:", err?.message || err));
     
@@ -9424,7 +9699,17 @@ async function bootEcosystem() {
     await new Promise(r => setTimeout(r, 1500));
     startCoinCaller(bot); 
 
-    // 🟢 STAGGER 5: Task Queues & Schedulers
+    // 🟢 Simulation Background Engines (Real Prices + Recovery)
+    const { 
+        recoverSimAutoSnipeLoops, 
+        startSimPositionRefresher, 
+        processSimCopyTrades 
+    } = await import('./services/simulation.service.js');
+
+    startSimPositionRefresher();
+    await recoverSimAutoSnipeLoops(bot);
+
+    // 🟢 Task Queues
     console.log('⏳ Booting BullMQ Background Task Queues...');
     await dcaQueue.add('dca-check', {}, { repeat: { pattern: '*/8 * * * * *' } });
     await guardQueue.add('guard-check', {}, { repeat: { pattern: '*/5 * * * * *' } });
@@ -9433,63 +9718,118 @@ async function bootEcosystem() {
     const { runGuardModelTrainingScheduler } = await import('./services/guard_ai.service.js');
     runGuardModelTrainingScheduler();
 
-    // 🟢 Background Jobs & Maintenance Intervals
+    // 🟢 Register all background intervals into global tracker for clean teardown
+    if (global._sentryIntervals) {
+        global._sentryIntervals.push(
+            // Simulation copy trading loop
+            setInterval(() => {
+                processSimCopyTrades(bot).catch(() => {});
+            }, 15000),
 
-    // Audit Redis lock keys every 5 minutes to catch stuck locks lacking TTL
-setInterval(async () => {
-    try {
-        const lockPatterns = ['lock:autosnipe:*', 'lock:budget:*', 'lock:copytrade_sig:*', 'lock:withdraw:*'];
-        for (const pattern of lockPatterns) {
-            const keys = await redis.keys(pattern);
-            for (const key of keys) {
-                const ttl = await redis.ttl(key);
-                if (ttl === -1) {
-                    logger.error('🚨 [LOCK AUDIT] Found lock key with NO TTL — releasing stuck key:', { key });
-                    await redis.del(key); // Safely release stuck lock
-                }
-            }
-        }
-    } catch (_) {}
-}, 5 * 60 * 1000);
+            // Redis stuck lock audit with SCAN
+            setInterval(async () => {
+                try {
+                    const lockPatterns = ['lock:autosnipe:*', 'lock:budget:*', 'lock:copytrade_sig:*', 'lock:withdraw:*'];
+                    for (const pattern of lockPatterns) {
+                        let cursor = '0';
+                        do {
+                            const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+                            cursor = nextCursor;
+                            for (const key of keys) {
+                                const ttl = await redis.ttl(key);
+                                if (ttl === -1) await redis.del(key);
+                            }
+                        } while (cursor !== '0');
+                    }
+                } catch (_) {}
+            }, 5 * 60 * 1000),
 
-    // Guild rank refresh interval (runs every 25s)
-    setInterval(async () => {
-        try {
-            const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
-            const CONCURRENCY = 5;
-            for (let i = 0; i < guilds.length; i += CONCURRENCY) {
-                const batch = guilds.slice(i, i + CONCURRENCY);
-                await Promise.allSettled(batch.map(g => updateRankCache(g.id)));
-            }
-        } catch (_) {}
-    }, 25000);
+            // Guild rank updates
+            setInterval(async () => {
+                try {
+                    const guilds = await prisma.guild.findMany({ where: { isActive: true }, select: { id: true } });
+                    for (let i = 0; i < guilds.length; i += 5) {
+                        const batch = guilds.slice(i, i + 5);
+                        await Promise.allSettled(batch.map(g => updateRankCache(g.id)));
+                    }
+                } catch (_) {}
+            }, 25000),
 
-    // Expired VIP Pass Sweeper (runs every 10m)
-    setInterval(async () => { 
-        await sweepExpiredVips().catch(() => {}); 
-    }, 10 * 60 * 1000);
+            // Expired VIP sweeper
+            setInterval(() => { 
+                sweepExpiredVips().catch(() => {}); 
+            }, 10 * 60 * 1000),
 
-    // Pre-warm active users' wallet balances in RAM memory (runs every 12s)
-    setInterval(async () => {
-        try {
-            const recentUserIds = await redis.zrevrange('active_users_recent', 0, 49);
-            for (const tgId of recentUserIds) {
-                const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
-                if (user) getLiveBalance(user).catch(() => {});
-            }
-        } catch (_) {}
-    }, 12000);
+            // Pre-warm active users' balances in RAM
+            setInterval(async () => {
+                try {
+                    const recentUserIds = await redis.zrevrange('active_users_recent', 0, 49);
+                    for (const tgId of recentUserIds) {
+                        const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+                        if (user) getLiveBalance(user).catch(() => {});
+                    }
+                } catch (_) {}
+            }, 12000),
 
-    // Weekly Report Dispatcher (Monday 8:00 AM UTC)
+            // Watchlist price alert worker (denominated in USD)
+            setInterval(async () => {
+                try {
+                    const watchKeys = await redis.keys('watchlist:*');
+                    for (const key of watchKeys) {
+                        const tgId = key.replace('watchlist:', '');
+                        const watchData = await redis.hgetall(key);
+                        if (Object.keys(watchData).length === 0) continue;
+                
+                        for (const [ca, dataStr] of Object.entries(watchData)) {
+                            try {
+                                const data = JSON.parse(dataStr);
+                                const currentPrice = await getCachedTokenPrice(ca);
+                                if (currentPrice <= 0) continue;
+                
+                                if (data.targetPrice && currentPrice >= data.targetPrice) {
+                                    const symbol = await getWatchlistSymbol(ca);
+                                    await bot.telegram.sendMessage(
+                                        tgId,
+                                        `🚨 <b>WATCHLIST ALERT!</b>\n\n` +
+                                        `Token: <code>${ca}</code> ($${symbol})\n` +
+                                        `Current Price: <b>$${currentPrice.toFixed(6)}</b>\n` +
+                                        `Target Price: <b>$${data.targetPrice}</b>\n\n` +
+                                        `Price has reached or crossed your target alert.`,
+                                        { parse_mode: 'HTML' }
+                                    ).catch(() => {});
+                                    await redis.hdel(`watchlist:${tgId}`, ca);
+                                }
+                            } catch (_) {}
+                        }
+                    }
+                } catch (_) {}
+            }, 30000),
+
+            // Ephemeral key deletion cleanup
+            setInterval(async () => {
+                try {
+                    const now = Date.now();
+                    const pending = await redis.zrangebyscore('pending_key_deletions', 0, now);
+                    for (const item of pending) {
+                        const [chatId, msgId] = item.split(':');
+                        try { await bot.telegram.deleteMessage(chatId, parseInt(msgId)); } catch (_) {}
+                        await redis.zrem('pending_key_deletions', item);
+                    }
+                } catch (_) {}
+            }, 5000)
+        );
+    }
+
+    // Weekly report cron scheduler (Monday 8:00 AM UTC)
     cron.schedule('0 8 * * 1', async () => {
         const weekKey = `lock:cron:weekly_report:${new Date().toISOString().split('T')[0]}`;
         const acquired = await redis.set(weekKey, '1', 'EX', 86400 * 2, 'NX');
         if (!acquired) return;
-        console.log('🕗 [CRON] Monday 8AM — firing weekly performance reports');
+        console.log('🕗 [CRON] Firing weekly performance reports...');
         await sendWeeklyReportsToAll(bot);
     }, { timezone: 'UTC' });
 
-    // VIP Expiration Reminder (Daily 9:00 AM UTC)
+    // VIP Expiration cron scheduler (Daily 9:00 AM UTC)
     cron.schedule('0 9 * * *', async () => {
         const dayKey = `lock:cron:vip_expiry:${new Date().toISOString().split('T')[0]}`;
         const acquired = await redis.set(dayKey, '1', 'EX', 86400, 'NX');
@@ -9506,67 +9846,12 @@ setInterval(async () => {
             const daysLeft = Math.ceil((u.vipExpiresAt!.getTime() - Date.now()) / 86400000);
             try {
                 await bot.telegram.sendMessage(u.telegramId,
-                    `⚠️ <b>VIP EXPIRING SOON</b>\n\nYour ${u.vipTier} VIP expires in <b>${daysLeft} day${daysLeft !== 1 ? 's' : ''}</b>.\nRenew now to keep your 0% fees.`,
+                    `⚠️ <b>VIP EXPIRING SOON</b>\n\nYour ${u.vipTier} VIP expires in <b>${daysLeft} day${daysLeft !== 1 ? 's' : ''}</b>.\nRenew now to maintain 0% fees.`,
                     { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('👑 Renew VIP', 'menu_vip')]]) }
                 );
-                await new Promise(r => setTimeout(r, 100));
             } catch (_) {}
         }
     }, { timezone: 'UTC' });
-
-    // Watchlist Price Alert Worker (runs every 30s)
-    setInterval(async () => {
-        try {
-            const watchKeys = await redis.keys('watchlist:*');
-            for (const key of watchKeys) {
-                const tgId = key.replace('watchlist:', '');
-                const watchData = await redis.hgetall(key);
-                if (Object.keys(watchData).length === 0) continue;
-        
-                for (const [ca, dataStr] of Object.entries(watchData)) {
-                    try {
-                        const data = JSON.parse(dataStr);
-                        const currentPrice = await getCachedTokenPrice(ca);
-                        if (currentPrice <= 0) continue;
-        
-                        if (data.targetPrice && currentPrice >= data.targetPrice) {
-                            const symbol = await getWatchlistSymbol(ca);
-                            await bot.telegram.sendMessage(
-                                tgId,
-                                `🚨 <b>WATCHLIST ALERT!</b>\n\n` +
-                                `Token: <code>${ca}</code> ($${symbol})\n` +
-                                `Current Price: <b>$${currentPrice}</b>\n` +
-                                `Target Price: <b>$${data.targetPrice}</b>\n\n` +
-                                `Price has crossed your target.`,
-                                { parse_mode: 'HTML' }
-                            ).catch(() => {});
-                            await redis.hdel(`watchlist:${tgId}`, ca);
-                        }
-                    } catch (_) {}
-                }
-            }
-        } catch (_) {}
-    }, 30000);
-
-    // Ephemeral Private Key Message Cleanup (runs every 5s)
-    setInterval(async () => {
-        try {
-            const now = Date.now();
-            const pending = await redis.zrangebyscore('pending_key_deletions', 0, now);
-            for (const item of pending) {
-                const [chatId, msgId] = item.split(':');
-                try { await bot.telegram.deleteMessage(chatId, parseInt(msgId)); } catch (_) {}
-                await redis.zrem('pending_key_deletions', item);
-            }
-        } catch (_) {}
-    }, 5000);
-
-    // Launch Calendar Refresh (runs every 30m)
-    const { updateLaunchCalendar } = await import('./services/calendar.service.js');
-    await updateLaunchCalendar().catch(() => {});
-    setInterval(() => {
-        updateLaunchCalendar().catch(() => {});
-    }, 30 * 60 * 1000);
 
     // AI Coin Caller Background Learning Schedulers
     const { startCallerEvaluator, scheduleTraining } = await import('./services/caller.service.js');
