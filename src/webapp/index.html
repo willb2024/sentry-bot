@@ -79,30 +79,12 @@
             border-color: rgba(255, 255, 255, 0.22);
         }
 
-        /* =========================================================
-           ⚡ CONTINUOUS RGB MULTI-COLOR HOVER BORDER (NO POPPING)
-           ========================================================= */
         @keyframes continuousRgbBorder {
-            0% {
-                border-color: rgba(239, 68, 68, 0.85);
-                box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
-            }
-            25% {
-                border-color: rgba(245, 158, 11, 0.85);
-                box-shadow: 0 0 16px rgba(245, 158, 11, 0.45);
-            }
-            50% {
-                border-color: rgba(16, 185, 129, 0.85);
-                box-shadow: 0 0 16px rgba(16, 185, 129, 0.45);
-            }
-            75% {
-                border-color: rgba(59, 130, 246, 0.85);
-                box-shadow: 0 0 16px rgba(59, 130, 246, 0.45);
-            }
-            100% {
-                border-color: rgba(239, 68, 68, 0.85);
-                box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
-            }
+            0% { border-color: rgba(239, 68, 68, 0.85); box-shadow: 0 0 16px rgba(239, 68, 68, 0.45); }
+            25% { border-color: rgba(245, 158, 11, 0.85); box-shadow: 0 0 16px rgba(245, 158, 11, 0.45); }
+            50% { border-color: rgba(16, 185, 129, 0.85); box-shadow: 0 0 16px rgba(16, 185, 129, 0.45); }
+            75% { border-color: rgba(59, 130, 246, 0.85); box-shadow: 0 0 16px rgba(59, 130, 246, 0.45); }
+            100% { border-color: rgba(239, 68, 68, 0.85); box-shadow: 0 0 16px rgba(239, 68, 68, 0.45); }
         }
 
         .chart-animated-live {
@@ -317,7 +299,7 @@
             <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.02] border border-white/5 mb-6 mt-4 shadow-inner">
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Avg Slippage (TCA)</span>
-                    <div class="text-xl font-bold text-white font-mono mt-1" id="tca-slippage">0.11%</div>
+                    <div class="text-xl font-bold text-white font-mono mt-1" id="tca-slippage">--%</div>
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold cursor-help" title="Expected Shortfall of bottom 5% trades">CVaR (5% Tail Risk)</span>
@@ -505,7 +487,7 @@
                 <div class="card-flat p-5">
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-trophy text-gray-500"></i> Your Tier</span>
                     <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-amber-500" id="aff-stat-tier">Bronze (40%)</span>
+                        <span class="text-3xl sm:text-4xl font-bold text-amber-500" id="aff-stat-tier">Bronze (50%)</span>
                     </div>
                 </div>
             </div>
@@ -516,7 +498,7 @@
                     <input type="text" id="aff-ref-link" readonly class="w-full bg-[#07090e] text-gray-300 font-mono text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
                     <button onclick="copyReferralLink()" class="glass-btn px-4 py-3 rounded-lg text-sm font-bold text-white whitespace-nowrap"><i class="fa-solid fa-copy mr-1"></i> Copy Link</button>
                 </div>
-                <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn up to 70% of their trading fees and AI Credit purchases for life.</p>
+                <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn up to 70% of their trading fees and 40% of their AI Credit purchases for life.</p>
             </div>
 
             <div class="space-y-3">
@@ -574,7 +556,11 @@
     let currentFilter = '30D'; 
     
     let liveLeaderboardData = { guild: null, members: [] };
-    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
+    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.50, recruitList: [], dailyEarnings: Array(30).fill(0) };
+
+    function escapeHtml(s) {
+        return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
 
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
@@ -910,9 +896,9 @@
                     <div class="flex items-center gap-3 sm:gap-4">
                         <div class="w-8 text-center font-bold">${medal}</div>
                         <div>
-                            <div class="font-bold text-white text-sm sm:text-base">@${row.username} ${airdropTag}</div>
+                            <div class="font-bold text-white text-sm sm:text-base">@${escapeHtml(row.username)} ${airdropTag}</div>
                             <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue" onclick="copyCA('${row.walletAddress}')">
-                                ${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
+                                ${escapeHtml(row.walletAddress.substring(0,4))}...${escapeHtml(row.walletAddress.slice(-4))} <i class="fa-regular fa-copy ml-1"></i>
                             </div>
                         </div>
                     </div>
@@ -925,39 +911,39 @@
         }
     }
 
+    function renderAffiliates() {
         const data = liveAffiliateData;
         
-        document.getElementById('aff-stat-recruits').innerText = data.recruits;
-        document.getElementById('aff-stat-pending').innerText = data.pendingYieldSol.toFixed(4);
-        document.getElementById('aff-stat-lifetime').innerText = data.lifetimeEarnedSol.toFixed(4);
+        document.getElementById('aff-stat-recruits').innerText = data.recruits || 0;
+        document.getElementById('aff-stat-pending').innerText = (data.pendingYieldSol || 0).toFixed(4);
+        document.getElementById('aff-stat-lifetime').innerText = (data.lifetimeEarnedSol || 0).toFixed(4);
         
-        let tier = data.currentTier || "Bronze";
-        let tierRate = ((data.currentRate || 0.40) * 100).toFixed(0) + "%";
+        // 🟢 AFF-2 FIX: Aligned with canonical TIER_CONFIG from points.ts
+        const pts = data.totalPoints || 0;
+        let tier = "Bronze";
+        let tierRate = "50%";
         let tierColor = "text-amber-500";
 
-        const pts = data.totalPoints || 0;
-        if (pts >= 1000000) {
-            tierColor = "text-cyan-400";
-            tier = "Diamond";
-            tierRate = "70%";
-        } else if (pts >= 250000) {
+        if (pts >= 25000000) {
             tierColor = "text-yellow-400";
             tier = "Gold";
-            tierRate = "60%";
-        } else if (pts >= 50000) {
+            tierRate = "70%";
+        } else if (pts >= 5000000) {
             tierColor = "text-gray-300";
             tier = "Silver";
-            tierRate = "50%";
+            tierRate = "60%";
         } else {
             tier = "Bronze";
-            tierRate = "40%";
+            tierRate = "50%";
         }
         
         const tierEl = document.getElementById('aff-stat-tier');
-        tierEl.innerText = `${tier} (${tierRate})`;
-        tierEl.className = `text-3xl sm:text-4xl font-bold ${tierColor}`;
+        if (tierEl) {
+            tierEl.innerText = `${tier} (${tierRate})`;
+            tierEl.className = `text-3xl sm:text-4xl font-bold ${tierColor}`;
+        }
         
-        document.getElementById('aff-ref-link').value = data.referralLink || "Link not generated";
+        document.getElementById('aff-ref-link').value = data.referralLink || "Link generating...";
         
         const container = document.getElementById('recruits-container');
         if (!data.recruitList || data.recruitList.length === 0) {
@@ -966,7 +952,7 @@
                     <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
                         <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
                         <div class="text-sm font-semibold">No recruits yet</div>
-                        <span class="text-xs font-mono mt-1">Share your link to start earning.</span>
+                        <span class="text-xs font-mono mt-1">Share your link to earn 50%–70% of fees for life.</span>
                     </div>`;
             }
         } else if (container) {
@@ -983,7 +969,7 @@
                             <span class="absolute bottom-0 right-0 h-3 w-3 rounded-full ${dotColor} border-2 border-[#0e131f]"></span>
                         </div>
                         <div>
-                            <h4 class="font-bold text-[15px] text-white">@${r.username}</h4>
+                            <h4 class="font-bold text-[15px] text-white">@${escapeHtml(r.username)}</h4>
                             <span class="text-[11px] text-gray-500 font-mono">${r.volumeSol.toFixed(2)} SOL Vol</span>
                         </div>
                     </div>
@@ -1035,13 +1021,13 @@
             });
         }
 
-        const last7dEarnings = data.dailyEarnings.slice(23).reduce((a, b) => a + b, 0);
+        const last7dEarnings = (data.dailyEarnings || []).slice(23).reduce((a, b) => a + b, 0);
         const dailyAvg = last7dEarnings / 7;
         
         document.getElementById('proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
         document.getElementById('proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
         document.getElementById('proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
-    
+    }
 
     function copyReferralLink() {
         const link = document.getElementById('aff-ref-link').value;
@@ -1221,6 +1207,26 @@
         } catch (_) {}
     }
 
+    async function fetchGuildData() {
+        try {
+            const res = await fetch('/api/guild-stats', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.inGuild) {
+                    liveLeaderboardData = {
+                        guild: { name: data.guildName, reward: `Guild Rank #${data.myRank} (${data.myPoints.toLocaleString()} GLP)`, code: data.guildCode },
+                        members: data.leaderboard
+                    };
+                    renderLeaderboard();
+                }
+            }
+        } catch (_) {}
+    }
+
     async function fetchLiveData() {
         try {
             const simRes = await fetch('/api/sim-stats', {
@@ -1254,8 +1260,9 @@
                     const totalTrades = simStats.totalTrades || (wins + losses);
                     const credits = simStats.credits !== undefined ? simStats.credits : 4828;
 
-                    const startingBalSol = parseFloat(simStats.startingBalance) || simCashSol || 1;
-                    const pnlPercent = startingBalSol > 0 ? ((totalPnlSol / startingBalSol) * 100).toFixed(2) : "0.00";
+                    // 🟢 DASH-1 FIX: Standardized ROI % calculation against total deployed capital
+                    const totalInvested = simStats.totalInvestedSol || totalVolumeSol || 1;
+                    const pnlPercent = totalInvested > 0 ? ((totalPnlSol / totalInvested) * 100).toFixed(2) : "0.00";
                     const pnlUsd = totalPnlSol * liveSolPrice;
                     const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
 
@@ -1545,6 +1552,7 @@
         } catch (_) {}
     }
 
+    async function fetchInstitutionalStats() {
         try {
             const res = await fetch('/api/institutional-stats', {
                 method: 'POST',
@@ -1554,9 +1562,15 @@
             if (!res.ok) return;
             const data = await res.json();
 
+            // 🟢 DASH-4 FIX: Display '--%' if slippage is unknown
             const tcaEl = document.getElementById('tca-slippage');
+            if (tcaEl) {
+                tcaEl.innerText = (data.avgSlippage !== null && data.avgSlippage !== undefined)
+                    ? data.avgSlippage.toFixed(2) + '%'
+                    : '--%';
+            }
+
             const cvarEl = document.getElementById('cvar-value');
-            if (tcaEl) tcaEl.innerText = data.avgSlippage !== undefined ? data.avgSlippage.toFixed(2) + '%' : '0.11%';
             if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '-0.9281 SOL';
 
             const totalTradesEl = document.getElementById('total-trades-count');
@@ -1564,8 +1578,27 @@
                 totalTradesEl.innerText = data.totalTradesCount.toLocaleString();
             }
 
-            const spend = data.currentSpend || 185;
-            const budget = data.maxBudget || 185;
+            // 🟢 DASH-5 FIX: Real Sharpe Ratio
+            const sharpeEl = document.getElementById('sharpe-ratio');
+            if (sharpeEl) {
+                sharpeEl.innerText = data.sharpeRatio ? data.sharpeRatio.toFixed(2) : '--';
+            }
+
+            // 🟢 DASH-3 FIX: Dynamic Max Loss Limit
+            const lossEl = document.getElementById('max-loss-limit');
+            if (lossEl) {
+                if (data.maxLossPercent && data.maxLossPercent > 0) {
+                    lossEl.innerText = `-${data.maxLossPercent}%`;
+                    lossEl.className = 'text-xs font-bold font-mono text-neonRed';
+                } else {
+                    lossEl.innerText = 'OFF (0%)';
+                    lossEl.className = 'text-xs font-bold font-mono text-gray-500';
+                }
+            }
+
+            // Update Budget Bar
+            const spend = data.currentSpend || 0;
+            const budget = data.maxBudget || 0;
             const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
             const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
 
@@ -1619,171 +1652,6 @@
             }
 
         } catch (e) {}
-    
-// 1. In src/webapp/index.html -> Replace renderAffiliates:
-function renderAffiliates() {
-        const data = liveAffiliateData;
-        
-        document.getElementById('aff-stat-recruits').innerText = data.recruits || 0;
-        document.getElementById('aff-stat-pending').innerText = (data.pendingYieldSol || 0).toFixed(4);
-        document.getElementById('aff-stat-lifetime').innerText = (data.lifetimeEarnedSol || 0).toFixed(4);
-        
-        // 🟢 AFF-2 FIX: Aligned with canonical TIER_CONFIG from points.ts
-        const pts = data.totalPoints || 0;
-        let tier = "Bronze";
-        let tierRate = "50%";
-        let tierColor = "text-amber-500";
-
-        if (pts >= 25000000) {
-            tierColor = "text-yellow-400";
-            tier = "Gold";
-            tierRate = "70%";
-        } else if (pts >= 5000000) {
-            tierColor = "text-gray-300";
-            tier = "Silver";
-            tierRate = "60%";
-        } else {
-            tier = "Bronze";
-            tierRate = "50%";
-        }
-        
-        const tierEl = document.getElementById('aff-stat-tier');
-        if (tierEl) {
-            tierEl.innerText = `${tier} (${tierRate})`;
-            tierEl.className = `text-3xl sm:text-4xl font-bold ${tierColor}`;
-        }
-        
-        document.getElementById('aff-ref-link').value = data.referralLink || "Link generating...";
-        
-        const container = document.getElementById('recruits-container');
-        if (!data.recruitList || data.recruitList.length === 0) {
-            if (container) {
-                container.innerHTML = `
-                    <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                        <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                        <div class="text-sm font-semibold">No recruits yet</div>
-                        <span class="text-xs font-mono mt-1">Share your link to earn 50%–70% of fees for life.</span>
-                    </div>`;
-            }
-        } else if (container) {
-            container.innerHTML = data.recruitList.map(r => {
-                const isActive = r.lastActiveDaysAgo < 7;
-                const dotColor = isActive ? 'bg-jupGreen' : 'bg-gray-600';
-                return `
-                <div class="card-flat overflow-hidden p-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
-                    <div class="flex items-center gap-4">
-                        <div class="relative">
-                            <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
-                                <i class="fa-solid fa-user text-gray-400"></i>
-                            </div>
-                            <span class="absolute bottom-0 right-0 h-3 w-3 rounded-full ${dotColor} border-2 border-[#0e131f]"></span>
-                        </div>
-                        <div>
-                            <h4 class="font-bold text-[15px] text-white">@${r.username}</h4>
-                            <span class="text-[11px] text-gray-500 font-mono">${r.volumeSol.toFixed(2)} SOL Vol</span>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <span class="font-bold text-lg text-jupGreen">+${r.yourEarningSol.toFixed(4)}</span>
-                        <div class="text-[12px] font-semibold text-gray-500 mt-0.5">
-                            SOL Earned
-                        </div>
-                    </div>
-                </div>
-                `;
-            }).join('');
-        }
-    }
-
-    // In src/webapp/index.html:
-    async function fetchGuildData() {
-        try {
-            const res = await fetch('/api/guild-stats', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data.inGuild) {
-                    liveLeaderboardData = {
-                        guild: { name: data.guildName, reward: `Guild Rank #${data.myRank} (${data.myPoints.toLocaleString()} GLP)`, code: data.guildCode },
-                        members: data.leaderboard
-                    };
-                    renderLeaderboard();
-                }
-            }
-        } catch (_) {}
-    }
-
-    // Call fetchGuildData on interval
-    fetchGuildData();
-    setInterval(fetchGuildData, 15000);
-
-// 2. In src/webapp/index.html -> Update fetchInstitutionalStats:
-    async function fetchInstitutionalStats() {
-        try {
-            const res = await fetch('/api/institutional-stats', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-
-            // 🟢 DASH-4 FIX: Display '--%' if slippage is not yet recorded on live trades
-            const tcaEl = document.getElementById('tca-slippage');
-            if (tcaEl) {
-                tcaEl.innerText = (data.avgSlippage !== null && data.avgSlippage !== undefined)
-                    ? data.avgSlippage.toFixed(2) + '%'
-                    : '--%';
-            }
-
-            const cvarEl = document.getElementById('cvar-value');
-            if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '-0.9281 SOL';
-
-            const totalTradesEl = document.getElementById('total-trades-count');
-            if (totalTradesEl && data.totalTradesCount !== undefined) {
-                totalTradesEl.innerText = data.totalTradesCount.toLocaleString();
-            }
-
-            // 🟢 DASH-5 FIX: Display live or sim Sharpe Ratio
-            const sharpeEl = document.getElementById('sharpe-ratio');
-            if (sharpeEl) {
-                sharpeEl.innerText = data.sharpeRatio ? data.sharpeRatio.toFixed(2) : '--';
-            }
-
-            // 🟢 DASH-3 FIX: Render dynamic Max Loss Limit
-            const lossEl = document.getElementById('max-loss-limit');
-            if (lossEl) {
-                if (data.maxLossPercent && data.maxLossPercent > 0) {
-                    lossEl.innerText = `-${data.maxLossPercent}%`;
-                    lossEl.className = 'text-xs font-bold font-mono text-neonRed';
-                } else {
-                    lossEl.innerText = 'OFF (0%)';
-                    lossEl.className = 'text-xs font-bold font-mono text-gray-500';
-                }
-            }
-
-            // Update Budget Bar
-            const spend = data.currentSpend || 0;
-            const budget = data.maxBudget || 0;
-            const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
-            const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
-
-            const gauge = document.getElementById('risk-budget-bar');
-            const gaugeText = document.getElementById('risk-budget-text');
-            const remainingEl = document.getElementById('risk-budget-remaining');
-
-            if (gauge) gauge.style.width = pct + '%';
-            if (gaugeText) {
-                gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
-            }
-            if (remainingEl) {
-                remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
-                remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
-            }
-        } catch (_) {}
     }
 
     fetchNetworthBreakdown();
@@ -1795,6 +1663,7 @@ function renderAffiliates() {
     fetchStatsWindow();
     fetchEnterpriseMetrics();
     fetchInstitutionalStats(); 
+    fetchGuildData();
 
     // 🟢 OPTIMIZED INTERVALS
     setInterval(fetchNetworthBreakdown, 8000);      
@@ -1805,6 +1674,7 @@ function renderAffiliates() {
     setInterval(fetchAdvancedStats, 20000);         
     setInterval(fetchHourlyPerformance, 25000);     
     setInterval(fetchInstitutionalStats, 10000);    
+    setInterval(fetchGuildData, 15000);
 </script>
 </body>
 </html>
