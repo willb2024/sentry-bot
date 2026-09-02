@@ -244,14 +244,13 @@ bot.use(async (ctx, next) => {
 });
 
 
-// 🟢 Dual Authenticator: Supports both Telegram Mini-App and Direct Browser Testing
 function verifyTelegramAuth(initData: string): boolean {
     // If testing in regular browser (Chrome/Desktop), allow for admin
     if (!initData) {
         return true; 
     }
-
     try {
+        // ... (Keep your existing HMAC verification logic here) ...
         const params = new URLSearchParams(initData);
         const authDateStr = params.get('auth_date');
         if (authDateStr) {
@@ -259,7 +258,6 @@ function verifyTelegramAuth(initData: string): boolean {
             const now = Math.floor(Date.now() / 1000);
             if (now - authDate > 86400 * 7) return false;
         }
-
         const hash = params.get('hash');
         params.delete('hash');
         const dataCheckString = [...params.entries()]
@@ -278,7 +276,8 @@ function verifyTelegramAuth(initData: string): boolean {
 
 function extractTelegramId(initData: string): string | null {
     if (!initData) {
-        // Fallback to first Admin ID from .env when opened in desktop browser
+        // 🟢 FIX: Allow passing explicit ID in body for local browser testing!
+        // (You will need to add a temporary way to inject the user ID into the request body)
         const adminId = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',')[0]?.trim();
         return adminId || null;
     }
@@ -5082,7 +5081,7 @@ export async function getStatsWindowData(tgId: string) {
 
   app.post('/api/dashboard-bundle', async (req, res) => {
     if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
-    const tgId = extractTelegramId(req.body.initData);
+    const tgId = extractTelegramId(req.body.initData) || req.body.telegramId;
     if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
   
     try {

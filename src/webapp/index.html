@@ -1273,7 +1273,7 @@
     }
 
 
-
+  
   try {
     const res = await fetch('/api/dashboard-bundle', {
       method: 'POST',
@@ -1407,10 +1407,22 @@
 
   async function fetchDashboardBundle() {
   try {
+    // 🟢 CRITICAL FIX: Support both Telegram WebApp and regular Browser testing
+    let initData = tg.initData || "";
+    let body = { initData };
+
+    // If testing in a regular browser (Chrome), tg.initData is empty, 
+    // so we must explicitly send the target telegramId.
+    if (!initData) {
+      // For testing, set this ID to the user who holds the 0.9 SOL.
+      // You can also use localStorage.setItem('telegramId', '12345678') in the console.
+      body.telegramId = localStorage.getItem('telegramId') || 'YOUR_ADMIN_TELEGRAM_ID_HERE'; 
+    }
+
     const res = await fetch('/api/dashboard-bundle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initData: tg.initData || "" })
+      body: JSON.stringify(body)
     });
     const d = await res.json();
     if (!d) return;
