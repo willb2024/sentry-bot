@@ -22,13 +22,13 @@ export interface SimPosition {
     amountInSol: number;
     highestSeenPrice: number; // SOL
     currentPriceSol: number;  // SOL
-    trailingPercent: number;  // e.g. 10 for -10%
-    takeProfitPercent?: number; // e.g. 40 for +40%
+    trailingPercent: number;  
+    takeProfitPercent?: number; 
     strategy: string;
     createdAt: number;
     score?: number;
-    winTrajectory?: boolean;
-    ticksRemaining?: number;
+    winTrajectory?: boolean;  // 🟢 Add this
+    ticksRemaining?: number;  // 🟢 Add this
 }
 
 export function randomBase58(length: number): string {
