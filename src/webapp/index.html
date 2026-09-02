@@ -586,10 +586,14 @@
     const tg = window.Telegram.WebApp;
     tg.expand();
 
+    // 🟢 GUARANTEED ID FALLBACK: Extracts your ID directly from Telegram, bypassing string decryption issues
+    const fallbackTgId = tg.initDataUnsafe?.user?.id?.toString() || localStorage.getItem('telegramId') || '';
+
     let isSimModeActive = false;
     let pnlChart = null;
     let allocChart = null;
     let affChart = null;
+    let hourlyChart = null;
     let tickerPrices = { SOL: 156.93, WIF: 3.09, BONK: 0.00002807, JUP: 1.08, POPCAT: 0.45, TREMP: 0.86 };
     
     let userTrades = []; 
@@ -597,24 +601,10 @@
     
     let liveLeaderboardData = { guild: null, members: [] };
     let liveAffiliateData = { 
-        recruits: 0, 
-        activeCopiers: 0,
-        totalPoints: 0,
-        currentTier: "Bronze",
-        currentRate: 0.50,
-        nextTier: "Silver (5M PTS)",
-        nextTierPoints: 5000000,
-        pendingYieldSol: 0, 
-        lifetimeEarnedSol: 0,
-        tradingFeeEarnedSol: 0,
-        creditEarnedSol: 0,
-        copierLeaderEarnedSol: 0,
-        totalCopierVolumeSol: 0,
-        referralLink: "", 
-        copierFeedLink: "",
-        recruitList: [], 
-        copierList: [],
-        dailyEarnings: Array(30).fill(0) 
+        recruits: 0, activeCopiers: 0, totalPoints: 0, currentTier: "Bronze", currentRate: 0.50,
+        nextTier: "Silver (5M PTS)", nextTierPoints: 5000000, pendingYieldSol: 0, lifetimeEarnedSol: 0,
+        tradingFeeEarnedSol: 0, creditEarnedSol: 0, copierLeaderEarnedSol: 0, totalCopierVolumeSol: 0,
+        referralLink: "", copierFeedLink: "", recruitList: [], copierList: [], dailyEarnings: Array(30).fill(0) 
     };
 
     function switchView(view) {
@@ -757,11 +747,11 @@
         return { labels, profitData, lossData };
     }
 
-    // 🟢 RENDER CHARTS WITH CONTINUOUS COLOR PALETTE & ALWAYS-ACTIVE STRATEGY RING
     function initCharts(labels, profitData, lossData, allocLabels, allocData) {
         Chart.defaults.color = '#64748b';
         Chart.defaults.font.family = "'Inter', sans-serif";
         
+        // 1. Line Flow Analytics Chart
         const pnlCanvas = document.getElementById('pnlHistoryChart');
         if (pnlCanvas) {
             const pnlCtx = pnlCanvas.getContext('2d');
@@ -797,19 +787,18 @@
             });
         }
 
-        const allocCanvas = document.getElementById('allocationChart');
+        // 2. Strategy Attribution Doughnut Chart
+        const allocCanvas = document.getElementById('allocationChart') || document.getElementById('allocChart');
         if (allocCanvas) {
             const allocCtx = allocCanvas.getContext('2d');
-            if (allocChart) allocChart.destroy();
+            if (window.allocChart) window.allocChart.destroy();
             
             const hasRealData = allocData && allocData.length > 0 && allocData.some(v => v > 0);
             const chartLabels = ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'];
-            
-            // 🟢 Render an active baseline distribution ring so the doughnut is never blank
-            const chartData = hasRealData ? allocData : [40, 25, 18, 12, 5];
+            const chartData = hasRealData ? allocData : [81, 12, 5, 2, 0];
             const chartColors = ['#10b981', '#f59e0b', '#3b82f6', '#8b5cf6', '#64748b'];
 
-            allocChart = new Chart(allocCtx, {
+            window.allocChart = allocChart = new Chart(allocCtx, {
                 type: 'doughnut',
                 data: {
                     labels: chartLabels,
@@ -837,6 +826,44 @@
                     },
                     cutout: '72%',
                     animation: { animateScale: true }
+                }
+            });
+        }
+
+        // 3. 24-Hour Hourly Histogram Chart
+        const hourlyCanvas = document.getElementById('hourlyChart');
+        if (hourlyCanvas) {
+            const hourlyCtx = hourlyCanvas.getContext('2d');
+            if (window.hourlyChart) window.hourlyChart.destroy();
+            window.hourlyChart = hourlyChart = new Chart(hourlyCtx, {
+                type: 'bar',
+                data: {
+                    labels: Array.from({ length: 24 }, (_, h) => `${h}:00`),
+                    datasets: [{
+                        label: 'PnL (SOL)',
+                        data: Array(24).fill(0),
+                        backgroundColor: (context) => {
+                            const val = context.raw || 0;
+                            return val >= 0 ? 'rgba(16, 185, 129, 0.85)' : 'rgba(239, 68, 68, 0.85)';
+                        },
+                        borderRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#0e131f',
+                            padding: 10,
+                            cornerRadius: 8
+                        }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 8 }, maxTicksLimit: 12, color: '#6B7280' } },
+                        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { font: { size: 9 }, color: '#6B7280' } }
+                    }
                 }
             });
         }
@@ -993,697 +1020,178 @@
         setFilter(currentFilter);
     }
 
-    function resetDashboardToZero() {
-        document.getElementById('stat-networth').innerText = '$0.00';
-        document.getElementById('stat-networth-sub').innerText = '0.0000 SOL';
-        document.getElementById('stat-pnl').innerText = '0.00%';
-        document.getElementById('stat-pnl').className = 'text-3xl sm:text-4xl font-bold text-gray-400 mt-1';
-        document.getElementById('stat-pnl-sub').innerText = '+$0.00 net profit';
-        document.getElementById('stat-winrate').innerText = '0.0%';
-        document.getElementById('stat-winrate-sub').innerText = '0 Wins / 0 Losses';
-        document.getElementById('stat-volume').innerText = '0.00 SOL';
-        document.getElementById('stat-trading-days').innerText = '0';
-        document.getElementById('stat-credits').innerText = '15';
-        document.getElementById('header-credits').innerText = '15 Credits';
-        document.getElementById('sharpe-ratio').innerText = '--';
-        document.getElementById('tca-slippage').innerText = '0.11%';
-        document.getElementById('cvar-value').innerText = '0.0000 SOL';
-        document.getElementById('total-trades-count').innerText = '0';
-        document.getElementById('risk-score').innerText = '0%';
-        document.getElementById('risk-label').innerText = 'Assessment: Safe Risk';
-        document.getElementById('strat-pnl-sniper').innerText = '+0.0000 SOL';
-        document.getElementById('strat-pnl-manual').innerText = '+0.0000 SOL';
-        document.getElementById('positions-count').innerText = `0 OPEN`;
-        document.getElementById('stats-live').innerText = `Manual: 0 trades (+0.0000 SOL)`;
-        document.getElementById('stats-sim').innerText = `Auto: 0 trades (+0.0000 SOL)`;
-        
-        const posContainer = document.getElementById('positions-container');
-        if (posContainer) {
-            posContainer.innerHTML = `
-                <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                    <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                    <div class="text-sm font-semibold">No Active Deployments</div>
-                    <span class="text-xs font-mono mt-1">Awaiting target.</span>
-                </div>`;
-        }
-        
-        userTrades = [];
-        if (pnlChart) pnlChart.destroy();
-        if (allocChart) allocChart.destroy();
-        initCharts([], [], [], [], []);
-    }
-
-    function renderLeaderboardChart(members) {
-        const chartCard = document.getElementById('lb-chart-card');
-        const canvas = document.getElementById('leaderboardChart');
-        if (!canvas || !members || members.length === 0) {
-            if (chartCard) chartCard.style.display = 'none';
-            return;
-        }
-        if (chartCard) chartCard.style.display = 'block';
-        const ctx = canvas.getContext('2d');
-        if (window.lbChartInst) window.lbChartInst.destroy();
-        const top10 = members.slice(0, 10);
-        window.lbChartInst = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: top10.map(m => '@' + (m.username || 'anon')),
-                datasets: [{ 
-                    label: 'GLP', 
-                    data: top10.map(m => m.glp), 
-                    backgroundColor: 'rgba(16,185,129,0.55)',
-                    borderColor: '#10b981',
-                    borderWidth: 1,
-                    borderRadius: 4
-                }]
-            },
-            options: {
-                indexAxis: 'y',
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { 
-                    legend: { display: false },
-                    tooltip: { backgroundColor: '#0e131f', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8 }
-                },
-                scales: { 
-                    x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } }, 
-                    y: { ticks: { color: '#cbd5e1', font: { size: 11 } }, grid: { display: false } } 
-                }
-            }
-        });
-    }
-
-    function renderLeaderboard() {
-        const data = liveLeaderboardData;
-        const container = document.getElementById('leaderboard-container');
-        
-        if (!data.guild) {
-            document.getElementById('lb-title').innerText = "Join a Guild";
-            document.getElementById('lb-desc').innerText = "Trade via Sentry to start earning GLP and climb the ranks.";
-            document.getElementById('lb-badge').innerText = "NO ACTIVE GUILD";
-            renderLeaderboardChart([]);
-            if (container) {
-                container.innerHTML = `
-                    <div class="text-center py-10 text-gray-500 flex flex-col items-center">
-                        <i class="fa-solid fa-users-slash text-3xl mb-3 opacity-50"></i>
-                        <div class="text-sm font-semibold">You are not in a Guild</div>
-                        <span class="text-xs font-mono mt-1">Use a KOL's invite link to join one.</span>
-                    </div>`;
-            }
-            return;
-        }
-
-        document.getElementById('lb-title').innerText = data.guild.name;
-        document.getElementById('lb-desc').innerText = `"${data.guild.reward}"`;
-        document.getElementById('lb-badge').innerText = `GUILD CODE: ${data.guild.code}`;
-
-        if (!data.members || data.members.length === 0) {
-            renderLeaderboardChart([]);
-            if (container) container.innerHTML = `<div class="text-center text-gray-500 py-4">No trading data yet. Be the first to rank!</div>`;
-            return;
-        }
-
-        renderLeaderboardChart(data.members);
-
-        if (container) {
-            container.innerHTML = data.members.map((row, i) => {
-                const medal = i === 0 ? '<span class="text-2xl">🥇</span>' : i === 1 ? '<span class="text-2xl">🥈</span>' : i === 2 ? '<span class="text-2xl">🥉</span>' : `<span class="text-gray-500 text-lg">#${i+1}</span>`;
-                const airdropTag = row.airdropsReceived > 0 ? `<div class="text-[10px] text-jupGreen bg-jupGreen/10 border border-jupGreen/20 px-2 py-0.5 rounded ml-2 inline-block"><i class="fa-solid fa-gift"></i> ${row.airdropsReceived.toFixed(2)} SOL</div>` : '';
-                
-                return `
-                <div class="flex justify-between items-center bg-[#1a2235] p-4 rounded-xl border border-white/5 transition-transform hover:scale-[1.01]">
-                    <div class="flex items-center gap-3 sm:gap-4">
-                        <div class="w-8 text-center font-bold">${medal}</div>
-                        <div>
-                            <div class="font-bold text-white text-sm sm:text-base">@${row.username} ${airdropTag}</div>
-                            <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue" onclick="copyCA('${row.walletAddress}')">
-                                ${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <div class="font-bold text-emerald-400 text-sm sm:text-base">${row.glp.toLocaleString()} GLP</div>
-                        <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${row.volumeSol.toFixed(2)} SOL Vol</div>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-    }
-
-    function renderAffiliates() {
-        const data = liveAffiliateData;
-
-        // 1. Points & Tier Display
-        const points = data.totalPoints || 0;
-        document.getElementById('aff-stat-points').innerText = `${points.toLocaleString()} PTS`;
-        
-        let tierColor = "text-amber-500";
-        let tierLabel = "Bronze (50%)";
-        if (data.currentTier === "Gold") {
-            tierColor = "text-cyan-400";
-            tierLabel = "Gold (70%)";
-        } else if (data.currentTier === "Silver") {
-            tierColor = "text-gray-300";
-            tierLabel = "Silver (60%)";
-        } else {
-            tierColor = "text-amber-500";
-            tierLabel = "Bronze (50%)";
-        }
-
-        const tierEl = document.getElementById('aff-stat-tier');
-        tierEl.innerText = tierLabel;
-        tierEl.className = `text-2xl sm:text-3xl font-bold font-mono mt-1 ${tierColor}`;
-
-        const nextTierEl = document.getElementById('aff-stat-next-tier');
-        const progressBar = document.getElementById('aff-points-bar');
-        const nextPts = data.nextTierPoints || 5000000;
-        const progressPct = Math.min(100, Math.max(5, (points / nextPts) * 100));
-        if (progressBar) progressBar.style.width = `${progressPct}%`;
-        if (nextTierEl) nextTierEl.innerText = `${points.toLocaleString()} / ${nextPts.toLocaleString()} PTS to ${data.nextTier || 'Silver'}`;
-
-        // 2. Revenue Breakdown KPIs
-        document.getElementById('aff-stat-pending').innerText = `${(data.pendingYieldSol || 0).toFixed(4)} SOL`;
-        document.getElementById('aff-stat-trade-fees').innerText = `+${(data.tradingFeeEarnedSol || 0).toFixed(4)} SOL`;
-        document.getElementById('aff-stat-credits-rev').innerText = `+${(data.creditEarnedSol || 0).toFixed(4)} SOL`;
-        document.getElementById('aff-stat-copier-rev').innerText = `+${(data.copierLeaderEarnedSol || 0).toFixed(4)} SOL`;
-
-        // 3. Links
-        document.getElementById('aff-ref-link').value = data.referralLink || "Link generating...";
-        document.getElementById('aff-feed-link').value = data.copierFeedLink || "Link generating...";
-        document.getElementById('aff-tab-recruits-count').innerText = data.recruits || 0;
-        document.getElementById('aff-tab-copiers-count').innerText = data.activeCopiers || 0;
-
-        // 4. Render Recruits List
-        const recContainer = document.getElementById('recruits-container');
-        if (!data.recruitList || data.recruitList.length === 0) {
-            recContainer.innerHTML = `
-                <div class="text-center py-8 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                    <i class="fa-solid fa-user-plus text-2xl mb-2 opacity-50"></i>
-                    <div class="text-xs font-semibold">No recruits yet</div>
-                    <span class="text-[10px] font-mono mt-1">Share your invite link to earn 50% - 70% fees + 40% on AI Credits.</span>
-                </div>`;
-        } else {
-            recContainer.innerHTML = data.recruitList.map(r => `
-                <div class="card-flat p-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
-                    <div class="flex items-center gap-3">
-                        <div class="bg-[#1e293b] text-white font-bold rounded-lg h-9 w-9 flex items-center justify-center text-xs border border-white/5">
-                            <i class="fa-solid fa-user text-gray-400"></i>
-                        </div>
-                        <div>
-                            <h4 class="font-bold text-sm text-white">@${r.username}</h4>
-                            <span class="text-[10px] text-gray-500 font-mono">${r.volumeSol.toFixed(2)} SOL Traded</span>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <span class="font-bold text-sm text-jupGreen">+${r.yourEarningSol.toFixed(4)} SOL</span>
-                        <div class="text-[10px] text-gray-500 font-mono">
-                            Fees: +${r.tradingFeeEarningSol.toFixed(3)} | Credits: +${r.creditEarningSol.toFixed(3)}
-                        </div>
-                    </div>
-                </div>
-            `).join('');
-        }
-
-        // 5. Render Copiers List
-        const copContainer = document.getElementById('copiers-container');
-        if (!data.copierList || data.copierList.length === 0) {
-            copContainer.innerHTML = `
-                <div class="text-center py-8 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                    <i class="fa-solid fa-users text-2xl mb-2 opacity-50 text-neonBlue"></i>
-                    <div class="text-xs font-semibold">No active copiers yet</div>
-                    <span class="text-[10px] font-mono mt-1">Share your Public Trade Feed link to monetize your alpha (50% fee cut).</span>
-                </div>`;
-        } else {
-            copContainer.innerHTML = data.copierList.map(c => `
-                <div class="card-flat p-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
-                    <div class="flex items-center gap-3">
-                        <div class="bg-neonBlue/10 text-neonBlue font-bold rounded-lg h-9 w-9 flex items-center justify-center text-xs border border-neonBlue/20">
-                            <i class="fa-solid fa-tower-broadcast"></i>
-                        </div>
-                        <div>
-                            <h4 class="font-bold text-sm text-white">@${c.username}</h4>
-                            <span class="text-[10px] text-gray-500 font-mono">${c.volumeSol.toFixed(2)} SOL Mirrored</span>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <span class="font-bold text-sm text-neonBlue">+${c.yourEarningSol.toFixed(4)} SOL</span>
-                        <div class="text-[10px] text-gray-500 font-mono">Leader Yield (50%)</div>
-                    </div>
-                </div>
-            `).join('');
-        }
-
-        // 6. Chart Rendering
-        const affCanvas = document.getElementById('affiliateChart');
-        if (affCanvas) {
-            const affCtx = affCanvas.getContext('2d');
-            const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
-            gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.45)'); 
-            gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
-
-            if (affChart) affChart.destroy();
-            const labels = Array.from({length: 30}, (_, i) => {
-                const d = new Date();
-                d.setDate(d.getDate() - (29 - i));
-                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
-            });
-
-            affChart = new Chart(affCtx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{ label: 'SOL Earned', data: data.dailyEarnings || Array(30).fill(0), borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.32, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#0e131f', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8 } },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
-                    }
-                }
-            });
-        }
-
-        const last7dEarnings = (data.dailyEarnings || []).slice(23).reduce((a, b) => a + b, 0);
-        const dailyAvg = last7dEarnings / 7;
-        document.getElementById('proj-7d').innerText = `${(dailyAvg * 7).toFixed(4)} SOL`;
-        document.getElementById('proj-30d').innerText = `${(dailyAvg * 30).toFixed(4)} SOL`;
-        document.getElementById('proj-1y').innerText = `${(dailyAvg * 365).toFixed(4)} SOL`;
-    }
-
-
-  
-  try {
-    const res = await fetch('/api/dashboard-bundle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initData: tg.initData || "" })
-    });
-    const d = await res.json();
-    if (!d) return;
-
-    // 1. Risk Score Gauge & Assessment Label
-    if (d.riskScore) {
-      const score = d.riskScore.score || 0;
-      document.getElementById('risk-score').innerText = score + '%';
-      document.getElementById('risk-bar').style.width = Math.min(100, Math.max(0, score)) + '%';
-      document.getElementById('risk-label').innerText = 'Assessment: ' + (d.riskScore.riskLevel || 'Safe Risk');
-    }
-
-    // 2. Sharpe Ratio
-    if (d.institutional && d.institutional.sharpeRatio !== undefined) {
-      document.getElementById('sharpe-ratio').innerText = parseFloat(d.institutional.sharpeRatio).toFixed(2);
-    }
-
-    // 3. CVaR / Total Trades / Slippage
-    if (d.institutional) {
-      const cvarEl = document.getElementById('cvar-value');
-      if (cvarEl && d.institutional.cvar !== undefined) cvarEl.innerText = `${parseFloat(d.institutional.cvar).toFixed(4)} SOL`;
-      const slipEl = document.getElementById('tca-slippage');
-      if (slipEl && d.institutional.avgSlippage !== undefined) slipEl.innerText = `${parseFloat(d.institutional.avgSlippage).toFixed(2)}%`;
-      const tradesEl = document.getElementById('total-trades-count');
-      if (tradesEl && d.institutional.totalTradesCount !== undefined) tradesEl.innerText = d.institutional.totalTradesCount.toLocaleString();
-    }
-
-    // 4. 24-Hour Rolling Activity Text
-    if (d.statsWindow) {
-      const manual = d.statsWindow.manual || { count: 0, pnl: 0 };
-      const auto = d.statsWindow.auto || { count: 0, pnl: 0 };
-      document.getElementById('stats-live').innerText = `Manual: ${manual.count} trades (${manual.pnl >= 0 ? '+' : ''}${parseFloat(manual.pnl).toFixed(4)} SOL)`;
-      document.getElementById('stats-sim').innerText = `Auto: ${auto.count} trades (${auto.pnl >= 0 ? '+' : ''}${parseFloat(auto.pnl).toFixed(4)} SOL)`;
-    }
-
-    // 5. Active Strategy Values (Sniper, Manual, Copy, DCA, Limit)
-    if (d.institutional && d.institutional.stratStats) {
-      const stratMap = d.institutional.stratStats;
-      const updateStratUI = (elementId, pnlValue) => {
-        const el = document.getElementById(elementId);
-        if (el) {
-          const val = typeof pnlValue === 'number' ? pnlValue : parseFloat(pnlValue) || 0;
-          const sign = val >= 0 ? '+' : '';
-          el.innerText = `${sign}${val.toFixed(4)} SOL`;
-          el.className = val >= 0 ? 'text-emerald-400 font-mono font-bold' : 'text-rose-400 font-mono font-bold';
-        }
-      };
-      updateStratUI('strat-pnl-sniper', stratMap['Sniper Engine']?.pnl ?? stratMap['Sniper Engine']?.totalPnl ?? 0);
-      updateStratUI('strat-pnl-manual', stratMap['Manual / Direct']?.pnl ?? stratMap['Manual / Direct']?.totalPnl ?? 0);
-      updateStratUI('strat-pnl-copy', stratMap['Copy Trade']?.pnl ?? stratMap['Copy Trade']?.totalPnl ?? 0);
-      updateStratUI('strat-pnl-dca', stratMap['DCA Engine']?.pnl ?? stratMap['DCA Engine']?.totalPnl ?? 0);
-      updateStratUI('strat-pnl-limit', stratMap['Limit Order']?.pnl ?? stratMap['Limit Order']?.totalPnl ?? 0);
-    }
-
-    // 6. Strategy Attribution Doughnut Chart
-    if (d.institutional && d.institutional.stratStats && window.allocChart) {
-      const strat = d.institutional.stratStats;
-      const values = [
-        Math.max(0, strat['Sniper Engine']?.pnl ?? strat['Sniper Engine']?.totalPnl ?? 0),
-        Math.max(0, strat['Manual / Direct']?.pnl ?? strat['Manual / Direct']?.totalPnl ?? 0),
-        Math.max(0, strat['Copy Trade']?.pnl ?? strat['Copy Trade']?.totalPnl ?? 0),
-        Math.max(0, strat['DCA Engine']?.pnl ?? strat['DCA Engine']?.totalPnl ?? 0),
-        Math.max(0, strat['Limit Order']?.pnl ?? strat['Limit Order']?.totalPnl ?? 0)
-      ];
-      window.allocChart.data.datasets[0].data = values;
-      window.allocChart.update();
-    }
-
-    // 7. 24-Hour Hourly Histogram
-    if (d.hourly && Array.isArray(d.hourly) && window.hourlyChart) {
-      const pnlData = d.hourly.map(h => h.totalPnlSol || 0);
-      window.hourlyChart.data.datasets[0].data = pnlData;
-      window.hourlyChart.update();
-    }
-
-    // 8. Exposure Limit (Budget) UI
-    if (d.institutional) {
-      const spend = d.institutional.currentSpend || 0;
-      const budget = d.institutional.maxBudget || 0;
-      const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
-      const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
-      document.getElementById('risk-budget-bar').style.width = pct + '%';
-      document.getElementById('risk-budget-text').innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
-      const remainingEl = document.getElementById('risk-budget-remaining');
-      if (remainingEl) {
-        remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
-        remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
-      }
-    }
-
-    // 9. Sizing Cap Card
-    if (d.sizingCap) {
-      const card = document.getElementById('sizing-cap-card');
-      const el = document.getElementById('sizing-cap-count');
-      if (d.sizingCap.count > 0 && card && el) {
-        card.style.display = 'flex';
-        el.innerText = `${d.sizingCap.count} time${d.sizingCap.count !== 1 ? 's' : ''}`;
-      } else if (card) {
-        card.style.display = 'none';
-      }
-    }
-
-    // 10. Max Loss Limit
-    if (d.sniperSettings) {
-      const lossEl = document.getElementById('max-loss-limit');
-      if (lossEl) {
-        if (d.sniperSettings.maxLossPercent && d.sniperSettings.maxLossPercent > 0) {
-          lossEl.innerText = `-${d.sniperSettings.maxLossPercent}%`;
-          lossEl.className = 'text-xs font-bold font-mono text-neonRed';
-        } else {
-          lossEl.innerText = 'OFF (0%)';
-          lossEl.className = 'text-xs font-bold font-mono text-gray-500';
-        }
-      }
-    }
-
-    // 11. Net Worth (Cash vs Deployed)
-    if (d.networth) {
-      document.getElementById('stat-cash').innerText = '$' + (d.networth.cashUsd || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      document.getElementById('stat-deployed').innerText = '$' + (d.networth.positionsValueUsd || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    }
-  } catch (e) {
-    console.error('Failed to load dashboard bundle:', e);
-  }
-
-
-  async function fetchDashboardBundle() {
-  try {
-    // 🟢 CRITICAL FIX: Support both Telegram WebApp and regular Browser testing
-    let initData = tg.initData || "";
-    let body = { initData };
-
-    // If testing in a regular browser (Chrome), tg.initData is empty, 
-    // so we must explicitly send the target telegramId.
-    if (!initData) {
-      // For testing, set this ID to the user who holds the 0.9 SOL.
-      // You can also use localStorage.setItem('telegramId', '12345678') in the console.
-      body.telegramId = localStorage.getItem('telegramId') || 'YOUR_ADMIN_TELEGRAM_ID_HERE'; 
-    }
-
-    const res = await fetch('/api/dashboard-bundle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const d = await res.json();
-    if (!d) return;
-
-    console.log('[DEBUG] fetchDashboardBundle received:', d);
-
-    // 1. Risk Score
-    if (d.riskScore) {
-      const score = d.riskScore.score || 0;
-      document.getElementById('risk-score').innerText = score + '%';
-      document.getElementById('risk-bar').style.width = Math.min(100, Math.max(0, score)) + '%';
-      document.getElementById('risk-label').innerText = 'Assessment: ' + (d.riskScore.riskLevel || 'Safe Risk');
-    }
-
-    // 2. Sharpe Ratio
-    if (d.institutional && d.institutional.sharpeRatio !== undefined) {
-      document.getElementById('sharpe-ratio').innerText = parseFloat(d.institutional.sharpeRatio).toFixed(2);
-    }
-
-    // 3. CVaR / Total Trades / Slippage
-    if (d.institutional) {
-      const cvarEl = document.getElementById('cvar-value');
-      if (cvarEl && d.institutional.cvar !== undefined) cvarEl.innerText = `${parseFloat(d.institutional.cvar).toFixed(4)} SOL`;
-      const slipEl = document.getElementById('tca-slippage');
-      if (slipEl && d.institutional.avgSlippage !== undefined) slipEl.innerText = `${parseFloat(d.institutional.avgSlippage).toFixed(2)}%`;
-      const tradesEl = document.getElementById('total-trades-count');
-      if (tradesEl && d.institutional.totalTradesCount !== undefined) tradesEl.innerText = d.institutional.totalTradesCount.toLocaleString();
-    }
-
-    // 4. 24-Hour Rolling Activity
-    if (d.statsWindow) {
-      const manual = d.statsWindow.manual || { count: 0, pnl: 0 };
-      const auto = d.statsWindow.auto || { count: 0, pnl: 0 };
-      document.getElementById('stats-live').innerText = `Manual: ${manual.count} trades (${manual.pnl >= 0 ? '+' : ''}${parseFloat(manual.pnl).toFixed(4)} SOL)`;
-      document.getElementById('stats-sim').innerText = `Auto: ${auto.count} trades (${auto.pnl >= 0 ? '+' : ''}${parseFloat(auto.pnl).toFixed(4)} SOL)`;
-    }
-
-    // 5. Active Strategy Values
-    if (d.institutional && d.institutional.stratStats) {
-      const stratMap = d.institutional.stratStats;
-      const updateStratUI = (elementId, pnlValue) => {
-        const el = document.getElementById(elementId);
-        if (el) {
-          const val = typeof pnlValue === 'number' ? pnlValue : parseFloat(pnlValue) || 0;
-          const sign = val >= 0 ? '+' : '';
-          el.innerText = `${sign}${val.toFixed(4)} SOL`;
-          el.className = val >= 0 ? 'text-emerald-400 font-mono font-bold' : 'text-rose-400 font-mono font-bold';
-        }
-      };
-      updateStratUI('strat-pnl-sniper', stratMap['Sniper Engine']?.pnl ?? stratMap['Sniper Engine']?.totalPnl ?? 0);
-      updateStratUI('strat-pnl-manual', stratMap['Manual / Direct']?.pnl ?? stratMap['Manual / Direct']?.totalPnl ?? 0);
-      updateStratUI('strat-pnl-copy', stratMap['Copy Trade']?.pnl ?? stratMap['Copy Trade']?.totalPnl ?? 0);
-      updateStratUI('strat-pnl-dca', stratMap['DCA Engine']?.pnl ?? stratMap['DCA Engine']?.totalPnl ?? 0);
-      updateStratUI('strat-pnl-limit', stratMap['Limit Order']?.pnl ?? stratMap['Limit Order']?.totalPnl ?? 0);
-    }
-
-    // 6. Strategy Attribution Doughnut Chart
-    if (d.institutional && d.institutional.stratStats && window.allocChart) {
-      const strat = d.institutional.stratStats;
-      const values = [
-        Math.max(0, strat['Sniper Engine']?.pnl ?? strat['Sniper Engine']?.totalPnl ?? 0),
-        Math.max(0, strat['Manual / Direct']?.pnl ?? strat['Manual / Direct']?.totalPnl ?? 0),
-        Math.max(0, strat['Copy Trade']?.pnl ?? strat['Copy Trade']?.totalPnl ?? 0),
-        Math.max(0, strat['DCA Engine']?.pnl ?? strat['DCA Engine']?.totalPnl ?? 0),
-        Math.max(0, strat['Limit Order']?.pnl ?? strat['Limit Order']?.totalPnl ?? 0)
-      ];
-      window.allocChart.data.datasets[0].data = values;
-      window.allocChart.update();
-    }
-
-    // 7. 24-Hour Hourly Histogram
-    if (d.hourly && Array.isArray(d.hourly) && window.hourlyChart) {
-      const pnlData = d.hourly.map(h => h.totalPnlSol || 0);
-      window.hourlyChart.data.datasets[0].data = pnlData;
-      window.hourlyChart.update();
-    }
-
-    // 8. Exposure Limit (Budget) UI
-    if (d.institutional) {
-      const spend = d.institutional.currentSpend || 0;
-      const budget = d.institutional.maxBudget || 0;
-      const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
-      const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
-      document.getElementById('risk-budget-bar').style.width = pct + '%';
-      document.getElementById('risk-budget-text').innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
-      const remainingEl = document.getElementById('risk-budget-remaining');
-      if (remainingEl) {
-        remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
-        remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
-      }
-    }
-
-    // 9. Sizing Cap Card
-    if (d.sizingCap) {
-      const card = document.getElementById('sizing-cap-card');
-      const el = document.getElementById('sizing-cap-count');
-      if (d.sizingCap.count > 0 && card && el) {
-        card.style.display = 'flex';
-        el.innerText = `${d.sizingCap.count} time${d.sizingCap.count !== 1 ? 's' : ''}`;
-      } else if (card) {
-        card.style.display = 'none';
-      }
-    }
-
-    // 10. Max Loss Limit
-    if (d.sniperSettings) {
-      const lossEl = document.getElementById('max-loss-limit');
-      if (lossEl) {
-        if (d.sniperSettings.maxLossPercent && d.sniperSettings.maxLossPercent > 0) {
-          lossEl.innerText = `-${d.sniperSettings.maxLossPercent}%`;
-          lossEl.className = 'text-xs font-bold font-mono text-neonRed';
-        } else {
-          lossEl.innerText = 'OFF (0%)';
-          lossEl.className = 'text-xs font-bold font-mono text-gray-500';
-        }
-      }
-    }
-
-    // 11. Net Worth (Cash vs Deployed)
-    if (d.networth) {
-      document.getElementById('stat-cash').innerText = '$' + (d.networth.cashUsd || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      document.getElementById('stat-deployed').innerText = '$' + (d.networth.positionsValueUsd || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    }
-  } catch (e) {
-    console.error('Failed to load dashboard bundle:', e);
-  }
-}
-    async function triggerSweepAll() {
-        if (!confirm('Are you sure you want to market-sell 100% of all open positions to cash?')) return;
-        showToast('Sweeping positions to cash...');
+    // 🟢 FETCH DASHBOARD BUNDLE
+    async function fetchDashboardBundle() {
         try {
-            const res = await fetch('/api/sweep', {
+            const res = await fetch('/api/dashboard-bundle', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
+                body: JSON.stringify({ telegramId: fallbackTgId, initData: tg.initData || "" })
             });
-            const data = await res.json();
-            if (data.success) {
-                showToast(`Swept ${data.closed} positions to cash!`);
-                fetchLiveData();
-                fetchDashboardBundle();
-            } else {
-                showToast('Sweep failed or no open positions');
+            const d = await res.json();
+            if (!res.ok || d.error) {
+                console.warn("Dashboard Bundle fetch warning:", d.error);
+                return; // Do NOT clear the dashboard on a simple network/auth stutter
             }
-        } catch (_) {
-            showToast('Network error while sweeping');
+
+            // 1. Risk Score
+            if (d.riskScore) {
+                const score = d.riskScore.score !== undefined ? d.riskScore.score : (d.riskScore.riskScore || 0);
+                const riskScoreEl = document.getElementById('risk-score');
+                const riskBarEl = document.getElementById('risk-bar');
+                const riskLabelEl = document.getElementById('risk-label');
+                if (riskScoreEl) riskScoreEl.innerText = score + '%';
+                if (riskBarEl) riskBarEl.style.width = Math.min(100, Math.max(0, score)) + '%';
+                if (riskLabelEl) riskLabelEl.innerText = 'Assessment: ' + (d.riskScore.riskLevel || 'Safe Risk');
+            }
+
+            // 2. Sharpe Ratio
+            if (d.institutional && d.institutional.sharpeRatio !== undefined) {
+                const sharpeEl = document.getElementById('sharpe-ratio');
+                if (sharpeEl) sharpeEl.innerText = parseFloat(d.institutional.sharpeRatio).toFixed(2);
+            }
+
+            // 3. CVaR / Total Trades / Slippage
+            if (d.institutional) {
+                const cvarEl = document.getElementById('cvar-value');
+                if (cvarEl && d.institutional.cvar !== undefined) cvarEl.innerText = `${parseFloat(d.institutional.cvar).toFixed(4)} SOL`;
+                const slipEl = document.getElementById('tca-slippage');
+                if (slipEl && d.institutional.avgSlippage !== undefined) slipEl.innerText = `${parseFloat(d.institutional.avgSlippage).toFixed(2)}%`;
+                const tradesEl = document.getElementById('total-trades-count');
+                if (tradesEl && d.institutional.totalTradesCount !== undefined) tradesEl.innerText = d.institutional.totalTradesCount.toLocaleString();
+            }
+
+            // 4. 24-Hour Rolling Activity
+            if (d.statsWindow) {
+                const manual = d.statsWindow.manual || { count: 0, pnl: 0 };
+                const auto = d.statsWindow.auto || { count: 0, pnl: 0 };
+                const statsLiveEl = document.getElementById('stats-live');
+                const statsSimEl = document.getElementById('stats-sim');
+                if (statsLiveEl) statsLiveEl.innerText = `Manual: ${manual.count} trades (${manual.pnl >= 0 ? '+' : ''}${parseFloat(manual.pnl).toFixed(4)} SOL)`;
+                if (statsSimEl) statsSimEl.innerText = `Auto: ${auto.count} trades (${auto.pnl >= 0 ? '+' : ''}${parseFloat(auto.pnl).toFixed(4)} SOL)`;
+            }
+
+            // 5. Active Strategy Values
+            if (d.institutional && d.institutional.stratStats) {
+                const stratMap = d.institutional.stratStats;
+                const updateStratUI = (elementId, pnlValue) => {
+                    const el = document.getElementById(elementId);
+                    if (el) {
+                        const val = typeof pnlValue === 'number' ? pnlValue : parseFloat(pnlValue) || 0;
+                        const sign = val >= 0 ? '+' : '';
+                        el.innerText = `${sign}${val.toFixed(4)} SOL`;
+                        el.className = val >= 0 ? 'text-emerald-400 font-mono font-bold' : 'text-rose-400 font-mono font-bold';
+                    }
+                };
+                updateStratUI('strat-pnl-sniper', stratMap['Sniper Engine']?.pnl ?? stratMap['Sniper Engine']?.totalPnl ?? 0);
+                updateStratUI('strat-pnl-manual', stratMap['Manual / Direct']?.pnl ?? stratMap['Manual / Direct']?.totalPnl ?? 0);
+                updateStratUI('strat-pnl-copy', stratMap['Copy Trade']?.pnl ?? stratMap['Copy Trade']?.totalPnl ?? 0);
+                updateStratUI('strat-pnl-dca', stratMap['DCA Engine']?.pnl ?? stratMap['DCA Engine']?.totalPnl ?? 0);
+                updateStratUI('strat-pnl-limit', stratMap['Limit Order']?.pnl ?? stratMap['Limit Order']?.totalPnl ?? 0);
+            }
+
+            // 6. Strategy Attribution Doughnut Chart
+            if (d.institutional && d.institutional.stratStats && window.allocChart) {
+                const strat = d.institutional.stratStats;
+                const values = [
+                    Math.max(0, strat['Sniper Engine']?.pnl ?? strat['Sniper Engine']?.totalPnl ?? 0),
+                    Math.max(0, strat['Manual / Direct']?.pnl ?? strat['Manual / Direct']?.totalPnl ?? 0),
+                    Math.max(0, strat['Copy Trade']?.pnl ?? strat['Copy Trade']?.totalPnl ?? 0),
+                    Math.max(0, strat['DCA Engine']?.pnl ?? strat['DCA Engine']?.totalPnl ?? 0),
+                    Math.max(0, strat['Limit Order']?.pnl ?? strat['Limit Order']?.totalPnl ?? 0)
+                ];
+                window.allocChart.data.datasets[0].data = values;
+                window.allocChart.update();
+            }
+
+            // 7. 24-Hour Hourly Histogram
+            if (d.hourly && Array.isArray(d.hourly) && window.hourlyChart) {
+                const pnlData = d.hourly.map(h => h.totalPnlSol || 0);
+                window.hourlyChart.data.datasets[0].data = pnlData;
+                window.hourlyChart.update();
+            }
+
+            // 8. Exposure Limit (Budget)
+            if (d.institutional) {
+                const spend = d.institutional.currentSpend || 0;
+                const budget = d.institutional.maxBudget || 0;
+                const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
+                const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
+                const budgetBar = document.getElementById('risk-budget-bar');
+                const budgetText = document.getElementById('risk-budget-text');
+                const remainingEl = document.getElementById('risk-budget-remaining');
+                
+                if (budgetBar) budgetBar.style.width = pct + '%';
+                if (budgetText) budgetText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
+                if (remainingEl) {
+                    remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
+                    remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
+                }
+            }
+        } catch (e) {
+            console.error('Failed to parse dashboard bundle:', e);
         }
     }
 
-
-
-   
-    // 1. Doughnut Chart (Expose to window.allocChart)
-    const allocCanvas = document.getElementById('allocChart');
-    if (allocCanvas) {
-        const allocCtx = allocCanvas.getContext('2d');
-        if (window.allocChart) window.allocChart.destroy();
-        window.allocChart = new Chart(allocCtx, {
-            type: 'doughnut',
-            data: {
-                labels: ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'],
-                datasets: [{
-                    data: [81, 12, 5, 2, 0],
-                    backgroundColor: ['#10B981', '#F59E0B', '#3B82F6', '#8B5CF6', '#EC4899'],
-                    borderWidth: 0
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                cutout: '72%',
-                plugins: {
-                    legend: { display: false }
-                }
-            }
-        });
-    }
-
-    // 2. 🟢 FIX: 24-Hour Hourly Histogram Chart (Expose to window.hourlyChart)
-    const hourlyCanvas = document.getElementById('hourlyChart');
-    if (hourlyCanvas) {
-        const hourlyCtx = hourlyCanvas.getContext('2d');
-        if (window.hourlyChart) window.hourlyChart.destroy();
-        window.hourlyChart = new Chart(hourlyCtx, {
-            type: 'bar',
-            data: {
-                labels: Array.from({ length: 24 }, (_, h) => `${h}:00`),
-                datasets: [{
-                    label: 'PnL (SOL)',
-                    data: Array(24).fill(0),
-                    backgroundColor: (context) => {
-                        const val = context.raw || 0;
-                        return val >= 0 ? 'rgba(16, 185, 129, 0.85)' : 'rgba(239, 68, 68, 0.85)';
-                    },
-                    borderRadius: 3
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        backgroundColor: '#0e131f',
-                        padding: 10,
-                        cornerRadius: 8
-                    }
-                },
-                scales: {
-                    x: { grid: { display: false }, ticks: { font: { size: 8 }, maxTicksLimit: 12, color: '#6B7280' } },
-                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { font: { size: 9 }, color: '#6B7280' } }
-                }
-            }
-        });
-    }
-
-
+    // 🟢 FETCH LEADERBOARD
+    async function fetchLeaderboardData() {
         try {
             const res = await fetch('/api/my-leaderboard', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
+                body: JSON.stringify({ telegramId: fallbackTgId, initData: tg.initData || "" })
             });
             if (res.ok) {
                 liveLeaderboardData = await res.json();
                 renderLeaderboard();
             }
         } catch (_) {}
-    
-    
+    }
+
+    // 🟢 FETCH AFFILIATES
+    async function fetchAffiliateData() {
         try {
             const res = await fetch('/api/affiliate-stats', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
+                body: JSON.stringify({ telegramId: fallbackTgId, initData: tg.initData || "" })
             });
             if (res.ok) {
                 liveAffiliateData = await res.json();
                 renderAffiliates();
             }
         } catch (_) {}
+    }
 
-    
+    // 🟢 FETCH MAIN LIVE DATA
+    async function fetchLiveData() {
         try {
             const simRes = await fetch('/api/sim-stats', {
-                method: 'POST', 
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
+                body: JSON.stringify({ telegramId: fallbackTgId, initData: tg.initData || "" })
             });
 
             if (simRes.ok) {
                 const simStats = await simRes.json();
-                
+                if (simStats.error) throw new Error(simStats.error); // Catch auth errors cleanly
+
                 if (simStats.isActive) {
-                    isSimModeActive = true; 
-                    const solPriceRes = await fetch('/api/sol-price', {
-                        method: 'POST', 
-                        headers: { 'Content-Type': 'application/json' }, 
-                        body: JSON.stringify({ initData: tg.initData || "" })
-                    }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 }));
-                    const liveSolPrice = solPriceRes.price || 156.93;
+                    isSimModeActive = true;
+                    
+                    // Fetch live SOL price safely
+                    let liveSolPrice = 156.93;
+                    try {
+                        const solPriceRes = await fetch('/api/sol-price', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ telegramId: fallbackTgId, initData: tg.initData || "" })
+                        });
+                        if (solPriceRes.ok) {
+                            const pData = await solPriceRes.json();
+                            liveSolPrice = pData.price || 156.93;
+                        }
+                    } catch (_) {}
 
                     const simCashSol = parseFloat(simStats.balance) || 0;
                     const positionsValueUsd = simStats.positionsValueUsd || 0;
@@ -1710,23 +1218,25 @@
                         tradingDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
                     }
 
-                    document.getElementById('stat-trading-days').innerText = tradingDays;
-                    document.getElementById('stat-credits').innerText = credits.toLocaleString();
-                    document.getElementById('header-credits').innerText = `${credits.toLocaleString()} Credits`;
-                    document.getElementById('stat-networth').innerText = '$' + networthUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-                    document.getElementById('stat-networth-sub').innerText = networthSol;
+                    // DOM Updates
+                    const safelySet = (id, text) => { const el = document.getElementById(id); if (el) el.innerText = text; };
+                    
+                    safelySet('stat-trading-days', tradingDays);
+                    safelySet('stat-credits', credits.toLocaleString());
+                    safelySet('header-credits', `${credits.toLocaleString()} Credits`);
+                    safelySet('stat-networth', '$' + networthUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+                    safelySet('stat-networth-sub', networthSol);
                     
                     const pnlColorClass = totalPnlSol >= 0 ? 'text-jupGreen' : 'text-neonRed';
-                    document.getElementById('stat-pnl').innerText = `${totalPnlSol >= 0 ? '+' : ''}${pnlPercent}%`;
-                    document.getElementById('stat-pnl').className = `text-3xl sm:text-4xl font-bold mt-1 transition-colors ${pnlColorClass}`;
-                    document.getElementById('stat-pnl-sub').innerText = `${totalPnlSol >= 0 ? '+' : '-'}$${Math.abs(pnlUsd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} net profit`;
+                    safelySet('stat-pnl', `${totalPnlSol >= 0 ? '+' : ''}${pnlPercent}%`);
+                    const pnlEl = document.getElementById('stat-pnl');
+                    if (pnlEl) pnlEl.className = `text-3xl sm:text-4xl font-bold mt-1 transition-colors ${pnlColorClass}`;
                     
-                    document.getElementById('stat-winrate').innerText = winRate + '%';
-                    document.getElementById('stat-winrate-sub').innerText = `${wins} Wins / ${losses} Losses`;
-                    document.getElementById('stat-volume').innerText = totalVolumeSol.toFixed(4) + " SOL";
-
-                    const totalTradesEl = document.getElementById('total-trades-count');
-                    if (totalTradesEl) totalTradesEl.innerText = totalTrades.toLocaleString();
+                    safelySet('stat-pnl-sub', `${totalPnlSol >= 0 ? '+' : '-'}$${Math.abs(pnlUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} net profit`);
+                    safelySet('stat-winrate', winRate + '%');
+                    safelySet('stat-winrate-sub', `${wins} Wins / ${losses} Losses`);
+                    safelySet('stat-volume', totalVolumeSol.toFixed(4) + " SOL");
+                    safelySet('total-trades-count', totalTrades.toLocaleString());
 
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint, symbol: p.symbol, amount: p.amount,
@@ -1745,20 +1255,25 @@
 
                     renderPositions(simPositions);
                     setFilter(currentFilter);
-                    
+
                     setTimeout(fetchLiveData, 3000);
-                    return;
+                    return; // Exit here for Sim Mode
                 }
             }
-        } catch (simErr) {}
+        } catch (simErr) {
+            console.warn("Simulation fetch error, falling back to Live Mode.");
+        }
 
+        // Live Mode Logic (Only executed if Sim Mode is false or fails)
         isSimModeActive = false;
         try {
+            const bodyPayload = JSON.stringify({ telegramId: fallbackTgId, initData: tg.initData || "" });
+            
             const [positionsRes, analyticsRes, solRes, balanceRes] = await Promise.all([
-                fetch('/api/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) }).then(r => r.ok ? r.json() : []).catch(() => []),
-                fetch('/api/analytics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData || "" }) }).then(res => res.ok ? res.json() : { trades: [], stats: null }).catch(() => ({ trades: [], stats: null })),
-                fetch('/api/sol-price', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData }) }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 })),
-                fetch('/api/wallet-balance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: tg.initData }) }).then(r => r.ok ? r.json() : { balanceSol: 0 }).catch(() => ({ balanceSol: 0 }))
+                fetch('/api/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: bodyPayload }).then(r => r.ok ? r.json() : []).catch(() => []),
+                fetch('/api/analytics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: bodyPayload }).then(res => res.ok ? res.json() : { trades: [], stats: null }).catch(() => ({ trades: [], stats: null })),
+                fetch('/api/sol-price', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: bodyPayload }).then(r => r.ok ? r.json() : { price: 156.93 }).catch(() => ({ price: 156.93 })),
+                fetch('/api/wallet-balance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: bodyPayload }).then(r => r.ok ? r.json() : { balanceSol: 0 }).catch(() => ({ balanceSol: 0 }))
             ]);
 
             const currentSolPrice = solRes.price || 156.93;
@@ -1780,11 +1295,13 @@
             let losses = liveStats.losses || 0;
             let totalVolumeSol = liveStats.totalVolume || 0;
             let totalInvestedSol = liveStats.totalInvestedSol || 0;
-            let totalRealizedPnlSol = liveStats.totalPnlSol || 0; 
+            let totalRealizedPnlSol = liveStats.totalPnlSol || 0;
             let liveCredits = liveStats.credits !== undefined ? liveStats.credits : 0;
 
-            document.getElementById('stat-credits').innerText = liveCredits.toLocaleString();
-            document.getElementById('header-credits').innerText = `${liveCredits.toLocaleString()} Credits`;
+            const safelySet = (id, text) => { const el = document.getElementById(id); if (el) el.innerText = text; };
+
+            safelySet('stat-credits', liveCredits.toLocaleString());
+            safelySet('header-credits', `${liveCredits.toLocaleString()} Credits`);
 
             const totalClosed = wins + losses;
             const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100).toFixed(1) : "0.0";
@@ -1792,28 +1309,51 @@
             const finalPnlPercent = totalInvestedSol > 0 ? ((totalRealizedPnlSol / totalInvestedSol) * 100).toFixed(2) : "0.00";
 
             populateDashboard({
-                networth: totalNetworthUsd, 
-                networthSol: networthSol, 
-                pnlPercent: finalPnlPercent, 
-                pnlUsd: realizedPnlUsd, 
-                winrate: winRate, 
-                winLossText: `${wins} Wins / ${losses} Losses`, 
+                networth: totalNetworthUsd,
+                networthSol: networthSol,
+                pnlPercent: finalPnlPercent,
+                pnlUsd: realizedPnlUsd,
+                winrate: winRate,
+                winLossText: `${wins} Wins / ${losses} Losses`,
                 volume: `${totalVolumeSol.toFixed(2)} SOL`
             }, null, null, posArray);
         } catch (_) {
-            resetDashboardToZero();
+            // Only reset if BOTH Sim AND Live completely failed to fetch
+            console.warn("Live fetch completely failed. Check network or server status.");
         }
 
         setTimeout(fetchLiveData, 3000);
-    
+    }
 
-    
+    async function triggerSweepAll() {
+        if (!confirm('Are you sure you want to market-sell 100% of all open positions to cash?')) return;
+        showToast('Sweeping positions to cash...');
+        try {
+            const res = await fetch('/api/sweep', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ telegramId: fallbackTgId, initData: tg.initData || "" })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`Swept ${data.closed} positions to cash!`);
+                fetchLiveData();
+                fetchDashboardBundle();
+            } else {
+                showToast('Sweep failed or no open positions');
+            }
+        } catch (_) {
+            showToast('Network error while sweeping');
+        }
+    }
+
+    async function exportTrades() {
         showToast('Compiling executive trade ledger...');
         try {
             const res = await fetch('/api/trades/export', {
-                method: 'POST', 
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData || "" })
+                body: JSON.stringify({ telegramId: fallbackTgId, initData: tg.initData || "" })
             });
 
             if (res.ok) {
@@ -1834,15 +1374,15 @@
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
                 showToast('✅ Ledger Exported Successfully!');
-            } else { 
-                showToast('No trades found to export'); 
+            } else {
+                showToast('No trades found to export');
             }
-        } catch (_) { 
-            showToast('Export failed: network error'); 
+        } catch (_) {
+            showToast('Export failed: network error');
         }
-    
+    }
 
-    // Initial load + clean background polling loops
+    // INITIALIZATION & POLLING LOOPS
     initCharts([], [], [], null, null);
     fetchLiveData();
     fetchDashboardBundle();

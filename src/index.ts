@@ -244,13 +244,17 @@ bot.use(async (ctx, next) => {
 });
 
 
+
+
+// 🟢 Dual Authenticator: Supports both Telegram Mini-App and Direct Browser Testing
 function verifyTelegramAuth(initData: string): boolean {
-    // If testing in regular browser (Chrome/Desktop), allow for admin
+    // If testing in regular browser (Chrome/Desktop), allow request to pass through
+    // The extractTelegramId function will enforce the Admin ID fallback.
     if (!initData) {
         return true; 
     }
+
     try {
-        // ... (Keep your existing HMAC verification logic here) ...
         const params = new URLSearchParams(initData);
         const authDateStr = params.get('auth_date');
         if (authDateStr) {
@@ -258,6 +262,7 @@ function verifyTelegramAuth(initData: string): boolean {
             const now = Math.floor(Date.now() / 1000);
             if (now - authDate > 86400 * 7) return false;
         }
+
         const hash = params.get('hash');
         params.delete('hash');
         const dataCheckString = [...params.entries()]
@@ -274,11 +279,11 @@ function verifyTelegramAuth(initData: string): boolean {
     }
 }
 
-function extractTelegramId(initData: string): string | null {
+function extractTelegramId(initData: string | undefined): string | null {
     if (!initData) {
-        // 🟢 FIX: Allow passing explicit ID in body for local browser testing!
-        // (You will need to add a temporary way to inject the user ID into the request body)
-        const adminId = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_IDS || process.env.ADMIN_TELEGRAM_ID || '').split(',')[0]?.trim();
+        // Fallback to first Admin ID from .env when opened in desktop browser
+        const adminIdStr = process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_IDS || process.env.ADMIN_TELEGRAM_ID || '';
+        const adminId = adminIdStr.split(',')[0]?.trim();
         return adminId || null;
     }
 
