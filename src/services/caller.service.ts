@@ -1284,15 +1284,20 @@ async function runCallerEvaluationPass(minAgeMs: number, maxAgeMs: number) {
 }
 
 // 🟢 FIX: Parallelized Dev Reputation Analysis (Signatures 8 -> 5 + Promise.all)
-export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean }> {
+// Replace getDevReputation in src/services/caller.service.ts:
+export async function getDevReputation(creatorWallet: string): Promise<{ launchCount: number; avgRugScore: number; isKnownRugger: boolean; timedOut?: boolean }> {
     if (!creatorWallet) return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
+    
+    // 🟢 24-Hour Cache for immutable developer wallet history
     const cacheKey = `dev_rep:${creatorWallet}`;
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
     try {
-        let pubkey: any;
-        try { pubkey = new PublicKey(creatorWallet); } catch { 
+        let pubkey: PublicKey;
+        try { 
+            pubkey = new PublicKey(creatorWallet); 
+        } catch { 
             return { launchCount: 0, avgRugScore: 0, isKnownRugger: false }; 
         }
 
@@ -1302,7 +1307,7 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
 
         if (!sigs || sigs.length === 0) {
             const emptyResult = { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
-            await redis.set(cacheKey, JSON.stringify(emptyResult), 'EX', 3600);
+            await redis.set(cacheKey, JSON.stringify(emptyResult), 'EX', 86400); // 24h TTL
             return emptyResult;
         }
 
@@ -1327,13 +1332,14 @@ export async function getDevReputation(creatorWallet: string): Promise<{ launchC
             avgRugScore: sigs.length > 0 ? rugCount / sigs.length : 0,
             isKnownRugger: rugCount >= 2
         };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 3600);
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 86400);
         return result;
     } catch (_) {
-        return { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
+        return { launchCount: 0, avgRugScore: 0, isKnownRugger: false, timedOut: true };
     }
 }
 
+// Replace checkLpLockStatus in src/services/caller.service.ts:
 export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: boolean; burned: boolean; lockPct: number }> {
     const cacheKey = `lp_lock:${mintAddress}`;
     const cached = await redis.get(cacheKey);
@@ -1344,23 +1350,22 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
 
     try {
         let pubkey: PublicKey;
-        try { pubkey = new PublicKey(mintAddress); } catch { return { locked: false, burned: false, lockPct: 0 }; }
+        try { 
+            pubkey = new PublicKey(mintAddress); 
+        } catch { 
+            return { locked: false, burned: false, lockPct: 0 }; 
+        }
 
-        // Fast parallel fetch with 400ms timeout
-        const largestPromise = rpcLimiter.run(() => connection.getTokenLargestAccounts(pubkey).catch(() => null));
-        const largest = await Promise.race([
-            largestPromise,
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 400))
-        ]);
+        const largest = await rpcLimiter.run(() => 
+            connection.getTokenLargestAccounts(pubkey).catch(() => null)
+        );
 
         if (!largest || !largest.value[0]) return { locked: false, burned: false, lockPct: 0 };
         const top = largest.value[0];
 
-        const ownerInfoPromise = rpcLimiter.run(() => connection.getParsedAccountInfo(top.address).catch(() => null));
-        const ownerInfo = await Promise.race([
-            ownerInfoPromise,
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 400))
-        ]);
+        const ownerInfo = await rpcLimiter.run(() => 
+            connection.getParsedAccountInfo(top.address).catch(() => null)
+        );
 
         const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner ?? '';
         const totalAmount = largest.value.reduce((s: number, v: any) => s + (v.uiAmount || 0), 0) || 1;
@@ -1371,12 +1376,16 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
             locked: owner === STREAMFLOW_PROGRAM,
             lockPct: pct
         };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 300); // 5 min TTL
         return result;
     } catch (_) {
         return { locked: false, burned: false, lockPct: 0 };
     }
 }
+
+
+
+
 export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
     const cacheKey = `velocity_cache:${mintAddress}`;
     const cached = await redis.get(cacheKey);

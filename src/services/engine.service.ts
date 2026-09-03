@@ -355,9 +355,15 @@ export async function verifyExecutionQuality(
     return fallbackReport;
 }
 
-const STAKED_JITO_ENDPOINT = process.env.STAKED_JITO_URL || "";
-const STAKED_JITO_AUTH = process.env.STAKED_JITO_AUTH_TOKEN || "";
-const JITO_PRIMARY_REGION = process.env.JITO_PRIMARY_REGION || 'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles';
+// Replace sendToJitoBundle in src/services/engine.service.ts:
+
+const JITO_REGIONAL_ENDPOINTS = [
+    'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
+];
 
 export async function sendToJitoBundle(
     swapTx: VersionedTransaction, 
@@ -368,87 +374,53 @@ export async function sendToJitoBundle(
     const tipBase64 = Buffer.from(tipTx.serialize()).toString('base64');
     const bundledTxs = [swapBase64, tipBase64];
 
-    if (STAKED_JITO_ENDPOINT) {
+    // 1. Staked Jito / Nozomi path (if configured)
+    if (process.env.STAKED_JITO_URL) {
         try {
-            let targetUrl = STAKED_JITO_ENDPOINT;
-            if (STAKED_JITO_AUTH && !targetUrl.includes('?c=')) {
-                targetUrl += (targetUrl.includes('?') ? '&' : '?') + `c=${STAKED_JITO_AUTH}`;
+            const res = await axiosClient.post(process.env.STAKED_JITO_URL, {
+                jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs, { encoding: "base64" }]
+            }, { timeout: 1200 });
+
+            if (res.data && !res.data.error && (res.data.result || res.data.bundle_id)) {
+                logger.info('🟢 [ROUTE] Landed via Staked Jito relayer');
+                return true;
             }
-
-            const isNozomi = targetUrl.includes('nozomi');
-
-            if (isNozomi) {
-                const nozomiUrl = targetUrl.includes('/api/sendTransaction2')
-                    ? targetUrl
-                    : targetUrl.replace(/\/\?/, '/api/sendTransaction2?').replace(/\/$/, '/api/sendTransaction2');
-
-                const res = await axiosClient.post(nozomiUrl, swapBase64, {
-                    headers: { 'Content-Type': 'text/plain' },
-                    timeout: 1200
-                });
-
-                if (res.status === 200) {
-                    logger.info('🟢 [ROUTE] Landed via Nozomi/Staked relayer (API v2)');
-                    return true;
-                }
-                logger.warn('🟡 [ROUTE] Nozomi rejected response', { status: res.status, data: res.data });
-            } else {
-                const bundlePayload = { 
-                    jsonrpc: "2.0", 
-                    id: 1, 
-                    method: "sendBundle", 
-                    params: [bundledTxs, { encoding: "base64" }] 
-                };
-
-                const res = await axiosClient.post(targetUrl, bundlePayload, {
-                    headers: { 'Content-Type': 'application/json' },
-                    timeout: 1500
-                });
-
-                if (res.data && !res.data.error && (res.data.result || res.data.bundle_id)) {
-                    logger.info('🟢 [ROUTE] Landed via Staked Jito / Helius');
-                    return true;
-                }
-                logger.warn('🟡 [ROUTE] Staked Jito rejected response', { data: res.data });
-            }
-        } catch (e: any) {
-            logger.warn('🟡 [ROUTE] Staked path failed — failing over to primary Jito block engine', {
-                error: e.message,
-                status: e.response?.status,
-                data: e.response?.data
-            });
-        }
+        } catch (_) {}
     }
 
-    const jitoPayload = { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] };
+    // 2. 🟢 Multi-Region Jito Racing (Races NY, Frankfurt, Amsterdam, Tokyo)
+    const bundlePayload = { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] };
+    
+    const racePromises = JITO_REGIONAL_ENDPOINTS.map(url => 
+        axiosClient.post(url, bundlePayload, { timeout: 1400 })
+            .then(res => {
+                if (res.data && !res.data.error && res.data.result) return true;
+                throw new Error('Rejected');
+            })
+    );
+
     try {
-        const res = await axiosClient.post(JITO_PRIMARY_REGION, jitoPayload, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 1500
-        });
-        if (res.data && !res.data.error) {
-            logger.info(`🟢 [ROUTE] Landed via Jito primary region (${JITO_PRIMARY_REGION})`);
-            return true;
-        }
-        logger.warn('🟡 [ROUTE] Public Jito primary rejected bundle', { data: res.data });
-    } catch (e: any) {
-        logger.warn('🟡 [ROUTE] Public Jito primary failed', { error: e.message });
+        await Promise.any(racePromises);
+        logger.info('🟢 [ROUTE] Landed via Fastest Regional Jito Block Engine');
+        return true;
+    } catch (_) {
+        logger.warn('🟡 [ROUTE] All Jito regional endpoints busy or timed out');
     }
 
+    // 3. 🟢 TPU Raw Transaction Fallback
     if (allowRawFallback) {
         try {
-            const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true }).catch(() => null);
+            const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true });
             if (rawSig) {
                 connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
-                logger.info('🟡 [ROUTE] Landed via raw fallback');
+                logger.info('🟡 [ROUTE] Landed via TPU direct validator fallback');
                 return true;
             }
         } catch (e: any) {
-            logger.error('🔴 [ROUTE] Raw fallback exception', { error: e.message });
+            logger.error('🔴 [ROUTE] Raw fallback error:', { error: e.message });
         }
     }
 
-    logger.error('🔴 [ROUTE] ALL execution routes failed to land transaction');
     return false;
 }
 

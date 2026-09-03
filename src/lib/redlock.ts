@@ -19,21 +19,21 @@ redlock.on('clientError', (err: any) => {
 
 /**
  * 🟢 Universal Auto-Extending Lock Wrapper:
- * Acquires a distributed lock and automatically extends it every ttl/2 ms 
- * until the routine completes, preventing mid-execution expiration.
+ * Acquires a distributed lock and reassigns the new Lock instance 
+ * on every extension cycle, ensuring unlock() operates on valid state.
  */
 export async function withLock<T>(
   resources: string[],
   ttlMs: number,
   routine: () => Promise<T>
 ): Promise<T> {
-  const lock = await redlock.lock(resources[0], ttlMs);
+  let lock = await redlock.lock(resources[0], ttlMs); // 🟢 let, not const
   let released = false;
 
   const extender = setInterval(async () => {
     if (released) return;
     try {
-      await lock.extend(ttlMs);
+      lock = await lock.extend(ttlMs); // 🟢 Reassigned to new Lock instance
     } catch (_) {
       console.warn('⚠️ [REDLOCK] Failed to auto-extend lock:', resources[0]);
     }
