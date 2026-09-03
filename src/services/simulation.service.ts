@@ -1397,3 +1397,40 @@ export async function loadSimulationState(telegramId: string) {
     }));
     await redis.set(`sim:trades:${telegramId}`, JSON.stringify(trades));
 }
+
+export interface ForgedBaseline {
+    wins: number; losses: number; volumeSol: number; pnlSol: number;
+    sharpe: number; drawdown: number; profitFactor: number; risk: number;
+    slippage: number; hourlyChart: number[];
+    stratStats: Record<string, { pnl: number; volume: number }>;
+    forgedAt: number;
+}
+
+/** Real sim activity that happened AFTER the forge was applied. */
+export async function getPostForgeActivity(telegramId: string) {
+    const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+    const forgedAt = forgedRaw ? (JSON.parse(forgedRaw).forgedAt || 0) : 0;
+
+    const trades: any[] = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
+    // Filter only trades that happened strictly after the forge timestamp
+    const post = trades.filter(t => new Date(t.createdAt).getTime() > forgedAt);
+
+    let wins = 0, losses = 0, volumeSol = 0, pnlSol = 0;
+    const stratStats: Record<string, { pnl: number; volume: number }> = {};
+
+    for (const t of post) {
+        if (!t.isBuy && t.realizedPnlSol != null) {
+            volumeSol += (t.amountInSol || 0);
+            const s = t.strategy || 'Manual / Direct';
+            if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
+            
+            stratStats[s].volume += (t.amountInSol || 0);
+            pnlSol += t.realizedPnlSol;
+            stratStats[s].pnl += t.realizedPnlSol;
+            
+            if (t.realizedPnlSol > 0) wins++;
+            else if (t.realizedPnlSol < 0) losses++;
+        }
+    }
+    return { wins, losses, volumeSol, pnlSol, stratStats, tradeCount: post.length };
+}

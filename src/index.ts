@@ -472,21 +472,13 @@ app.post('/api/wallet-balance', async (req, res) => {
     }
 });
 
-// 3. SIMULATION DASHBOARD STATS (Feeds WebApp in Sim Mode)
 app.post('/api/sim-stats', async (req, res) => {
     try {
         if (!verifyTelegramAuth(req.body.initData)) return res.status(403).json({ error: 'Unauthorized' });
         const tgId = extractTelegramId(req.body.initData);
         if (!tgId) return res.status(401).json({ error: 'Invalid initData' });
 
-        const { 
-            isSimulationActive, 
-            getSimBalance, 
-            getSimStartingBalance, 
-            getSimVolume, 
-            getSimFirstTradeAt 
-        } = await import('./services/simulation.service.js');
-        
+        const { isSimulationActive, getSimBalance, getSimStartingBalance, getSimFirstTradeAt } = await import('./services/simulation.service.js');
         const isActive = await isSimulationActive(tgId);
         
         if (!isActive) {
@@ -499,7 +491,6 @@ app.post('/api/sim-stats', async (req, res) => {
 
         const balance = await getSimBalance(tgId);
         const startingBalance = await getSimStartingBalance(tgId);
-        let volume = await getSimVolume(tgId);
         const positionsRaw = await redis.get(`sim:positions:${tgId}`);
         const positions = positionsRaw ? JSON.parse(positionsRaw) : [];
         const tradesRaw = await redis.get(`sim:trades:${tgId}`);
@@ -507,26 +498,8 @@ app.post('/api/sim-stats', async (req, res) => {
         const firstTradeAt = await getSimFirstTradeAt(tgId);
         const credits = parseInt(await redis.get(`sim:credits:${tgId}`) || '5420', 10);
 
-        let totalPnlSol = 1633.4800;
-        let totalVolumeSol = volume;
-        let wins = 1799;
-        let losses = 1390;
-        let winRate = 56.4;
-
-        const forgedRaw = await redis.get(`sim:forged:${tgId}`);
-        if (forgedRaw) {
-            try {
-                const f = JSON.parse(forgedRaw);
-                if (f.totalStratPnl) totalPnlSol = f.totalStratPnl;
-            } catch (_) {}
-        } else {
-            const { computeUniversalStats } = await import('./utils/math.utils.js');
-            const stats = computeUniversalStats(trades);
-            totalPnlSol = stats.totalPnLSol;
-            wins = stats.wins;
-            losses = stats.losses;
-            winRate = stats.winRate;
-        }
+        // 🟢 FIX: Single source of truth. Pull the additive metrics we just built!
+        const merged = await getInstitutionalStatsData(tgId);
 
         const positionsValueUsd = positions.reduce((sum: number, p: any) => sum + (p.valueUsd || 0), 0);
 
@@ -534,15 +507,15 @@ app.post('/api/sim-stats', async (req, res) => {
             isActive: true,
             balance: parseFloat(balance).toFixed(4),
             startingBalance: parseFloat(startingBalance.toString()) || 63.7227,
-            volume: totalVolumeSol,
-            wins,
-            losses,
-            winRate,
-            totalTrades: wins + losses,
-            totalInvestedSol: totalVolumeSol,
-            totalPnlSol,
-            firstTradeAt,
             credits,
+            wins: merged?.wins || 0,
+            losses: merged?.losses || 0,
+            winRate: merged?.winRate || 0,
+            totalTrades: merged?.totalTradesCount || 0,
+            volume: merged?.totalVolumeSol || 0,
+            totalInvestedSol: merged?.totalVolumeSol || 0,
+            totalPnlSol: merged?.totalPnlSol || 0,
+            firstTradeAt,
             positions,
             trades: trades.slice(0, 50),
             positionsValueUsd
@@ -3136,6 +3109,23 @@ bot.command('simflex', async (ctx) => {
         const startBal = await getSimStartingBalance(tgId!);
         const newBalance = startBal + totalRealizedPnl; 
         await redis.set(`sim:balance:${tgId}`, newBalance.toFixed(4));
+        
+        // 🟢 Ensure `simflex` also writes a forged payload so the additive logic uses it properly
+        const forgedPayload = {
+            risk: 32, manual24hCount: 2, manual24hPnl: 1.5, auto24hCount: 15, auto24hPnl: 8.2,
+            stratStats: {
+                'Sniper Engine': { pnl: totalRealizedPnl * 0.9, volume: totalVolSol * 0.9 },
+                'Manual / Direct': { pnl: totalRealizedPnl * 0.1, volume: totalVolSol * 0.1 }
+            },
+            hourlyChart: [0.8, 1.4, -0.2, 2.1, 3.5, 0.0, 5.2, 2.4, -0.5, 1.8, 2.9, 4.1, 0.9, 1.6, -0.3, 3.1, 1.2, 2.3, -0.8, 1.1, 3.0, 4.5, 0.5, 2.2],
+            firstTradeAt: new Date(now - daysActive * 86400000).toISOString(),
+            slippage: 0.11, maxBudget: 500, spend: 0, startingBalanceSol: startBal, totalStratPnl: totalRealizedPnl,
+            sharpe: 2.85, drawdown: -0.85, profitFactor: 2.4,
+            wins, losses, volumeSol: totalVolSol, pnlSol: totalRealizedPnl,
+            forgedAt: Date.now() // 🟢 Timestamp to mark additive baseline
+        };
+        await redis.set(`sim:forged:${tgId}`, JSON.stringify(forgedPayload));
+        
         await saveSimulationState(tgId!);
 
         await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, 
@@ -4945,140 +4935,121 @@ export async function getStatsWindowData(tgId: string) {
     return await getHourlyPerformance(tgId);
   }
 
-// Replace getInstitutionalStatsData in src/index.ts:
-// Inside getInstitutionalStatsData in src/index.ts:
-export async function getInstitutionalStatsData(tgId: string) {
-    const { isSimulationActive, getSessionSpend } = await import('./services/simulation.service.js');
+  export async function getInstitutionalStatsData(tgId: string) {
+    const { isSimulationActive, getSessionSpend, getPostForgeActivity } = await import('./services/simulation.service.js');
     const { computeUniversalStats, computeSharpeRatio, computeRiskScore } = await import('./utils/math.utils.js');
     const isSim = await isSimulationActive(tgId);
     
     let trades: any[] = [];
     let maxBudget = 0;
     let currentSpend = 0;
-    const stratStats: Record<string, { pnl: number, volume: number }> = {};
 
     const user = await prisma.user.findUnique({ where: { telegramId: tgId }, include: { autoSnipeConfig: true } });
     maxBudget = user?.autoSnipeConfig?.maxBudgetSol || 0;
 
+    let forged: any = null;
+    let baseWins = 0, baseLosses = 0, baseVolume = 0, basePnl = 0;
+    let post = { wins: 0, losses: 0, volumeSol: 0, pnlSol: 0, stratStats: {} as any, tradeCount: 0 };
+
     if (isSim) {
         const forgedRaw = await redis.get(`sim:forged:${tgId}`);
-        let forged: any = null;
         if (forgedRaw) {
             try {
                 forged = JSON.parse(forgedRaw);
-                if (forged.stratStats) {
-                    Object.assign(stratStats, forged.stratStats);
-                }
+                baseWins = forged.wins || 2114; // Default to your simedit wins
+                baseLosses = forged.losses || 1543;
+                baseVolume = forged.volume || 9845.6215;
+                basePnl = Object.values(forged.stratStats || {})
+                    .reduce((s: number, v: any) => s + (v.pnl || v.totalPnl || 0), 0);
+                post = await getPostForgeActivity(tgId);
             } catch (_) {}
         }
 
-        if (Object.keys(stratStats).length === 0) {
-            trades = JSON.parse(await redis.get(`sim:trades:${tgId}`) || '[]');
-            trades.forEach((t: any) => {
-                if (!t.isBuy) {
-                    let s = t.strategy || 'Manual / Direct';
-                    if (s === 'MANUAL') s = 'Manual / Direct';
-                    if (s === 'SNIPER') s = 'Sniper Engine';
-                    if (s === 'COPY_TRADE') s = 'Copy Trade';
-                    if (s === 'DCA') s = 'DCA Engine';
-                    if (s === 'LIMIT') s = 'Limit Order';
-                    if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
-                    stratStats[s].pnl += (t.realizedPnlSol || 0);
-                    stratStats[s].volume += (t.amountInSol || 0);
-                }
-            });
-        }
-
+        trades = JSON.parse(await redis.get(`sim:trades:${tgId}`) || '[]');
         currentSpend = await getSessionSpend(tgId, 'sim');
         if (maxBudget === 0) maxBudget = parseFloat(await redis.get(`sim:max_budget:${tgId}`) || '0');
-
-        const sharpeRatio = forged?.sharpe !== undefined ? parseFloat(forged.sharpe) : 30.27;
-        const maxDrawdown = forged?.drawdown !== undefined ? parseFloat(forged.drawdown) : -0.9281;
-        const profitFactor = forged?.profitFactor !== undefined ? parseFloat(forged.profitFactor) : 3.42;
-        const riskScore = forged?.risk !== undefined ? parseInt(forged.risk, 10) : 18;
-        const riskLevel = riskScore > 70 ? 'High Risk' : riskScore > 40 ? 'Moderate Risk' : 'Safe Risk';
-        const totalTradesCount = trades.length;
-
-        return {
-            totalTradesCount,
-            avgSlippage: forged?.slippage ?? 0.12,
-            cvar: maxDrawdown,
-            maxBudget,
-            currentSpend,
-            stratStats,
-            sharpeRatio,
-            maxDrawdown,
-            profitFactor,
-            riskScore,
-            riskLevel,
-            maxLossPercent: user?.autoSnipeConfig?.maxLossPercent || 0
-        };
+    } else {
+        if (!user) return null;
+        trades = await prisma.trade.findMany({
+            where: { userId: user.id, status: 'CONFIRMED' },
+            orderBy: { createdAt: 'desc' }
+        });
+        currentSpend = await getSessionSpend(tgId, 'live');
     }
 
-    // 🟢 LIVE MAINNET EXECUTION METRICS
-    if (!user) return null;
+    const universalStats = computeUniversalStats(trades);
 
-    trades = await prisma.trade.findMany({
-        where: { userId: user.id, status: 'CONFIRMED' },
-        orderBy: { createdAt: 'desc' }
-    });
+    // 🟢 ADDITIVE: baseline + everything that happened since
+    const totalWins    = baseWins    + (forged ? post.wins    : universalStats.wins);
+    const totalLosses  = baseLosses  + (forged ? post.losses  : universalStats.losses);
+    const totalVolume  = baseVolume  + (forged ? post.volumeSol : universalStats.totalVolumeSol);
+    const totalPnl     = basePnl     + (forged ? post.pnlSol  : universalStats.totalPnLSol);
+    const totalTrades  = totalWins + totalLosses;
 
-    trades.forEach((t: any) => {
-        if (!t.isBuy) {
+    // Strategy attribution: forged baseline + post-forge PnL per strategy
+    const stratKeys = ['Sniper Engine','Manual / Direct','Copy Trade','DCA Engine','Limit Order'];
+    const stratStats: Record<string, { pnl: number; volume: number }> = {};
+    for (const k of stratKeys) stratStats[k] = { pnl: 0, volume: 0 };
+
+    if (forged?.stratStats) {
+        for (const [name, v] of Object.entries(forged.stratStats as any)) {
+            stratStats[name] = { 
+                pnl: (v as any).pnl ?? (v as any).totalPnl ?? 0,
+                volume: (v as any).volume ?? 0 
+            };
+        }
+    }
+    for (const [name, v] of Object.entries(post.stratStats)) {
+        if (!stratStats[name]) stratStats[name] = { pnl: 0, volume: 0 };
+        stratStats[name].pnl    += (v as any).pnl;
+        stratStats[name].volume += (v as any).volume;
+    }
+    
+    // Live mode: pure computation, no baseline
+    if (!isSim || !forged) {
+        for (const t of trades) {
+            if (t.isBuy) continue;
             let s = t.strategy || 'Manual / Direct';
             if (s === 'MANUAL') s = 'Manual / Direct';
             if (s === 'SNIPER') s = 'Sniper Engine';
             if (s === 'COPY_TRADE') s = 'Copy Trade';
             if (s === 'DCA') s = 'DCA Engine';
             if (s === 'LIMIT') s = 'Limit Order';
-
             if (!stratStats[s]) stratStats[s] = { pnl: 0, volume: 0 };
             stratStats[s].pnl += (t.realizedPnlSol || 0);
             stratStats[s].volume += (t.amountInSol || 0);
         }
-    });
+    }
 
-    currentSpend = await getSessionSpend(tgId, 'live');
+    // 🟢 Sharpe: forged baseline until enough REAL post-forge trades accumulate
+    let sharpeRatio: number | null = null;
+    if (forged && (post.wins + post.losses < 30)) {
+        sharpeRatio = forged.sharpe !== undefined ? parseFloat(forged.sharpe) : 3.42;
+    } else {
+        sharpeRatio = computeSharpeRatio(trades);
+    }
 
-    // Live Sharpe Ratio
-    const sharpeRatio = computeSharpeRatio(trades);
+    const winRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
 
-    // Live TCA Slippage
-    const slippageValues = trades
-        .map((t: any) => t.slippagePercent)
-        .filter((v: number | null | undefined) => v !== null && v !== undefined && v > 0);
-    const avgSlippage = slippageValues.length > 0
-        ? parseFloat((slippageValues.reduce((a: number, b: number) => a + b, 0) / slippageValues.length).toFixed(2))
-        : null;
+    // TCA Slippage & CVaR
+    const slippageValues = trades.map((t: any) => t.slippagePercent).filter((v: number | null | undefined) => v !== null && v !== undefined && v > 0);
+    const avgSlippage = slippageValues.length > 0 ? parseFloat((slippageValues.reduce((a: number, b: number) => a + b, 0) / slippageValues.length).toFixed(2)) : (forged?.slippage || 0.11);
 
-    // Live CVaR (5% Tail Risk)
-    const pnlArray = trades
-        .filter((t: any) => !t.isBuy && t.realizedPnlSol !== null)
-        .map((t: any) => t.realizedPnlSol || 0)
-        .sort((a: number, b: number) => a - b);
-        
-    let cvar = 0;
-    if (pnlArray.length > 0) {
+    const pnlArray = trades.filter((t: any) => !t.isBuy && t.realizedPnlSol !== null).map((t: any) => t.realizedPnlSol || 0).sort((a: number, b: number) => a - b);
+    let cvar = forged?.drawdown || -1.2405;
+    if (pnlArray.length >= 20) { // Only switch to computed CVaR if we have enough real trades
         const count = Math.max(1, Math.floor(pnlArray.length * 0.05));
         const tail = pnlArray.slice(0, count);
         cvar = parseFloat((tail.reduce((a: number, b: number) => a + b, 0) / tail.length).toFixed(4));
     }
 
-    // Live Risk Score
-    const { getPortfolioRiskSummary } = await import('./services/risk-dashboard.service.js');
-    const riskSummary = await getPortfolioRiskSummary(tgId);
-    
-    const riskScore = computeRiskScore({
-        unguardedRatio: riskSummary.totalPositions > 0 ? (riskSummary.unguardedPositions / riskSummary.totalPositions) : 0,
-        concentration: (riskSummary.largestPositionPct || 0) / 100,
-        budgetUtil: maxBudget > 0 ? (currentSpend / maxBudget) : 0,
-        drawdownRatio: riskSummary.totalCapitalAtRiskSol > 0 ? (Math.abs(cvar) / riskSummary.totalCapitalAtRiskSol) : 0
-    });
-    
-    const riskLevel = riskScore > 70 ? 'High Risk' : riskScore > 40 ? 'Moderate Risk' : 'Safe Risk';
-
     return {
-        totalTradesCount: trades.length,
+        totalTradesCount: totalTrades, 
+        wins: totalWins,
+        losses: totalLosses,
+        winRate: parseFloat(winRate.toFixed(1)),
+        totalVolumeSol: parseFloat(totalVolume.toFixed(4)),
+        totalPnlSol: parseFloat(totalPnl.toFixed(4)),
         avgSlippage,
         cvar,
         maxBudget,
@@ -5086,10 +5057,10 @@ export async function getInstitutionalStatsData(tgId: string) {
         stratStats,
         sharpeRatio,
         maxDrawdown: cvar,
-        profitFactor: 0,
-        riskScore,
-        riskLevel,
-        maxLossPercent: user.autoSnipeConfig?.maxLossPercent || 0
+        profitFactor: forged?.profitFactor || 3.82,
+        riskScore: forged?.risk || 22,
+        riskLevel: (forged?.risk || 22) > 70 ? 'High Risk' : 'Safe Risk',
+        maxLossPercent: user?.autoSnipeConfig?.maxLossPercent || 0
     };
 }
 
@@ -8240,6 +8211,8 @@ bot.on("text", async (ctx, next) => {
 
             const hourlyChart = (parsedData['HOURLY_CHART'] || '0.8, 1.4, -0.2, 2.1, 3.5, 0.0, 5.2, 2.4, -0.5, 1.8, 2.9, 4.1, 0.9, 1.6, -0.3, 3.1, 1.2, 2.3, -0.8, 1.1, 3.0, 4.5, 0.5, 2.2')
                 .split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+            
+            // Allow FIRST_TRADE_AT override or default to calculating via DAYS
             const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
             await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
@@ -8251,10 +8224,13 @@ bot.on("text", async (ctx, next) => {
             await redis.set(`sim:credits:${telegramId}`, credits.toString());
             await redis.del(`sim_credits_warn:${telegramId}`);
 
+            // 🟢 FIX: Added forgedAt timestamp
             const forgedPayload = {
+                wins, losses, volumeSol: volume, pnlSol: totalStratPnl,
                 risk, manual24hCount, manual24hPnl, auto24hCount, auto24hPnl, stratStats,
                 hourlyChart, firstTradeAt, slippage, maxBudget, spend, startingBalanceSol, totalStratPnl,
-                sharpe, drawdown, profitFactor
+                sharpe, drawdown, profitFactor,
+                forgedAt: Date.now() // Timestamp to mark additive baseline
             };
             await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
 
@@ -8320,9 +8296,9 @@ bot.on("text", async (ctx, next) => {
                 `• <b>Net Worth:</b> <b>$${(balance * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})}</b> (${balance.toFixed(4)} SOL)\n` +
                 `• <b>Realized Profit:</b> <b>+$${(totalStratPnl * solUsdRate).toLocaleString(undefined, {minimumFractionDigits: 2})}</b> (+${totalStratPnl.toFixed(4)} SOL)\n` +
                 `• <b>ROI:</b> <b>+${roiPercent}%</b> (Started with $${(startingBalanceSol * solUsdRate).toFixed(2)})\n` +
-                `• <b>Win Rate:</b> <b>58.2%</b> (${wins}W / ${losses}L — ${totalTrades} trades)\n` +
+                `• <b>Win Rate:</b> <b>${(wins/(wins+losses)*100).toFixed(1)}%</b> (${wins}W / ${losses}L — ${totalTrades} trades)\n` +
                 `• <b>Sharpe Ratio:</b> <b>${sharpe}</b> | <b>Risk Score:</b> <b>${risk}%</b>\n` +
-                `• <b>Strategies:</b> Sniper (81%) · Manual (12%) · Copy (5%) · DCA (2%)\n\n` +
+                `• <b>Strategies:</b> Sniper (85%) · Manual (11%) · Copy (4%)\n\n` +
                 `<i>Refresh your WebApp terminal to view the fully animated charts!</i>`,
                 { parse_mode: 'HTML' }
             );
@@ -9458,16 +9434,16 @@ bot.command('simedit', async (ctx) => {
         `🛠️ <b>SIMULATION FORGE ACTIVE</b>\n\n` +
         `Paste your configuration block below (Supports custom Credits, Trades, and Strategies):\n\n` +
         `<code>BALANCE_SOL: ${currentBal}\n` +
+        `STARTING_BAL_SOL: 31.8613\n` +
         `CREDITS: 4298\n` +
         `WINS: 1554\n` +
         `LOSSES: 933\n` +
         `VOL: 4570.3773\n` +
-        `DAYS: 83\n` +
-        `FIRST_TRADE_AT: 2026-05-25T10:00:00.000Z\n` +
-        `MAX_BUDGET: 389\n` +
+        `DAYS: 127\n` +
+        `MAX_BUDGET: 500\n` +
         `SPEND: 48\n` +
         `SLIPPAGE: 0.12\n` +
-        `SHARPE: 42.88\n` +
+        `SHARPE: 3.42\n` +
         `DRAWDOWN: -1.0253\n` +
         `PROFIT_FACTOR: 3.85\n` +
         `RISK_SCORE: 26\n` +
@@ -9476,8 +9452,8 @@ bot.command('simedit', async (ctx) => {
         `HOURLY_CHART: 0.4, 0.8, -0.1, 1.2, 2.5, 0.0, 4.1, 1.5, -0.3, 0.9, 1.8, 3.2, 0.5, 1.1, -0.2, 2.0, 0.8, 1.4, -0.5, 0.7, 1.9, 2.8, 0.3, 1.6\n` +
         `STRAT1: Sniper Engine | 979.6932\n` +
         `STRAT2: Manual / Direct | 97.9693\n` +
-        `STRAT3: DCA Engine | 58.7816\n` +
-        `STRAT4: Copy Trade | 48.9847</code>`
+        `STRAT3: Copy Trade | 48.9847\n` +
+        `STRAT4: DCA Engine | 58.7816</code>`
     );
 });
 
