@@ -9173,6 +9173,18 @@ app.post('/api/performance', async (req, res) => {
         const isSim = await isSimulationActive(telegramId);
 
         if (isSim) {
+            // 🟢 FIX: Read from the forged payload first so large numbers reflect in Active Strategies
+            const forgedRaw = await redis.get(`sim:forged:${telegramId}`);
+            if (forgedRaw) {
+                try {
+                    const forged = JSON.parse(forgedRaw);
+                    if (forged.stratStats) {
+                        return res.json(forged.stratStats);
+                    }
+                } catch (_) {}
+            }
+
+            // Fallback if no forged payload exists
             const simTrades = JSON.parse(await redis.get(`sim:trades:${telegramId}`) || '[]');
             simTrades.forEach((t: any) => {
                 if (!t.isBuy) {
