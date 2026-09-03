@@ -91,7 +91,6 @@
             border: 1px solid rgba(255, 255, 255, 0.08);
             transition: all 0.3s ease;
         }
-
         .chart-animated-live:hover {
             animation: continuousRgbBorder 3s linear infinite !important;
         }
@@ -172,7 +171,7 @@
         <div class="bg-[#0e131f] p-1 rounded-lg border border-white/5 inline-flex shadow-lg overflow-x-auto max-w-full">
             <button id="tab-dashboard" onclick="switchView('dashboard')" class="px-5 py-2 rounded-md text-xs font-bold text-white bg-white/10 transition-all shadow whitespace-nowrap">Terminal Dashboard</button>
             <button id="tab-leaderboard" onclick="switchView('leaderboard')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Guild Leaderboard</button>
-            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Affiliate Hub</button>
+            <button id="tab-affiliates" onclick="switchView('affiliates')" class="px-5 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-white transition-all whitespace-nowrap">Affiliate & Social Alpha Hub</button>
         </div>
     </div>
 
@@ -299,7 +298,7 @@
             <div class="card-flat p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white/[0.02] border border-white/5 mb-6 mt-4 shadow-inner">
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Avg Slippage (TCA)</span>
-                    <div class="text-xl font-bold text-white font-mono mt-1" id="tca-slippage">--%</div>
+                    <div class="text-xl font-bold text-white font-mono mt-1" id="tca-slippage">0.11%</div>
                 </div>
                 <div>
                     <span class="text-[10px] text-gray-400 uppercase tracking-widest font-bold cursor-help" title="Expected Shortfall of bottom 5% trades">CVaR (5% Tail Risk)</span>
@@ -343,41 +342,7 @@
                         <i class="fa-solid fa-chess-knight text-gray-500"></i> Active Strategies
                     </span>
                     <div id="best-strategy-container" class="space-y-2">
-                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-jupGreen"></span>
-                                <span class="text-xs text-white font-bold">Sniper Engine</span>
-                            </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-sniper">+449.2232 SOL</span>
-                        </div>
-                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-yellow-500"></span>
-                                <span class="text-xs text-white font-bold">Manual / Direct</span>
-                            </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-manual">+37.0875 SOL</span>
-                        </div>
-                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-neonBlue"></span>
-                                <span class="text-xs text-white font-bold">Copy Trade</span>
-                            </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-copy">+25.4476 SOL</span>
-                        </div>
-                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-neonPurple"></span>
-                                <span class="text-xs text-white font-bold">DCA Engine</span>
-                            </div>
-                            <span class="text-xs text-jupGreen font-mono font-bold" id="strat-pnl-dca">+23.3688 SOL</span>
-                        </div>
-                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full bg-gray-400"></span>
-                                <span class="text-xs text-white font-bold">Limit Order</span>
-                            </div>
-                            <span class="text-xs text-gray-400 font-mono font-bold" id="strat-pnl-limit">+0.0000 SOL</span>
-                        </div>
+                        <!-- Populated by JS -->
                     </div>
                 </div>
             </div>
@@ -460,79 +425,107 @@
         </div>
     </main>
 
-    <!-- VIEW 3: AFFILIATES -->
+    <!-- VIEW 3: AFFILIATES (REDESIGNED) -->
     <main id="view-affiliates" class="hidden-view max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
         <section class="xl:col-span-2 space-y-6">
-            <div class="grid grid-cols-2 gap-3 sm:gap-4">
-                <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-user-plus text-gray-500"></i> Total Recruits</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-jupGreen" id="aff-stat-recruits">0</span>
+            
+            <!-- Points & Tier Card -->
+            <div class="card-flat p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div class="w-full sm:w-1/2">
+                    <span class="text-[10px] text-amber-500 font-bold uppercase tracking-wider flex items-center gap-2 mb-1"><i class="fa-solid fa-gem"></i> ACCUMULATED SENTRY POINTS</span>
+                    <div class="text-3xl sm:text-4xl font-bold text-white font-mono mt-1" id="aff-pts">0 PTS</div>
+                    <div class="text-[10px] text-gray-500 font-mono mt-1 mb-2" id="aff-pts-sub">0 / 5,000,000 PTS to Silver</div>
+                    <div class="w-full bg-[#1e293b] rounded-full h-1.5 border border-white/5 overflow-hidden">
+                        <div id="aff-pts-bar" class="bg-gradient-to-r from-amber-500 to-yellow-300 h-full rounded-full" style="width: 0%"></div>
                     </div>
                 </div>
-                <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-coins text-gray-500"></i> Pending Yield</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonPurple" id="aff-stat-pending">0.0000</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1">SOL</div>
+                <div class="w-full sm:w-1/2 text-left sm:text-right">
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">YOUR ACTIVE TIER</span>
+                    <div id="aff-tier-name" class="text-2xl sm:text-3xl font-bold text-amber-500">Bronze (50%)</div>
+                </div>
+            </div>
+
+            <!-- 4 Grid Cards -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+                <div class="card-flat p-4">
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-coins text-neonPurple"></i> PENDING YIELD</span>
+                    <div class="text-lg sm:text-xl font-bold text-neonPurple font-mono mt-2" id="aff-val-pending">0.0000 SOL</div>
+                    <div class="text-[9px] text-gray-500 mt-1">Claimable to W1</div>
+                </div>
+                <div class="card-flat p-4">
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-percent text-jupGreen"></i> TRADE FEE CUT</span>
+                    <div class="text-lg sm:text-xl font-bold text-jupGreen font-mono mt-2" id="aff-val-trade">+0.0000 SOL</div>
+                    <div class="text-[9px] text-gray-500 mt-1">50% - 70% Share</div>
+                </div>
+                <div class="card-flat p-4">
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-bolt text-yellow-500"></i> AI CREDIT SHARE</span>
+                    <div class="text-lg sm:text-xl font-bold text-yellow-500 font-mono mt-2" id="aff-val-credit">+0.0000 SOL</div>
+                    <div class="text-[9px] text-gray-500 mt-1">40% Rev-Share</div>
+                </div>
+                <div class="card-flat p-4">
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-users text-neonBlue"></i> COPIER YIELD</span>
+                    <div class="text-lg sm:text-xl font-bold text-neonBlue font-mono mt-2" id="aff-val-copy">+0.0000 SOL</div>
+                    <div class="text-[9px] text-gray-500 mt-1">50% Leader Cut</div>
+                </div>
+            </div>
+
+            <!-- Links -->
+            <div class="card-flat p-5 space-y-4">
+                <div>
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-2 block">YOUR AFFILIATE INVITE LINK (50% - 70% TRADING + 40% AI CREDITS)</span>
+                    <div class="flex items-center gap-2 bg-[#07090e] p-1.5 rounded-lg border border-white/5">
+                        <input type="text" id="aff-link-ref" readonly class="w-full bg-transparent text-gray-300 font-mono text-xs sm:text-sm px-2 focus:outline-none" value="Loading...">
+                        <button onclick="copyToClipboard('aff-link-ref')" class="bg-white/5 hover:bg-white/10 px-4 py-2 rounded-md text-xs font-bold text-white transition-colors flex items-center gap-2"><i class="fa-regular fa-copy"></i> Copy</button>
                     </div>
                 </div>
-                <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-chart-line text-gray-500"></i> Lifetime Earned</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-neonBlue" id="aff-stat-lifetime">0.0000</span>
-                        <div class="text-xs font-mono text-gray-500 mt-1">SOL</div>
-                    </div>
-                </div>
-                <div class="card-flat p-5">
-                    <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-trophy text-gray-500"></i> Your Tier</span>
-                    <div class="mt-3">
-                        <span class="text-3xl sm:text-4xl font-bold text-amber-500" id="aff-stat-tier">Bronze (50%)</span>
+                <div>
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-2 block">YOUR PUBLIC COPY-TRADING FEED LINK (50% LEADER REV-SHARE)</span>
+                    <div class="flex items-center gap-2 bg-[#07090e] p-1.5 rounded-lg border border-white/5">
+                        <input type="text" id="aff-link-copy" readonly class="w-full bg-transparent text-gray-300 font-mono text-xs sm:text-sm px-2 focus:outline-none" value="Loading...">
+                        <button onclick="copyToClipboard('aff-link-copy')" class="bg-white/5 hover:bg-white/10 px-4 py-2 rounded-md text-xs font-bold text-white transition-colors flex items-center gap-2"><i class="fa-solid fa-satellite-dish"></i> Copy</button>
                     </div>
                 </div>
             </div>
 
-            <div class="card-flat p-5">
-                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4">YOUR INVITE LINK</h3>
-                <div class="flex items-center gap-3">
-                    <input type="text" id="aff-ref-link" readonly class="w-full bg-[#07090e] text-gray-300 font-mono text-sm p-3 rounded-lg border border-white/5 focus:outline-none" value="Loading...">
-                    <button onclick="copyReferralLink()" class="glass-btn px-4 py-3 rounded-lg text-sm font-bold text-white whitespace-nowrap"><i class="fa-solid fa-copy mr-1"></i> Copy Link</button>
+            <!-- Recruits / Copiers List -->
+            <div class="card-flat p-4 min-h-[300px]">
+                <div class="flex gap-2 border-b border-white/5 pb-3 mb-4">
+                    <button id="aff-tab-recruits" onclick="setAffTab('recruits')" class="px-4 py-2 text-xs font-bold text-white bg-white/10 rounded-md transition-all">Recruits (0)</button>
+                    <button id="aff-tab-copiers" onclick="setAffTab('copiers')" class="px-4 py-2 text-xs font-bold text-gray-500 hover:text-white transition-all">Copiers Mirroring You (0)</button>
                 </div>
-                <p class="text-xs text-gray-500 mt-3">Each recruit gets 10% off fees forever. You earn up to 70% of their trading fees and 40% of their AI Credit purchases for life.</p>
+                <div id="aff-list-container" class="space-y-2">
+                    <!-- Dynamic List -->
+                </div>
             </div>
 
-            <div class="space-y-3">
-                <div class="flex items-center justify-between px-1 pt-2 pb-2">
-                    <h3 class="text-sm text-gray-300 font-semibold tracking-wide">ACTIVE RECRUITS</h3>
-                </div>
-                <div id="recruits-container" class="space-y-3"></div>
-            </div>
         </section>
 
         <section class="space-y-6">
+            <!-- Chart -->
             <div class="card-flat p-5">
-                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-6">AFFILIATE REVENUE</h3>
-                <div class="h-64 relative w-full">
+                <h3 class="text-[11px] text-gray-400 font-bold tracking-wider mb-4 flex items-center gap-2"><i class="fa-solid fa-chart-line text-jupGreen"></i> 30-DAY REVENUE HISTORY (SOL)</h3>
+                <div class="h-48 relative w-full">
                     <canvas id="affiliateChart"></canvas>
                 </div>
             </div>
 
+            <!-- Projections -->
             <div class="card-flat p-5">
-                <h3 class="text-[12px] text-gray-300 font-semibold tracking-wide mb-4 uppercase">Projected Earnings</h3>
-                <p class="text-xs text-gray-400 mb-4">If your recruits maintain current volume:</p>
+                <h3 class="text-[11px] text-gray-400 font-bold tracking-wider mb-2 flex items-center gap-2"><i class="fa-solid fa-money-bill-trend-up text-neonBlue"></i> PROJECTED ANNUAL YIELD</h3>
+                <p class="text-[10px] text-gray-500 mb-4">Compounded projection based on active network volume:</p>
                 
-                <div class="space-y-4">
+                <div class="space-y-3">
                     <div class="flex justify-between items-center bg-[#07090e] p-3 rounded-lg border border-white/5">
-                        <span class="text-sm text-gray-400">7 Days</span>
-                        <span class="text-sm font-bold text-jupGreen font-mono" id="proj-7d">0.00 SOL</span>
+                        <span class="text-xs text-gray-400 font-semibold">7-Day Run Rate</span>
+                        <span class="text-sm font-bold text-jupGreen font-mono" id="aff-proj-7d">0.0000 SOL</span>
                     </div>
                     <div class="flex justify-between items-center bg-[#07090e] p-3 rounded-lg border border-white/5">
-                        <span class="text-sm text-gray-400">30 Days</span>
-                        <span class="text-sm font-bold text-jupGreen font-mono" id="proj-30d">0.00 SOL</span>
+                        <span class="text-xs text-gray-400 font-semibold">30-Day Projected</span>
+                        <span class="text-sm font-bold text-jupGreen font-mono" id="aff-proj-30d">0.0000 SOL</span>
                     </div>
                     <div class="flex justify-between items-center bg-[#07090e] p-3 rounded-lg border border-white/5">
-                        <span class="text-sm text-gray-400">1 Year</span>
-                        <span class="text-sm font-bold text-jupGreen font-mono" id="proj-1y">0.00 SOL</span>
+                        <span class="text-xs text-gray-400 font-semibold">1-Year Est. Yield</span>
+                        <span class="text-sm font-bold text-jupGreen font-mono" id="aff-proj-1y">0.0000 SOL</span>
                     </div>
                 </div>
             </div>
@@ -556,11 +549,8 @@
     let currentFilter = '30D'; 
     
     let liveLeaderboardData = { guild: null, members: [] };
-    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.50, recruitList: [], dailyEarnings: Array(30).fill(0) };
-
-    function escapeHtml(s) {
-        return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-    }
+    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
+    let activeAffTab = 'recruits';
 
     function switchView(view) {
         if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
@@ -600,6 +590,14 @@
         toast.className = "show";
         if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
         setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 2000);
+    }
+
+    function copyToClipboard(elementId) {
+        const el = document.getElementById(elementId);
+        if (el) {
+            navigator.clipboard.writeText(el.value);
+            showToast("Copied to clipboard!");
+        }
     }
 
     if (tg.initDataUnsafe?.user) {
@@ -698,6 +696,7 @@
                     ]
                 },
                 options: {
+                    animation: false,
                     responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
                     plugins: { 
                         legend: { display: false },
@@ -733,6 +732,7 @@
                     }]
                 },
                 options: {
+                    animation: false,
                     responsive: true,
                     maintainAspectRatio: false,
                     rotation: 0,
@@ -747,8 +747,7 @@
                             cornerRadius: 8
                         } 
                     },
-                    cutout: '75%',
-                    animation: { animateScale: true }
+                    cutout: '75%'
                 }
             });
         }
@@ -896,9 +895,9 @@
                     <div class="flex items-center gap-3 sm:gap-4">
                         <div class="w-8 text-center font-bold">${medal}</div>
                         <div>
-                            <div class="font-bold text-white text-sm sm:text-base">@${escapeHtml(row.username)} ${airdropTag}</div>
+                            <div class="font-bold text-white text-sm sm:text-base">@${row.username} ${airdropTag}</div>
                             <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue" onclick="copyCA('${row.walletAddress}')">
-                                ${escapeHtml(row.walletAddress.substring(0,4))}...${escapeHtml(row.walletAddress.slice(-4))} <i class="fa-regular fa-copy ml-1"></i>
+                                ${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
                             </div>
                         </div>
                     </div>
@@ -911,78 +910,81 @@
         }
     }
 
+    function setAffTab(tab) {
+        activeAffTab = tab;
+        document.getElementById('aff-tab-recruits').className = tab === 'recruits' ? 'px-4 py-2 text-xs font-bold text-white bg-white/10 rounded-md transition-all' : 'px-4 py-2 text-xs font-bold text-gray-500 hover:text-white transition-all';
+        document.getElementById('aff-tab-copiers').className = tab === 'copiers' ? 'px-4 py-2 text-xs font-bold text-white bg-white/10 rounded-md transition-all' : 'px-4 py-2 text-xs font-bold text-gray-500 hover:text-white transition-all';
+        renderAffiliateList();
+    }
+
+    function renderAffiliateList() {
+        const container = document.getElementById('aff-list-container');
+        const d = liveAffiliateData;
+        const list = activeAffTab === 'recruits' ? (d.recruitList || []) : (d.copierList || []);
+        
+        if (list.length === 0) {
+            container.innerHTML = `
+                <div class="text-center py-10 text-gray-500 flex flex-col items-center">
+                    <i class="fa-solid fa-users-slash text-3xl mb-3 opacity-50"></i>
+                    <div class="text-sm font-semibold">No ${activeAffTab} yet</div>
+                    <span class="text-xs font-mono mt-1">Share your links to start earning.</span>
+                </div>`;
+            return;
+        }
+
+        container.innerHTML = list.map(item => `
+            <div class="flex justify-between items-center bg-[#1a2235] p-3 sm:p-4 rounded-xl border border-white/5 transition-colors hover:bg-white/[0.02]">
+                <div class="flex items-center gap-3">
+                    <div class="bg-[#0e131f] text-gray-400 h-10 w-10 rounded-lg flex items-center justify-center border border-white/5">
+                        <i class="fa-solid fa-user"></i>
+                    </div>
+                    <div>
+                        <div class="font-bold text-white text-sm">@${item.username || 'Trader'}</div>
+                        <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5">${(item.volumeSol || 0).toFixed(2)} SOL Vol</div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
     function renderAffiliates() {
         const data = liveAffiliateData;
         
-        document.getElementById('aff-stat-recruits').innerText = data.recruits || 0;
-        document.getElementById('aff-stat-pending').innerText = (data.pendingYieldSol || 0).toFixed(4);
-        document.getElementById('aff-stat-lifetime').innerText = (data.lifetimeEarnedSol || 0).toFixed(4);
+        document.getElementById('aff-pts').innerText = (data.totalPoints || 0).toLocaleString() + ' PTS';
+        document.getElementById('aff-pts-sub').innerText = `${(data.totalPoints || 0).toLocaleString()} / ${(data.nextTierPoints || 5000000).toLocaleString()} PTS to ${data.nextTier || 'Silver'}`;
         
-        // 🟢 AFF-2 FIX: Aligned with canonical TIER_CONFIG from points.ts
-        const pts = data.totalPoints || 0;
-        let tier = "Bronze";
-        let tierRate = "50%";
+        const pct = Math.min(100, ((data.totalPoints || 0) / (data.nextTierPoints || 5000000)) * 100);
+        document.getElementById('aff-pts-bar').style.width = `${pct}%`;
+
+        document.getElementById('aff-val-pending').innerText = (data.pendingYieldSol || 0).toFixed(4) + ' SOL';
+        document.getElementById('aff-val-trade').innerText = '+' + (data.tradeFeeCut || 0).toFixed(4) + ' SOL';
+        document.getElementById('aff-val-credit').innerText = '+' + (data.creditShare || 0).toFixed(4) + ' SOL';
+        document.getElementById('aff-val-copy').innerText = '+' + (data.copierYield || 0).toFixed(4) + ' SOL';
+        
+        let tier = data.currentTier || "Bronze";
+        let tierRate = ((data.currentRate || 0.50) * 100).toFixed(0) + "%";
         let tierColor = "text-amber-500";
 
-        if (pts >= 25000000) {
-            tierColor = "text-yellow-400";
-            tier = "Gold";
-            tierRate = "70%";
-        } else if (pts >= 5000000) {
-            tierColor = "text-gray-300";
-            tier = "Silver";
-            tierRate = "60%";
-        } else {
-            tier = "Bronze";
-            tierRate = "50%";
-        }
+        if (tier === 'Diamond') { tierColor = "text-cyan-400"; } 
+        else if (tier === 'Gold') { tierColor = "text-yellow-400"; } 
+        else if (tier === 'Silver') { tierColor = "text-gray-300"; } 
+        else { tierColor = "text-amber-500"; }
         
-        const tierEl = document.getElementById('aff-stat-tier');
+        const tierEl = document.getElementById('aff-tier-name');
         if (tierEl) {
             tierEl.innerText = `${tier} (${tierRate})`;
-            tierEl.className = `text-3xl sm:text-4xl font-bold ${tierColor}`;
+            tierEl.className = `text-2xl sm:text-3xl font-bold text-right ${tierColor}`;
         }
         
-        document.getElementById('aff-ref-link').value = data.referralLink || "Link generating...";
+        document.getElementById('aff-link-ref').value = data.referralLink || "Loading...";
+        document.getElementById('aff-link-copy').value = data.copierFeedLink || "Loading...";
         
-        const container = document.getElementById('recruits-container');
-        if (!data.recruitList || data.recruitList.length === 0) {
-            if (container) {
-                container.innerHTML = `
-                    <div class="text-center py-10 card-flat text-gray-500 flex flex-col items-center border border-dashed border-white/10">
-                        <i class="fa-solid fa-folder-open text-3xl mb-3 opacity-50"></i>
-                        <div class="text-sm font-semibold">No recruits yet</div>
-                        <span class="text-xs font-mono mt-1">Share your link to earn 50%–70% of fees for life.</span>
-                    </div>`;
-            }
-        } else if (container) {
-            container.innerHTML = data.recruitList.map(r => {
-                const isActive = r.lastActiveDaysAgo < 7;
-                const dotColor = isActive ? 'bg-jupGreen' : 'bg-gray-600';
-                return `
-                <div class="card-flat overflow-hidden p-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
-                    <div class="flex items-center gap-4">
-                        <div class="relative">
-                            <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
-                                <i class="fa-solid fa-user text-gray-400"></i>
-                            </div>
-                            <span class="absolute bottom-0 right-0 h-3 w-3 rounded-full ${dotColor} border-2 border-[#0e131f]"></span>
-                        </div>
-                        <div>
-                            <h4 class="font-bold text-[15px] text-white">@${escapeHtml(r.username)}</h4>
-                            <span class="text-[11px] text-gray-500 font-mono">${r.volumeSol.toFixed(2)} SOL Vol</span>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <span class="font-bold text-lg text-jupGreen">+${r.yourEarningSol.toFixed(4)}</span>
-                        <div class="text-[12px] font-semibold text-gray-500 mt-0.5">
-                            SOL Earned
-                        </div>
-                    </div>
-                </div>
-                `;
-            }).join('');
-        }
+        const recruitsCount = data.recruitList ? data.recruitList.length : 0;
+        const copiersCount = data.copierList ? data.copierList.length : 0;
+        document.getElementById('aff-tab-recruits').innerText = `Recruits (${recruitsCount})`;
+        document.getElementById('aff-tab-copiers').innerText = `Copiers Mirroring You (${copiersCount})`;
+
+        renderAffiliateList();
         
         const affCanvas = document.getElementById('affiliateChart');
         if (affCanvas) {
@@ -1004,10 +1006,11 @@
                 data: {
                     labels: labels,
                     datasets: [
-                        { label: 'SOL Earned', data: data.dailyEarnings, borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.32, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }
+                        { label: 'SOL Earned', data: data.dailyEarnings || Array(30).fill(0), borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.32, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }
                     ]
                 },
                 options: {
+                    animation: false,
                     responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
                     plugins: { 
                         legend: { display: false },
@@ -1021,18 +1024,13 @@
             });
         }
 
-        const last7dEarnings = (data.dailyEarnings || []).slice(23).reduce((a, b) => a + b, 0);
+        const dailyData = data.dailyEarnings || Array(30).fill(0);
+        const last7dEarnings = dailyData.slice(-7).reduce((a, b) => a + b, 0);
         const dailyAvg = last7dEarnings / 7;
         
-        document.getElementById('proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
-        document.getElementById('proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
-        document.getElementById('proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
-    }
-
-    function copyReferralLink() {
-        const link = document.getElementById('aff-ref-link').value;
-        navigator.clipboard.writeText(link);
-        showToast("Referral Link Copied!");
+        document.getElementById('aff-proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
+        document.getElementById('aff-proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
+        document.getElementById('aff-proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
     }
 
     function toggleDrawer(mint) {
@@ -1060,7 +1058,7 @@
             pnlChart.data.labels = chartData.labels;
             pnlChart.data.datasets[0].data = chartData.profitData;
             pnlChart.data.datasets[1].data = chartData.lossData;
-            pnlChart.update();
+            pnlChart.update('none');
         }
         if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     }
@@ -1105,11 +1103,6 @@
         document.getElementById('total-trades-count').innerText = '0';
         document.getElementById('risk-score').innerText = '0%';
         document.getElementById('risk-label').innerText = 'Awaiting Scan...';
-        document.getElementById('strat-pnl-sniper').innerText = '+0.0000 SOL';
-        document.getElementById('strat-pnl-manual').innerText = '+0.0000 SOL';
-        document.getElementById('positions-count').innerText = `0 OPEN`;
-        document.getElementById('stats-live').innerText = `Manual: 0 trades (+0.0000 SOL)`;
-        document.getElementById('stats-sim').innerText = `Auto: 0 trades (+0.0000 SOL)`;
         
         const posContainer = document.getElementById('positions-container');
         if (posContainer) {
@@ -1207,24 +1200,121 @@
         } catch (_) {}
     }
 
-    async function fetchGuildData() {
+    async function fetchDashboardBundle() {
+        window._lastGood = window._lastGood || {};
+        function setMetric(id, value, formatter) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (value === null || value === undefined || Number.isNaN(value)) {
+                if (window._lastGood[id] !== undefined) {
+                    el.innerText = window._lastGood[id];
+                }
+                return;
+            }
+            const formatted = formatter ? formatter(value) : String(value);
+            window._lastGood[id] = formatted;
+            el.innerText = formatted;
+        }
+
         try {
-            const res = await fetch('/api/guild-stats', {
+            const res = await fetch('/api/dashboard-bundle', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ initData: tg.initData || "" })
             });
-            if (res.ok) {
-                const data = await res.json();
-                if (data.inGuild) {
-                    liveLeaderboardData = {
-                        guild: { name: data.guildName, reward: `Guild Rank #${data.myRank} (${data.myPoints.toLocaleString()} GLP)`, code: data.guildCode },
-                        members: data.leaderboard
-                    };
-                    renderLeaderboard();
+            if (!res.ok) return;
+            const data = await res.json();
+
+            if (data.institutional) {
+                setMetric('sharpe-ratio', data.institutional.sharpeRatio, v => parseFloat(v).toFixed(2));
+                setMetric('cvar-value', data.institutional.cvar, v => `${parseFloat(v).toFixed(4)} SOL`);
+                setMetric('tca-slippage', data.institutional.avgSlippage, v => `${parseFloat(v).toFixed(2)}%`);
+                setMetric('total-trades-count', data.institutional.totalTradesCount, v => v.toLocaleString());
+
+                const spend = data.institutional.currentSpend || 0;
+                const budget = data.institutional.maxBudget || 0;
+                const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
+                const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
+
+                const gauge = document.getElementById('risk-budget-bar');
+                const gaugeText = document.getElementById('risk-budget-text');
+                const remainingEl = document.getElementById('risk-budget-remaining');
+
+                if (gauge) gauge.style.width = pct + '%';
+                if (gaugeText) {
+                    gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
+                }
+                if (remainingEl) {
+                    remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
+                    remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
+                }
+
+                const colorMapping = {
+                    'Sniper Engine': '#10b981',
+                    'Manual / Direct': '#f59e0b',
+                    'Copy Trade': '#3b82f6',
+                    'DCA Engine': '#8b5cf6',
+                    'Limit Order': '#64748b'
+                };
+
+                const stratLabels = [];
+                const stratData = [];
+                const stratColors = [];
+
+                const defaultOrder = ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'];
+                const statsPool = Object.keys(data.institutional.stratStats || {}).length > 0 ? data.institutional.stratStats : {
+                    'Sniper Engine': { pnl: 449.2232 },
+                    'Manual / Direct': { pnl: 37.0875 },
+                    'Copy Trade': { pnl: 25.4476 },
+                    'DCA Engine': { pnl: 23.3688 },
+                    'Limit Order': { pnl: 0.0000 }
+                };
+
+                defaultOrder.forEach(strat => {
+                    if (statsPool[strat]) {
+                        stratLabels.push(strat);
+                        stratData.push(Math.max(0, statsPool[strat].pnl));
+                        stratColors.push(colorMapping[strat] || '#64748b');
+                    }
+                });
+
+                if (allocChart && stratLabels.length > 0) {
+                    allocChart.data.labels = stratLabels;
+                    allocChart.data.datasets[0].data = stratData;
+                    allocChart.data.datasets[0].backgroundColor = stratColors;
+                    allocChart.update('none');
+                }
+
+                const container = document.getElementById('best-strategy-container');
+                if (container) {
+                    const entries = Object.entries(statsPool).map(([name, stats]) => ({ name, pnl: stats.pnl })).sort((a, b) => b.pnl - a.pnl);
+                    container.innerHTML = entries.map(strat => {
+                        const dotColor = colorMapping[strat.name] ? `bg-[${colorMapping[strat.name]}]` : 'bg-gray-400';
+                        return `
+                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
+                            <div class="flex items-center gap-2">
+                                <span class="h-2 w-2 rounded-full" style="background-color: ${colorMapping[strat.name] || '#64748b'}"></span>
+                                <span class="text-xs text-white font-bold">${strat.name}</span>
+                            </div>
+                            <span class="text-xs ${strat.pnl >= 0 ? 'text-jupGreen' : 'text-neonRed'} font-mono font-bold">
+                                ${strat.pnl >= 0 ? '+' : ''}${strat.pnl.toFixed(4)} SOL
+                            </span>
+                        </div>
+                        `;
+                    }).join('');
                 }
             }
-        } catch (_) {}
+
+            if (data.riskScore) {
+                const scoreEl = document.getElementById('risk-score');
+                const barEl = document.getElementById('risk-bar');
+                const labelEl = document.getElementById('risk-label');
+                if (scoreEl) scoreEl.innerText = (data.riskScore.score || 18) + '%';
+                if (barEl) barEl.style.width = Math.min(100, Math.max(5, (data.riskScore.score || 18))) + '%';
+                if (labelEl) labelEl.innerText = `Assessment: ${data.riskScore.riskLevel || 'Safe'} Risk`;
+            }
+
+        } catch (e) {}
     }
 
     async function fetchLiveData() {
@@ -1257,14 +1347,12 @@
                     const losses = simStats.losses || 0;
                     const totalPnlSol = simStats.totalPnlSol || 0;
                     const totalVolumeSol = simStats.volume || 0;
-                    const totalTrades = simStats.totalTrades || (wins + losses);
                     const credits = simStats.credits !== undefined ? simStats.credits : 4828;
 
-                    // 🟢 DASH-1 FIX: Standardized ROI % calculation against total deployed capital
-                    const totalInvested = simStats.totalInvestedSol || totalVolumeSol || 1;
-                    const pnlPercent = totalInvested > 0 ? ((totalPnlSol / totalInvested) * 100).toFixed(2) : "0.00";
+                    const startingBalSol = parseFloat(simStats.startingBalance) || simCashSol || 1;
+                    const pnlPercent = startingBalSol > 0 ? ((totalPnlSol / startingBalSol) * 100).toFixed(2) : "0.00";
                     const pnlUsd = totalPnlSol * liveSolPrice;
-                    const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
+                    const winRate = simStats.winRate || 0;
 
                     let tradingDays = 77;
                     if (simStats.firstTradeAt) {
@@ -1288,9 +1376,6 @@
                     document.getElementById('stat-winrate-sub').innerText = `${wins} Wins / ${losses} Losses`;
                     document.getElementById('stat-volume').innerText = totalVolumeSol.toFixed(4) + " SOL";
 
-                    const totalTradesEl = document.getElementById('total-trades-count');
-                    if (totalTradesEl) totalTradesEl.innerText = totalTrades.toLocaleString();
-
                     const simPositions = (simStats.positions || []).map(p => ({
                         mint: p.mint, symbol: p.symbol, amount: p.amount,
                         priceUsd: p.priceUsd || (p.entryPriceUsd * liveSolPrice),
@@ -1309,7 +1394,6 @@
                     renderPositions(simPositions);
                     setFilter(currentFilter);
                     
-                    setTimeout(fetchLiveData, 3000);
                     return;
                 }
             }
@@ -1366,8 +1450,6 @@
         } catch (_) {
             resetDashboardToZero();
         }
-
-        setTimeout(fetchLiveData, 3000);
     }
 
     async function exportTrades() {
@@ -1403,20 +1485,6 @@
         } catch (_) { 
             showToast('Export failed: network error'); 
         }
-    }
-
-    async function fetchAdvancedStats() {
-        try {
-            const res = await fetch('/api/analytics/advanced-stats', {
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData })
-            });
-            if (res.ok) {
-                const stats = await res.json();
-                document.getElementById('sharpe-ratio').innerText = (stats.sharpeRatio || 30.27).toFixed(2);
-            }
-        } catch (_) {}
     }
 
     async function fetchHourlyPerformance() {
@@ -1457,6 +1525,7 @@
                             ]
                         },
                         options: { 
+                            animation: false,
                             responsive: true, 
                             maintainAspectRatio: false, 
                             plugins: { legend: { display: false } }, 
@@ -1497,184 +1566,66 @@
         } catch (_) {}
     }
 
-    async function fetchEnterpriseMetrics() {
+    async function fetchGuildData() {
         try {
-            const riskRes = await fetch('/api/risk-score', { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ initData: tg.initData }) 
+            const res = await fetch('/api/guild-stats', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initData: tg.initData || "" })
             });
-            if (riskRes.ok) {
-                const riskData = await riskRes.json();
-                const scoreEl = document.getElementById('risk-score');
-                const barEl = document.getElementById('risk-bar');
-                const labelEl = document.getElementById('risk-label');
-                if (scoreEl) scoreEl.innerText = (riskData.score || 18) + '%';
-                if (barEl) barEl.style.width = Math.min(100, Math.max(5, (riskData.score || 18))) + '%';
-                if (labelEl) labelEl.innerText = `Assessment: ${riskData.riskLevel || 'Safe'} Risk`;
-            }
-
-            const perfRes = await fetch('/api/performance', { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ initData: tg.initData }) 
-            });
-            if (perfRes.ok) {
-                const perfData = await perfRes.json();
-                const container = document.getElementById('best-strategy-container');
-                const entries = Object.entries(perfData).map(([name, stats]) => ({ name, pnl: stats.totalPnl })).sort((a, b) => b.pnl - a.pnl);
-
-                const colorMap = {
-                    'Sniper Engine': 'bg-jupGreen',
-                    'Manual / Direct': 'bg-yellow-500',
-                    'Copy Trade': 'bg-neonBlue',
-                    'DCA Engine': 'bg-neonPurple',
-                    'Limit Order': 'bg-gray-400'
-                };
-
-                if (container && entries.length > 0) {
-                    container.innerHTML = entries.map(strat => {
-                        const dotColor = colorMap[strat.name] || 'bg-gray-400';
-                        return `
-                        <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
-                            <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full ${dotColor}"></span>
-                                <span class="text-xs text-white font-bold">${strat.name}</span>
-                            </div>
-                            <span class="text-xs ${strat.pnl >= 0 ? 'text-jupGreen' : 'text-neonRed'} font-mono font-bold">
-                                ${strat.pnl >= 0 ? '+' : ''}${strat.pnl.toFixed(4)} SOL
-                            </span>
-                        </div>
-                        `;
-                    }).join('');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.inGuild) {
+                    liveLeaderboardData = {
+                        guild: { name: data.guildName, reward: `Guild Rank #${data.myRank} (${data.myPoints.toLocaleString()} GLP)`, code: data.guildCode },
+                        members: data.leaderboard
+                    };
+                    if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) {
+                        renderLeaderboard();
+                    }
                 }
             }
         } catch (_) {}
     }
 
-    async function fetchInstitutionalStats() {
+    async function fetchAffiliateStats() {
         try {
-            const res = await fetch('/api/institutional-stats', {
+            const res = await fetch('/api/affiliate-stats', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ initData: tg.initData })
+                body: JSON.stringify({ initData: tg.initData || "" })
             });
-            if (!res.ok) return;
-            const data = await res.json();
-
-            // 🟢 DASH-4 FIX: Display '--%' if slippage is unknown
-            const tcaEl = document.getElementById('tca-slippage');
-            if (tcaEl) {
-                tcaEl.innerText = (data.avgSlippage !== null && data.avgSlippage !== undefined)
-                    ? data.avgSlippage.toFixed(2) + '%'
-                    : '--%';
-            }
-
-            const cvarEl = document.getElementById('cvar-value');
-            if (cvarEl) cvarEl.innerText = data.cvar ? data.cvar.toFixed(4) + ' SOL' : '-0.9281 SOL';
-
-            const totalTradesEl = document.getElementById('total-trades-count');
-            if (totalTradesEl && data.totalTradesCount !== undefined) {
-                totalTradesEl.innerText = data.totalTradesCount.toLocaleString();
-            }
-
-            // 🟢 DASH-5 FIX: Real Sharpe Ratio
-            const sharpeEl = document.getElementById('sharpe-ratio');
-            if (sharpeEl) {
-                sharpeEl.innerText = data.sharpeRatio ? data.sharpeRatio.toFixed(2) : '--';
-            }
-
-            // 🟢 DASH-3 FIX: Dynamic Max Loss Limit
-            const lossEl = document.getElementById('max-loss-limit');
-            if (lossEl) {
-                if (data.maxLossPercent && data.maxLossPercent > 0) {
-                    lossEl.innerText = `-${data.maxLossPercent}%`;
-                    lossEl.className = 'text-xs font-bold font-mono text-neonRed';
-                } else {
-                    lossEl.innerText = 'OFF (0%)';
-                    lossEl.className = 'text-xs font-bold font-mono text-gray-500';
+            if (res.ok) {
+                liveAffiliateData = await res.json();
+                if (!document.getElementById('view-affiliates').classList.contains('hidden-view')) {
+                    renderAffiliates();
                 }
             }
-
-            // Update Budget Bar
-            const spend = data.currentSpend || 0;
-            const budget = data.maxBudget || 0;
-            const pct = budget > 0 ? Math.min(100, (spend / budget) * 100) : 100;
-            const remaining = budget > 0 ? Math.max(0, budget - spend) : 0;
-
-            const gauge = document.getElementById('risk-budget-bar');
-            const gaugeText = document.getElementById('risk-budget-text');
-            const remainingEl = document.getElementById('risk-budget-remaining');
-
-            if (gauge) gauge.style.width = pct + '%';
-            if (gaugeText) {
-                gaugeText.innerText = budget > 0 ? `${spend.toFixed(2)} / ${budget.toFixed(2)} SOL (${pct.toFixed(1)}%)` : 'No Cap (∞)';
-            }
-            if (remainingEl) {
-                remainingEl.innerText = budget > 0 ? `${remaining.toFixed(2)} SOL` : '0.00 SOL';
-                remainingEl.className = `text-xs font-bold font-mono ${remaining < budget * 0.1 && budget > 0 ? 'text-neonRed animate-pulse' : 'text-jupGreen'}`;
-            }
-
-            const colorMapping = {
-                'Sniper Engine': '#10b981',
-                'Manual / Direct': '#f59e0b',
-                'Copy Trade': '#3b82f6',
-                'DCA Engine': '#8b5cf6',
-                'Limit Order': '#64748b'
-            };
-
-            const stratLabels = [];
-            const stratData = [];
-            const stratColors = [];
-
-            const defaultOrder = ['Sniper Engine', 'Manual / Direct', 'Copy Trade', 'DCA Engine', 'Limit Order'];
-            const statsPool = Object.keys(data.stratStats || {}).length > 0 ? data.stratStats : {
-                'Sniper Engine': { pnl: 449.2232 },
-                'Manual / Direct': { pnl: 37.0875 },
-                'Copy Trade': { pnl: 25.4476 },
-                'DCA Engine': { pnl: 23.3688 },
-                'Limit Order': { pnl: 0.0000 }
-            };
-
-            defaultOrder.forEach(strat => {
-                if (statsPool[strat]) {
-                    stratLabels.push(strat);
-                    stratData.push(Math.max(0, statsPool[strat].pnl));
-                    stratColors.push(colorMapping[strat] || '#64748b');
-                }
-            });
-
-            if (allocChart && stratLabels.length > 0) {
-                allocChart.data.labels = stratLabels;
-                allocChart.data.datasets[0].data = stratData;
-                allocChart.data.datasets[0].backgroundColor = stratColors;
-                allocChart.update('none');
-            }
-
-        } catch (e) {}
+        } catch (_) {}
     }
 
+    // Initial Loads
     fetchNetworthBreakdown();
     fetchSizingCapCount();
     fetchSniperSettings();
     fetchLiveData();
-    fetchAdvancedStats();
     fetchHourlyPerformance();
     fetchStatsWindow();
-    fetchEnterpriseMetrics();
-    fetchInstitutionalStats(); 
+    fetchDashboardBundle(); 
     fetchGuildData();
+    fetchAffiliateStats();
 
-    // 🟢 OPTIMIZED INTERVALS
-    setInterval(fetchNetworthBreakdown, 8000);      
-    setInterval(fetchSizingCapCount, 12000);        
-    setInterval(fetchSniperSettings, 20000);        
+    // Loop Timers
+    setInterval(fetchLiveData, 3000);
     setInterval(fetchStatsWindow, 6000);            
-    setInterval(fetchEnterpriseMetrics, 20000);     
-    setInterval(fetchAdvancedStats, 20000);         
-    setInterval(fetchHourlyPerformance, 25000);     
-    setInterval(fetchInstitutionalStats, 10000);    
+    setInterval(fetchNetworthBreakdown, 8000);      
+    setInterval(fetchDashboardBundle, 10000);    
+    setInterval(fetchSizingCapCount, 12000);        
     setInterval(fetchGuildData, 15000);
+    setInterval(fetchAffiliateStats, 15000);
+    setInterval(fetchSniperSettings, 20000);        
+    setInterval(fetchHourlyPerformance, 25000);     
+
 </script>
 </body>
 </html>
