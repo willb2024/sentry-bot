@@ -196,6 +196,7 @@ model CopyTradeFollow {
   follower   User     @relation("Follower", fields: [followerId], references: [id])
   isActive   Boolean  @default(true)
   createdAt  DateTime @default(now())
+  @@index([leaderId, isActive]) // 🟢 ADD THIS
 
   @@unique([leaderId, followerId])
   @@index([leaderId])
@@ -290,6 +291,9 @@ model User {
   pk4                   String?  @unique
   vault5                String?  @unique
   pk5                   String?  @unique
+
+  @@index([vaultAddress])   // 🟢 ADD THIS
+  @@index([activeWallets])  // 🟢 ADD THIS
 
   priorityLevel         String   @default("FAST") 
   customPriorityFee     Float    @default(0.001) 

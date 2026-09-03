@@ -3,6 +3,7 @@ import { PublicKey, Keypair, SystemProgram, TransactionMessage, VersionedTransac
 import { connection } from '../lib/connection.js';
 import { decryptKey } from './vault.service.js';
 import { redis } from '../lib/redis.js';
+import { withLock } from '../lib/redlock.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import { prisma } from '../lib/prisma.js';
@@ -340,67 +341,65 @@ export async function executeGuildAirdrop(telegramId: string, guildId: string, t
         };
     }
 
-    let lock;
     try {
-        lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
-        const signer = await getGuildOwnerSigner(telegramId, guildId);
-        if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
+        return await withLock([`lock:guild_airdrop:${guildId}`], 60000, async () => {
+            const signer = await getGuildOwnerSigner(telegramId, guildId);
+            if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
 
-        const top50 = await getLeaderboard(guildId, 50);
-        if (top50.length === 0) return { success: false, message: "No members to airdrop to." };
+            const top50 = await getLeaderboard(guildId, 50);
+            if (top50.length === 0) return { success: false, message: "No members to airdrop to." };
 
-        const perMember = totalSol / top50.length;
-        const lamportsPer = Math.floor(perMember * LAMPORTS_PER_SOL);
-        if (lamportsPer <= 0) return { success: false, message: "Amount too small to split." };
+            const perMember = totalSol / top50.length;
+            const lamportsPer = Math.floor(perMember * LAMPORTS_PER_SOL);
+            if (lamportsPer <= 0) return { success: false, message: "Amount too small to split." };
 
-        const instructions = [];
-        for (const m of top50) {
-            if (!m || !m.walletAddress || m.walletAddress === "Unknown") continue;
-            try {
-                const destPubkey = new PublicKey(m.walletAddress);
-                instructions.push(SystemProgram.transfer({
-                    fromPubkey: signer.vaultPubkey, toPubkey: destPubkey, lamports: lamportsPer
-                }));
-            } catch (_) {}
-        }
-
-        if (instructions.length === 0) return { success: false, message: "No valid recipient addresses." };
-
-        const CHUNK_SIZE = 20;
-        let confirmedTxs = 0;
-        let lastSig = "";
-
-        for (let i = 0; i < instructions.length; i += CHUNK_SIZE) {
-            const chunk = instructions.slice(i, i + CHUNK_SIZE);
-            const { blockhash } = await connection.getLatestBlockhash('confirmed');
-            const vTx = new VersionedTransaction(new TransactionMessage({
-                payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions: chunk
-            }).compileToV0Message());
-            vTx.sign([signer.keypair]);
-            const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-            lastSig = sig;
-
-            let isConfirmed = false;
-            for (let j = 0; j < 15; j++) {
-                await new Promise(r => setTimeout(r, 1000));
-                const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-                if (status?.value && !status.value.err) { isConfirmed = true; break; }
+            const instructions = [];
+            for (const m of top50) {
+                if (!m || !m.walletAddress || m.walletAddress === "Unknown") continue;
+                try {
+                    const destPubkey = new PublicKey(m.walletAddress);
+                    instructions.push(SystemProgram.transfer({
+                        fromPubkey: signer.vaultPubkey, toPubkey: destPubkey, lamports: lamportsPer
+                    }));
+                } catch (_) {}
             }
-            if (isConfirmed) confirmedTxs++;
-        }
 
-        if (confirmedTxs === 0) return { success: false, message: "All transaction batches dropped by the network." };
+            if (instructions.length === 0) return { success: false, message: "No valid recipient addresses." };
 
-        await prisma.guildMembership.updateMany({
-            where: { guildId, user: { vaultAddress: { in: top50.map(m => m?.walletAddress).filter((w): w is string => !!w && w !== 'Unknown') } } },
-            data: { airdropsReceivedSol: { increment: perMember } }
-        }).catch(() => {});
+            const CHUNK_SIZE = 20;
+            let confirmedTxs = 0;
+            let lastSig = "";
 
-        return { success: true, message: `Airdropped ${perMember.toFixed(4)} SOL to ${top50.length} members.`, signature: lastSig };
+            for (let i = 0; i < instructions.length; i += CHUNK_SIZE) {
+                const chunk = instructions.slice(i, i + CHUNK_SIZE);
+                const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                const vTx = new VersionedTransaction(new TransactionMessage({
+                    payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions: chunk
+                }).compileToV0Message());
+                vTx.sign([signer.keypair]);
+                const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+                lastSig = sig;
+
+                let isConfirmed = false;
+                for (let j = 0; j < 15; j++) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+                    if (status?.value && !status.value.err) { isConfirmed = true; break; }
+                }
+                if (isConfirmed) confirmedTxs++;
+            }
+
+            if (confirmedTxs === 0) return { success: false, message: "All transaction batches dropped by the network." };
+
+            await prisma.guildMembership.updateMany({
+                where: { guildId, user: { vaultAddress: { in: top50.map(m => m?.walletAddress).filter((w): w is string => !!w && w !== 'Unknown') } } },
+                data: { airdropsReceivedSol: { increment: perMember } }
+            }).catch(() => {});
+
+            return { success: true, message: `Airdropped ${perMember.toFixed(4)} SOL to ${top50.length} members.`, signature: lastSig };
+        });
     } catch (e: any) {
         return { success: false, message: e.message || "Airdrop failed." };
-    } finally {
-        if (lock) await (lock as any).release().catch(() => {});
     }
 }
 
@@ -414,65 +413,63 @@ export async function executeTieredAirdrop(telegramId: string, guildId: string, 
         };
     }
 
-    let lock;
     try {
-        lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
-        const signer = await getGuildOwnerSigner(telegramId, guildId);
-        if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
+        return await withLock([`lock:guild_airdrop:${guildId}`], 60000, async () => {
+            const signer = await getGuildOwnerSigner(telegramId, guildId);
+            if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
 
-        const top50 = await getLeaderboard(guildId, 50);
-        if (top50.length === 0) return { success: false, message: "No members to airdrop to." };
+            const top50 = await getLeaderboard(guildId, 50);
+            if (top50.length === 0) return { success: false, message: "No members to airdrop to." };
 
-        const instructions = [];
-        let totalPaid = 0;
-        for (const m of top50) {
-            if (!m || !m.walletAddress || m.walletAddress === "Unknown") continue;
-            let amount = 0;
-            if (m.rank <= 3) amount = top3Sol;
-            else if (m.rank <= 10) amount = next7Sol;
-            else amount = ranks11to50Sol as number;
-            if (amount <= 0) continue;
+            const instructions = [];
+            let totalPaid = 0;
+            for (const m of top50) {
+                if (!m || !m.walletAddress || m.walletAddress === "Unknown") continue;
+                let amount = 0;
+                if (m.rank <= 3) amount = top3Sol;
+                else if (m.rank <= 10) amount = next7Sol;
+                else amount = ranks11to50Sol as number;
+                if (amount <= 0) continue;
 
-            try {
-                const destPubkey = new PublicKey(m.walletAddress);
-                instructions.push(SystemProgram.transfer({
-                    fromPubkey: signer.vaultPubkey, toPubkey: destPubkey, lamports: Math.floor(amount * LAMPORTS_PER_SOL)
-                }));
-                totalPaid += amount;
-            } catch (_) {}
-        }
-        if (instructions.length === 0) return { success: false, message: "No eligible recipients." };
-
-        const CHUNK_SIZE = 20;
-        let confirmedTxs = 0;
-        let lastSig = "";
-
-        for (let i = 0; i < instructions.length; i += CHUNK_SIZE) {
-            const chunk = instructions.slice(i, i + CHUNK_SIZE);
-            const { blockhash } = await connection.getLatestBlockhash('confirmed');
-            const vTx = new VersionedTransaction(new TransactionMessage({
-                payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions: chunk
-            }).compileToV0Message());
-            vTx.sign([signer.keypair]);
-            const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-            lastSig = sig;
-
-            let isConfirmed = false;
-            for (let j = 0; j < 15; j++) {
-                await new Promise(r => setTimeout(r, 1000));
-                const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-                if (status?.value && !status.value.err) { isConfirmed = true; break; }
+                try {
+                    const destPubkey = new PublicKey(m.walletAddress);
+                    instructions.push(SystemProgram.transfer({
+                        fromPubkey: signer.vaultPubkey, toPubkey: destPubkey, lamports: Math.floor(amount * LAMPORTS_PER_SOL)
+                    }));
+                    totalPaid += amount;
+                } catch (_) {}
             }
-            if (isConfirmed) confirmedTxs++;
-        }
+            if (instructions.length === 0) return { success: false, message: "No eligible recipients." };
 
-        if (confirmedTxs === 0) return { success: false, message: "All transaction batches dropped by the network." };
+            const CHUNK_SIZE = 20;
+            let confirmedTxs = 0;
+            let lastSig = "";
 
-        return { success: true, message: `Distributed ${totalPaid.toFixed(4)} SOL across ${instructions.length} recipients.`, signature: lastSig };
+            for (let i = 0; i < instructions.length; i += CHUNK_SIZE) {
+                const chunk = instructions.slice(i, i + CHUNK_SIZE);
+                const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                const vTx = new VersionedTransaction(new TransactionMessage({
+                    payerKey: signer.vaultPubkey, recentBlockhash: blockhash, instructions: chunk
+                }).compileToV0Message());
+                vTx.sign([signer.keypair]);
+                const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+                lastSig = sig;
+
+                let isConfirmed = false;
+                for (let j = 0; j < 15; j++) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+                    if (status?.value && !status.value.err) { isConfirmed = true; break; }
+                }
+                if (isConfirmed) confirmedTxs++;
+            }
+
+            if (confirmedTxs === 0) return { success: false, message: "All transaction batches dropped by the network." };
+
+            return { success: true, message: `Distributed ${totalPaid.toFixed(4)} SOL across ${instructions.length} recipients.`, signature: lastSig };
+        });
     } catch (e: any) {
         return { success: false, message: e.message || "Airdrop failed." };
-    } finally {
-        if (lock) await (lock as any).release().catch(() => {});
     }
 }
 
@@ -486,48 +483,48 @@ export async function executeIndividualAirdrop(telegramId: string, guildId: stri
         };
     }
 
-    let lock;
     try {
-        lock = await redlock.acquire([`lock:guild_airdrop:${guildId}`], 60000);
-        const signer = await getGuildOwnerSigner(telegramId, guildId);
-        if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
+        return await withLock([`lock:guild_airdrop:${guildId}`], 60000, async () => {
+            const signer = await getGuildOwnerSigner(telegramId, guildId);
+            if (!signer) return { success: false, message: "Not the guild owner or no active vault." };
 
-        const lb = await getLeaderboard(guildId, Math.max(targetRank, 50));
-        const target = lb.find(m => m && m.rank === targetRank);
-        if (!target || !target.walletAddress || target.walletAddress === "Unknown") {
-            return { success: false, message: `No member found at rank #${targetRank}.` };
-        }
-
-        try {
-            const destPubkey = new PublicKey(target.walletAddress);
-            const { blockhash } = await connection.getLatestBlockhash('confirmed');
-            const vTx = new VersionedTransaction(new TransactionMessage({
-                payerKey: signer.vaultPubkey,
-                recentBlockhash: blockhash,
-                instructions: [SystemProgram.transfer({
-                    fromPubkey: signer.vaultPubkey, toPubkey: destPubkey,
-                    lamports: Math.floor(amountSol * LAMPORTS_PER_SOL)
-                })]
-            }).compileToV0Message());
-            vTx.sign([signer.keypair]);
-
-            const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-
-            let confirmed = false;
-            for (let i = 0; i < 15; i++) {
-                await new Promise(r => setTimeout(r, 2000));
-                const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-                if (status?.value && !status.value.err) { confirmed = true; break; }
+            const lb = await getLeaderboard(guildId, Math.max(targetRank, 50));
+            const target = lb.find(m => m && m.rank === targetRank);
+            if (!target || !target.walletAddress || target.walletAddress === "Unknown") {
+                return { success: false, message: `No member found at rank #${targetRank}.` };
             }
-            if (!confirmed) return { success: false, message: "Transaction dropped by network." };
 
-            return { success: true, message: `Sent ${amountSol} SOL to @${target.username} (#${targetRank}).`, signature: sig };
-        } catch (addrErr: any) {
-            return { success: false, message: `Invalid recipient wallet address: ${target.walletAddress}` };
-        }
+            try {
+                const destPubkey = new PublicKey(target.walletAddress);
+                const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                const vTx = new VersionedTransaction(new TransactionMessage({
+                    payerKey: signer.vaultPubkey,
+                    recentBlockhash: blockhash,
+                    instructions: [SystemProgram.transfer({
+                        fromPubkey: signer.vaultPubkey, toPubkey: destPubkey,
+                        lamports: Math.floor(amountSol * LAMPORTS_PER_SOL)
+                    })]
+                }).compileToV0Message());
+                vTx.sign([signer.keypair]);
+
+                const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+
+                let confirmed = false;
+                for (let i = 0; i < 15; i++) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+                    if (status?.value && !status.value.err) { confirmed = true; break; }
+                }
+                if (!confirmed) return { success: false, message: "Transaction dropped by network." };
+
+                return { success: true, message: `Sent ${amountSol} SOL to @${target.username} (#${targetRank}).`, signature: sig };
+            } catch (addrErr: any) {
+                return { success: false, message: `Invalid recipient wallet address: ${target.walletAddress}` };
+            }
+        });
     } catch (e: any) {
         return { success: false, message: e.message || "Airdrop failed." };
-    } finally {
-        if (lock) await (lock as any).release().catch(() => {});
     }
 }
+
+

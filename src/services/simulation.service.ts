@@ -8,6 +8,7 @@ import { cachedSolUsdPrice } from './grpc.service.js';
 import { computeTokenScore, TokenStats } from './caller.service.js';
 import { getCachedTokenPrice } from './engine.service.js';
 import { getBondingCurveAddress, decodePumpCurvePrice, getTokenMetadata } from './price.service.js';
+import { withLock } from '../lib/redlock.js';
 import { addTrailingStopToMemory, cancelAllGuardsForToken } from './order.service.js';
 import { awardGuildPoints } from './guild.service.js';
 import { connection } from '../lib/connection.js';
@@ -1117,20 +1118,16 @@ export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: 
                 break;
             }
 
-            const budgetLockKey = `lock:budget:sim:${telegramId}`;
-            let budgetLock;
+            // 🟢 CLEAN WITHLOCK IMPLEMENTATION (No leftover finally blocks)
             try {
-                budgetLock = await redlock.acquire([budgetLockKey], 5000);
+                await withLock([`lock:budget:sim:${telegramId}`], 10000, async () => {
+                    await addSessionSpend(telegramId, clampedTotalSpend, 'sim');
+                    const updatedSpend = await getSessionSpend(telegramId, 'sim');
+                    checkAndSendBudgetWarning(bot, telegramId, 'sim', updatedSpend, config.maxBudgetSol).catch(() => {});
+                });
             } catch (err) {
+                console.warn('⚠️ [SIM BUDGET] Lock failed, skipping cycle:', (err as any)?.message);
                 continue;
-            }
-
-            try {
-                await addSessionSpend(telegramId, clampedTotalSpend, 'sim');
-                const updatedSpend = await getSessionSpend(telegramId, 'sim');
-                checkAndSendBudgetWarning(bot, telegramId, 'sim', updatedSpend, config.maxBudgetSol).catch(() => {});
-            } finally {
-                if (budgetLock) await (budgetLock as any).release().catch(() => {});
             }
 
             const result = await simExecuteSnipe(

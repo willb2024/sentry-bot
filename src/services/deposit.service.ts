@@ -18,21 +18,19 @@ export async function startDepositWatcher(bot: any) {
 
     setInterval(async () => {
         try {
-            const activeUsers = await prisma.user.findMany({
-                where: {
-                    vaultAddress: { not: null }
-                },
-                select: {
-                    telegramId: true,
-                    vaultAddress: true,
-                    vault2: true,
-                    vault3: true,
-                    vault4: true,
-                    vault5: true,
-                    activeWallets: true
-                }
-            });
-
+          // Inside startDepositWatcher in src/services/deposit.service.ts:
+          const activeUsers = await prisma.user.findMany({
+            where: { vaultAddress: { not: null } },
+            select: { 
+                telegramId: true, 
+                vaultAddress: true, 
+                vault2: true, 
+                vault3: true, 
+                vault4: true, 
+                vault5: true, 
+                activeWallets: true 
+            } // 🟢 Highly optimized query
+        });
             const addressToUserMap = new Map<string, { user: any; label: string }>();
 
             for (const u of activeUsers) {

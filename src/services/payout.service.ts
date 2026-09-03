@@ -6,7 +6,6 @@ import { decryptKey } from './vault.service.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import { prisma } from '../lib/prisma.js'; // 🟢 FIX: Singleton
-import { redlock } from '../lib/redlock.js';
 import { logger } from '../lib/logger.js';
 import { withLock } from '../lib/redlock.js';
 
@@ -42,13 +41,10 @@ async function alertAdmins(message: string) {
     } catch (_) {}
 }
 
-// In src/services/payout.service.ts:
-
-
 export async function processAffiliatePayout(userId: string): Promise<{ success: boolean; signature?: string; message: string }> {
     const lockKey = `lock:payout:${userId}`;
 
-    return await withLock([lockKey], 60000, async () => {
+    return await withLock([lockKey], 90000, async () => {
         let amountToPay = 0;
         let rewardsDebited = false;
 
@@ -57,6 +53,7 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
             if (!user || user.pendingRewardsSol <= 0) throw new Error("No rewards to claim.");
             if (!user.vaultAddress) throw new Error("No vault address found to receive payout.");
 
+            // Route dynamically for Devnet vs Mainnet
             const { getConnectionFor, getTreasuryConfigFor } = await import('../lib/devnet.js');
             const conn = await getConnectionFor(user.telegramId);
             const treasuryCfg = await getTreasuryConfigFor(user.telegramId);
@@ -69,8 +66,19 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
             if (!treasuryPrivKey) throw new Error("Platform Error: Treasury key decryption failed.");
 
             amountToPay = user.pendingRewardsSol;
-            const lamportsToPay = Math.floor(amountToPay * LAMPORTS_PER_SOL);
+            
+            const todaysTotal = await getTodaysPayoutTotal();
+            if (todaysTotal + amountToPay > DAILY_PAYOUT_CAP_SOL) {
+                await alertAdmins(`🚨 <b>PAYOUT CAP HIT</b>\n\nUser ${userId} tried to claim ${amountToPay.toFixed(4)} SOL.\nBlocked.`);
+                return { success: false, message: "Daily payout limit reached platform-wide. Please try again tomorrow or contact support." };
+            }
 
+            if (amountToPay >= SINGLE_PAYOUT_ALERT_THRESHOLD_SOL) {
+                alertAdmins(`⚠️ <b>Large Payout</b>\n\nUser ${userId} claiming ${amountToPay.toFixed(4)} SOL. Signature will follow.`);
+            }
+
+            const lamportsToPay = Math.floor(amountToPay * LAMPORTS_PER_SOL);
+            
             await prisma.user.update({ 
                 where: { id: user.id }, 
                 data: { 
@@ -85,9 +93,12 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
 
             const treasuryBalance = await conn.getBalance(treasuryKeypair.publicKey);
             if (treasuryBalance < lamportsToPay + 500000) {
-                await prisma.user.update({ where: { id: user.id }, data: { pendingRewardsSol: amountToPay, lifetimeEarnedSol: { decrement: amountToPay } } });
+                await prisma.user.update({ 
+                    where: { id: user.id }, 
+                    data: { pendingRewardsSol: amountToPay, lifetimeEarnedSol: { decrement: amountToPay } } 
+                });
                 rewardsDebited = false;
-                throw new Error("Platform Error: Treasury lacks liquidity to process payout.");
+                throw new Error("Platform Error: Treasury temporarily lacks liquidity to process payout.");
             }
 
             const transferIx = SystemProgram.transfer({
@@ -105,7 +116,11 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
             const txBuffer = Buffer.from(vTx.serialize());
             const signature = bs58.encode(vTx.signatures[0]);
 
-            await conn.sendRawTransaction(txBuffer, { skipPreflight: true });
+            try {
+                await conn.sendRawTransaction(txBuffer, { skipPreflight: true });
+            } catch (sendError: any) {
+                logger.warn(`⚠️ [PAYOUT] RPC threw error, but Tx might land. Polling ${signature}...`, { error: sendError.message });
+            }
 
             let isConfirmed = false;
             for (let i = 0; i < 15; i++) {
@@ -118,16 +133,28 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
             }
 
             if (!isConfirmed) {
-                await prisma.user.update({ where: { id: user.id }, data: { pendingRewardsSol: amountToPay, lifetimeEarnedSol: { decrement: amountToPay } } });
+                await prisma.user.update({ 
+                    where: { id: user.id }, 
+                    data: { pendingRewardsSol: amountToPay, lifetimeEarnedSol: { decrement: amountToPay } } 
+                });
                 rewardsDebited = false;
-                throw new Error("Network congestion. Transaction dropped. Rewards refunded to balance.");
+                throw new Error("Network congestion. Transaction dropped. Your rewards have been refunded to your balance.");
             }
 
+            await recordPayout(amountToPay);
             return { success: true, signature, message: "Instant Payout Successful." };
 
         } catch (e: any) {
+            logger.error(`🔴 [PAYOUT] Execution failed for user ${userId}`, { error: e.message });
             if (rewardsDebited && amountToPay > 0) {
-                await prisma.user.update({ where: { id: userId }, data: { pendingRewardsSol: { increment: amountToPay }, lifetimeEarnedSol: { decrement: amountToPay } } }).catch(() => {});
+                try {
+                    await prisma.user.update({ 
+                        where: { id: userId }, 
+                        data: { pendingRewardsSol: { increment: amountToPay }, lifetimeEarnedSol: { decrement: amountToPay } } 
+                    });
+                } catch (refundErr: any) {
+                    logger.error(`🔴 [CRITICAL] Failed to refund payout for user ${userId}`, { error: refundErr.message });
+                }
             }
             return { success: false, message: e.message };
         }

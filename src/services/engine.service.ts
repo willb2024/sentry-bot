@@ -11,6 +11,7 @@ import {
 import { prisma } from '../lib/prisma.js'; 
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
+import { withLock } from '../lib/redlock.js'
 import { redlock } from '../lib/redlock.js';
 import { getBotInstance } from '../lib/bot-instance.js';
 import { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } from './simulation.service.js';
@@ -113,6 +114,9 @@ export async function warmDnsCache(): Promise<void> {
     }));
 }
 
+
+
+
 export async function getDynamicPriorityFee(priorityLevel: string, customPriorityFee: number): Promise<number> {
     if (priorityLevel === 'ECO') return 500_000;
     if (priorityLevel === 'CUSTOM') return Math.floor(customPriorityFee * 1_000_000_000);
@@ -154,23 +158,95 @@ const JITO_TIP_ACCOUNTS = [
     "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"
 ];
 
-const keypairCache = new Map<string, Keypair>();
+
+const JITO_ENDPOINTS = [
+    'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
+];
+
+const keypairCache = new Map<string, { keypair: Keypair; expires: number }>();
 
 export function clearKeypairCache(walletAddress: string) {
     keypairCache.delete(walletAddress);
 }
 
 function getCachedKeypair(walletAddress: string, pkEncrypted: string): Keypair | null {
-    if (keypairCache.has(walletAddress)) return keypairCache.get(walletAddress)!;
+    const hit = keypairCache.get(walletAddress);
+    if (hit && hit.expires > Date.now()) return hit.keypair;
+    
     const rawPk = decryptKey(pkEncrypted);
     if (!rawPk) return null;
     try {
         const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
-        keypairCache.set(walletAddress, keypair);
-        setTimeout(() => keypairCache.delete(walletAddress), 60 * 1000); 
+        // Cache decrypted key in RAM for 5 minutes (eliminates scryptSync latency)
+        keypairCache.set(walletAddress, { keypair, expires: Date.now() + 300_000 });
         return keypair;
     } catch (_) { return null; }
 }
+
+export async function sendToJitoBundle(
+    swapTx: VersionedTransaction, 
+    tipTx: VersionedTransaction, 
+    allowRawFallback: boolean = true
+): Promise<boolean> {
+    const swapBase64 = Buffer.from(swapTx.serialize()).toString('base64');
+    const tipBase64 = Buffer.from(tipTx.serialize()).toString('base64');
+    const bundledTxs = [swapBase64, tipBase64];
+
+    // 1. Staked Jito / Nozomi path (if configured)
+    if (process.env.STAKED_JITO_URL) {
+        try {
+            const res = await axiosClient.post(process.env.STAKED_JITO_URL, {
+                jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs, { encoding: "base64" }]
+            }, { timeout: 1200 });
+
+            if (res.data && !res.data.error && (res.data.result || res.data.bundle_id)) {
+                logger.info('🟢 [ROUTE] Landed via Staked Jito relayer');
+                return true;
+            }
+        } catch (_) {}
+    }
+
+    // 2. 🟢 Multi-Region Jito Racing (Races all endpoints worldwide)
+    const bundlePayload = { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] };
+    
+    const racePromises = JITO_ENDPOINTS.map(url => 
+        axiosClient.post(url, bundlePayload, { timeout: 1500 })
+            .then(res => {
+                if (res.data && !res.data.error && res.data.result) return true;
+                throw new Error('Rejected');
+            })
+    );
+
+    try {
+        await Promise.any(racePromises);
+        logger.info('🟢 [ROUTE] Landed via Fastest Regional Jito Block Engine');
+        return true;
+    } catch (_) {
+        logger.warn('⚠️ [ROUTE] All Jito regional endpoints failed — falling back to direct TPU');
+    }
+
+    // 3. 🟢 TPU Raw Transaction Fallback
+    if (allowRawFallback) {
+        try {
+            const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true, maxRetries: 3 });
+            if (rawSig) {
+                // Fire and forget the tip transaction
+                connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true, maxRetries: 3 }).catch(() => {});
+                logger.info('🟡 [ROUTE] Landed via TPU direct validator fallback');
+                return true;
+            }
+        } catch (e: any) {
+            logger.error('🔴 [ROUTE] Raw fallback error:', { error: e.message });
+        }
+    }
+
+    return false;
+}
+
 
 export async function getCachedTokenPrice(mint: string, bypassCache = false): Promise<number> {
     if (!bypassCache) {
@@ -365,64 +441,7 @@ const JITO_REGIONAL_ENDPOINTS = [
     'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
 ];
 
-export async function sendToJitoBundle(
-    swapTx: VersionedTransaction, 
-    tipTx: VersionedTransaction, 
-    allowRawFallback: boolean = true
-): Promise<boolean> {
-    const swapBase64 = Buffer.from(swapTx.serialize()).toString('base64');
-    const tipBase64 = Buffer.from(tipTx.serialize()).toString('base64');
-    const bundledTxs = [swapBase64, tipBase64];
 
-    // 1. Staked Jito / Nozomi path (if configured)
-    if (process.env.STAKED_JITO_URL) {
-        try {
-            const res = await axiosClient.post(process.env.STAKED_JITO_URL, {
-                jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs, { encoding: "base64" }]
-            }, { timeout: 1200 });
-
-            if (res.data && !res.data.error && (res.data.result || res.data.bundle_id)) {
-                logger.info('🟢 [ROUTE] Landed via Staked Jito relayer');
-                return true;
-            }
-        } catch (_) {}
-    }
-
-    // 2. 🟢 Multi-Region Jito Racing (Races NY, Frankfurt, Amsterdam, Tokyo)
-    const bundlePayload = { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] };
-    
-    const racePromises = JITO_REGIONAL_ENDPOINTS.map(url => 
-        axiosClient.post(url, bundlePayload, { timeout: 1400 })
-            .then(res => {
-                if (res.data && !res.data.error && res.data.result) return true;
-                throw new Error('Rejected');
-            })
-    );
-
-    try {
-        await Promise.any(racePromises);
-        logger.info('🟢 [ROUTE] Landed via Fastest Regional Jito Block Engine');
-        return true;
-    } catch (_) {
-        logger.warn('🟡 [ROUTE] All Jito regional endpoints busy or timed out');
-    }
-
-    // 3. 🟢 TPU Raw Transaction Fallback
-    if (allowRawFallback) {
-        try {
-            const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true });
-            if (rawSig) {
-                connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true }).catch(() => {});
-                logger.info('🟡 [ROUTE] Landed via TPU direct validator fallback');
-                return true;
-            }
-        } catch (e: any) {
-            logger.error('🔴 [ROUTE] Raw fallback error:', { error: e.message });
-        }
-    }
-
-    return false;
-}
 
 export async function runExecutionBenchmark(
     telegramId: string, 

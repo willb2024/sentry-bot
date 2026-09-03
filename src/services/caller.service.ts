@@ -1387,7 +1387,7 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
 
 
 export async function trackHolderVelocity(mintAddress: string): Promise<{ growthRate: number; uniqueBuyers5m: number }> {
-    const cacheKey = `velocity_cache:${mintAddress}`;
+    const cacheKey = `holdervel:${mintAddress}`;
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
@@ -1411,7 +1411,9 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
         const growthRate = oldCount > 0 ? ((currentCount - oldCount) / oldCount) * 100 : 0;
         
         const result = { growthRate, uniqueBuyers5m: Math.max(0, currentCount - oldCount) };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); 
+        
+        // 🟢 Caches for exactly 30s to eliminate latency from immediate repeat scans
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 30); 
         return result;
     } catch (_) {
         return { growthRate: 0, uniqueBuyers5m: 0 };
