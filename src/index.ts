@@ -773,59 +773,89 @@ app.post('/api/affiliate-stats', async (req, res) => {
         });
         if (!user) return res.status(404).json({ error: 'User not found' });
 
-        const { getUserTotalPoints } = await import('./services/points.js');
-        const points = await getUserTotalPoints(user.id);
-        const rank = await redis.zrevrank('global_points_lb', user.telegramId).then(r => r === null ? 1 : r + 1).catch(() => 1);
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(telegramId);
 
+        let forged: any = null;
+        if (isSim) {
+            const raw = await redis.get(`sim:forged:${telegramId}`);
+            if (raw) { try { forged = JSON.parse(raw); } catch (_) {} }
+        }
+
+        // ---- REAL earnings from Postgres (live + sim both track this) ----
         const since = new Date(Date.now() - 30 * 86400_000);
         const earnings = await prisma.affiliateEarning.findMany({
             where: { userId: user.id, createdAt: { gte: since } },
             select: { amountSol: true, source: true, createdAt: true }
         }).catch(() => []);
 
-        const daily: Record<string, number> = {};
-        for (let i = 29; i >= 0; i--) {
-            daily[new Date(Date.now() - i * 86400_000).toISOString().slice(0, 10)] = 0;
-        }
-        let tradeFeeCut = 0, creditShare = 0, copierYield = 0;
+        const dayKeys: string[] = [];
+        for (let i = 29; i >= 0; i--) dayKeys.push(new Date(Date.now() - i * 86400_000).toISOString().slice(0, 10));
+        const dailyMap: Record<string, number> = {};
+        dayKeys.forEach(k => dailyMap[k] = 0);
+
+        let realFee = 0, realCredit = 0, realCopier = 0;
         for (const e of earnings) {
             const d = e.createdAt.toISOString().slice(0, 10);
-            if (daily[d] !== undefined) daily[d] += e.amountSol;
-            if (e.source === 'CREDIT') creditShare += e.amountSol;
-            else if (e.source === 'COPY') copierYield += e.amountSol;
-            else tradeFeeCut += e.amountSol;
+            if (dailyMap[d] !== undefined) dailyMap[d] += e.amountSol;
+            if (e.source === 'CREDIT') realCredit += e.amountSol;
+            else if (e.source === 'COPY') realCopier += e.amountSol;
+            else realFee += e.amountSol;
         }
 
+        // 🟢 ADDITIVE: forged baseline + real activity, per day
+        const dailyEarnings = dayKeys.map((k, i) => dailyMap[k] + (forged?.revenue30d?.[i] || 0));
+
+        // ---- REAL points (live-accurate) ----
+        const { getUserTotalPoints } = await import('./services/points.js');
+        const realPointsBreakdown = await getUserTotalPoints(user.id).catch(() => ({ totalPoints: 0 }));
+        const totalPoints = (forged?.points || 0) + (realPointsBreakdown.totalPoints || 0);
+
+        // ---- Tier resolution ----
+        const TIERS = [
+            { name: 'Bronze', min: 0,          rate: 0.50 },
+            { name: 'Silver', min: 5_000_000,  rate: 0.60 },
+            { name: 'Gold',   min: 25_000_000, rate: 0.70 }
+        ];
+        const currentTierObj = [...TIERS].reverse().find(t => totalPoints >= t.min) || TIERS[0];
+        const nextTierObj = TIERS.find(t => t.min > totalPoints);
+
         const botUsername = process.env.BOT_USERNAME || 'SentryTerminalBot';
+
         res.json({
-            totalPoints: points.totalPoints,
-            selfPoints: points.selfPoints,
-            recruitPoints: points.recruitPoints,
-            copierPoints: points.copierPoints,
-            currentTier: points.currentTier,
-            currentRate: points.currentRate,
-            nextTier: points.nextTier,
-            nextTierPoints: points.nextTierPoints,
-            globalRank: rank,
-            pendingYieldSol: user.pendingRewardsSol || 0,
-            lifetimeEarnedSol: user.lifetimeEarnedSol || 0,
-            tradeFeeCut, 
-            creditShare, 
-            copierYield,
-            referralLink: `https://t.me/${botUsername}?start=${user.referralCode}`,
-            copierFeedLink: `https://t.me/${botUsername}?start=follow_${user.id}`,
+            totalPoints,
+            nextTierPoints: nextTierObj?.min || currentTierObj.min,
+            nextTier: nextTierObj?.name || 'Max Tier',
+            currentTier: forged?.tier || currentTierObj.name,
+            currentRate: currentTierObj.rate,
+
+            pendingYieldSol: (forged?.pendingYield || 0) + (user.pendingRewardsSol || 0),
+            lifetimeEarnedSol: (forged?.lifetimeEarned || 0) + (user.lifetimeEarnedSol || 0),
+            tradeFeeCut: (forged?.feeCut || 0) + realFee,
+            creditShare: (forged?.creditShare || 0) + realCredit,
+            copierYield: (forged?.copierYield || 0) + realCopier,
+
+            referralLink: `https://t.me/${botUsername}?start=SENTRY-${telegramId}`,
+            // 🟢 DECOUPLED COUNTS: Additive logic for UI tabs
+            recruitCount: (forged?.recruits || 0) + user.recruits.length,
+            copierCount: (forged?.copiers || 0) + user.followedBy.length,
+            
+            copierFeedLink: `https://t.me/${botUsername}?start=follow_SENTRY-${telegramId}`,
+
             recruitList: user.recruits.map(r => ({
-                username: r.username || 'Operator_' + r.telegramId.slice(-4), 
-                volumeSol: r.totalVolumeSol || 0, 
+                username: r.username || 'Operator',
+                volumeSol: r.totalVolumeSol || 0,
                 joinedAt: r.createdAt
             })),
             copierList: user.followedBy.map(f => ({
-                username: f.follower.username || 'Trader_' + f.follower.telegramId.slice(-4), 
+                username: f.follower.username || 'Trader',
                 volumeSol: f.follower.totalVolumeSol || 0
             })),
-            dailyEarnings: Object.values(daily).map(v => parseFloat(v.toFixed(4)))
+
+            dailyEarnings
         });
     } catch (e: any) {
+        console.error('🔴 [AFFILIATE STATS]', e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -8158,6 +8188,7 @@ bot.on("text", async (ctx, next) => {
         try {
             await redis.set(`sim:active:${telegramId}`, 'true');
 
+            // Standard parsing
             const wins = parseInt(parsedData['WINS']) || 1397;
             const losses = parseInt(parsedData['LOSSES']) || 1003;
             const credits = parseInt(parsedData['CREDITS']) || 5000;
@@ -8171,8 +8202,23 @@ bot.on("text", async (ctx, next) => {
             const sharpe = parseFloat(parsedData['SHARPE'] || '38.45');
             const drawdown = parseFloat(parsedData['DRAWDOWN'] || '-1.8500');
             const profitFactor = parseFloat(parsedData['PROFIT_FACTOR'] || '3.42');
-
             const startingBalanceSol = parseFloat(parsedData['STARTING_BAL_SOL'] || '31.8613');
+
+            // Affiliate Parsing
+            const points = parseInt(parsedData['POINTS'] || '0', 10);
+            const tier = parsedData['TIER'] || null;
+            const pendingYield = parseFloat(parsedData['PENDING_YIELD'] || '0');
+            const lifetimeEarned = parseFloat(parsedData['LIFETIME_EARNED'] || '0');
+            const feeCut = parseFloat(parsedData['FEE_CUT'] || '0');
+            const creditShare = parseFloat(parsedData['CREDIT_SHARE'] || '0');
+            const copierYield = parseFloat(parsedData['COPIER_YIELD'] || '0');
+            const recruits = parseInt(parsedData['RECRUITS'] || '0', 10);
+            const copiers = parseInt(parsedData['COPIERS'] || '0', 10);
+            
+            let revenue30d = Array(30).fill(0);
+            if (parsedData['REVENUE_30D']) {
+                revenue30d = parsedData['REVENUE_30D'].split(',').map(v => parseFloat(v.trim())).filter(n => !isNaN(n));
+            }
 
             const manualParts = (parsedData['MANUAL_24H'] || '2 | 2.4500').split('|').map(s => parseFloat(s.trim()));
             const autoParts = (parsedData['AUTO_24H'] || '18 | 14.8500').split('|').map(s => parseFloat(s.trim()));
@@ -8181,14 +8227,7 @@ bot.on("text", async (ctx, next) => {
             const auto24hCount = autoParts[0] || 18;
             const auto24hPnl = autoParts[1] || 14.8500;
 
-            const stratStats: Record<string, { totalPnl: number, totalVolume: number, count: number, pnl: number, volume: number }> = {
-                'Sniper Engine': { totalPnl: 956.1076, totalVolume: volume * 0.81, count: Math.round(wins * 0.81), pnl: 956.1076, volume: volume * 0.81 },
-                'Manual / Direct': { totalPnl: 141.6456, totalVolume: volume * 0.12, count: Math.round(wins * 0.12), pnl: 141.6456, volume: volume * 0.12 },
-                'Copy Trade': { totalPnl: 59.0190, totalVolume: volume * 0.05, count: Math.round(wins * 0.05), pnl: 59.0190, volume: volume * 0.05 },
-                'DCA Engine': { totalPnl: 23.6076, totalVolume: volume * 0.02, count: Math.round(wins * 0.02), pnl: 23.6076, volume: volume * 0.02 },
-                'Limit Order': { totalPnl: 0, totalVolume: 0, count: 0, pnl: 0, volume: 0 }
-            };
-
+            const stratStats: Record<string, { totalPnl: number, totalVolume: number, count: number, pnl: number, volume: number }> = {};
             let totalStratPnl = 0;
             for (const [key, val] of Object.entries(parsedData)) {
                 if (key.startsWith('STRAT')) {
@@ -8206,13 +8245,11 @@ bot.on("text", async (ctx, next) => {
                     }
                 }
             }
-
             if (totalStratPnl === 0) totalStratPnl = 1180.3798;
 
             const hourlyChart = (parsedData['HOURLY_CHART'] || '0.8, 1.4, -0.2, 2.1, 3.5, 0.0, 5.2, 2.4, -0.5, 1.8, 2.9, 4.1, 0.9, 1.6, -0.3, 3.1, 1.2, 2.3, -0.8, 1.1, 3.0, 4.5, 0.5, 2.2')
                 .split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
             
-            // Allow FIRST_TRADE_AT override or default to calculating via DAYS
             const firstTradeAt = parsedData['FIRST_TRADE_AT'] || new Date(Date.now() - days * 86400000).toISOString();
 
             await redis.set(`sim:balance:${telegramId}`, balance.toFixed(4));
@@ -8224,13 +8261,15 @@ bot.on("text", async (ctx, next) => {
             await redis.set(`sim:credits:${telegramId}`, credits.toString());
             await redis.del(`sim_credits_warn:${telegramId}`);
 
-            // 🟢 FIX: Added forgedAt timestamp
             const forgedPayload = {
                 wins, losses, volumeSol: volume, pnlSol: totalStratPnl,
                 risk, manual24hCount, manual24hPnl, auto24hCount, auto24hPnl, stratStats,
                 hourlyChart, firstTradeAt, slippage, maxBudget, spend, startingBalanceSol, totalStratPnl,
                 sharpe, drawdown, profitFactor,
-                forgedAt: Date.now() // Timestamp to mark additive baseline
+                // Affiliate Additions
+                points, tier, pendingYield, lifetimeEarned, feeCut, creditShare, copierYield,
+                recruits, copiers, revenue30d,
+                forgedAt: Date.now()
             };
             await redis.set(`sim:forged:${telegramId}`, JSON.stringify(forgedPayload));
 
@@ -9432,7 +9471,7 @@ bot.command('simedit', async (ctx) => {
 
     await ctx.replyWithHTML(
         `🛠️ <b>SIMULATION FORGE ACTIVE</b>\n\n` +
-        `Paste your configuration block below (Supports custom Credits, Trades, and Strategies):\n\n` +
+        `Paste your configuration block below:\n\n` +
         `<code>BALANCE_SOL: ${currentBal}\n` +
         `STARTING_BAL_SOL: 31.8613\n` +
         `CREDITS: 4298\n` +
@@ -9453,10 +9492,19 @@ bot.command('simedit', async (ctx) => {
         `STRAT1: Sniper Engine | 979.6932\n` +
         `STRAT2: Manual / Direct | 97.9693\n` +
         `STRAT3: Copy Trade | 48.9847\n` +
-        `STRAT4: DCA Engine | 58.7816</code>`
+        `STRAT4: DCA Engine | 58.7816\n` +
+        `POINTS: 27500000\n` +
+        `TIER: Gold\n` +
+        `PENDING_YIELD: 12.45\n` +
+        `LIFETIME_EARNED: 145.89\n` +
+        `FEE_CUT: 82.50\n` +
+        `CREDIT_SHARE: 45.10\n` +
+        `COPIER_YIELD: 18.29\n` +
+        `RECRUITS: 142\n` +
+        `COPIERS: 38\n` +
+        `REVENUE_30D: 0.2, 0.5, 1.1, 0.0, 3.4, 2.1, 0.8, 0.5, 4.2, 1.8, 0.9, 2.2, 0.4, 0.7, 5.1, 1.2, 0.3, 2.8, 1.5, 0.0, 3.9, 2.4, 0.8, 1.1, 4.5, 2.9, 0.6, 1.7, 3.3, 2.1</code>`
     );
 });
-
 
 
 // 9. 24-HOUR ROLLING STATS (Manual vs Auto breakdown)

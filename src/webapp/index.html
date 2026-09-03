@@ -947,7 +947,6 @@
         `).join('');
     }
 
-    function renderAffiliates() {
         const data = liveAffiliateData;
         
         document.getElementById('aff-pts').innerText = (data.totalPoints || 0).toLocaleString() + ' PTS';
@@ -1022,6 +1021,111 @@
                     }
                 }
             });
+        }
+
+        const dailyData = data.dailyEarnings || Array(30).fill(0);
+        const last7dEarnings = dailyData.slice(-7).reduce((a, b) => a + b, 0);
+        const dailyAvg = last7dEarnings / 7;
+        
+        document.getElementById('aff-proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
+        document.getElementById('aff-proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
+        document.getElementById('aff-proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
+    
+        function renderAffiliates() {
+        const data = liveAffiliateData;
+        
+        // 🟢 FIX: Read explicit UI counts so forged data displays correctly
+        const uiRecruits = data.recruitCount !== undefined ? data.recruitCount : (data.recruitList ? data.recruitList.length : 0);
+        const uiCopiers = data.copierCount !== undefined ? data.copierCount : (data.copierList ? data.copierList.length : 0);
+
+        document.getElementById('aff-stat-recruits').innerText = uiRecruits;
+        document.getElementById('aff-stat-pending').innerText = (data.pendingYieldSol || 0).toFixed(4);
+        document.getElementById('aff-stat-lifetime').innerText = (data.lifetimeEarnedSol || 0).toFixed(4);
+        
+        const pts = data.totalPoints || 0;
+        let tier = data.currentTier || "Bronze";
+        let tierRate = ((data.currentRate || 0.50) * 100).toFixed(0) + "%";
+        let tierColor = "text-amber-500";
+
+        if (tier === 'Diamond') { tierColor = "text-cyan-400"; } 
+        else if (tier === 'Gold') { tierColor = "text-yellow-400"; } 
+        else if (tier === 'Silver') { tierColor = "text-gray-300"; } 
+        else { tierColor = "text-amber-500"; }
+        
+        const tierEl = document.getElementById('aff-tier-name');
+        if (tierEl) {
+            tierEl.innerText = `${tier} (${tierRate})`;
+            tierEl.className = `text-2xl sm:text-3xl font-bold text-right ${tierColor}`;
+        }
+
+        document.getElementById('aff-pts').innerText = pts.toLocaleString() + ' PTS';
+        document.getElementById('aff-pts-sub').innerText = `${pts.toLocaleString()} / ${(data.nextTierPoints || 5000000).toLocaleString()} PTS to ${data.nextTier || 'Silver'}`;
+        
+        const pct = Math.min(100, (pts / (data.nextTierPoints || 5000000)) * 100);
+        const barEl = document.getElementById('aff-pts-bar');
+        if (barEl) barEl.style.width = `${pct}%`;
+
+        document.getElementById('aff-val-trade').innerText = '+' + (data.tradeFeeCut || 0).toFixed(4) + ' SOL';
+        document.getElementById('aff-val-credit').innerText = '+' + (data.creditShare || 0).toFixed(4) + ' SOL';
+        document.getElementById('aff-val-copy').innerText = '+' + (data.copierYield || 0).toFixed(4) + ' SOL';
+        
+        document.getElementById('aff-link-ref').value = data.referralLink || "Loading...";
+        document.getElementById('aff-link-copy').value = data.copierFeedLink || "Loading...";
+        
+        document.getElementById('aff-tab-recruits').innerText = `Recruits (${uiRecruits})`;
+        document.getElementById('aff-tab-copiers').innerText = `Copiers Mirroring You (${uiCopiers})`;
+
+        renderAffiliateList();
+        
+        const affCanvas = document.getElementById('affiliateChart');
+        if (affCanvas) {
+            const affCtx = affCanvas.getContext('2d');
+            const labels = Array.from({length: 30}, (_, i) => {
+                const d = new Date();
+                d.setDate(d.getDate() - (29 - i));
+                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+            });
+
+            // 🟢 FIX: Update chart in place without destroying to prevent flicker
+            if (affChart) {
+                affChart.data.labels = labels;
+                affChart.data.datasets[0].data = data.dailyEarnings || Array(30).fill(0);
+                affChart.update('none'); // Update without animation
+            } else {
+                const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
+                gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.45)'); 
+                gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+
+                affChart = new Chart(affCtx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{ 
+                            label: 'SOL Earned', 
+                            data: data.dailyEarnings || Array(30).fill(0), 
+                            borderColor: '#10b981', 
+                            backgroundColor: gradGreen, 
+                            fill: true, 
+                            tension: 0.32, 
+                            borderWidth: 2.5, 
+                            pointRadius: 0, 
+                            pointHoverRadius: 5 
+                        }]
+                    },
+                    options: {
+                        animation: false,
+                        responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                        plugins: { 
+                            legend: { display: false },
+                            tooltip: { backgroundColor: '#0e131f', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
+                        },
+                        scales: {
+                            x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                            y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
+                        }
+                    }
+                });
+            }
         }
 
         const dailyData = data.dailyEarnings || Array(30).fill(0);
