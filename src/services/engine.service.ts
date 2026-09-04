@@ -204,13 +204,13 @@ export async function sendToJitoBundle(
     swapTx: VersionedTransaction, 
     tipTx: VersionedTransaction, 
     allowRawFallback: boolean = true
-): Promise<{ ok: boolean; tipSig: string }> {
+): Promise<{ ok: boolean; tipSig: string; feeAtomic: boolean }> {
     const tipSig = bs58.encode(tipTx.signatures[0]);
     const swapBase64 = Buffer.from(swapTx.serialize()).toString('base64');
     const tipBase64 = Buffer.from(tipTx.serialize()).toString('base64');
     const bundledTxs = [swapBase64, tipBase64];
 
-    // 1. Staked Jito / Nozomi path
+    // 1. Staked Jito / Nozomi path (Atomic)
     if (process.env.STAKED_JITO_URL) {
         try {
             const res = await axiosClient.post(process.env.STAKED_JITO_URL, {
@@ -219,12 +219,12 @@ export async function sendToJitoBundle(
 
             if (res.data && !res.data.error && (res.data.result || res.data.bundle_id)) {
                 logger.info('🟢 [ROUTE] Landed via Staked Jito relayer');
-                return { ok: true, tipSig };
+                return { ok: true, tipSig, feeAtomic: true };
             }
         } catch (_) {}
     }
 
-    // 2. Multi-Region Jito Racing
+    // 2. Multi-Region Jito Racing (Atomic)
     const bundlePayload = { jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs] };
     
     const racePromises = JITO_ENDPOINTS.map(url => 
@@ -238,26 +238,26 @@ export async function sendToJitoBundle(
     try {
         await Promise.any(racePromises);
         logger.info('🟢 [ROUTE] Landed via Fastest Regional Jito Block Engine');
-        return { ok: true, tipSig };
+        return { ok: true, tipSig, feeAtomic: true };
     } catch (_) {
         logger.warn('⚠️ [ROUTE] All Jito regional endpoints failed — falling back to direct TPU');
     }
 
-    // 3. TPU Raw Transaction Fallback
+    // 3. TPU Raw Transaction Fallback (Non-Atomic)
     if (allowRawFallback) {
         try {
             const rawSig = await connection.sendRawTransaction(Buffer.from(swapTx.serialize()), { skipPreflight: true, maxRetries: 3 });
             if (rawSig) {
                 connection.sendRawTransaction(Buffer.from(tipTx.serialize()), { skipPreflight: true, maxRetries: 3 }).catch(() => {});
                 logger.info('🟡 [ROUTE] Landed via TPU direct validator fallback');
-                return { ok: true, tipSig };
+                return { ok: true, tipSig, feeAtomic: false };
             }
         } catch (e: any) {
             logger.error('🔴 [ROUTE] Raw fallback error:', { error: e.message });
         }
     }
 
-    return { ok: false, tipSig };
+    return { ok: false, tipSig, feeAtomic: false };
 }
 
 
@@ -798,55 +798,54 @@ export async function executeSnipe(
     aiScore?: number
 ): Promise<{ success: boolean; signature?: string; message: string; volumeSpent?: number }> {
 
-    // 1. Trade Idempotency Lock
-    const idemKey = `idem:trade:${telegramId}:${targetCA}:${amountSol}:${Math.floor(Date.now() / 10000)}`;
-    const isFirstCall = await redis.set(idemKey, '1', 'EX', 10, 'NX');
-    if (!isFirstCall) {
-        return { success: false, message: '⏳ An identical trade is currently executing. Please wait.' };
+    // 1. Whole-Execution Lock
+    const execLockKey = `lock:trade_exec:${telegramId}:${targetCA}`;
+    const gotLock = await redis.set(execLockKey, '1', 'EX', 45, 'NX');
+    if (!gotLock) {
+        return { success: false, message: '⏳ A trade on this token is currently executing. Please wait.' };
     }
-
-    // 2. Simulation Intercept
-    const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
-    if (await isSimulationActive(telegramId)) {
-        return await simExecuteSnipe(telegramId, targetCA, amountSol, strategy, aiScore ?? 75);
-    }
-
-    // 3. Devnet Intercept
-    const { isDevnetActive, DEVNET_UNSUPPORTED_MSG } = await import('../lib/devnet.js');
-    if (await isDevnetActive(telegramId)) {
-        return { success: false, message: DEVNET_UNSUPPORTED_MSG };
-    }
-    
-    if (antiMevDelayMs > 0) await new Promise(r => setTimeout(r, antiMevDelayMs));
-
-    // 4. Pre-Trade Rug Prevention Check
-    if (side === 'buy' && !isBumper) {
-        const rugAudit = await preTradeRugCheck(targetCA);
-        if (!rugAudit.safe) {
-            return { success: false, message: `🚨 <b>PRE-TRADE RUG BLOCK:</b> ${rugAudit.reason}` };
-        }
-    }
-
-    const preloaded = await preloadHotPathCache(telegramId, targetCA);
-
-    // 5. Fast-mode sniper skips redundant 400ms MEV check
-    if (side === 'buy' && !isBumper && strategy !== 'Sniper Engine') {
-        let isMev = preloaded.mevCache === 'true';
-        if (preloaded.mevCache === null) {
-            const mevPromise = checkRecentMevActivityCached(targetCA).catch(() => 'ERROR');
-            const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), 400));
-            const mevResult = await Promise.race([mevPromise, timeoutPromise]);
-            if (mevResult === true) return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
-            if (mevResult === 'TIMEOUT' || mevResult === 'ERROR') return { success: false, message: "⚠️ MEV check timeout — trade blocked." };
-        } else if (isMev) {
-            return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
-        }
-    }
-
-    const tokenPubkey = safePublicKey(targetCA);
-    if (!tokenPubkey) return { success: false, message: "🔴 Invalid Token Address." };
 
     try {
+        // 2. Simulation Intercept
+        const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
+        if (await isSimulationActive(telegramId)) {
+            return await simExecuteSnipe(telegramId, targetCA, amountSol, strategy, aiScore ?? 75);
+        }
+
+        // 3. Devnet Intercept
+        const { isDevnetActive, DEVNET_UNSUPPORTED_MSG } = await import('../lib/devnet.js');
+        if (await isDevnetActive(telegramId)) {
+            return { success: false, message: DEVNET_UNSUPPORTED_MSG };
+        }
+        
+        if (antiMevDelayMs > 0) await new Promise(r => setTimeout(r, antiMevDelayMs));
+
+        // 4. Pre-Trade Rug Prevention Check
+        if (side === 'buy' && !isBumper) {
+            const rugAudit = await preTradeRugCheck(targetCA);
+            if (!rugAudit.safe) {
+                return { success: false, message: `🚨 <b>PRE-TRADE RUG BLOCK:</b> ${rugAudit.reason}` };
+            }
+        }
+
+        const preloaded = await preloadHotPathCache(telegramId, targetCA);
+
+        // 5. MEV Check
+        if (side === 'buy' && !isBumper && strategy !== 'Sniper Engine') {
+            let isMev = preloaded.mevCache === 'true';
+            if (preloaded.mevCache === null) {
+                const mevPromise = checkRecentMevActivityCached(targetCA).catch(() => 'ERROR');
+                const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => setTimeout(() => resolve('TIMEOUT'), 400));
+                const mevResult = await Promise.race([mevPromise, timeoutPromise]);
+                if (mevResult === true) return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
+            } else if (isMev) {
+                return { success: false, message: "🚨 MEV Sandwich Bot Detected. Trade Blocked." };
+            }
+        }
+
+        const tokenPubkey = safePublicKey(targetCA);
+        if (!tokenPubkey) return { success: false, message: "🔴 Invalid Token Address." };
+
         const user = await prisma.user.findUnique({ where: { telegramId } });
         if (!user || !user.vaultAddress || !user.turnkeySubOrgId) {
             return { success: false, message: "🔴 No active Vault found. Send /start to initialize." };
@@ -859,7 +858,6 @@ export async function executeSnipe(
         const baseSlippage = overrideSlippage ?? user.slippagePercent ?? 20.0;
         const needsVolatilityCheck = user.enableAdaptiveSlippage && overrideSlippage === undefined;
 
-        // Parallel Pre-flight checks
         const [liveBalanceLamportsOrNull, feeRate, liveConfig, volatilitySlippage] = await Promise.all([
             cachedBal === null ? connection.getBalance(vaultPubkey).catch(() => 0) : Promise.resolve(null),
             getPlatformFeeRate(user.telegramId),
@@ -867,7 +865,10 @@ export async function executeSnipe(
             needsVolatilityCheck ? getVolatilityAdjustedSlippage(targetCA, baseSlippage).catch(() => baseSlippage) : Promise.resolve(baseSlippage)
         ]);
 
-        const liveBalanceSol = cachedBal !== null ? cachedBal : (liveBalanceLamportsOrNull as number) / LAMPORTS_PER_SOL;
+        let liveBalanceSol = cachedBal !== null ? cachedBal : (liveBalanceLamportsOrNull as number) / LAMPORTS_PER_SOL;
+        if (liveBalanceSol < amountSol + 0.005) {
+            liveBalanceSol = (await connection.getBalance(vaultPubkey).catch(() => 0)) / LAMPORTS_PER_SOL;
+        }
         if (liveBalanceSol < amountSol + 0.005) return { success: false, message: "Insufficient Funds." };
 
         let selectedSlippage = baseSlippage;
@@ -890,10 +891,9 @@ export async function executeSnipe(
 
         let walletReport: string[] = [];
         let walletErrors: string[] = [];
-        
         const recentBlockhash = getCachedBlockhash() || (await connection.getLatestBlockhash('processed')).blockhash;
 
-        // Max Loss Limit Circuit Breaker Check (Applied only to Auto-Sniper)
+        // Max Loss Limit Circuit Breaker (Sniper Engine only)
         if (strategy === 'Sniper Engine' && liveConfig?.maxLossPercent && liveConfig.maxLossPercent > 0) {
             const lossCheck = await isLiveLossLimitHit(telegramId, liveConfig, user);
             if (lossCheck.hit) {
@@ -915,15 +915,17 @@ export async function executeSnipe(
         const intendedSpend = amountSol * activeWallets;
         let actualSpendPerWallet = amountSol;
 
-        // Auto-extending Redlock budget check (Only for Sniper Engine)
+        // Session Budget Allocation (Only for Sniper Engine)
         if (strategy === 'Sniper Engine' && liveConfig) {
             const budgetLockKey = `lock:budget:${telegramId}`;
             const { withLock } = await import('../lib/redlock.js');
+            const { resolveBudgetSol } = await import('./simulation.service.js');
+            const { cachedSolUsdPrice } = await import('./grpc.service.js');
 
             await withLock([budgetLockKey], 10000, async () => {
                 const sessionId = preloaded.sessionId || (await redis.get(`autosnipe:session_id:live:${telegramId}`));
                 const currentSpendFinal = preloaded.sessionSpend || (await getSessionSpend(telegramId, 'live'));
-                const maxBudget = liveConfig.maxBudgetSol || Infinity;
+                const maxBudget = resolveBudgetSol(liveConfig, cachedSolUsdPrice || 156.93);
                 const remainingBudget = maxBudget - currentSpendFinal;
 
                 if (remainingBudget <= 0) {
@@ -952,7 +954,6 @@ export async function executeSnipe(
         const forceNoSOR = strategy === 'Sniper Engine';
         const useSORForTrade = forceNoSOR ? false : (user.enableSOR ?? true);
 
-        // Execute transactions in parallel across active whale wallets
         const executionPromises = wallets.map(async (w, index) => {
             let wBal = getLiveWalletBalance(w.publicKey.toBase58());
             if (wBal === null) wBal = (await connection.getBalance(w.publicKey).catch(()=>0)) / LAMPORTS_PER_SOL;
@@ -1005,7 +1006,7 @@ export async function executeSnipe(
                 } catch(e) {}
             }
 
-            const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
+            const { ok: bundleOk, feeAtomic } = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
             const tSendEnd = process.hrtime.bigint();
 
             logger.info('⚡ [SNIPE TIMING]', {
@@ -1026,96 +1027,74 @@ export async function executeSnipe(
 
             walletReport[index] = `W${index + 1}: 🚀 Sent [${apiRes.winningRoute || 'Native'}]`;
 
-            // Non-blocking verification & revenue distribution
             const expectedOutput = apiRes.estimatedOutput || 0;
             (async () => {
                 try {
                     const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true, w.publicKey);
+                    if (!tcaReport.confirmed) return;
 
-                    const feeCharged = actualSpendPerWallet * feeRate;
-                    const feeChargedLamports = BigInt(Math.round((actualSpendPerWallet * 1_000_000_000) * feeRate));
-
-                    let remainingFeeLamports = feeChargedLamports;
-                    let affiliateCutLamports = 0n, guildOwnerCutLamports = 0n, leaderCutLamports = 0n;
-
-                    // 1. Social Copy Leader (50%)
-                    if (strategy === 'Copy Trade' && remainingFeeLamports > 0n) {
-                        try {
-                            const followRelation = await prisma.copyTradeFollow.findFirst({
-                                where: { followerId: user.id, isActive: true }, include: { leader: true }
-                            });
-                            if (followRelation?.leaderId) {
-                                leaderCutLamports = (remainingFeeLamports * 50n) / 100n;
-                                remainingFeeLamports -= leaderCutLamports;
-                                prisma.user.update({ 
-                                    where: { id: followRelation.leaderId }, 
-                                    data: { pendingRewardsSol: { increment: Number(leaderCutLamports) / 1_000_000_000 } } 
-                                }).catch(() => {});
-                            }
-                        } catch (_) {}
-                    }
-
-                    // 2. Affiliate Tree (50%-70%)
-                    if (remainingFeeLamports > 0n && user.referredById) {
-                        try {
-                            const dynamicRate = await getDynamicAffiliateRate(user.referredById);
-                            affiliateCutLamports = (remainingFeeLamports * BigInt(Math.floor(dynamicRate * 100))) / 100n;
-                            remainingFeeLamports -= affiliateCutLamports;
-                            prisma.user.update({ 
-                                where: { id: user.referredById }, 
-                                data: { pendingRewardsSol: { increment: Number(affiliateCutLamports) / 1_000_000_000 } } 
-                            }).catch(() => {});
-                        } catch (_) {}
-                    }
-
-                    // 3. Guild Owner Cut (40%)
-                    if (remainingFeeLamports > 0n) {
-                        try {
-                            const activeGuildMembership = await prisma.guildMembership.findFirst({
-                                where: { userId: user.id, isActive: true }, include: { guild: true }
-                            });
-                            if (activeGuildMembership?.guild.ownerId) {
-                                guildOwnerCutLamports = (remainingFeeLamports * 40n) / 100n;
-                                prisma.user.update({ 
-                                    where: { id: activeGuildMembership.guild.ownerId }, 
-                                    data: { pendingRewardsSol: { increment: Number(guildOwnerCutLamports) / 1_000_000_000 } } 
-                                }).catch(() => {});
-                            }
-                        } catch (_) {}
-                    }
-
-                    // User Volume & Loyalty Points
                     const { isSimulationActive: checkSimStatus } = await import('./simulation.service.js');
                     const isStillSim = await checkSimStatus(telegramId).catch(() => false);
+
                     if (!isStillSim) {
                         prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: actualSpendPerWallet } } }).catch(() => {});
                         invalidateUserPointsCache(user.id).catch(() => {});
                         awardGuildPoints(user.telegramId, actualSpendPerWallet).catch(() => {});
                     }
-                    
-                    await prisma.trade.create({
-                        data: {
-                            userId: user.id,
-                            tokenAddress: targetCA,
-                            isBuy: true,
-                            amountInSol: actualSpendPerWallet,
-                            feeChargedSol: feeCharged,
-                            affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000,
-                            loyaltyRebateSol: 0.0,
-                            txSignature: txSig,
-                            status: 'CONFIRMED',
-                            strategy: strategy,
-                            aiScore: aiScore ?? null,
-                            expectedPriceUsd: tcaReport.expectedAmount || 0,
-                            executedPriceUsd: tcaReport.executedPricePerToken || 0,
-                            slippagePercent: tcaReport.slippagePercent || 0
+
+                    let feeCharged = 0;
+                    let affiliateCutSol = 0;
+
+                    if (feeAtomic && !isStillSim) {
+                        feeCharged = actualSpendPerWallet * feeRate;
+                        try {
+                            const { distributeTradeFee } = await import('./affiliate.service.js');
+                            const dist = await distributeTradeFee({
+                                feeSol: feeCharged,
+                                payerUserId: user.id,
+                                referredById: user.referredById,
+                                strategy,
+                            });
+                            affiliateCutSol = dist.affiliateCutSol;
+                        } catch (e: any) {
+                            logger.error('🔴 [AFFILIATE] distributeTradeFee failed (buy):', { error: e.message });
                         }
-                    }).catch((dbErr) => {
-                        logger.error('Failed to create Buy Trade record:', { error: dbErr.message });
-                    });
+                    }
+
+                    const { cachedSolUsdPrice } = await import('./grpc.service.js');
+                    const executedPriceUsd = (tcaReport.executedPricePerToken || 0) * (cachedSolUsdPrice || 156.93);
+
+                    try {
+                        // Idempotent insertion using findFirst check to avoid Prisma @unique errors
+                        const existing = await prisma.trade.findFirst({ where: { txSignature: txSig } });
+                        if (!existing) {
+                            await prisma.trade.create({
+                                data: {
+                                    userId: user.id,
+                                    tokenAddress: targetCA,
+                                    isBuy: true,
+                                    amountInSol: actualSpendPerWallet,
+                                    feeChargedSol: feeCharged,
+                                    affiliateCutSol,
+                                    loyaltyRebateSol: 0.0,
+                                    txSignature: txSig,
+                                    status: 'CONFIRMED',
+                                    strategy,
+                                    aiScore: aiScore ?? null,
+                                    expectedPriceUsd: 0,
+                                    executedPriceUsd,
+                                    slippagePercent: tcaReport.slippagePercent || 0,
+                                }
+                            });
+                        }
+                    } catch (dbErr: any) {
+                        logger.error('🔴 [TRADE WRITE ERROR] buy:', { error: dbErr.message });
+                    }
 
                     fireWebhook(user.telegramId, 'trade_buy', { tokenAddress: targetCA, amountSol: actualSpendPerWallet, signature: txSig, strategy, aiScore }).catch(() => {});
-                } catch (err: any) {}
+                } catch (err: any) {
+                    logger.error('🔴 [ATTRIBUTION ERROR] buy:', { error: err.message });
+                }
             })();
 
             return { success: true, index, signature: txSig, volumeSpent: actualSpendPerWallet };
@@ -1136,16 +1115,18 @@ export async function executeSnipe(
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10); 
 
         return {
-            success: true, signature: firstSignature, volumeSpent: totalVolume,
+            success: true, 
+            signature: firstSignature, 
+            volumeSpent: totalVolume,
             message: `🟢 Trade Confirmed (${successful.length}/${wallets.length} Wallets).\n📊 <b>Breakdown:</b> ${walletReport.join(" | ")}`
         };
     } catch (error: any) { 
         return { success: false, message: `🔴 Execution Fault: ${error.message}` }; 
+    } finally {
+        await redis.del(execLockKey).catch(() => {});
     }
 }
 
-
-// Replace executeExit in src/services/engine.service.ts
 export async function executeExit(
     telegramId: string, 
     targetCA: string, 
@@ -1255,7 +1236,7 @@ export async function executeExit(
                 }
             } catch (_) {}
 
-            // Cap the upfront fee transfer to spendable balance so sell orders never fail due to gas shortage
+            // Cap the upfront fee transfer to available balance to avoid trapping the exit
             const maxSafeSpendable = Math.max(0, (balances[index] - 1_500_000) / LAMPORTS_PER_SOL);
             const clampedFeeVolume = Math.min(volumeToRecord, maxSafeSpendable);
 
@@ -1268,7 +1249,7 @@ export async function executeExit(
             
             let txSig = bs58.encode(swapTx.signatures[0]);
             
-            const bundleOk = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
+            const { ok: bundleOk, feeAtomic } = await sendToJitoBundle(swapTx, tipTx, selectedSlippage <= 25.0);
             if (!bundleOk) { 
                 walletErrors[index] = "Dropped by Jito."; 
                 walletReport[index] = `W${index + 1}: 🔴 Drop`; 
@@ -1282,92 +1263,75 @@ export async function executeExit(
             (async () => {
                 try {
                     const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, decimals, false, w.publicKey);
+                    if (!tcaReport.confirmed) return; // Abort if sell did not confirm on-chain
 
                     let actualSolReceived = tcaReport.executedAmount > 0 ? tcaReport.executedAmount : dynamicFeeBase;
-                    const feeCharged = volumeToRecord * feeRate;
-                    const feeChargedLamports = BigInt(Math.round((volumeToRecord * 1_000_000_000) * feeRate));
+                    
+                    let feeCharged = 0;
+                    let affiliateCutSol = 0;
 
-                    let remainingFeeLamports = feeChargedLamports;
-                    let affiliateCutLamports = 0n, guildOwnerCutLamports = 0n, leaderCutLamports = 0n;
+                    const { isSimulationActive: checkSimStatus } = await import('./simulation.service.js');
+                    const isStillSim = await checkSimStatus(telegramId).catch(() => false);
 
-                    if (strategy === 'Copy Trade' && remainingFeeLamports > 0n) {
+                    if (feeAtomic && !isStillSim) {
+                        feeCharged = volumeToRecord * feeRate;
                         try {
-                            const followRelation = await prisma.copyTradeFollow.findFirst({
-                                where: { followerId: user.id, isActive: true }, include: { leader: true }
+                            const { distributeTradeFee } = await import('./affiliate.service.js');
+                            const dist = await distributeTradeFee({
+                                feeSol: feeCharged,
+                                payerUserId: user.id,
+                                referredById: user.referredById,
+                                strategy,
                             });
-                            if (followRelation?.leaderId) {
-                                leaderCutLamports = (remainingFeeLamports * 50n) / 100n;
-                                remainingFeeLamports -= leaderCutLamports;
-                                prisma.user.update({ 
-                                    where: { id: followRelation.leaderId }, 
-                                    data: { pendingRewardsSol: { increment: Number(leaderCutLamports) / 1_000_000_000 } } 
-                                }).catch(() => {});
-                            }
-                        } catch (_) {}
-                    }
-
-                    if (remainingFeeLamports > 0n && user.referredById) {
-                        try {
-                            const dynamicRate = await getDynamicAffiliateRate(user.referredById);
-                            affiliateCutLamports = (remainingFeeLamports * BigInt(Math.floor(dynamicRate * 100))) / 100n;
-                            remainingFeeLamports -= affiliateCutLamports;
-                            prisma.user.update({ 
-                                where: { id: user.referredById }, 
-                                data: { pendingRewardsSol: { increment: Number(affiliateCutLamports) / 1_000_000_000 } } 
-                            }).catch(() => {});
-                        } catch (_) {}
-                    }
-
-                    if (remainingFeeLamports > 0n) {
-                        try {
-                            const activeGuildMembership = await prisma.guildMembership.findFirst({
-                                where: { userId: user.id, isActive: true }, include: { guild: true }
-                            });
-                            if (activeGuildMembership?.guild.ownerId) {
-                                guildOwnerCutLamports = (remainingFeeLamports * 40n) / 100n;
-                                prisma.user.update({ 
-                                    where: { id: activeGuildMembership.guild.ownerId }, 
-                                    data: { pendingRewardsSol: { increment: Number(guildOwnerCutLamports) / 1_000_000_000 } } 
-                                }).catch(() => {});
-                            }
-                        } catch (_) {}
+                            affiliateCutSol = dist.affiliateCutSol;
+                        } catch (e: any) {
+                            logger.error('🔴 [AFFILIATE] distributeTradeFee failed (sell):', { error: e.message });
+                        }
                     }
 
                     const realizedPnlSol = (actualSolReceived - volumeToRecord) - feeCharged;
                     const profitPercent = volumeToRecord > 0 ? (realizedPnlSol / volumeToRecord) * 100 : 0;
 
-                    const { isSimulationActive: checkSimStatus } = await import('./simulation.service.js');
-                    const isStillSim = await checkSimStatus(telegramId).catch(() => false);
                     if (!isStillSim) {
                         prisma.user.update({ where: { id: user.id }, data: { totalVolumeSol: { increment: volumeToRecord } } }).catch(() => {});
                         invalidateUserPointsCache(user.id).catch(() => {});
                         awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
                     }
+
+                    const { cachedSolUsdPrice } = await import('./grpc.service.js');
+                    const executedPriceUsd = (tcaReport.executedPricePerToken || 0) * (cachedSolUsdPrice || 156.93);
                     
-                    await prisma.trade.create({
-                        data: {
-                            userId: user.id,
-                            tokenAddress: targetCA,
-                            isBuy: false,
-                            amountInSol: volumeToRecord,
-                            feeChargedSol: feeCharged,
-                            affiliateCutSol: Number(affiliateCutLamports) / 1_000_000_000,
-                            loyaltyRebateSol: 0.0,
-                            txSignature: txSig,
-                            status: 'CONFIRMED',
-                            profitPercent: parseFloat(profitPercent.toFixed(2)),
-                            realizedPnlSol: realizedPnlSol,
-                            strategy: strategy || 'Manual / Direct',
-                            expectedPriceUsd: tcaReport.expectedAmount || 0,
-                            executedPriceUsd: tcaReport.executedPricePerToken || 0,
-                            slippagePercent: tcaReport.slippagePercent || 0
+                    try {
+                        const existing = await prisma.trade.findFirst({ where: { txSignature: txSig } });
+                        if (!existing) {
+                            await prisma.trade.create({
+                                data: {
+                                    userId: user.id,
+                                    tokenAddress: targetCA,
+                                    isBuy: false,
+                                    amountInSol: volumeToRecord,
+                                    feeChargedSol: feeCharged,
+                                    affiliateCutSol,
+                                    loyaltyRebateSol: 0.0,
+                                    txSignature: txSig,
+                                    status: 'CONFIRMED',
+                                    profitPercent: parseFloat(profitPercent.toFixed(2)),
+                                    realizedPnlSol,
+                                    strategy,
+                                    expectedPriceUsd: 0,
+                                    executedPriceUsd,
+                                    slippagePercent: tcaReport.slippagePercent || 0,
+                                }
+                            });
                         }
-                    }).catch((dbErr) => {
-                        logger.error('Failed to create Sell Trade record:', { error: dbErr.message });
-                    });
+                    } catch (dbErr: any) {
+                        logger.error('🔴 [TRADE WRITE ERROR] sell:', { error: dbErr.message });
+                    }
 
                     fireWebhook(user.telegramId, 'trade_sell', { tokenAddress: targetCA, percentage: sellPercentage, realizedPnlSol, profitPercent, signature: txSig, strategy }).catch(() => {});
-                } catch (err: any) {}
+                } catch (err: any) {
+                    logger.error('🔴 [ATTRIBUTION ERROR] sell:', { error: err.message });
+                }
             })();
 
             return { success: true, index, signature: txSig, feeBase: dynamicFeeBase };
@@ -1385,7 +1349,8 @@ export async function executeExit(
         await redis.set(`recent_trade:${telegramId}`, '1', 'EX', 10);
         
         return { 
-            success: true, signature: (successful[0] as any).value.signature, 
+            success: true, 
+            signature: (successful[0] as any).value.signature, 
             message: `🟢 Exit Confirmed (${sellPercentage}%).\n📊 <b>Breakdown:</b> ${breakdown}` 
         };
     } catch (error: any) { 

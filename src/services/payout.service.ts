@@ -179,3 +179,59 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
         }
     });
 }
+
+// src/services/payout.service.ts
+
+async function refundPayout(rec: { id: string; userId: string; amountSol: number; createdAt: Date }) {
+    const capDay = rec.createdAt.toISOString().split('T')[0];
+    await prisma.$transaction([
+        prisma.user.update({
+            where: { id: rec.userId },
+            data: { 
+                pendingRewardsSol: { increment: rec.amountSol }, 
+                lifetimeEarnedSol: { decrement: rec.amountSol } 
+            }
+        }),
+        prisma.payoutRecord.update({ 
+            where: { id: rec.id }, 
+            data: { status: 'FAILED' } 
+        })
+    ]);
+    await redis.incrbyfloat(`treasury:payouts:${capDay}`, -rec.amountSol).catch(() => {});
+}
+
+export async function reconcilePendingPayouts(): Promise<void> {
+    const graceStart = new Date(Date.now() - 3 * 60 * 1000); // Do not evaluate records younger than 3 minutes
+    const pending = await prisma.payoutRecord.findMany({
+        where: { status: 'PENDING', createdAt: { lt: graceStart } }
+    }).catch(() => []);
+
+    for (const rec of pending) {
+        try {
+            if (!rec.signature) { 
+                await refundPayout(rec); 
+                continue; 
+            }
+
+            const status = await connection
+                .getSignatureStatus(rec.signature, { searchTransactionHistory: true })
+                .catch(() => null);
+
+            const landed = status?.value && !status.value.err &&
+                (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized');
+
+            if (landed) {
+                await prisma.payoutRecord.update({ 
+                    where: { id: rec.id }, 
+                    data: { status: 'CONFIRMED' } 
+                });
+            } else if (status?.value?.err) {
+                await refundPayout(rec); // On-chain failure verified -> safely refund
+            } else if (Date.now() - rec.createdAt.getTime() > 10 * 60 * 1000) {
+                await refundPayout(rec); // Dropped by validators (>10 minutes) -> safely refund
+            }
+        } catch (e: any) {
+            logger.error('🔴 [PAYOUT RECONCILE ERROR]', { id: rec.id, error: e.message });
+        }
+    }
+}

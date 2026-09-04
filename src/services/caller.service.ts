@@ -101,6 +101,8 @@ export function humanizeMs(ms: number): string {
 }
 
 
+// src/services/caller.service.ts
+
 export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean; top10Pct: number; uncertain: boolean }> {
     const cacheKey = `rug_status_ext:${mint}`;
     try {
@@ -110,9 +112,9 @@ export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean
             if (!parsed.uncertain) return parsed;
         }
 
-        // 🟢 FIX: Tightened timeout to 400ms inside limiter
+        // Aligned to 2000ms to eliminate false-positives on normal network latency
         const res = await rugCheckLimiter(() =>
-            axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, { timeout: 400 })
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, { timeout: 2000 })
         );
 
         const data = res.data;
@@ -127,9 +129,52 @@ export async function getCachedRugStatus(mint: string): Promise<{ isRug: boolean
         await redis.set(cacheKey, JSON.stringify(result), 'EX', 600);
         return result;
     } catch (_) {
-        const result = { isRug: true, top10Pct: 0, uncertain: true };
+        // Mark as uncertain, do not hard-block outright
+        const result = { isRug: false, top10Pct: 0, uncertain: true };
         await redis.set(cacheKey, JSON.stringify(result), 'EX', 45); 
         return result;
+    }
+}
+
+export async function simulateSellability(
+    mintAddress: string, 
+    probeSolSize: number = 0.1
+): Promise<{ sellable: boolean; estimatedTaxPct: number; uncertain?: boolean }> {
+    const cacheKey = `sellable:${mintAddress}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    try {
+        const buyQuote = await axios.get(
+            `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`,
+            { timeout: 800 }
+        ).catch(() => null);
+        
+        if (!buyQuote?.data?.outAmount) {
+            const uncertain = { sellable: false, estimatedTaxPct: 0, uncertain: true };
+            await redis.set(cacheKey, JSON.stringify(uncertain), 'EX', 60);
+            return uncertain;
+        }
+
+        const sellQuote = await axios.get(
+            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`,
+            { timeout: 800 }
+        ).catch(() => null);
+
+        if (!sellQuote?.data?.outAmount) {
+            const uncertain = { sellable: false, estimatedTaxPct: 0, uncertain: true };
+            await redis.set(cacheKey, JSON.stringify(uncertain), 'EX', 60);
+            return uncertain;
+        }
+
+        const priceImpact = parseFloat(sellQuote.data.priceImpactPct || "0") * 100;
+        const result = { sellable: priceImpact < 15, estimatedTaxPct: priceImpact, uncertain: false };
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 300);
+        return result;
+    } catch (_) {
+        const uncertain = { sellable: false, estimatedTaxPct: 0, uncertain: true };
+        await redis.set(cacheKey, JSON.stringify(uncertain), 'EX', 60);
+        return uncertain; 
     }
 }
 
@@ -1464,43 +1509,7 @@ export async function trackHolderVelocity(mintAddress: string): Promise<{ growth
     }
 }
 
-// 🟢 FIX: Explicit 400ms timeouts on Jupiter simulation quote endpoints
-export async function simulateSellability(mintAddress: string, probeSolSize: number = 0.1): Promise<{ sellable: boolean; estimatedTaxPct: number }> {
-    const cacheKey = `sellable:${mintAddress}`;
-    const cached = await redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
 
-    try {
-        const buyQuote = await axios.get(
-            `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mintAddress}&amount=${Math.floor(probeSolSize * 1e9)}&autoSlippage=true`,
-            { timeout: 400 }
-        ).catch(() => null);
-        
-        if (!buyQuote?.data?.outAmount) {
-            const result = { sellable: true, estimatedTaxPct: 0 }; 
-            await redis.set(cacheKey, JSON.stringify(result), 'EX', 120);
-            return result;
-        }
-
-        const sellQuote = await axios.get(
-            `https://lite-api.jup.ag/swap/v1/quote?inputMint=${mintAddress}&outputMint=So11111111111111111111111111111111111111112&amount=${buyQuote.data.outAmount}&autoSlippage=true`,
-            { timeout: 400 }
-        ).catch(() => null);
-
-        if (!sellQuote?.data?.outAmount) {
-            const result = { sellable: true, estimatedTaxPct: 0 }; 
-            await redis.set(cacheKey, JSON.stringify(result), 'EX', 120);
-            return result;
-        }
-
-        const priceImpact = parseFloat(sellQuote.data.priceImpactPct || "0") * 100;
-        const result = { sellable: priceImpact < 15, estimatedTaxPct: priceImpact };
-        await redis.set(cacheKey, JSON.stringify(result), 'EX', 300);
-        return result;
-    } catch (_) {
-        return { sellable: true, estimatedTaxPct: 0 }; 
-    }
-}
 
 // 🟢 NEW: Scoring Pipeline Speed Benchmark for /speedtest
 export async function runTriggerBenchmark(telegramId: string): Promise<TriggerBenchmarkResult> {
