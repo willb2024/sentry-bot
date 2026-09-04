@@ -21,14 +21,15 @@ export async function runQAHarness(telegramId: string): Promise<QACheckResult[]>
         return [{ name: 'User Exists', passed: false, detail: `No user found for telegramId ${telegramId}. Run /start first.` }];
     }
 
-    // ── Check 1: Sim mode DB vs Helper Consistency ──
+    // ── Check 1: Sim mode DB vs Helper Consistency (Null-Safe) ──
     const simState = await prisma.simState.findUnique({ where: { userId: user.id } });
     const simActiveHelper = await isSimulationActive(telegramId).catch(() => null);
-    const simMatches = simState?.active === simActiveHelper;
+    const simMatches = (simState?.active ?? false) === (simActiveHelper ?? false);
+    
     results.push({
         name: 'Simulation Mode Integrity',
         passed: simActiveHelper !== null && simMatches,
-        detail: `isSimulationActive() = ${simActiveHelper} | DB SimState.active = ${simState?.active}. ${!simMatches ? '🚨 MISMATCH — Cache and DB disagree!' : 'State is strictly synchronized.'}`
+        detail: `isSimulationActive() = ${simActiveHelper} | DB SimState.active = ${simState?.active ?? false}. ${!simMatches ? '🚨 MISMATCH — Cache and DB disagree!' : 'State is strictly synchronized.'}`
     });
 
     // ── Check 2: Sim Credits Isolation ──
@@ -72,7 +73,6 @@ export async function runQAHarness(telegramId: string): Promise<QACheckResult[]>
         detail: membership ? `GLP: ${membership.loyaltyPoints} | Guild Volume: ${membership.totalVolumeSol} SOL.` : 'No active guild membership.'
     });
 
-   // Replace Check 7 in src/services/qa-harness.service.ts:
     // ── Check 7: Trailing Stop Memory Coverage ──
     const guardIds = await redis.smembers(`user_guards:${telegramId}`).catch(() => []);
     results.push({

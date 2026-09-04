@@ -1,6 +1,7 @@
 // src/services/simulation.service.ts
 import { redis } from '../lib/redis.js';
 import { redlock } from '../lib/redlock.js';
+import { normalizeStrategy } from '../lib/strategy.js';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { generatePnlCard } from './image.service.js';
@@ -365,25 +366,46 @@ export async function recordSimTrade(
     mint: string = 'simulated',
     slippagePercent: number = 0.12,
     aiScore?: number
-) {
+): Promise<void> {
     const key = `sim:trades:${telegramId}`;
     const existing = JSON.parse(await redis.get(key) || '[]');
     const realizedPnlSol = isBuy ? 0 : amountInSol * (profitPercent / 100);
+    const canonicalStrategy = normalizeStrategy(strategy);
     
-    existing.unshift({ 
+    const tradeEntry = { 
         createdAt: new Date().toISOString(), 
         isBuy, 
         amountInSol, 
         profitPercent, 
         realizedPnlSol, 
-        strategy, 
+        strategy: canonicalStrategy, 
         mint,
         slippagePercent,
         aiScore: aiScore ?? null
-    });
-    
+    };
+
+    existing.unshift(tradeEntry);
     const trimmed = existing.slice(0, 5000);
     await redis.set(key, JSON.stringify(trimmed));
+
+    // Persist to PostgreSQL SimTrade table
+    try {
+        const user = await prisma.user.findUnique({ where: { telegramId }, select: { id: true } });
+        if (user) {
+            await prisma.simTrade.create({
+                data: {
+                    userId: user.id,
+                    tokenAddress: mint,
+                    isBuy,
+                    amountInSol,
+                    profitPercent,
+                    realizedPnlSol,
+                    strategy: canonicalStrategy,
+                    createdAt: new Date()
+                }
+            });
+        }
+    } catch (_) {}
 
     const anchorKey = `sim:first_trade_at:${telegramId}`;
     if (!(await redis.get(anchorKey))) await redis.set(anchorKey, new Date().toISOString());
@@ -876,7 +898,7 @@ export async function generateSimCallerAlert(
     return null;
 }
 
-export async function processSimCopyTrades(bot: any) {
+export async function processSimCopyTrades(bot: any): Promise<void> {
     const simUsers = await prisma.user.findMany({
         where: { simState: { active: true } },
         include: { copyTrades: { where: { isActive: true } } }
@@ -891,7 +913,9 @@ export async function processSimCopyTrades(bot: any) {
             const isBuy = Math.random() > 0.35;
 
             if (isBuy && copy.copyBuys !== false) {
-                const tradeSize = copy.maxTradeSizeSol ? Math.min(copy.tradeAmountSol, copy.maxTradeSizeSol) : copy.tradeAmountSol;
+                const tradeSize = copy.maxTradeSizeSol 
+                    ? Math.min(copy.tradeAmountSol, copy.maxTradeSizeSol) 
+                    : copy.tradeAmountSol;
                 const randomScore = Math.floor(Math.random() * (84 - 65 + 1)) + 65;
                 const res = await simExecuteSnipe(
                     user.telegramId, 
@@ -910,6 +934,23 @@ export async function processSimCopyTrades(bot: any) {
                             { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
                         );
                     } catch (_) {}
+                }
+            } else if (!isBuy && copy.copySells !== false) {
+                // Mirror Sells in Simulation
+                const posRaw = await redis.get(`sim:positions:${user.telegramId}`);
+                const positions: SimPosition[] = posRaw ? JSON.parse(posRaw) : [];
+                const held = positions.find((p: SimPosition) => p.mint === token.mint);
+                if (held) {
+                    const exitRes = await simExecuteExit(user.telegramId, token.mint, 100, undefined, 'Copy Trade');
+                    if (exitRes.success) {
+                        try {
+                            await bot.telegram.sendMessage(
+                                user.telegramId,
+                                `👥 <b>COPY TRADE: EXIT EXECUTED! (SIM)</b>\nTarget: <code>${copy.targetWallet.substring(0, 8)}...</code>\nToken: <code>${token.mint}</code>\n${exitRes.message}`,
+                                { parse_mode: 'HTML' }
+                            );
+                        } catch (_) {}
+                    }
                 }
             }
         }
@@ -1256,12 +1297,20 @@ export async function isSimLossLimitHit(
     };
 }
 
+
+
 export async function setSimulationMode(telegramId: string, active: boolean): Promise<void> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
 
-    const keysToDelete = await redis.keys(`sim:*:${telegramId}`);
-    if (keysToDelete.length > 0) await redis.del(...keysToDelete);
+    // Use non-blocking SCAN instead of blocking redis.keys()
+    let cursor = '0';
+    do {
+        const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', `sim:*:${telegramId}`, 'COUNT', 100);
+        cursor = nextCursor;
+        if (keys.length > 0) await redis.del(...keys);
+    } while (cursor !== '0');
+
     if (activeSimLoops.has(telegramId)) activeSimLoops.delete(telegramId);
 
     if (!active) {
@@ -1283,14 +1332,14 @@ export async function setSimulationMode(telegramId: string, active: boolean): Pr
     await redis.set(`sim:active:${telegramId}`, 'true');
     await redis.set(`sim:balance:${telegramId}`, startBal.toFixed(4));
     await redis.set(`sim:starting_balance:${telegramId}`, startBal.toFixed(4));
-    await redis.set(`sim:credits:${telegramId}`, '5420');
+    await redis.set(`sim:credits:${telegramId}`, '5420'); // Seed credits so callers/scans never fail
     await redis.set(`autosnipe:session_spend:sim:${telegramId}`, '0');
     await redis.set(`sim:session_spend:${telegramId}`, '0');
     const wallets = generateSimWallets();
     await redis.set(`sim:wallets:${telegramId}`, JSON.stringify(wallets));
 }
 
-export async function saveSimulationState(telegramId: string) {
+export async function saveSimulationState(telegramId: string): Promise<void> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
 
@@ -1317,6 +1366,7 @@ export async function saveSimulationState(telegramId: string) {
         amountInSol: t.amountInSol,
         profitPercent: t.profitPercent || 0,
         realizedPnlSol: t.realizedPnlSol || 0,
+        strategy: t.strategy || 'Manual / Direct', // Strategy attribution preserved
         createdAt: new Date(t.createdAt)
     }));
 
@@ -1350,7 +1400,7 @@ export async function saveSimulationState(telegramId: string) {
     }
 }
 
-export async function loadSimulationState(telegramId: string) {
+export async function loadSimulationState(telegramId: string): Promise<void> {
     const user = await prisma.user.findUnique({ where: { telegramId } });
     if (!user) return;
 
@@ -1385,6 +1435,7 @@ export async function loadSimulationState(telegramId: string) {
     if (state.sessionSpendSol) await redis.set(`autosnipe:session_spend:sim:${telegramId}`, state.sessionSpendSol.toString());
     if (state.positions) await redis.set(`sim:positions:${telegramId}`, JSON.stringify(state.positions));
 
+    // Reload strategy directly from the database row without hardcoding
     const trades = state.trades.map((t: any) => ({
         createdAt: t.createdAt.toISOString(),
         isBuy: t.isBuy,
@@ -1392,12 +1443,22 @@ export async function loadSimulationState(telegramId: string) {
         profitPercent: t.profitPercent || 0,
         realizedPnlSol: t.realizedPnlSol || 0,
         mint: t.tokenAddress,
-        strategy: 'Sniper Engine',
+        strategy: t.strategy || 'Manual / Direct',
         slippagePercent: 0.11
     }));
     await redis.set(`sim:trades:${telegramId}`, JSON.stringify(trades));
 }
 
+export function resolveBudgetSol(
+    config: { maxBudgetSol?: number | null; maxBudgetUsd?: number | null },
+    solUsdPrice: number
+): number {
+    if (config.maxBudgetUsd && config.maxBudgetUsd > 0) {
+        if (!solUsdPrice || solUsdPrice <= 0) return config.maxBudgetSol || Infinity;
+        return config.maxBudgetUsd / solUsdPrice;
+    }
+    return config.maxBudgetSol || Infinity;
+}
 export interface ForgedBaseline {
     wins: number; losses: number; volumeSol: number; pnlSol: number;
     sharpe: number; drawdown: number; profitFactor: number; risk: number;

@@ -425,7 +425,7 @@
         </div>
     </main>
 
-    <!-- VIEW 3: AFFILIATES (REDESIGNED) -->
+    <!-- VIEW 3: AFFILIATES -->
     <main id="view-affiliates" class="hidden-view max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
         <section class="xl:col-span-2 space-y-6">
             
@@ -549,7 +549,7 @@
     let currentFilter = '30D'; 
     
     let liveLeaderboardData = { guild: null, members: [] };
-    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.40, recruitList: [], dailyEarnings: Array(30).fill(0) };
+    let liveAffiliateData = { recruits: 0, pendingYieldSol: 0, lifetimeEarnedSol: 0, referralLink: "", totalPoints: 0, currentTier: "Bronze", currentRate: 0.50, recruitList: [], copierList: [], dailyEarnings: Array(30).fill(0) };
     let activeAffTab = 'recruits';
 
     function switchView(view) {
@@ -919,6 +919,7 @@
 
     function renderAffiliateList() {
         const container = document.getElementById('aff-list-container');
+        if (!container) return;
         const d = liveAffiliateData;
         const list = activeAffTab === 'recruits' ? (d.recruitList || []) : (d.copierList || []);
         
@@ -947,177 +948,134 @@
         `).join('');
     }
 
+    function renderAffiliates() {
         const data = liveAffiliateData;
-        
-        document.getElementById('aff-pts').innerText = (data.totalPoints || 0).toLocaleString() + ' PTS';
-        document.getElementById('aff-pts-sub').innerText = `${(data.totalPoints || 0).toLocaleString()} / ${(data.nextTierPoints || 5000000).toLocaleString()} PTS to ${data.nextTier || 'Silver'}`;
-        
-        const pct = Math.min(100, ((data.totalPoints || 0) / (data.nextTierPoints || 5000000)) * 100);
-        document.getElementById('aff-pts-bar').style.width = `${pct}%`;
+        if (!data) return;
 
-        document.getElementById('aff-val-pending').innerText = (data.pendingYieldSol || 0).toFixed(4) + ' SOL';
-        document.getElementById('aff-val-trade').innerText = '+' + (data.tradeFeeCut || 0).toFixed(4) + ' SOL';
-        document.getElementById('aff-val-credit').innerText = '+' + (data.creditShare || 0).toFixed(4) + ' SOL';
-        document.getElementById('aff-val-copy').innerText = '+' + (data.copierYield || 0).toFixed(4) + ' SOL';
-        
-        let tier = data.currentTier || "Bronze";
-        let tierRate = ((data.currentRate || 0.50) * 100).toFixed(0) + "%";
-        let tierColor = "text-amber-500";
+        // 1. Recruits and Copiers count resolution (additive and sim-aware)
+        const uiRecruits = data.recruitCount !== undefined 
+            ? data.recruitCount 
+            : (data.recruitList ? data.recruitList.length : 0);
+        const uiCopiers = data.copierCount !== undefined 
+            ? data.copierCount 
+            : (data.copierList ? data.copierList.length : 0);
 
-        if (tier === 'Diamond') { tierColor = "text-cyan-400"; } 
-        else if (tier === 'Gold') { tierColor = "text-yellow-400"; } 
-        else if (tier === 'Silver') { tierColor = "text-gray-300"; } 
-        else { tierColor = "text-amber-500"; }
-        
-        const tierEl = document.getElementById('aff-tier-name');
-        if (tierEl) {
-            tierEl.innerText = `${tier} (${tierRate})`;
-            tierEl.className = `text-2xl sm:text-3xl font-bold text-right ${tierColor}`;
-        }
-        
-        document.getElementById('aff-link-ref').value = data.referralLink || "Loading...";
-        document.getElementById('aff-link-copy').value = data.copierFeedLink || "Loading...";
-        
-        const recruitsCount = data.recruitList ? data.recruitList.length : 0;
-        const copiersCount = data.copierList ? data.copierList.length : 0;
-        document.getElementById('aff-tab-recruits').innerText = `Recruits (${recruitsCount})`;
-        document.getElementById('aff-tab-copiers').innerText = `Copiers Mirroring You (${copiersCount})`;
-
-        renderAffiliateList();
-        
-        const affCanvas = document.getElementById('affiliateChart');
-        if (affCanvas) {
-            const affCtx = affCanvas.getContext('2d');
-            const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
-            gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.45)'); 
-            gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
-
-            if (affChart) affChart.destroy();
-            
-            const labels = Array.from({length: 30}, (_, i) => {
-                const d = new Date();
-                d.setDate(d.getDate() - (29 - i));
-                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
-            });
-
-            affChart = new Chart(affCtx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        { label: 'SOL Earned', data: data.dailyEarnings || Array(30).fill(0), borderColor: '#10b981', backgroundColor: gradGreen, fill: true, tension: 0.32, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5 }
-                    ]
-                },
-                options: {
-                    animation: false,
-                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-                    plugins: { 
-                        legend: { display: false },
-                        tooltip: { backgroundColor: '#0e131f', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
-                    },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, border: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
-                    }
-                }
-            });
-        }
-
-        const dailyData = data.dailyEarnings || Array(30).fill(0);
-        const last7dEarnings = dailyData.slice(-7).reduce((a, b) => a + b, 0);
-        const dailyAvg = last7dEarnings / 7;
-        
-        document.getElementById('aff-proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
-        document.getElementById('aff-proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
-        document.getElementById('aff-proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
-    
-        function renderAffiliates() {
-        const data = liveAffiliateData;
-        
-        // 🟢 FIX: Read explicit UI counts so forged data displays correctly
-        const uiRecruits = data.recruitCount !== undefined ? data.recruitCount : (data.recruitList ? data.recruitList.length : 0);
-        const uiCopiers = data.copierCount !== undefined ? data.copierCount : (data.copierList ? data.copierList.length : 0);
-
-        document.getElementById('aff-stat-recruits').innerText = uiRecruits;
-        document.getElementById('aff-stat-pending').innerText = (data.pendingYieldSol || 0).toFixed(4);
-        document.getElementById('aff-stat-lifetime').innerText = (data.lifetimeEarnedSol || 0).toFixed(4);
-        
+        // 2. Accumulated Sentry Points & Progress Bar
         const pts = data.totalPoints || 0;
-        let tier = data.currentTier || "Bronze";
-        let tierRate = ((data.currentRate || 0.50) * 100).toFixed(0) + "%";
-        let tierColor = "text-amber-500";
+        const nextPts = data.nextTierPoints || 5000000;
+        const nextTierName = data.nextTier || 'Silver';
 
-        if (tier === 'Diamond') { tierColor = "text-cyan-400"; } 
-        else if (tier === 'Gold') { tierColor = "text-yellow-400"; } 
-        else if (tier === 'Silver') { tierColor = "text-gray-300"; } 
-        else { tierColor = "text-amber-500"; }
-        
+        const ptsEl = document.getElementById('aff-pts');
+        const ptsSubEl = document.getElementById('aff-pts-sub');
+        const ptsBarEl = document.getElementById('aff-pts-bar');
+
+        if (ptsEl) ptsEl.innerText = pts.toLocaleString() + ' PTS';
+        if (ptsSubEl) {
+            ptsSubEl.innerText = `${pts.toLocaleString()} / ${nextPts.toLocaleString()} PTS to ${nextTierName}`;
+        }
+        if (ptsBarEl) {
+            const pct = Math.min(100, (pts / nextPts) * 100);
+            ptsBarEl.style.width = `${pct}%`;
+        }
+
+        // 3. Tier & Rate Resolution (Canonical: Bronze 50%, Silver 60%, Gold 70%)
+        let tier = data.currentTier || "Bronze";
+        let tierRate = data.currentRate ? ((data.currentRate * 100).toFixed(0) + "%") : "50%";
+        if (tier === 'Gold') tierRate = "70%";
+        else if (tier === 'Silver') tierRate = "60%";
+        else if (tier === 'Bronze') tierRate = "50%";
+
+        let tierColor = "text-amber-500";
+        if (tier === 'Diamond') tierColor = "text-cyan-400";
+        else if (tier === 'Gold') tierColor = "text-yellow-400";
+        else if (tier === 'Silver') tierColor = "text-gray-300";
+        else tierColor = "text-amber-500";
+
         const tierEl = document.getElementById('aff-tier-name');
         if (tierEl) {
             tierEl.innerText = `${tier} (${tierRate})`;
-            tierEl.className = `text-2xl sm:text-3xl font-bold text-right ${tierColor}`;
+            tierEl.className = `text-2xl sm:text-3xl font-bold text-left sm:text-right ${tierColor}`;
         }
 
-        document.getElementById('aff-pts').innerText = pts.toLocaleString() + ' PTS';
-        document.getElementById('aff-pts-sub').innerText = `${pts.toLocaleString()} / ${(data.nextTierPoints || 5000000).toLocaleString()} PTS to ${data.nextTier || 'Silver'}`;
-        
-        const pct = Math.min(100, (pts / (data.nextTierPoints || 5000000)) * 100);
-        const barEl = document.getElementById('aff-pts-bar');
-        if (barEl) barEl.style.width = `${pct}%`;
+        // 4. Financial Yield Grid Cards
+        const pendingEl = document.getElementById('aff-val-pending');
+        const tradeEl = document.getElementById('aff-val-trade');
+        const creditEl = document.getElementById('aff-val-credit');
+        const copyEl = document.getElementById('aff-val-copy');
 
-        document.getElementById('aff-val-trade').innerText = '+' + (data.tradeFeeCut || 0).toFixed(4) + ' SOL';
-        document.getElementById('aff-val-credit').innerText = '+' + (data.creditShare || 0).toFixed(4) + ' SOL';
-        document.getElementById('aff-val-copy').innerText = '+' + (data.copierYield || 0).toFixed(4) + ' SOL';
-        
-        document.getElementById('aff-link-ref').value = data.referralLink || "Loading...";
-        document.getElementById('aff-link-copy').value = data.copierFeedLink || "Loading...";
-        
-        document.getElementById('aff-tab-recruits').innerText = `Recruits (${uiRecruits})`;
-        document.getElementById('aff-tab-copiers').innerText = `Copiers Mirroring You (${uiCopiers})`;
+        if (pendingEl) pendingEl.innerText = (data.pendingYieldSol || 0).toFixed(4) + ' SOL';
+        if (tradeEl) tradeEl.innerText = '+' + (data.tradeFeeCut || 0).toFixed(4) + ' SOL';
+        if (creditEl) creditEl.innerText = '+' + (data.creditShare || 0).toFixed(4) + ' SOL';
+        if (copyEl) copyEl.innerText = '+' + (data.copierYield || 0).toFixed(4) + ' SOL';
 
+        // 5. Referral & Copier Link Inputs
+        const refLinkEl = document.getElementById('aff-link-ref');
+        const copyLinkEl = document.getElementById('aff-link-copy');
+        if (refLinkEl) refLinkEl.value = data.referralLink || "Loading...";
+        if (copyLinkEl) copyLinkEl.value = data.copierFeedLink || "Loading...";
+
+        // 6. Sub-Tab Buttons with Counters
+        const tabRecruits = document.getElementById('aff-tab-recruits');
+        const tabCopiers = document.getElementById('aff-tab-copiers');
+        if (tabRecruits) tabRecruits.innerText = `Recruits (${uiRecruits})`;
+        if (tabCopiers) tabCopiers.innerText = `Copiers Mirroring You (${uiCopiers})`;
+
+        // 7. Render Sub-List for the active tab
         renderAffiliateList();
-        
+
+        // 8. 30-Day Revenue Line Chart (Updated in-place to prevent flicker)
         const affCanvas = document.getElementById('affiliateChart');
         if (affCanvas) {
             const affCtx = affCanvas.getContext('2d');
-            const labels = Array.from({length: 30}, (_, i) => {
+            const labels = Array.from({ length: 30 }, (_, i) => {
                 const d = new Date();
                 d.setDate(d.getDate() - (29 - i));
-                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+                return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
             });
 
-            // 🟢 FIX: Update chart in place without destroying to prevent flicker
+            const earningsData = data.dailyEarnings || Array(30).fill(0);
+
             if (affChart) {
                 affChart.data.labels = labels;
-                affChart.data.datasets[0].data = data.dailyEarnings || Array(30).fill(0);
-                affChart.update('none'); // Update without animation
+                affChart.data.datasets[0].data = earningsData;
+                affChart.update('none');
             } else {
                 const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
-                gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.45)'); 
+                gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.45)');
                 gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
 
                 affChart = new Chart(affCtx, {
                     type: 'line',
                     data: {
                         labels: labels,
-                        datasets: [{ 
-                            label: 'SOL Earned', 
-                            data: data.dailyEarnings || Array(30).fill(0), 
-                            borderColor: '#10b981', 
-                            backgroundColor: gradGreen, 
-                            fill: true, 
-                            tension: 0.32, 
-                            borderWidth: 2.5, 
-                            pointRadius: 0, 
-                            pointHoverRadius: 5 
+                        datasets: [{
+                            label: 'SOL Earned',
+                            data: earningsData,
+                            borderColor: '#10b981',
+                            backgroundColor: gradGreen,
+                            fill: true,
+                            tension: 0.32,
+                            borderWidth: 2.5,
+                            pointRadius: 0,
+                            pointHoverRadius: 5
                         }]
                     },
                     options: {
                         animation: false,
-                        responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-                        plugins: { 
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
                             legend: { display: false },
-                            tooltip: { backgroundColor: '#0e131f', titleColor: '#fff', bodyColor: '#cbd5e1', padding: 10, cornerRadius: 8, borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
+                            tooltip: {
+                                backgroundColor: '#0e131f',
+                                titleColor: '#fff',
+                                bodyColor: '#cbd5e1',
+                                padding: 10,
+                                cornerRadius: 8,
+                                borderColor: 'rgba(255,255,255,0.1)',
+                                borderWidth: 1
+                            }
                         },
                         scales: {
                             x: { grid: { display: false }, ticks: { font: { size: 10 } } },
@@ -1128,17 +1086,23 @@
             }
         }
 
+        // 9. Annualized Run-Rate Projections
         const dailyData = data.dailyEarnings || Array(30).fill(0);
         const last7dEarnings = dailyData.slice(-7).reduce((a, b) => a + b, 0);
         const dailyAvg = last7dEarnings / 7;
-        
-        document.getElementById('aff-proj-7d').innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
-        document.getElementById('aff-proj-30d').innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
-        document.getElementById('aff-proj-1y').innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
+
+        const proj7d = document.getElementById('aff-proj-7d');
+        const proj30d = document.getElementById('aff-proj-30d');
+        const proj1y = document.getElementById('aff-proj-1y');
+
+        if (proj7d) proj7d.innerText = (dailyAvg * 7).toFixed(4) + ' SOL';
+        if (proj30d) proj30d.innerText = (dailyAvg * 30).toFixed(4) + ' SOL';
+        if (proj1y) proj1y.innerText = (dailyAvg * 365).toFixed(4) + ' SOL';
     }
 
     function toggleDrawer(mint) {
         const el = document.getElementById(`drawer-${mint}`);
+        if (!el) return;
         const isHidden = el.classList.contains('hidden');
         document.querySelectorAll('[id^="drawer-"]').forEach(d => d.classList.add('hidden'));
         if (isHidden) el.classList.remove('hidden');
@@ -1393,7 +1357,6 @@
                 if (container) {
                     const entries = Object.entries(statsPool).map(([name, stats]) => ({ name, pnl: stats.pnl })).sort((a, b) => b.pnl - a.pnl);
                     container.innerHTML = entries.map(strat => {
-                        const dotColor = colorMapping[strat.name] ? `bg-[${colorMapping[strat.name]}]` : 'bg-gray-400';
                         return `
                         <div class="flex justify-between items-center bg-[#07090e] p-2.5 rounded-lg border border-white/5">
                             <div class="flex items-center gap-2">

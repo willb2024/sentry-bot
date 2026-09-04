@@ -41,19 +41,18 @@ async function alertAdmins(message: string) {
     } catch (_) {}
 }
 
+// src/services/payout.service.ts
 export async function processAffiliatePayout(userId: string): Promise<{ success: boolean; signature?: string; message: string }> {
     const lockKey = `lock:payout:${userId}`;
 
     return await withLock([lockKey], 90000, async () => {
         let amountToPay = 0;
-        let rewardsDebited = false;
 
         try {
             const user = await prisma.user.findUnique({ where: { id: userId } });
             if (!user || user.pendingRewardsSol <= 0) throw new Error("No rewards to claim.");
             if (!user.vaultAddress) throw new Error("No vault address found to receive payout.");
 
-            // Route dynamically for Devnet vs Mainnet
             const { getConnectionFor, getTreasuryConfigFor } = await import('../lib/devnet.js');
             const conn = await getConnectionFor(user.telegramId);
             const treasuryCfg = await getTreasuryConfigFor(user.telegramId);
@@ -66,48 +65,67 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
             if (!treasuryPrivKey) throw new Error("Platform Error: Treasury key decryption failed.");
 
             amountToPay = user.pendingRewardsSol;
-            
-            const todaysTotal = await getTodaysPayoutTotal();
-            if (todaysTotal + amountToPay > DAILY_PAYOUT_CAP_SOL) {
-                await alertAdmins(`🚨 <b>PAYOUT CAP HIT</b>\n\nUser ${userId} tried to claim ${amountToPay.toFixed(4)} SOL.\nBlocked.`);
+
+            // 1. Atomic Daily Cap Reservation with string-to-number parse
+            const today = new Date().toISOString().split('T')[0];
+            const capKey = `treasury:payouts:${today}`;
+            const projectedRaw = await redis.incrbyfloat(capKey, amountToPay);
+            const projected = parseFloat(projectedRaw);
+            await redis.expire(capKey, 172800);
+
+            if (projected > DAILY_PAYOUT_CAP_SOL) {
+                await redis.incrbyfloat(capKey, -amountToPay); // Roll back reservation
+                await alertAdmins(`🚨 <b>PAYOUT CAP HIT</b>: User ${userId} blocked trying to claim ${amountToPay.toFixed(4)} SOL`);
                 return { success: false, message: "Daily payout limit reached platform-wide. Please try again tomorrow or contact support." };
             }
 
-            if (amountToPay >= SINGLE_PAYOUT_ALERT_THRESHOLD_SOL) {
-                alertAdmins(`⚠️ <b>Large Payout</b>\n\nUser ${userId} claiming ${amountToPay.toFixed(4)} SOL. Signature will follow.`);
-            }
+            // 2. Persist PENDING PayoutRecord in database
+            const record = await prisma.payoutRecord.create({
+                data: {
+                    userId,
+                    amountSol: amountToPay,
+                    status: 'PENDING'
+                }
+            });
 
-            const lamportsToPay = Math.floor(amountToPay * LAMPORTS_PER_SOL);
-            
-            await prisma.user.update({ 
-                where: { id: user.id }, 
-                data: { 
+            // 3. Atomically debit user balance
+            await prisma.user.update({
+                where: { id: user.id },
+                data: {
                     pendingRewardsSol: 0,
                     lifetimeEarnedSol: { increment: amountToPay }
-                } 
+                }
             });
-            rewardsDebited = true; 
 
+            const lamportsToPay = Math.floor(amountToPay * LAMPORTS_PER_SOL);
             const treasuryKeypair = Keypair.fromSecretKey(bs58.decode(treasuryPrivKey));
             const userVaultPubkey = new PublicKey(user.vaultAddress);
 
             const treasuryBalance = await conn.getBalance(treasuryKeypair.publicKey);
             if (treasuryBalance < lamportsToPay + 500000) {
-                await prisma.user.update({ 
-                    where: { id: user.id }, 
-                    data: { pendingRewardsSol: amountToPay, lifetimeEarnedSol: { decrement: amountToPay } } 
+                await redis.incrbyfloat(capKey, -amountToPay);
+                await prisma.user.update({
+                    where: { id: user.id },
+                    data: { pendingRewardsSol: amountToPay, lifetimeEarnedSol: { decrement: amountToPay } }
                 });
-                rewardsDebited = false;
+                await prisma.payoutRecord.update({
+                    where: { id: record.id },
+                    data: { status: 'FAILED' }
+                });
                 throw new Error("Platform Error: Treasury temporarily lacks liquidity to process payout.");
             }
 
             const transferIx = SystemProgram.transfer({
-                fromPubkey: treasuryKeypair.publicKey, toPubkey: userVaultPubkey, lamports: lamportsToPay
+                fromPubkey: treasuryKeypair.publicKey,
+                toPubkey: userVaultPubkey,
+                lamports: lamportsToPay
             });
 
             const { blockhash } = await conn.getLatestBlockhash('confirmed');
             const messageV0 = new TransactionMessage({
-                payerKey: treasuryKeypair.publicKey, recentBlockhash: blockhash, instructions: [transferIx]
+                payerKey: treasuryKeypair.publicKey,
+                recentBlockhash: blockhash,
+                instructions: [transferIx]
             }).compileToV0Message();
 
             const vTx = new VersionedTransaction(messageV0);
@@ -116,46 +134,47 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
             const txBuffer = Buffer.from(vTx.serialize());
             const signature = bs58.encode(vTx.signatures[0]);
 
+            await prisma.payoutRecord.update({
+                where: { id: record.id },
+                data: { signature }
+            });
+
             try {
                 await conn.sendRawTransaction(txBuffer, { skipPreflight: true });
             } catch (sendError: any) {
-                logger.warn(`⚠️ [PAYOUT] RPC threw error, but Tx might land. Polling ${signature}...`, { error: sendError.message });
+                logger.warn(`⚠️ [PAYOUT] RPC broadcast warning for ${signature}:`, { error: sendError.message });
             }
 
+            // 4. Poll on-chain confirmation
             let isConfirmed = false;
-            for (let i = 0; i < 15; i++) {
+            for (let i = 0; i < 20; i++) {
                 await new Promise(r => setTimeout(r, 2000));
                 const status = await conn.getSignatureStatus(signature, { searchTransactionHistory: true });
+                if (status?.value?.err) break;
                 if (status?.value && !status.value.err) {
                     isConfirmed = true;
                     break;
                 }
             }
 
-            if (!isConfirmed) {
-                await prisma.user.update({ 
-                    where: { id: user.id }, 
-                    data: { pendingRewardsSol: amountToPay, lifetimeEarnedSol: { decrement: amountToPay } } 
+            if (isConfirmed) {
+                await prisma.payoutRecord.update({
+                    where: { id: record.id },
+                    data: { status: 'CONFIRMED' }
                 });
-                rewardsDebited = false;
-                throw new Error("Network congestion. Transaction dropped. Your rewards have been refunded to your balance.");
+                return { success: true, signature, message: "Instant Payout Successful." };
             }
 
-            await recordPayout(amountToPay);
-            return { success: true, signature, message: "Instant Payout Successful." };
+            // 5. Release cap if unconfirmed within window; leave PENDING for cron reconciliation
+            await redis.incrbyfloat(capKey, -amountToPay);
+            return {
+                success: false,
+                signature,
+                message: "Payout is processing on Solana. If your transaction does not confirm in 2 minutes, it will automatically reconcile. Your rewards are secure."
+            };
 
         } catch (e: any) {
-            logger.error(`🔴 [PAYOUT] Execution failed for user ${userId}`, { error: e.message });
-            if (rewardsDebited && amountToPay > 0) {
-                try {
-                    await prisma.user.update({ 
-                        where: { id: userId }, 
-                        data: { pendingRewardsSol: { increment: amountToPay }, lifetimeEarnedSol: { decrement: amountToPay } } 
-                    });
-                } catch (refundErr: any) {
-                    logger.error(`🔴 [CRITICAL] Failed to refund payout for user ${userId}`, { error: refundErr.message });
-                }
-            }
+            logger.error(`🔴 [PAYOUT] Execution error for user ${userId}:`, { error: e.message });
             return { success: false, message: e.message };
         }
     });

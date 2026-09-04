@@ -84,12 +84,21 @@ export async function syncInitialSolPrice() {
 syncInitialSolPrice();
 
 global._sentryIntervals.push(setInterval(async () => {
-    try {
-        const res = await axiosClient.get(`https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`, { timeout: 4000 });
-        const price = res.data?.data?.[WSOL_MINT]?.price;
-        if (price && parseFloat(price) > 0) cachedSolUsdPrice = parseFloat(price);
-    } catch (_) {}
-}, 15_000));
+    const { isSimulationActive } = await import('./simulation.service.js');
+    await Promise.allSettled(cachedActiveGuards.map(async (guard) => {
+        if ((guard as any).isProcessing) return;
+        // Skip presigning simulation guards
+        if (await isSimulationActive(guard.telegramId).catch(() => false)) return;
+
+        try {
+            const { generatePreSignedExitTxMulti } = await import('./engine.service.js');
+            const payloads = await generatePreSignedExitTxMulti(guard.telegramId, guard.tokenAddress);
+            if (payloads.length > 0) {
+                await redis.set(`presigned_exit_multi:${guard.id}`, JSON.stringify(payloads), 'EX', 4);
+            }
+        } catch (e) {}
+    }));
+}, 1000));
 
 let cachedActiveSnipers: any[] = [];
 global._sentryIntervals.push(setInterval(async () => {
@@ -574,7 +583,6 @@ export async function triggerAutoSnipes(
                 const isSnipeLocked = await redis.set(sniperLockKey, '1', 'EX', 86400, 'NX');
                 if (!isSnipeLocked) return;
 
-                // 🟢 FIX: 5s cached auto-snipe config to eliminate sequential DB round-trips
                 const { getCachedAutoSnipeConfigFull } = await import('../lib/cache.js');
                 const liveConfigUser = await getCachedAutoSnipeConfigFull(sniper.user.telegramId, 5);
                 const liveConfig = liveConfigUser?.autoSnipeConfig ? { ...liveConfigUser.autoSnipeConfig, user: liveConfigUser } : null;
@@ -583,17 +591,92 @@ export async function triggerAutoSnipes(
                 if (liveConfig.sniperMode !== mode && liveConfig.sniperMode !== 'BOTH') { await redis.del(sniperLockKey); return; }
                 if (mode === 'PUMP' && liveConfig.antiDeadCoin && initialBuySol === 0) { await redis.del(sniperLockKey); return; }
 
+                const { isSimulationActive } = await import('./simulation.service.js');
+                const isUserSim = await isSimulationActive(liveConfig.user.telegramId);
+
                 let score = 0, ageMins = 0, volUsd = 0, liqUsd = 0, priceChangeM5 = 0;
                 let auditReasons: string[] = [];
                 let auditStats: any = { ageMins: 0, volume: 0, liquidity: 0, priceChangeM5: 0, socials: false, lpLock: { lockPct: 0, burned: false } };
+                let estMarketCapUsd = 0;
 
+                // 1. Derive Market Data & Market Cap
+                const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
+                ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
+                const creatorWallet = seen?.creator || '';
+
+                if (mode === 'PUMP') {
+                    const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
+                    const curvePda = getBondingCurveAddress(mintCa);
+                    const accInfo = await connection.getAccountInfo(new PublicKey(curvePda)).catch(() => null);
+                    if (accInfo?.data) {
+                        const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
+                        if (buf.length >= 40) {
+                            const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
+                            const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
+                            liqUsd = virtualSolReserves * cachedSolUsdPrice;
+                            volUsd = realSolReserves * cachedSolUsdPrice * 2;
+                            const priceSol = decodePumpCurvePrice(buf.toString('base64'));
+                            estMarketCapUsd = priceSol * 1_000_000_000 * cachedSolUsdPrice;
+                        }
+                    }
+                } else {
+                    const res = await axiosClient.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 }).catch(() => null);
+                    const pair = res?.data?.pairs?.[0];
+                    if (pair) {
+                        liqUsd = pair.liquidity?.usd || 0;
+                        volUsd = pair.volume?.h24 || 0;
+                        priceChangeM5 = pair.priceChange?.m5 || 0;
+                        estMarketCapUsd = pair.fdv || 0;
+                    }
+                }
+
+                // 2. Enforce Market Cap Range (Fix 1)
+                const minMc = liveConfig.minMarketCap || 0;
+                const maxMc = liveConfig.maxMarketCap || Infinity;
+                if (estMarketCapUsd > 0 && (estMarketCapUsd < minMc || estMarketCapUsd > maxMc)) {
+                    redis.set(`snipe_decision:${liveConfig.user.telegramId}:${mintCa}`, JSON.stringify({
+                        score: 0, minScoreRequired: liveConfig.minScore,
+                        reasons: [`⚠️ Market cap $${Math.round(estMarketCapUsd).toLocaleString()} is outside allowed range ($${minMc.toLocaleString()} - $${maxMc.toLocaleString()})`],
+                        decision: 'SKIPPED_MC_FILTER', timestamp: Date.now()
+                    }), 'EX', 86400).catch(() => {});
+                    await redis.del(sniperLockKey);
+                    return;
+                }
+
+                // 3. Enforce Max Dev Bag Limit (Fix 2)
+                if (creatorWallet && liveConfig.maxDevBuyPercent && liveConfig.maxDevBuyPercent < 100) {
+                    const { getDevHoldingPercent } = await import('./caller.service.js').catch(() => ({ getDevHoldingPercent: null as any }));
+                    let devPct: number | null = null;
+                    if (typeof getDevHoldingPercent === 'function') {
+                        devPct = await getDevHoldingPercent(mintCa, creatorWallet).catch(() => null);
+                    }
+                    if (devPct === null) {
+                        const largest = await connection.getTokenLargestAccounts(new PublicKey(mintCa)).catch(() => null);
+                        if (largest?.value?.length) {
+                            const top = largest.value[0];
+                            const totalSupply = largest.value.reduce((s, a) => s + (a.uiAmount || 0), 0);
+                            devPct = totalSupply > 0 ? ((top.uiAmount || 0) / totalSupply) * 100 : null;
+                        }
+                    }
+                    if (devPct !== null && devPct > liveConfig.maxDevBuyPercent) {
+                        redis.set(`snipe_decision:${liveConfig.user.telegramId}:${mintCa}`, JSON.stringify({
+                            score: 0, minScoreRequired: liveConfig.minScore,
+                            reasons: [`🐋 Dev holds ${devPct.toFixed(1)}% of total supply (configured limit: ${liveConfig.maxDevBuyPercent}%)`],
+                            decision: 'SKIPPED_DEV_BAG', timestamp: Date.now()
+                        }), 'EX', 86400).catch(() => {});
+                        await redis.del(sniperLockKey);
+                        return;
+                    }
+                }
+
+                // 4. Scoring Pipeline
                 if (liveConfig.minScore > 0) {
                     try {
                         const { consumeSniperCredit } = await import('./credits.service.js');
                         const creditResult = await consumeSniperCredit(liveConfig.user.telegramId, mintCa);
                         
                         if (!creditResult.success) {
-                            const warnKey = `sniper_credits_warn:${liveConfig.user.telegramId}`;
+                            const warnKey = `${isUserSim ? 'sim' : 'live'}_sniper_credits_warn:${liveConfig.user.telegramId}`;
                             if (!(await redis.get(warnKey))) {
                                 await redis.set(warnKey, '1', 'EX', 600);
                                 await bot.telegram.sendMessage(
@@ -624,11 +707,6 @@ export async function triggerAutoSnipes(
 
                         if (preScoredToken && preScoredToken.totalScore !== undefined) {
                             score = preScoredToken.totalScore;
-                            volUsd = preScoredToken.volume || 0;
-                            liqUsd = preScoredToken.liquidity || 0;
-                            priceChangeM5 = preScoredToken.priceChangeM5 || 0;
-                            ageMins = preScoredToken.ageMins || 0;
-
                             auditReasons = preScoredToken.reasons || [];
                             auditStats = {
                                 ageMins: preScoredToken.ageMins || 0,
@@ -650,29 +728,6 @@ export async function triggerAutoSnipes(
                             } = await import('./caller.service.js');
                             const { checkTokenRugRisk, checkRecentMevActivity } = await import('./price.service.js');
 
-                            const seen = getRecentNewMints().find((m: any) => m.mint === mintCa);
-                            ageMins = seen ? (Date.now() - seen.firstSeenAt) / 60000 : 0;
-                            const creatorWallet = seen?.creator || '';
-
-                            if (mode === 'PUMP') {
-                                const { getBondingCurveAddress } = await import('./price.service.js');
-                                const curvePda = getBondingCurveAddress(mintCa);
-                                const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
-                                if (accInfo?.data) {
-                                    const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
-                                    if (buf.length >= 40) {
-                                        const virtualSolReserves = Number(buf.readBigUInt64LE(16)) / 1_000_000_000;
-                                        const realSolReserves = Number(buf.readBigUInt64LE(32)) / 1_000_000_000;
-                                        liqUsd = virtualSolReserves * cachedSolUsdPrice;
-                                        volUsd = realSolReserves * cachedSolUsdPrice * 2;
-                                    }
-                                }
-                            } else {
-                                const res = await axiosClient.get(`https://api.dexscreener.com/latest/dex/tokens/${mintCa}`, { timeout: 2000 }).catch(() => null);
-                                const pair = res?.data?.pairs?.[0];
-                                if (pair) { liqUsd = pair.liquidity?.usd || 0; volUsd = pair.volume?.h24 || 0; priceChangeM5 = pair.priceChange?.m5 || 0; }
-                            }
-
                             let isRug = false, hasMev = false;
                             let devRep: any = { launchCount: 0, avgRugScore: 0, isKnownRugger: false };
                             let lpLock: any = { locked: false, burned: false, lockPct: 0 };
@@ -682,50 +737,43 @@ export async function triggerAutoSnipes(
                             if (liveConfig.useDeepScoring) {
                                 const HARD_CAP_MS = 500;
                                 const deepCheckPromise = Promise.all([
-                                    checkTokenRugRisk(mintCa).catch(() => true),
-                                    getDevReputation(creatorWallet).catch(() => ({ isKnownRugger: true, launchCount: 0, avgRugScore: 0 })),
-                                    checkRecentMevActivity(mintCa).catch(() => true)
+                                    checkTokenRugRisk(mintCa).catch(() => false),
+                                    getDevReputation(creatorWallet).catch(() => ({ isKnownRugger: false, launchCount: 0, avgRugScore: 0 })),
+                                    checkRecentMevActivity(mintCa).catch(() => false)
                                 ]);
                                 const timeoutPromise = new Promise<'TIMEOUT'>(resolve => setTimeout(() => resolve('TIMEOUT'), HARD_CAP_MS));
-            
                                 const deepResult = await Promise.race([deepCheckPromise, timeoutPromise]);
-            
+
+                                // Fall through to fast heuristic score on timeout (Fix 5)
                                 if (deepResult === 'TIMEOUT') {
                                     redis.incr('stats:deepscoring_timeouts').catch(() => {});
-                                    console.warn(`⚠️ [DEEP-AUDIT TIMEOUT] Skipping snipe on ${mintCa}`);
-                                    await redis.del(sniperLockKey);
-                                    return;
+                                    auditReasons.push('⏱️ Deep RPC checks timed out (>500ms) — evaluated via fast heuristic');
+                                } else {
+                                    const [isRugRes, devRepRes, hasMevRes] = deepResult as [boolean, any, boolean];
+                                    if (isRugRes || devRepRes?.isKnownRugger) {
+                                        redis.set(`snipe_decision:${liveConfig.user.telegramId}:${mintCa}`, JSON.stringify({
+                                            score: 0, minScoreRequired: liveConfig.minScore,
+                                            reasons: [isRugRes ? '🚨 Rug risk flagged by deep scan' : '', devRepRes?.isKnownRugger ? '🚨 Serial rugger dev wallet' : ''].filter(Boolean),
+                                            decision: 'SKIPPED_HARD_BLOCK', timestamp: Date.now()
+                                        }), 'EX', 86400).catch(() => {});
+                                        await redis.del(sniperLockKey);
+                                        return;
+                                    }
+                                    isRug = isRugRes;
+                                    devRep = devRepRes;
+                                    hasMev = hasMevRes;
+
+                                    const subChecks = await Promise.all([
+                                        checkLpLockStatus(mintCa).catch(() => ({ locked: false, burned: false, lockPct: 0 })),
+                                        trackHolderVelocity(mintCa).catch(() => ({ growthRate: 0, uniqueBuyers5m: 0 })),
+                                        mode === 'PUMP' ? Promise.resolve({ sellable: true, estimatedTaxPct: 0 }) : simulateSellability(mintCa).catch(() => ({ sellable: true, estimatedTaxPct: 0 }))
+                                    ]);
+                                    lpLock = subChecks[0];
+                                    velocity = subChecks[1];
+                                    sellability = subChecks[2];
                                 }
-            
-                                const [isRugRes, devRepRes, hasMevRes] = deepResult as [boolean, any, boolean];
-                                if (isRugRes || devRepRes?.isKnownRugger) {
-                                    // 🟢 Log Hard Block decision for /whyskip
-                                    redis.set(`snipe_decision:${liveConfig.user.telegramId}:${mintCa}`, JSON.stringify({
-                                        score: 0,
-                                        minScoreRequired: liveConfig.minScore,
-                                        reasons: [isRugRes ? '🚨 Rug risk flagged by deep scan' : '', devRepRes?.isKnownRugger ? '🚨 Serial rugger dev wallet' : ''].filter(Boolean),
-                                        decision: 'SKIPPED_HARD_BLOCK',
-                                        timestamp: Date.now()
-                                    }), 'EX', 86400).catch(() => {});
-                                    await redis.del(sniperLockKey);
-                                    return;
-                                }
-                                
-                                isRug = isRugRes;
-                                devRep = devRepRes;
-                                hasMev = hasMevRes;
-                                
-                                const subChecks = await Promise.all([
-                                    checkLpLockStatus(mintCa).catch(() => ({ locked: false, burned: false, lockPct: 0 })),
-                                    trackHolderVelocity(mintCa).catch(() => ({ growthRate: 0, uniqueBuyers5m: 0 })),
-                                    mode === 'PUMP' ? Promise.resolve({ sellable: true, estimatedTaxPct: 0 }) : simulateSellability(mintCa).catch(() => ({ sellable: true, estimatedTaxPct: 0 }))
-                                ]);
-                                lpLock = subChecks[0];
-                                velocity = subChecks[1];
-                                sellability = subChecks[2];
                             }
 
-                            // 🟢 FIX: Sentiment bounded inside Promise.race to guarantee max 500ms
                             const sentiment = await Promise.race([
                                 getSentimentScore(symbol),
                                 new Promise<number>(resolve => setTimeout(() => resolve(0.5), 500))
@@ -734,7 +782,7 @@ export async function triggerAutoSnipes(
                             const stats = { ageMins, volume24h: volUsd, liquidity: liqUsd, priceChangeM5, hasSocials: false, isRug, devRep, lpLock, velocity, sellability, sentiment };
                             const heuristicResult = computeTokenScore(stats);
                             score = heuristicResult.score;
-                            auditReasons = heuristicResult.reasons || [];
+                            auditReasons.push(...(heuristicResult.reasons || []));
                             auditStats = { ageMins, volume: volUsd, liquidity: liqUsd, priceChangeM5, socials: true, lpLock: lpLock || { lockPct: 100, burned: true } };
 
                             const useML = creditResult.success && !creditResult.fallback;
@@ -744,7 +792,6 @@ export async function triggerAutoSnipes(
                             }
                         }
 
-                        // 🟢 Log decision for /whyskip
                         redis.set(`snipe_decision:${liveConfig.user.telegramId}:${mintCa}`, JSON.stringify({
                             score: Math.round(score),
                             minScoreRequired: liveConfig.minScore,
@@ -756,8 +803,7 @@ export async function triggerAutoSnipes(
                             timestamp: Date.now()
                         }), 'EX', 86400).catch(() => {});
 
-                        const rawScore = score;
-                        if (rawScore < liveConfig.minScore) { 
+                        if (score < liveConfig.minScore) { 
                             await redis.del(sniperLockKey); 
                             return; 
                         } 
@@ -767,6 +813,7 @@ export async function triggerAutoSnipes(
                     }
                 }
 
+                // 5. Dynamic Sizing & Dollar-Denominated Budget Resolution (Fix 3)
                 let snipeAmount = liveConfig.amountSol;
                 if (liveConfig.enableDynamicScaling) {
                     let liveBal: number | undefined = undefined;
@@ -779,19 +826,27 @@ export async function triggerAutoSnipes(
                     snipeAmount = calculateDynamicSize(liveConfig, score, liqUsd, cachedSolUsdPrice, liveBal);
                 }
 
-                const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary, checkAndSendBudgetWarning } = await import('./simulation.service.js');
-                const sessionId = await redis.get(`autosnipe:session_id:live:${liveConfig.user.telegramId}`);
-                const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, 'live');
+                const { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary, checkAndSendBudgetWarning, resolveBudgetSol } = await import('./simulation.service.js');
+                const sessionMode = isUserSim ? 'sim' : 'live';
+                const sessionId = await redis.get(`autosnipe:session_id:${sessionMode}:${liveConfig.user.telegramId}`);
+                const currentSpendFinal = await getSessionSpend(liveConfig.user.telegramId, sessionMode);
                 const intendedSpend = snipeAmount * (liveConfig.user.activeWallets || 1);
 
-                if (liveConfig.maxBudgetSol && currentSpendFinal + intendedSpend > liveConfig.maxBudgetSol) {
-                    await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
-                    await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
+                // Resolves budget dynamically in real-time USD/SOL (Fix 3d)
+                const effMaxBudget = resolveBudgetSol(liveConfig, cachedSolUsdPrice);
+
+                if (isFinite(effMaxBudget) && currentSpendFinal + intendedSpend > effMaxBudget) {
+                    if (isUserSim) {
+                        const { killSimAutoSnipe } = await import('./simulation.service.js');
+                        await killSimAutoSnipe(liveConfig.user.telegramId);
+                    } else {
+                        await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
+                    }
+                    await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, sessionMode, sessionId);
                     await redis.del(sniperLockKey);
                     return; 
                 }
 
-                // 🟢 FIX: 50ms x 10 = 500ms max price wait instead of 1050ms
                 if (!isPriceReady) {
                     for (let i = 0; i < 10 && !isPriceReady; i++) await new Promise(r => setTimeout(r, 50));
                 }
@@ -806,40 +861,47 @@ export async function triggerAutoSnipes(
                 if (result.success) {
                     const spent = result.volumeSpent || intendedSpend;
                     
-                    await addSessionSpend(liveConfig.user.telegramId, spent, 'live');
+                    await addSessionSpend(liveConfig.user.telegramId, spent, sessionMode);
                     if (sessionId) {
-                        await redis.rpush(`live:session_trades:${sessionId}`, JSON.stringify({ 
+                        await redis.rpush(`${sessionMode}:session_trades:${sessionId}`, JSON.stringify({ 
                             mint: mintCa, amountInSol: spent, realizedPnlSol: 0 
                         }));
                     }
 
-                    await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { totalSpentSol: { increment: spent } } });
+                    if (!isUserSim) {
+                        await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { totalSpentSol: { increment: spent } } });
 
-                    let entryPrice = await fetchLiveEntryPrice(mintCa);
-                    if (entryPrice === 0 && mintCa.toLowerCase().endsWith("pump")) {
-                        try {
-                            const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
-                            const curvePda = getBondingCurveAddress(mintCa);
-                            const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
-                            if (accInfo?.data) {
-                                entryPrice = decodePumpCurvePrice(accInfo.data.toString('base64'));
-                            }
-                        } catch (_) {}
+                        let entryPrice = await fetchLiveEntryPrice(mintCa);
+                        if (entryPrice === 0 && mintCa.toLowerCase().endsWith("pump")) {
+                            try {
+                                const { getBondingCurveAddress, decodePumpCurvePrice } = await import('./price.service.js');
+                                const curvePda = getBondingCurveAddress(mintCa);
+                                const accInfo = await connection.getAccountInfo(new PublicKey(curvePda));
+                                if (accInfo?.data) {
+                                    entryPrice = decodePumpCurvePrice(accInfo.data.toString('base64'));
+                                }
+                            } catch (_) {}
+                        }
+
+                        const { addTrailingStopToMemory } = await import('./order.service.js');
+                        await addTrailingStopToMemory(
+                            liveConfig.user.telegramId, mintCa, liveConfig.autoTrailingDropPercent,
+                            snipeAmount, entryPrice || 0.00001, liveConfig.autoTakeProfitPercent || undefined,
+                            undefined, 'Sniper Engine'
+                        );
                     }
 
-                    const { addTrailingStopToMemory } = await import('./order.service.js');
-                    await addTrailingStopToMemory(
-                        liveConfig.user.telegramId, mintCa, liveConfig.autoTrailingDropPercent,
-                        snipeAmount, entryPrice || 0.00001, liveConfig.autoTakeProfitPercent || undefined,
-                        undefined, 'Sniper Engine'
-                    );
+                    const updatedSpend = await getSessionSpend(liveConfig.user.telegramId, sessionMode);
+                    checkAndSendBudgetWarning(bot, liveConfig.user.telegramId, sessionMode, updatedSpend, effMaxBudget).catch(() => {});
 
-                    const updatedSpend = await getSessionSpend(liveConfig.user.telegramId, 'live');
-                    checkAndSendBudgetWarning(bot, liveConfig.user.telegramId, 'live', updatedSpend, liveConfig.maxBudgetSol).catch(() => {});
-
-                    if (liveConfig.maxBudgetSol && updatedSpend >= liveConfig.maxBudgetSol) {
-                        await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
-                        await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, 'live', sessionId);
+                    if (isFinite(effMaxBudget) && updatedSpend >= effMaxBudget) {
+                        if (isUserSim) {
+                            const { killSimAutoSnipe } = await import('./simulation.service.js');
+                            await killSimAutoSnipe(liveConfig.user.telegramId);
+                        } else {
+                            await prisma.autoSnipeConfig.update({ where: { id: liveConfig.id }, data: { isActive: false } });
+                        }
+                        await sendBudgetExhaustedSummary(bot, liveConfig.user.telegramId, sessionMode, sessionId);
                     }
 
                     try {
@@ -851,7 +913,7 @@ export async function triggerAutoSnipes(
                             spent, 
                             liveConfig.autoTrailingDropPercent, 
                             liveConfig.autoTakeProfitPercent || 'OFF', 
-                            'Sniper Engine',
+                            `Sniper Engine${isUserSim ? ' (SIM)' : ''}`,
                             result.signature || ''
                         );
                         await bot.telegram.sendMessage(liveConfig.user.telegramId, finalMsg, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });

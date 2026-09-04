@@ -3,36 +3,47 @@ import { prisma } from '../lib/prisma.js';
 import dns from 'dns/promises';
 import net from 'net';
 import crypto from 'crypto';
+import http from 'http';
+import https from 'https';
 
-async function isSafeWebhookUrl(raw: string): Promise<boolean> {
+function pinnedAgent(ip: string, family: number, protocol: string) {
+    const lookup = (_host: string, _opts: any, cb: any) => cb(null, ip, family);
+    return protocol === 'https:'
+        ? new https.Agent({ lookup } as any)
+        : new http.Agent({ lookup } as any);
+}
+
+async function resolveSafeWebhook(raw: string): Promise<{ ip: string; family: number; protocol: string } | null> {
     let u: URL;
     try { 
         u = new URL(raw); 
     } catch { 
-        return false; 
+        return null; 
     }
-    if (u.protocol !== 'https:') return false;
-    if (u.port && !['443', ''].includes(u.port)) return false;
+    if (u.protocol !== 'https:') return null;
+    if (u.port && !['443', ''].includes(u.port)) return null;
 
     try {
         const results = await dns.lookup(u.hostname, { all: true });
-        if (!results || results.length === 0) return false;
+        if (!results || results.length === 0) return null;
 
         for (const { address } of results) {
-            if (net.isIP(address) === 0) return false;
+            if (net.isIP(address) === 0) return null;
 
-            // Block IPv4 loopback, private, link-local, CGNAT, broadcast
+            // Block private, loopback, link-local, carrier-grade NAT IPv4
             if (/^(10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(address)) {
-                return false;
+                return null;
             }
-            // Block IPv6 loopback, unique local, link-local
+            // Block loopback, unique-local, link-local IPv6
             if (address === '::1' || address.startsWith('fc') || address.startsWith('fd') || address.startsWith('fe80') || address === '::') {
-                return false;
+                return null;
             }
         }
-        return true;
+
+        const first = results[0];
+        return { ip: first.address, family: first.family, protocol: u.protocol };
     } catch { 
-        return false; 
+        return null; 
     }
 }
 
@@ -58,15 +69,14 @@ export async function fireWebhook(telegramId: string, event: 'trade_buy' | 'trad
                 return;
             }
 
-            const isSafe = await isSafeWebhookUrl(cfg.url);
-            if (!isSafe) return;
+            const safe = await resolveSafeWebhook(cfg.url);
+            if (!safe) return;
 
             const headers: Record<string, string> = {
                 'Content-Type': 'application/json',
                 'User-Agent': 'Sentry-Webhook-Dispatcher/1.0'
             };
 
-            // 🟢 NEW-2 FIX: HMAC-SHA256 signature in header instead of plaintext secret
             if (cfg.secretKey) {
                 const signature = crypto
                     .createHmac('sha256', cfg.secretKey)
@@ -84,8 +94,9 @@ export async function fireWebhook(telegramId: string, event: 'trade_buy' | 'trad
                     headers,
                     body: payloadStr,
                     signal: controller.signal,
-                    redirect: 'error'
-                });
+                    redirect: 'error',
+                    agent: pinnedAgent(safe.ip, safe.family, safe.protocol)
+                } as any);
             } finally {
                 clearTimeout(timeout);
             }

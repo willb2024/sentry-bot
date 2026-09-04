@@ -615,7 +615,7 @@ export function buildAuditTrailMessage(
 
 
 export function computeTokenScore(stats: TokenStats & { sentiment?: number }): { score: number; reasons: string[] } {
-    if (stats.isRug) {
+    if (stats.isRug && !stats.uncertain) {
         return { score: 0, reasons: [`🚨 Rug risk flagged — HARD BLOCK`] };
     }
     if (stats.sellability && !stats.sellability.sellable) {
@@ -664,7 +664,6 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
         reasons.push(`📈 Positive sentiment +${bonus}`);
     }
 
-    // 🟢 Single LP check evaluation block (Duplicate removed)
     if (stats.lpLock) {
         if (stats.lpLock.burned || stats.lpLock.lockPct > 80) {
             score += 15;
@@ -685,9 +684,13 @@ export function computeTokenScore(stats: TokenStats & { sentiment?: number }): {
         }
     }
 
-    if (stats.uncertain && score >= 75) {
-        score = 65;
-        reasons.push(`⚠️ Score capped: security check inconclusive`);
+    if (stats.uncertain) {
+        if (score >= 70) {
+            score = 65;
+            reasons.push(`⚠️ Score capped at 65: security check inconclusive`);
+        } else {
+            reasons.push(`⚠️ Security check inconclusive`);
+        }
     }
 
     return { score: Math.max(0, Math.min(100, score)), reasons };
@@ -1381,6 +1384,47 @@ export async function checkLpLockStatus(mintAddress: string): Promise<{ locked: 
     } catch (_) {
         return { locked: false, burned: false, lockPct: 0 };
     }
+}
+
+// Helper cache wrapper for low-latency sub-checks
+async function cachedAuditCheck<T>(key: string, ttlSec: number, fn: () => Promise<T>): Promise<T> {
+    try {
+        const hit = await redis.get(key);
+        if (hit) return JSON.parse(hit) as T;
+    } catch (_) {}
+    const val = await fn();
+    if (val !== null && val !== undefined) {
+        redis.set(key, JSON.stringify(val), 'EX', ttlSec).catch(() => {});
+    }
+    return val;
+}
+
+export async function getDevHoldingPercent(mint: string, creatorWallet: string): Promise<number | null> {
+    const cacheKey = `dev_holding:${mint}:${creatorWallet}`;
+    return await cachedAuditCheck(cacheKey, 60, async () => {
+        try {
+            const largest = await rpcLimiter.run(() => 
+                connection.getTokenLargestAccounts(new PublicKey(mint)).catch(() => null)
+            );
+            if (!largest || !largest.value.length) return null;
+
+            const totalSupply = largest.value.reduce((s, a) => s + (a.uiAmount || 0), 0);
+            if (totalSupply <= 0) return null;
+
+            // Check if creator owns the top token account
+            const top = largest.value[0];
+            const ownerInfo = await rpcLimiter.run(() => 
+                connection.getParsedAccountInfo(top.address).catch(() => null)
+            );
+            const owner = (ownerInfo?.value?.data as any)?.parsed?.info?.owner;
+            if (owner === creatorWallet) {
+                return ((top.uiAmount || 0) / totalSupply) * 100;
+            }
+            return 0;
+        } catch (_) {
+            return null;
+        }
+    });
 }
 
 

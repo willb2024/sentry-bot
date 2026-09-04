@@ -11,42 +11,108 @@ datasource db {
 }
 
 
+model Trade {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields:[userId], references: [id])
+  tokenAddress     String
+  isBuy            Boolean
+  amountInSol      Float
+  feeChargedSol    Float    
+  affiliateCutSol  Float    @default(0.0)
+  loyaltyRebateSol Float    @default(0.0)
+  txSignature      String   
+  status           String   @default("CONFIRMED") 
+  profitPercent    Float?   @default(0)
+  realizedPnlSol   Float?   @default(0)
+  
+  strategy         String   @default("Manual / Direct")
+  aiScore          Int?     
+  expectedPriceUsd Float?
+  executedPriceUsd Float?   @default(0)
+  slippagePercent  Float?
+
+  createdAt        DateTime @default(now())
+
+  @@index([userId, status])
+  @@index([userId, tokenAddress, isBuy, status])
+  @@index([txSignature])
+}
+
+model SimTrade {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  tokenAddress    String
+  isBuy           Boolean
+  amountInSol     Float
+  profitPercent   Float?
+  realizedPnlSol  Float?
+  strategy        String    @default("Manual / Direct")
+  createdAt       DateTime  @default(now())
+  simStateId      String?
+  simState        SimState? @relation(fields: [simStateId], references: [id])
+
+  @@index([userId, isBuy])
+}
 
 model SimState {
-  id                   String     @id @default(uuid())
-  userId               String     @unique
-  user                 User       @relation(fields: [userId], references: [id])
-  balance              Float      @default(0.0)
-  startingBalance      Float      @default(0.0)
-  volume               Float      @default(0.0)
-  credits              Int        @default(0)
-  active               Boolean    @default(false)
-  autoSnipeActive      Boolean    @default(false)
-  positions            Json?      
+  id                      String     @id @default(uuid())
+  userId                  String     @unique
+  user                    User       @relation(fields: [userId], references: [id])
+  balance                 Float      @default(0.0)
+  startingBalance         Float      @default(0.0)
+  volume                  Float      @default(0.0)
+  credits                 Int        @default(0)
+  active                  Boolean    @default(false)
+  autoSnipeActive         Boolean    @default(false)
+  positions               Json?      
   
-  maxBudgetSol         Float?     // 🟢 Simulation Session Budget Cap
-  sessionSpendSol      Float?     // 🟢 Simulation Session Spend Tracking
+  maxBudgetSol            Float?     
+  sessionSpendSol         Float?     
 
   // Forged stats overrides
-  forgedSharpe         Float?
-  forgedDrawdown       Float?
-  forgedProfit         Float?
-  forgedRisk           Float?
-  forged24hTrades      Int?
-  forged24hPnl         Float?
-  forgedManual24hCount Int?
-  forgedManual24hPnl   Float?
-  forgedAuto24hCount   Int?
-  forgedAuto24hPnl     Float?
-  forgedHourlyChart    Json?
-  forgedStrat1Name     String?
-  forgedStrat1Pnl      Float?
-  forgedStrat2Name     String?
-  forgedStrat2Pnl      Float?
+  forgedSharpe            Float?
+  forgedDrawdown          Float?
+  forgedProfit            Float?
+  forgedRisk              Float?
+  forged24hTrades         Int?
+  forged24hPnl            Float?
+  forgedManual24hCount    Int?
+  forgedManual24hPnl      Float?
+  forgedAuto24hCount      Int?
+  forgedAuto24hPnl        Float?
+  forgedHourlyChart       Json?
+  forgedStrat1Name        String?
+  forgedStrat1Pnl         Float?
+  forgedStrat2Name        String?
+  forgedStrat2Pnl         Float?
 
-  updatedAt            DateTime   @updatedAt
-  trades               SimTrade[]
+  // Forged Affiliate additions
+  forgedPendingRewardsSol Float?
+  forgedLifetimeEarnedSol Float?
+  forgedTotalPoints       Int?
+  forgedTier              String?
+  forgedCopierYieldSol    Float?
+  forgedRecruitCount      Int?
+
+  updatedAt               DateTime   @updatedAt
+  trades                  SimTrade[]
 }
+
+// 🔴 Idempotent Payout Ledger
+model PayoutRecord {
+  id         String   @id @default(uuid())
+  userId     String
+  amountSol  Float
+  signature  String?  @unique
+  status     String   @default("PENDING") // PENDING | CONFIRMED | FAILED | REFUNDED
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, status])
+}
+
 
 model GuardRecommendation {
   id                 String   @id @default(uuid())
@@ -87,19 +153,7 @@ model GuardModelWeights {
   metrics       Json?
 }
 
-model SimTrade {
-  id              String    @id @default(uuid())
-  userId          String
-  user            User      @relation(fields: [userId], references: [id])
-  tokenAddress    String
-  isBuy           Boolean
-  amountInSol     Float
-  profitPercent   Float?
-  realizedPnlSol  Float?
-  createdAt       DateTime  @default(now())
-  simStateId      String?
-  simState        SimState? @relation(fields: [simStateId], references: [id])
-}
+
 
 model CreditTransaction {
   id           String   @id @default(uuid())
@@ -162,30 +216,7 @@ model LaunchedToken {
   @@index([userId])
 }
 
-model Trade {
-  id               String   @id @default(uuid())
-  userId           String
-  user             User     @relation(fields:[userId], references: [id])
-  tokenAddress     String
-  isBuy            Boolean
-  amountInSol      Float
-  feeChargedSol    Float    
-  affiliateCutSol  Float    
-  loyaltyRebateSol Float   
-  txSignature      String   
-  status           String   @default("CONFIRMED") 
-  profitPercent    Float?   @default(0)
-  realizedPnlSol   Float?   @default(0)
-  
-  strategy         String   @default("MANUAL") 
-  aiScore          Int?     // 🟢 Recorded AI Token Score
 
-  createdAt        DateTime @default(now())
-
-  @@index([userId])
-  @@index([tokenAddress])
-  @@index([txSignature])  
-}
 
 // 🟢 NEW: Social Copy-Trading Network Model
 model CopyTradeFollow {

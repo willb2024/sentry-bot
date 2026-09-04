@@ -109,10 +109,10 @@ export function formatWeeklyReport(stats: WeeklyStats): string {
     const pnlEmoji = stats.weeklyPnlSol >= 0 ? '📈' : '📉';
     const winEmoji = stats.winRate >= 60 ? '🔥' : stats.winRate >= 40 ? '⚡' : '📊';
 
+    // Canonical Tier resolution matching points.ts
     let tierLabel = '🥉 Bronze';
-    if (stats.sentryPoints >= 1000000) tierLabel = '💎 Diamond';
-    else if (stats.sentryPoints >= 250000) tierLabel = '🥇 Gold';
-    else if (stats.sentryPoints >= 50000) tierLabel = '🥈 Silver';
+    if (stats.sentryPoints >= 25_000_000) tierLabel = '🥇 Gold';
+    else if (stats.sentryPoints >= 5_000_000) tierLabel = '🥈 Silver';
 
     const bestLine = stats.bestTrade
         ? `• Best Trade: <code>${stats.bestTrade.token.substring(0, 8)}...</code> <b>${stats.bestTrade.pnlPercent >= 0 ? '+' : ''}${stats.bestTrade.pnlPercent.toFixed(1)}%</b>`
@@ -132,7 +132,7 @@ export function formatWeeklyReport(stats: WeeklyStats): string {
         `📊 <b>TRADING PERFORMANCE</b>\n\n` +
         `${pnlEmoji} Weekly PnL: <b>${pnlSign}${stats.weeklyPnlSol.toFixed(4)} SOL</b>\n` +
         `${winEmoji} Win Rate: <b>${stats.winRate}%</b> (${stats.wins}W / ${stats.losses}L)\n` +
-        `% Volume Traded: <b>${stats.totalVolumeSol.toFixed(4)} SOL</b>\n` +
+        `💰 Volume Traded: <b>${stats.totalVolumeSol.toFixed(4)} SOL</b>\n` +
         `💸 Fees Paid: <b>${stats.totalFeesPaidSol.toFixed(4)} SOL</b>\n\n` +
         `━━━━━━━━━━━━━━━\n` +
         `🎯 <b>TOP TRADES</b>\n\n` +

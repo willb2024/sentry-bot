@@ -94,9 +94,10 @@ export async function getUserPositions(telegramId: string) {
             };
         }));
           
-        const finalPositions = mappedPositions
-            .filter(p => p.valueUsd >= 0.01 || p.priceUsd === 0) 
-            .sort((a, b) => b.valueUsd - a.valueUsd);
+       // Near line 80 in src/services/position.service.ts
+const finalPositions = mappedPositions
+.filter(p => p.valueUsd >= 0.01) // Filter out 0-value dust
+.sort((a, b) => b.valueUsd - a.valueUsd);
 
         await redis.set(cacheKey, JSON.stringify(finalPositions), 'EX', 30);
         return finalPositions;

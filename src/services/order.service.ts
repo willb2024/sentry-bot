@@ -1,5 +1,5 @@
 // src/services/order.service.ts
-import { redis } from '../lib/redis.js';
+import { redis, redisTx } from '../lib/redis.js';
 import crypto from 'crypto';
 import { subscribeToMintPrice, unsubscribeFromMintPrice } from './guard-price-feed.service.js';
 import { prisma } from '../lib/prisma.js';
@@ -65,29 +65,34 @@ export async function syncGuardsFromDb() {
     }
 }
 
-async function updateGuardSafe(orderId: string, mutateFn: (order: TrailingOrder) => void) {
+
+
+
+async function updateGuardSafe(orderId: string, mutateFn: (order: TrailingOrder) => void): Promise<void> {
     const key = `order:trail:${orderId}`;
     const maxRetries = 5;
 
     for (let i = 0; i < maxRetries; i++) {
-        await redis.watch(key); 
-        const raw = await redis.get(key);
+        // Dedicated non-pipelined client for reliable WATCH semantics
+        await redisTx.watch(key); 
+        const raw = await redisTx.get(key);
         
         if (!raw) {
-            await redis.unwatch();
+            await redisTx.unwatch();
             return;
         }
 
         const order: TrailingOrder = JSON.parse(raw);
         mutateFn(order); 
 
-        const multi = redis.multi();
+        const multi = redisTx.multi();
         multi.set(key, JSON.stringify(order));
         const execResult = await multi.exec();
 
+        // If execResult is not null, transaction succeeded cleanly
         if (execResult !== null) return; 
         
-        await redis.unwatch();
+        await redisTx.unwatch();
         await new Promise(r => setTimeout(r, 50 * (i + 1)));
     }
 }
@@ -160,32 +165,38 @@ export async function addTrailingStopToMemory(
 
     await subscribeToMintPrice(tokenAddress, orderId).catch(() => {});
 
-    try {
-        const user = await prisma.user.findUnique({ where: { telegramId } });
-        if (user) {
-            await prisma.activeOrder.create({
-                data: {
-                    id: orderId, 
-                    userId: user.id, 
-                    tokenAddress, 
-                    orderType: ORDER_TYPES.GUARD,
-                    amountSol: amountInSol, 
-                    trailingPercent, 
-                    takeProfitPercent: takeProfitPercent || null,
-                    targetPriceUsd: currentPrice, 
-                    isActive: true, 
-                    maxHoldMinutes: maxHoldMinutes || null,
-                    strategy // 🟢 FUNC-2 Fix: Persisted properly without 'as any'
-                }
-            });
+    // Isolate simulation guards from the production PostgreSQL ActiveOrder table
+    const { isSimulationActive } = await import('./simulation.service.js');
+    const isSim = await isSimulationActive(telegramId).catch(() => false);
+
+    if (!isSim) {
+        try {
+            const user = await prisma.user.findUnique({ where: { telegramId } });
+            if (user) {
+                await prisma.activeOrder.create({
+                    data: {
+                        id: orderId, 
+                        userId: user.id, 
+                        tokenAddress, 
+                        orderType: ORDER_TYPES.GUARD,
+                        amountSol: amountInSol, 
+                        trailingPercent, 
+                        takeProfitPercent: takeProfitPercent || null,
+                        targetPriceUsd: currentPrice, 
+                        isActive: true, 
+                        maxHoldMinutes: maxHoldMinutes || null,
+                        strategy
+                    }
+                });
+            }
+        } catch (e: any) {
+            console.error("🔴 [GUARD DB CREATE ERROR]:", e.message);
         }
-    } catch (e: any) {
-        console.error("🔴 [GUARD DB CREATE ERROR]:", e.message);
+
+        presignGuardImmediately(order).catch(() => {});
     }
 
     pushGuardToCacheImmediately(order);
-    presignGuardImmediately(order).catch(() => {});
-
     return orderId;
 }
 

@@ -72,11 +72,24 @@ export function verifyEncryptionKeyHealth(): boolean {
 
 verifyEncryptionKeyHealth();
 
-export async function generateSecureVault(telegramId: string): Promise<{ address: string, subOrgId: string }> {
+// src/services/vault.service.ts
+export async function generateSecureVault(telegramId: string, force: boolean = false): Promise<{ address: string, subOrgId: string }> {
+    const existing = await prisma.user.findUnique({
+        where: { telegramId },
+        select: { vaultAddress: true, turnkeySubOrgId: true }
+    });
+
+    // Refuse to destroy an existing key unless force is explicitly requested
+    if (existing?.vaultAddress && existing?.turnkeySubOrgId && !force) {
+        return {
+            address: existing.vaultAddress,
+            subOrgId: existing.turnkeySubOrgId
+        };
+    }
+
     const newWallet = Keypair.generate();
     const privateKeyStr = bs58.encode(newWallet.secretKey);
     const pubKeyStr = newWallet.publicKey.toBase58();
-    
     const encryptedKey = encryptKey(privateKeyStr);
     
     await prisma.user.update({

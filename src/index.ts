@@ -782,7 +782,7 @@ app.post('/api/affiliate-stats', async (req, res) => {
             if (raw) { try { forged = JSON.parse(raw); } catch (_) {} }
         }
 
-        // ---- REAL earnings from Postgres (live + sim both track this) ----
+        // Canonical earnings from Postgres AffiliateEarning table
         const since = new Date(Date.now() - 30 * 86400_000);
         const earnings = await prisma.affiliateEarning.findMany({
             where: { userId: user.id, createdAt: { gte: since } },
@@ -803,31 +803,26 @@ app.post('/api/affiliate-stats', async (req, res) => {
             else realFee += e.amountSol;
         }
 
-        // 🟢 ADDITIVE: forged baseline + real activity, per day
         const dailyEarnings = dayKeys.map((k, i) => dailyMap[k] + (forged?.revenue30d?.[i] || 0));
 
-        // ---- REAL points (live-accurate) ----
+        // Canonical points breakdown from points.ts
         const { getUserTotalPoints } = await import('./services/points.js');
-        const realPointsBreakdown = await getUserTotalPoints(user.id).catch(() => ({ totalPoints: 0 }));
+        const realPointsBreakdown = await getUserTotalPoints(user.id).catch(() => ({ 
+            totalPoints: 0, currentTier: 'Bronze' as const, currentRate: 0.50, nextTier: 'Silver', nextTierPoints: 5000000 
+        }));
+        
         const totalPoints = (forged?.points || 0) + (realPointsBreakdown.totalPoints || 0);
 
-        // ---- Tier resolution ----
-        const TIERS = [
-            { name: 'Bronze', min: 0,          rate: 0.50 },
-            { name: 'Silver', min: 5_000_000,  rate: 0.60 },
-            { name: 'Gold',   min: 25_000_000, rate: 0.70 }
-        ];
-        const currentTierObj = [...TIERS].reverse().find(t => totalPoints >= t.min) || TIERS[0];
-        const nextTierObj = TIERS.find(t => t.min > totalPoints);
-
+        const currentTier = forged?.tier || realPointsBreakdown.currentTier;
+        const currentRate = realPointsBreakdown.currentRate; // 0.50, 0.60, or 0.70
         const botUsername = process.env.BOT_USERNAME || 'SentryTerminalBot';
 
         res.json({
             totalPoints,
-            nextTierPoints: nextTierObj?.min || currentTierObj.min,
-            nextTier: nextTierObj?.name || 'Max Tier',
-            currentTier: forged?.tier || currentTierObj.name,
-            currentRate: currentTierObj.rate,
+            nextTierPoints: realPointsBreakdown.nextTierPoints,
+            nextTier: realPointsBreakdown.nextTier,
+            currentTier,
+            currentRate,
 
             pendingYieldSol: (forged?.pendingYield || 0) + (user.pendingRewardsSol || 0),
             lifetimeEarnedSol: (forged?.lifetimeEarned || 0) + (user.lifetimeEarnedSol || 0),
@@ -836,11 +831,10 @@ app.post('/api/affiliate-stats', async (req, res) => {
             copierYield: (forged?.copierYield || 0) + realCopier,
 
             referralLink: `https://t.me/${botUsername}?start=SENTRY-${telegramId}`,
-            // 🟢 DECOUPLED COUNTS: Additive logic for UI tabs
+            copierFeedLink: `https://t.me/${botUsername}?start=follow_SENTRY-${telegramId}`,
+
             recruitCount: (forged?.recruits || 0) + user.recruits.length,
             copierCount: (forged?.copiers || 0) + user.followedBy.length,
-            
-            copierFeedLink: `https://t.me/${botUsername}?start=follow_SENTRY-${telegramId}`,
 
             recruitList: user.recruits.map(r => ({
                 username: r.username || 'Operator',
@@ -855,7 +849,6 @@ app.post('/api/affiliate-stats', async (req, res) => {
             dailyEarnings
         });
     } catch (e: any) {
-        console.error('🔴 [AFFILIATE STATS]', e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -3799,42 +3792,68 @@ bot.action('menu_affiliate', async (ctx) => {
         const tgId = ctx.from?.id.toString();
         if (!tgId) return;
 
-        const user = await prisma.user.findUnique({
-            where: { telegramId: tgId },
-            include: {
-                _count: { select: { recruits: true } },
-                followedBy: { where: { isActive: true } }
-            }
-        });
+        const { isSimulationActive } = await import('./services/simulation.service.js');
+        const isSim = await isSimulationActive(tgId);
 
-        if (!user) {
-            return await ctx.answerCbQuery('⚠️ User profile not found.');
+        let totalPoints = 0;
+        let currentTier = 'Bronze';
+        let rateStr = '50%';
+        let nextTierStr = 'Silver (5,000,000 PTS)';
+        let pendingSol = '0.0000';
+        let recruitCount = 0;
+        let copierCount = 0;
+        let referralCode = `SENTRY-${tgId}`;
+
+        if (isSim) {
+            const forgedRaw = await redis.get(`sim:forged:${tgId}`);
+            const forged = forgedRaw ? JSON.parse(forgedRaw) : {};
+            totalPoints = forged.points || 27500000;
+            currentTier = forged.tier || 'Gold';
+            rateStr = currentTier === 'Gold' ? '70%' : currentTier === 'Silver' ? '60%' : '50%';
+            nextTierStr = currentTier === 'Gold' ? 'MAX RANK ACHIEVED' : 'Gold (25,000,000 PTS)';
+            pendingSol = (forged.pendingYield || 12.45).toFixed(4);
+            recruitCount = forged.recruits || 142;
+            copierCount = forged.copiers || 38;
+        } else {
+            const user = await prisma.user.findUnique({
+                where: { telegramId: tgId },
+                include: {
+                    _count: { select: { recruits: true } },
+                    followedBy: { where: { isActive: true } }
+                }
+            });
+
+            if (!user) return await ctx.answerCbQuery('⚠️ User profile not found.');
+
+            const { getUserTotalPoints } = await import('./services/points.js');
+            const pointsBreakdown = await getUserTotalPoints(user.id);
+
+            totalPoints = pointsBreakdown.totalPoints;
+            currentTier = pointsBreakdown.currentTier;
+            rateStr = `${(pointsBreakdown.currentRate * 100).toFixed(0)}%`;
+            nextTierStr = currentTier === 'Gold' 
+                ? 'MAX RANK ACHIEVED' 
+                : `${pointsBreakdown.nextTier} (${(pointsBreakdown.nextTierPoints / 1_000_000).toFixed(0)}M PTS)`;
+            pendingSol = (user.pendingRewardsSol || 0).toFixed(4);
+            recruitCount = user._count.recruits;
+            copierCount = user.followedBy.length;
+            referralCode = user.referralCode;
         }
 
-        // 🟢 FIX: Fetch canonical Points & Tier status from single source of truth
-        const { getUserTotalPoints } = await import('./services/points.js');
-        const pointsBreakdown = await getUserTotalPoints(user.id);
-
-        const totalPoints = pointsBreakdown.totalPoints;
-        const currentTier = pointsBreakdown.currentTier === 'Gold' ? '🥇 Gold' : pointsBreakdown.currentTier === 'Silver' ? '🥈 Silver' : '🥉 Bronze';
-        const nextTier = pointsBreakdown.currentTier === 'Gold' 
-            ? 'MAX RANK ACHIEVED' 
-            : `${pointsBreakdown.nextTier} (${(pointsBreakdown.nextTierPoints / 1_000_000).toFixed(0)}M PTS)`;
-        const rate = `${(pointsBreakdown.currentRate * 100).toFixed(0)}%`;
-
+        const tierEmoji = currentTier === 'Gold' ? '🥇' : currentTier === 'Silver' ? '🥈' : '🥉';
         const botUsername = process.env.BOT_USERNAME || 'SentryTerminalBot';
-        const referralLink = `https://t.me/${botUsername}?start=${user.referralCode}`;
-        const copyFeedLink = `https://t.me/${botUsername}?start=follow_${user.referralCode}`;
+        const referralLink = `https://t.me/${botUsername}?start=${referralCode}`;
+        const copyFeedLink = `https://t.me/${botUsername}?start=follow_${referralCode}`;
 
-        let msg = `🤝 <b>AFFILIATE & SOCIAL ALPHA HUB</b>\n\n`;
+        let msg = `🤝 <b>AFFILIATE & SOCIAL ALPHA HUB${isSim ? ' (SIM)' : ''}</b>\n\n`;
         msg += `Monetize your network with industry-leading dual revenue streams:\n\n`;
         msg += `💎 <b>Accumulated Points:</b> <code>${totalPoints.toLocaleString()} PTS</code>\n`;
-        msg += `🏆 <b>Current Tier:</b> <b>${currentTier} (${rate} Fee Cut)</b>\n`;
-        msg += `🎯 <b>Next Tier:</b> <code>${nextTier}</code>\n\n`;
+        msg += `🏆 <b>Current Tier:</b> <b>${tierEmoji} ${currentTier} (${rateStr} Fee Cut)</b>\n`;
+        msg += `🎯 <b>Next Tier:</b> <code>${nextTierStr}</code>\n\n`;
         msg += `━━━━━━━━━━━━━━━━━━━━\n`;
-        msg += `💰 <b>Pending Unclaimed Yield:</b> <b>${(user.pendingRewardsSol || 0).toFixed(4)} SOL</b>\n`;
-        msg += `👥 <b>Active Recruits:</b> <code>${user._count.recruits} users</code> (50% - 70% Fees + 40% AI Credits)\n`;
-        msg += `📡 <b>Active Copiers:</b> <code>${user.followedBy.length} mirroring</code> (50% Leader Yield)\n\n`;
+        msg += `💰 <b>Pending Unclaimed Yield:</b> <b>${pendingSol} SOL</b>\n`;
+        msg += `👥 <b>Active Recruits:</b> <code>${recruitCount} users</code> (50% - 70% Fees + 40% AI Credits)\n`;
+        msg += `📡 <b>Active Copiers:</b> <code>${copierCount} mirroring</code> (50% Leader Yield)\n\n`;
         msg += `🔗 <b>Your Personal Invite Link:</b>\n<code>${referralLink}</code>\n\n`;
         msg += `📡 <b>Your Public Copy-Trade Link:</b>\n<code>${copyFeedLink}</code>\n\n`;
         msg += `<i>Earnings are automatically credited after every confirmed trade and can be claimed instantly.</i>`;
@@ -3844,11 +3863,10 @@ bot.action('menu_affiliate', async (ctx) => {
             [Markup.button.callback('💸 Claim Unclaimed Yield', 'action_claim_payout')],
             [Markup.button.webApp('📊 Open WebApp Analytics Hub', `${webAppUrl}?view=affiliates`)],
             [Markup.button.callback('👥 View Recruits', 'menu_view_recruits'), Markup.button.callback('📡 View Copiers', 'menu_view_copiers')],
-            [Markup.button.callback('⬅️ Back to Main Menu', 'btn_main_menu')]
+            [Markup.button.callback('⬅️ Back to Main Menu', 'btn_dashboard')]
         ];
 
         return await safeEditMessageText(ctx, msg, Markup.inlineKeyboard(buttons));
-
     } catch (e: any) {
         console.error('🔴 [menu_affiliate] Error:', e.message);
         return await ctx.answerCbQuery('Failed to load affiliate hub.');
@@ -4686,25 +4704,29 @@ bot.command('qacheck', async (ctx) => {
 // =========================================================
 // 🟢 FIX 4A: Fully parallelized positions guard lookups (removes serial loop bottleneck)
 bot.action('menu_positions', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
+    try { await ctx.answerCbQuery(); } catch (e) {}
     const tgId = ctx.from?.id.toString();
     if (!tgId) return;
 
-    // Simulation Intercept
+    // 1. Simulation Mode Intercept
     const { isSimulationActive } = await import('./services/simulation.service.js');
     if (tgId && await isSimulationActive(tgId)) {
         const { getSimWallets } = await import('./services/simulation.service.js');
-        const simWallets = await getSimWallets(tgId);
+        await getSimWallets(tgId);
         const simPositions = JSON.parse(await redis.get(`sim:positions:${tgId}`) || '[]');
         
-        let posText = `💼 <b>YOUR CURRENT BAGS</b>\n\n`;
+        let posText = `💼 <b>YOUR CURRENT BAGS (SIM)</b>\n\n`;
         const buttons: any[] = [];
         
         if (simPositions.length === 0) {
             posText += `<i>No active simulation positions. Use the sniper or paste a CA to simulate a buy.</i>`;
         } else {
+            const { cachedSolUsdPrice } = await import('./services/grpc.service.js');
+            const solRate = cachedSolUsdPrice || 156.93;
+
             simPositions.forEach((p: any, i: number) => {
-                const pnlPercent = ((p.priceUsd - (p.entryPrice * 150)) / (p.entryPrice * 150) * 100).toFixed(2);
+                const entryUsd = (p.entryPriceUsd && p.entryPriceUsd > 0) ? p.entryPriceUsd : (p.entryPrice * solRate);
+                const pnlPercent = entryUsd > 0 ? (((p.priceUsd - entryUsd) / entryUsd) * 100).toFixed(2) : "0.00";
                 const solPnl = p.amountInSol * (parseFloat(pnlPercent) / 100); 
                 const sign = parseFloat(pnlPercent) >= 0 ? '+' : '';
                 
@@ -4717,35 +4739,33 @@ bot.action('menu_positions', async (ctx) => {
             });
         }
 
-
-       // Inside bot.action('menu_positions', ...)
-// Inside bot.action('menu_positions') in src/index.ts, update the footer buttons:
-buttons.push([
-    Markup.button.callback('📊 Portfolio Risk Audit', 'action_view_risk'),
-    Markup.button.callback('🧠 AI Recommended Stop / TP', 'ai_recommend_guard')
-]);
-buttons.push([
-    Markup.button.callback('🧹 Sweep All to Cash', 'action_sweep_all'),
-    Markup.button.callback('🔄 Refresh', 'menu_positions')
-]);
-buttons.push([
-    Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')
-]);
-        const loader = await ctx.reply("<i>⏳ Scanning simulation vault...</i>", { parse_mode: 'HTML' });
-        await new Promise(r => setTimeout(r, 400)); 
+        buttons.push([
+            Markup.button.callback('📊 Portfolio Risk Audit', 'action_view_risk'),
+            Markup.button.callback('🧠 AI Recommended Stop / TP', 'ai_recommend_guard')
+        ]);
+        buttons.push([
+            Markup.button.callback('🧹 Sweep All to Cash', 'action_sweep_all'),
+            Markup.button.callback('🔄 Refresh', 'menu_positions')
+        ]);
+        buttons.push([
+            Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')
+        ]);
+        
         await safeEditMessageText(ctx, posText, {
             reply_markup: { inline_keyboard: buttons }
         });
-        await ctx.telegram.deleteMessage(ctx.chat!.id, loader.message_id).catch(() => {});
         return;
     }
 
+    // 2. Live Mainnet Positions Flow
     const loader = await ctx.reply("<i>⏳ Scanning blockchain and fetching live prices...</i>", { parse_mode: 'HTML' });
     
     const user = await prisma.user.findUnique({ where: { telegramId: tgId } });
     if (!user) return;
 
+    const { getUserPositions } = await import('./services/position.service.js');
     const positions = await getUserPositions(tgId);
+    const { getEmptyTokenAccounts } = await import('./services/burn.service.js');
     const emptyAccounts = await getEmptyTokenAccounts(user.vaultAddress || "");
     const emptyCount = emptyAccounts.length;
 
@@ -4760,19 +4780,18 @@ buttons.push([
     const displayLimit = 15;
     const topPositions = positions ? positions.slice(0, displayLimit) : [];
     
+    const { getVipStatus } = await import('./services/vip_promo.service.js');
     const vipStatus = await getVipStatus(tgId);
     let posText = `💼 <b>YOUR CURRENT BAGS</b> ${vipStatus.badge}\n\n`;
     const buttons: any[] = [];
 
     if (topPositions.length > 0) {
-        // Parallelize all guard lookups at once
-        // Replace the topPositions.map line in menu_positions with explicit (p: any):
-const guardData = await Promise.all(topPositions.map(async (p: any) => {
-    const guards = await redis.smembers(`token_guards:${tgId}:${p.mint}`);
-    if (!guards || guards.length === 0) return { mint: p.mint, entryPrice: 0 };
-    const raw = await redis.get(`order:trail:${guards[0]}`);
-    return { mint: p.mint, entryPrice: raw ? JSON.parse(raw).entryPrice || 0 : 0 };
-}));
+        const guardData = await Promise.all(topPositions.map(async (p: any) => {
+            const guards = await redis.smembers(`token_guards:${tgId}:${p.mint}`);
+            if (!guards || guards.length === 0) return { mint: p.mint, entryPrice: 0 };
+            const raw = await redis.get(`order:trail:${guards[0]}`);
+            return { mint: p.mint, entryPrice: raw ? JSON.parse(raw).entryPrice || 0 : 0 };
+        }));
         const entryPriceMap = new Map(guardData.map(g => [g.mint, g.entryPrice]));
 
         for (let i = 0; i < topPositions.length; i++) {
@@ -4783,7 +4802,7 @@ const guardData = await Promise.all(topPositions.map(async (p: any) => {
                 ? `<b>$${p.valueUsd.toFixed(2)}</b> <i>(${p.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })} Tokens)</i>` 
                 : `<b>${p.amount.toFixed(2)}</b> Tokens`;
 
-            const entryPrice = entryPriceMap.get(p.mint) || 0;
+            const entryPrice = entryPriceMap.get(p.mint) || p.entryPriceUsd || 0;
             const pnlPercent = entryPrice > 0
                 ? (((p.priceUsd - entryPrice) / entryPrice) * 100).toFixed(2)
                 : null;
@@ -4795,8 +4814,10 @@ const guardData = await Promise.all(topPositions.map(async (p: any) => {
             posText += `${i+1}. ${symbolDisplay} : ${valueDisplay}${pnlLine}\n`;
             
             buttons.push([
-                Markup.button.callback(`10%`, `sell_10_${p.mint}`), Markup.button.callback(`25%`, `sell_25_${p.mint}`),
-                Markup.button.callback(`50%`, `sell_50_${p.mint}`), Markup.button.callback(`75%`, `sell_75_${p.mint}`),
+                Markup.button.callback(`10%`, `sell_10_${p.mint}`), 
+                Markup.button.callback(`25%`, `sell_25_${p.mint}`),
+                Markup.button.callback(`50%`, `sell_50_${p.mint}`), 
+                Markup.button.callback(`75%`, `sell_75_${p.mint}`),
                 Markup.button.callback(`💥 100%`, `sell_100_${p.mint}`)
             ]);
         }
@@ -4812,12 +4833,22 @@ const guardData = await Promise.all(topPositions.map(async (p: any) => {
         buttons.push([Markup.button.callback(`🧹 Sweep Empty Accounts (+${potentialReclaim} SOL)`, 'action_sweep_rent')]);
     }
 
-    buttons.push([Markup.button.callback('🔄 Refresh', 'menu_positions'), Markup.button.callback('⬅️ Back', 'btn_dashboard')]);
+    buttons.push([
+        Markup.button.callback('📊 Portfolio Risk Audit', 'action_view_risk'),
+        Markup.button.callback('🧠 AI Recommended Stop / TP', 'ai_recommend_guard')
+    ]);
+    buttons.push([
+        Markup.button.callback('🧹 Sweep All to Cash', 'action_sweep_all'),
+        Markup.button.callback('🔄 Refresh', 'menu_positions')
+    ]);
+    buttons.push([
+        Markup.button.callback('⬅️ Back to Dashboard', 'btn_dashboard')
+    ]);
     
     await ctx.telegram.editMessageText(ctx.chat!.id, loader.message_id, undefined, posText, { 
         parse_mode: 'HTML', 
         ...Markup.inlineKeyboard(buttons) 
-    }).catch(()=>{});
+    }).catch(() => {});
 });
 
 // =========================================================
@@ -6046,13 +6077,20 @@ bot.action(/^unfollow_leader_(.+)$/, async (ctx) => {
 });
 
 bot.action('action_view_directory', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch(e){}
-    const directoryText = `👑 <b>SENTRY ALPHA DIRECTORY</b>\n\n<i>Top performing Pump.fun wallets curated by the Sentry Intelligence Team. Click any address to copy, then paste it in "Add Custom Wallet".</i>\n\n` +
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    
+    const directoryText = 
+        `👑 <b>SENTRY ALPHA DIRECTORY</b>\n\n` +
+        `<i>Top performing Pump.fun wallets curated by the Sentry Intelligence Team. Click any address to copy, then paste it in "Add Custom Wallet".</i>\n\n` +
         `🥇 <b>Oracle_01 (78% Win Rate | +142.5 SOL Net 7D)</b>\n<code>3yFomLQyHj3Y2bWmK1XG9p5uBEwF6PQcaQSkeBpn782T</code>\n\n` +
         `🥈 <b>Oracle_02 (71% Win Rate | +89.2 SOL Net 7D)</b>\n<code>7kPxoM4TzVU4EoHEpgzq1VV7AbicfhtW4xC9iMCe6TQq</code>\n\n` +
         `🥉 <b>Oracle_03 (64% Win Rate | +210.8 SOL Net 7D)</b>\n<code>5Q544fKrFoe6tsEbD7S8EmxjnzVU4EoHEpgzq1VV7Abic</code>\n\n` +
-        `🔥 <b>Oracle_05 (89% Win Rate | Insider Wallets)</b>\n<code>A1foGxGHK3nasjjnr7jxW14VNCe6TQqeHC9p8KetsN6J</code>\n\n`;
-    await safeEditMessageText(ctx, directoryText, Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Copy Trade', 'menu_copytrade')]]));
+        `🔥 <b>Oracle_05 (89% Win Rate | Insider Wallets)</b>\n<code>A1foGxGHK3nasjjnr7jxW14VNCe6TQqeHC9p8KetsN6J</code>\n\n` +
+        `<i>⚠️ <b>DISCLAIMER:</b> Directory entries are curated trader examples. Past performance does not guarantee future results. Copy trade responsibly.</i>`;
+
+    await safeEditMessageText(ctx, directoryText, Markup.inlineKeyboard([
+        [Markup.button.callback('⬅️ Back to Copy Trade', 'menu_copytrade')]
+    ]));
 });
 
 bot.action('action_deploy_guard', async (ctx) => {
@@ -8166,6 +8204,7 @@ bot.on("text", async (ctx, next) => {
         return ctx.replyWithHTML(`✅ Broadcast sent to <b>${sent} users</b>.`);
     }
 
+
     const isSimEdit = await redis.get(`state:simedit:${telegramId}`);
     if (isSimEdit) {
         await redis.del(`state:simedit:${telegramId}`);
@@ -8188,7 +8227,7 @@ bot.on("text", async (ctx, next) => {
         try {
             await redis.set(`sim:active:${telegramId}`, 'true');
 
-            // Standard parsing
+            // Standard Metrics Parsing
             const wins = parseInt(parsedData['WINS']) || 1397;
             const losses = parseInt(parsedData['LOSSES']) || 1003;
             const credits = parseInt(parsedData['CREDITS']) || 5000;
@@ -8204,7 +8243,7 @@ bot.on("text", async (ctx, next) => {
             const profitFactor = parseFloat(parsedData['PROFIT_FACTOR'] || '3.42');
             const startingBalanceSol = parseFloat(parsedData['STARTING_BAL_SOL'] || '31.8613');
 
-            // Affiliate Parsing
+            // Affiliate & Network Parsing
             const points = parseInt(parsedData['POINTS'] || '0', 10);
             const tier = parsedData['TIER'] || null;
             const pendingYield = parseFloat(parsedData['PENDING_YIELD'] || '0');
@@ -8247,6 +8286,17 @@ bot.on("text", async (ctx, next) => {
             }
             if (totalStratPnl === 0) totalStratPnl = 1180.3798;
 
+            // 🟢 Invariant Enforcement: Realized Profit cannot drift from Net Worth - Starting Balance
+            const impliedPnl = balance - startingBalanceSol;
+            if (Math.abs(totalStratPnl - impliedPnl) > 0.01 && totalStratPnl > 0) {
+                const scalingFactor = impliedPnl / (totalStratPnl || 1);
+                for (const s of Object.keys(stratStats)) {
+                    stratStats[s].pnl = parseFloat((stratStats[s].pnl * scalingFactor).toFixed(4));
+                    stratStats[s].totalPnl = stratStats[s].pnl;
+                }
+                totalStratPnl = parseFloat(impliedPnl.toFixed(4));
+            }
+
             const hourlyChart = (parsedData['HOURLY_CHART'] || '0.8, 1.4, -0.2, 2.1, 3.5, 0.0, 5.2, 2.4, -0.5, 1.8, 2.9, 4.1, 0.9, 1.6, -0.3, 3.1, 1.2, 2.3, -0.8, 1.1, 3.0, 4.5, 0.5, 2.2')
                 .split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
             
@@ -8266,7 +8316,6 @@ bot.on("text", async (ctx, next) => {
                 risk, manual24hCount, manual24hPnl, auto24hCount, auto24hPnl, stratStats,
                 hourlyChart, firstTradeAt, slippage, maxBudget, spend, startingBalanceSol, totalStratPnl,
                 sharpe, drawdown, profitFactor,
-                // Affiliate Additions
                 points, tier, pendingYield, lifetimeEarned, feeCut, creditShare, copierYield,
                 recruits, copiers, revenue30d,
                 forgedAt: Date.now()
@@ -8290,7 +8339,7 @@ bot.on("text", async (ctx, next) => {
                 'CzLSujWBLFsSjncfkh59rQDqvJgCSwUiW3De5Y87dUXZ'
             ];
 
-            // 1. Generate 18 recent 24h trades
+            // 1. Generate 18 recent 24h auto trades
             for (let i = 0; i < 18; i++) {
                 const isWin = i < 14;
                 const pnlPct = isWin ? +(25.0 + Math.random() * 8) : -(8.0 + Math.random() * 3);
@@ -8321,8 +8370,49 @@ bot.on("text", async (ctx, next) => {
             if (user) {
                 await prisma.simState.upsert({
                     where: { userId: user.id },
-                    update: { balance, startingBalance: startingBalanceSol, volume, credits, active: true },
-                    create: { userId: user.id, balance, startingBalance: startingBalanceSol, volume, credits, active: true }
+                    update: { 
+                        balance, 
+                        startingBalance: startingBalanceSol, 
+                        volume, 
+                        credits, 
+                        active: true,
+                        forgedSharpe: sharpe,
+                        forgedDrawdown: drawdown,
+                        forgedProfit: profitFactor,
+                        forgedRisk: risk,
+                        forgedManual24hCount: manual24hCount,
+                        forgedManual24hPnl: manual24hPnl,
+                        forgedAuto24hCount: auto24hCount,
+                        forgedAuto24hPnl: auto24hPnl,
+                        forgedPendingRewardsSol: pendingYield,
+                        forgedLifetimeEarnedSol: lifetimeEarned,
+                        forgedTotalPoints: points,
+                        forgedTier: tier,
+                        forgedCopierYieldSol: copierYield,
+                        forgedRecruitCount: recruits
+                    },
+                    create: { 
+                        userId: user.id, 
+                        balance, 
+                        startingBalance: startingBalanceSol, 
+                        volume, 
+                        credits, 
+                        active: true,
+                        forgedSharpe: sharpe,
+                        forgedDrawdown: drawdown,
+                        forgedProfit: profitFactor,
+                        forgedRisk: risk,
+                        forgedManual24hCount: manual24hCount,
+                        forgedManual24hPnl: manual24hPnl,
+                        forgedAuto24hCount: auto24hCount,
+                        forgedAuto24hPnl: auto24hPnl,
+                        forgedPendingRewardsSol: pendingYield,
+                        forgedLifetimeEarnedSol: lifetimeEarned,
+                        forgedTotalPoints: points,
+                        forgedTier: tier,
+                        forgedCopierYieldSol: copierYield,
+                        forgedRecruitCount: recruits
+                    }
                 });
             }
 
@@ -9736,14 +9826,17 @@ async function bootEcosystem() {
     startCoinCaller(bot); 
 
     // 🟢 Simulation Background Engines (Real Prices + Recovery)
-    const { 
-        recoverSimAutoSnipeLoops, 
-        startSimPositionRefresher, 
-        processSimCopyTrades 
-    } = await import('./services/simulation.service.js');
+// 🟢 Simulation Background Engines (Real Prices + Recovery)
+const { 
+    recoverSimAutoSnipeLoops, 
+    startSimPositionRefresher, 
+    processSimCopyTrades,
+    startSimulationGuardResolver
+} = await import('./services/simulation.service.js');
 
-    startSimPositionRefresher();
-    await recoverSimAutoSnipeLoops(bot);
+startSimPositionRefresher();
+startSimulationGuardResolver(bot);
+await recoverSimAutoSnipeLoops(bot);
 
     // 🟢 Task Queues
     console.log('⏳ Booting BullMQ Background Task Queues...');

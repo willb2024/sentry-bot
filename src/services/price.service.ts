@@ -135,6 +135,42 @@ export async function getTokenMetadata(mint: string): Promise<{
     }
 }
 
+// src/services/price.service.ts
+export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
+    const key = `rugcheck:${tokenMint}`;
+    try {
+        const cached = await redis.get(key);
+        if (cached === 'true') return true;
+        if (cached === 'false') return false;
+
+        const { keepAliveHttpsAgent } = await import('../lib/http-agent.js');
+        const res = await rugCheckLimiter(() => 
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { 
+                timeout: 2500,
+                httpsAgent: keepAliveHttpsAgent 
+            })
+        );
+
+        const data = res.data;
+        const risks = data.risks || [];
+
+        const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
+        const isMintable = !!(data.token && data.token.mintAuthority);
+        const highScore = data.score > 500;
+        const topHolders = data.topHolders || [];
+        const top10Pct = topHolders.reduce((acc: number, h: any) => acc + (h.pct || 0), 0);
+        const isHighlyConcentrated = top10Pct > 40.0;
+
+        const isUnsafe = isHoneypot || isMintable || highScore || isHighlyConcentrated;
+
+        await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
+        return isUnsafe;
+    } catch (_) {
+        await redis.set(key, 'uncertain', 'EX', 45).catch(() => {});
+        return false; // Inconclusive network result: do not hard-block
+    }
+}
+
 export async function getTokenRiskDetails(tokenMint: string): Promise<{
     isUnsafe: boolean; isHoneypot: boolean; isMintable: boolean; top10Pct: number; score: number;
 }> {
@@ -143,8 +179,12 @@ export async function getTokenRiskDetails(tokenMint: string): Promise<{
         const cached = await redis.get(key);
         if (cached) return JSON.parse(cached);
 
+        const { keepAliveHttpsAgent } = await import('../lib/http-agent.js');
         const res = await rugCheckLimiter(() => 
-            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 400 }) // 🟢 FIX: 4000ms -> 400ms
+            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { 
+                timeout: 2500,
+                httpsAgent: keepAliveHttpsAgent
+            })
         );
         
         const data = res.data;
@@ -234,36 +274,6 @@ export async function checkRecentMevActivity(tokenMint: string): Promise<boolean
 }
 
 // 🟢 FIX: Tightened timeout to 400ms inside rugCheckLimiter
-export async function checkTokenRugRisk(tokenMint: string): Promise<boolean> {
-    const key = `rugcheck:${tokenMint}`;
-    try {
-        const cached = await redis.get(key);
-        if (cached === 'true') return true;
-        if (cached === 'false') return false;
-
-        const res = await rugCheckLimiter(() => 
-            axios.get(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 400 })
-        );
-
-        const data = res.data;
-        const risks = data.risks || [];
-
-        const isHoneypot = risks.some((r: any) => r.name === 'Freeze Authority still enabled');
-        const isMintable = !!(data.token && data.token.mintAuthority);
-        const highScore = data.score > 500;
-        const topHolders = data.topHolders || [];
-        const top10Pct = topHolders.reduce((acc: number, h: any) => acc + (h.pct || 0), 0);
-        const isHighlyConcentrated = top10Pct > 40.0;
-
-        const isUnsafe = isHoneypot || isMintable || highScore || isHighlyConcentrated;
-
-        await redis.set(key, isUnsafe ? 'true' : 'false', 'EX', 600);
-        return isUnsafe;
-    } catch (_) {
-        await redis.set(key, 'uncertain', 'EX', 45).catch(() => {});
-        return true; 
-    }
-}
 
 export async function getTokenPriceUsd(mintAddress: string): Promise<number> {
     const cacheKey = `price:${mintAddress}`;

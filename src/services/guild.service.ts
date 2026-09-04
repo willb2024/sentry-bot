@@ -7,10 +7,12 @@ import { withLock } from '../lib/redlock.js';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import { prisma } from '../lib/prisma.js';
-import { redlock } from '../lib/redlock.js';
 import { isSimulationActive } from './simulation.service.js';
 
 dotenv.config();
+
+const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
+const PRICE_SOL = 0.2;
 
 export function sanitizeCsvField(value: string | null | undefined): string {
     if (!value) return '';
@@ -21,93 +23,7 @@ export function sanitizeCsvField(value: string | null | undefined): string {
     return str;
 }
 
-const GUILD_WORDS = ['ALPHA', 'SIGMA', 'APEX', 'NOVA', 'NEXUS', 'OMEGA', 'TITAN', 'VANGUARD', 'ECLIPSE', 'ZENITH'];
-const PRICE_SOL = 0.2;
 
-export async function createGuild(
-    telegramId: string, 
-    name: string, 
-    description: string | null, 
-    rewardDescription: string | null
-): Promise<{ success: boolean; message: string; guildCode?: string }> {
-    try {
-        const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
-        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
-        if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
-
-        const isSim = await isSimulationActive(telegramId);
-        const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
-        const randomTwoDigit = Math.floor(10 + Math.random() * 90);
-        const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
-
-        if (isSim) {
-            await prisma.guild.create({
-                data: {
-                    ownerId: user.id,
-                    guildCode,
-                    name,
-                    description,
-                    rewardDescription,
-                    feePaidSol: 0
-                }
-            });
-            return { success: true, message: "Guild successfully established (Simulation).", guildCode };
-        }
-
-        const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
-        if (!treasuryWalletStr) return { success: false, message: "Platform treasury not configured." };
-
-        const priceLamports = Math.floor(PRICE_SOL * LAMPORTS_PER_SOL);
-        const vaultPubkey = new PublicKey(user.vaultAddress);
-        const balance = await connection.getBalance(vaultPubkey);
-
-        if (balance < priceLamports + 500000) {
-            return { success: false, message: `Insufficient Funds: You need ${PRICE_SOL} SOL + gas in your Main Wallet (W1).` };
-        }
-
-        const rawPk = decryptKey(user.turnkeySubOrgId);
-        if (!rawPk) return { success: false, message: "Decryption Fault." };
-        const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
-
-        const ix = SystemProgram.transfer({
-            fromPubkey: vaultPubkey,
-            toPubkey: new PublicKey(treasuryWalletStr),
-            lamports: priceLamports
-        });
-
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        const vTx = new VersionedTransaction(new TransactionMessage({
-            payerKey: vaultPubkey, recentBlockhash: blockhash, instructions: [ix]
-        }).compileToV0Message());
-        vTx.sign([keypair]);
-
-        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
-
-        let isConfirmed = false;
-        for (let i = 0; i < 15; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            if (status?.value && !status.value.err) { isConfirmed = true; break; }
-        }
-
-        if (!isConfirmed) return { success: false, message: "Transaction dropped by the network." };
-
-        await prisma.guild.create({
-            data: {
-                ownerId: user.id,
-                guildCode,
-                name,
-                description,
-                rewardDescription,
-                feePaidSol: PRICE_SOL
-            }
-        });
-
-        return { success: true, message: "Guild successfully established.", guildCode };
-    } catch (e: any) {
-        return { success: false, message: e.message };
-    }
-}
 
 export async function joinGuild(telegramId: string, guildCode: string): Promise<{ success: boolean; message: string; guildName?: string; rewardDescription?: string | null }> {
     try {
@@ -181,7 +97,108 @@ export async function awardGuildPoints(telegramId: string, volumeSol: number): P
     } catch (e) {}
 }
 
-// Replace getLeaderboard in src/services/guild.service.ts:
+export async function createGuild(
+    telegramId: string, 
+    name: string, 
+    description: string | null, 
+    rewardDescription: string | null
+): Promise<{ success: boolean; message: string; guildCode?: string }> {
+    try {
+        const user = await prisma.user.findUnique({ where: { telegramId }, include: { ownedGuild: true } });
+        if (!user || !user.vaultAddress || !user.turnkeySubOrgId) return { success: false, message: "No active vault found." };
+        if (user.ownedGuild) return { success: false, message: "You already own a Guild." };
+
+        const isSim = await isSimulationActive(telegramId);
+        const randomWord = GUILD_WORDS[Math.floor(Math.random() * GUILD_WORDS.length)];
+        const randomTwoDigit = Math.floor(10 + Math.random() * 90);
+        const guildCode = `GUILD-${randomWord}-${randomTwoDigit}`;
+
+        if (isSim) {
+            await prisma.guild.create({
+                data: {
+                    ownerId: user.id,
+                    guildCode,
+                    name,
+                    description,
+                    rewardDescription,
+                    feePaidSol: 0
+                }
+            });
+            return { success: true, message: "Guild successfully established (Simulation).", guildCode };
+        }
+
+        const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS;
+        if (!treasuryWalletStr) return { success: false, message: "Platform treasury not configured." };
+
+        const priceLamports = Math.floor(PRICE_SOL * LAMPORTS_PER_SOL);
+        const vaultPubkey = new PublicKey(user.vaultAddress);
+        const balance = await connection.getBalance(vaultPubkey);
+
+        if (balance < priceLamports + 500000) {
+            return { success: false, message: `Insufficient Funds: You need ${PRICE_SOL} SOL + gas in your Main Wallet (W1).` };
+        }
+
+        const rawPk = decryptKey(user.turnkeySubOrgId);
+        if (!rawPk) return { success: false, message: "Decryption Fault." };
+        const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
+
+        const ix = SystemProgram.transfer({
+            fromPubkey: vaultPubkey,
+            toPubkey: new PublicKey(treasuryWalletStr),
+            lamports: priceLamports
+        });
+
+        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+        const vTx = new VersionedTransaction(new TransactionMessage({
+            payerKey: vaultPubkey, recentBlockhash: blockhash, instructions: [ix]
+        }).compileToV0Message());
+        vTx.sign([keypair]);
+
+        const sig = await connection.sendRawTransaction(Buffer.from(vTx.serialize()), { skipPreflight: true });
+
+        let isConfirmed = false;
+        for (let i = 0; i < 15; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            if (status?.value && !status.value.err) { isConfirmed = true; break; }
+        }
+
+        if (!isConfirmed) return { success: false, message: "Transaction dropped by the network." };
+
+        // Post-Payment Idempotent Retry Loop
+        let guildRow = null;
+        for (let attempt = 1; attempt <= 3 && !guildRow; attempt++) {
+            try {
+                guildRow = await prisma.guild.create({
+                    data: {
+                        ownerId: user.id,
+                        guildCode,
+                        name,
+                        description,
+                        rewardDescription,
+                        feePaidSol: PRICE_SOL
+                    }
+                });
+            } catch (e: any) {
+                if (attempt === 3) {
+                    await redis.rpush('guild:paid_but_failed', JSON.stringify({ 
+                        userId: user.id, sig, guildCode, name, ts: Date.now() 
+                    }));
+                    return { 
+                        success: false, 
+                        message: `Payment received, but guild database registration failed. Support has been alerted to provision your guild. Reference: ${sig}` 
+                    };
+                }
+                await new Promise(r => setTimeout(r, 800));
+            }
+        }
+
+        return { success: true, message: "Guild successfully established.", guildCode };
+    } catch (e: any) {
+        return { success: false, message: e.message };
+    }
+}
+
 export async function getLeaderboard(
     guildId: string, 
     limit: number = 50, 
@@ -207,18 +224,18 @@ export async function getLeaderboard(
             scoreMap[userId] = score;
         }
 
+        // Batched single Prisma query resolving all members (No N+1)
         const members = await prisma.guildMembership.findMany({
             where: { guildId, userId: { in: userIds } },
             include: { user: true }
         });
 
         const memberMap = new Map(members.map(m => [m.userId, m]));
-
         const results: LeaderboardMember[] = [];
+
         userIds.forEach((userId) => {
             const member = memberMap.get(userId);
             if (member) {
-                // 🟢 Type-safe resolution for sim vs live volume
                 const volumeSol = mode === 'sim' 
                     ? Number((member as any).simTotalVolumeSol ?? member.totalVolumeSol ?? 0)
                     : Number(member.totalVolumeSol ?? 0);
@@ -240,7 +257,6 @@ export async function getLeaderboard(
         return [];
     }
 }
-
 
 export interface LeaderboardMember {
     rank: number;

@@ -110,6 +110,7 @@ export async function mineVanityKeypair(prefix: string, maxIterations = 50000): 
 }
 
 // 🟢 EXPORT 4: Launch Token on Pump.fun with Jito Block-0 Multi-Wallet Bundles
+// src/services/token_launch.service.ts
 export async function launchTokenOnPumpFun(
     telegramId: string, 
     name: string, 
@@ -130,6 +131,21 @@ export async function launchTokenOnPumpFun(
             if (devBuySol > 0) {
                 const { simExecuteSnipe } = await import('./simulation.service.js');
                 await simExecuteSnipe(telegramId, fakeMint, devBuySol, 'Token Launchpad', 85, 15, 50);
+            }
+
+            const simUser = await prisma.user.findUnique({ where: { telegramId } });
+            if (simUser) {
+                await prisma.launchedToken.create({
+                    data: {
+                        userId: simUser.id,
+                        tokenAddress: fakeMint,
+                        name,
+                        symbol,
+                        devBuySol,
+                        walletCount,
+                        isSimulated: true
+                    }
+                }).catch(() => {});
             }
 
             return { 
@@ -180,8 +196,8 @@ export async function launchTokenOnPumpFun(
         if (walletCount >= 2 && refreshedUser.pk2) { const pk = decryptKey(refreshedUser.pk2); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
         if (walletCount >= 3 && refreshedUser.pk3) { const pk = decryptKey(refreshedUser.pk3); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
         if (walletCount >= 4 && refreshedUser.pk4) { const pk = decryptKey(refreshedUser.pk4); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
+        if (walletCount >= 5 && refreshedUser.pk5) { const pk = decryptKey(refreshedUser.pk5); if (pk) wallets.push(Keypair.fromSecretKey(bs58.decode(pk))); }
 
-        // Mine vanity keypair
         const vanityResult = await mineVanityKeypair(vanityPrefix);
         const mintKeypair = vanityResult.keypair;
         const tokenAddress = mintKeypair.publicKey.toBase58();
@@ -189,7 +205,6 @@ export async function launchTokenOnPumpFun(
         const splitBuySol = devBuySol > 0 ? Number((devBuySol / wallets.length).toFixed(4)) : 0;
         const bundledTxs: string[] = [];
 
-        // Build Token Creation Transaction
         let createRes;
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
@@ -220,7 +235,6 @@ export async function launchTokenOnPumpFun(
         launchTx.sign([mintKeypair, wallets[0]]);
         bundledTxs.push(Buffer.from(launchTx.serialize()).toString('base64'));
 
-        // Build Sub-Wallet Dev Buys in Block-0
         if (splitBuySol > 0 && wallets.length > 1) {
             const extraBuys = await Promise.all(wallets.slice(1).map(async (wallet) => {
                 const buyRes = await axios.post('https://pumpportal.fun/api/trade-local', {
@@ -240,7 +254,6 @@ export async function launchTokenOnPumpFun(
             bundledTxs.push(...extraBuys);
         }
 
-        // Attach Jito Tip and Platform Fee
         const { blockhash } = await connection.getLatestBlockhash('confirmed');
         const JITO_TIP_ACCOUNTS = [
             "96gYZGLnJYVFmbjzopPSU6QiCRK2UhdTEeqEMZouvHjL", 
@@ -268,7 +281,6 @@ export async function launchTokenOnPumpFun(
         feeTx.sign([wallets[0]]);
         bundledTxs.push(Buffer.from(feeTx.serialize()).toString('base64'));
 
-        // Broadcast Bundle to Jito Block Engine
         const jitoRes = await axios.post(`https://mainnet.block-engine.jito.wtf/api/v1/bundles`, {
             jsonrpc: "2.0", id: 1, method: "sendBundle", params: [bundledTxs]
         });
@@ -284,6 +296,19 @@ export async function launchTokenOnPumpFun(
         }
 
         if (!isConfirmed) return { success: false, message: "Network congestion. Jito validator did not land the bundle." };
+
+        // Record launched token row in PostgreSQL
+        await prisma.launchedToken.create({
+            data: {
+                userId: user.id,
+                tokenAddress,
+                name,
+                symbol,
+                devBuySol,
+                walletCount,
+                isSimulated: false
+            }
+        }).catch(() => {});
 
         let returnMsg = "Token launched successfully!";
         if (!vanityResult.matched) returnMsg = "Token launched! (Vanity prefix timed out, random address used).";

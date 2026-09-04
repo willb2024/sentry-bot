@@ -1,22 +1,25 @@
 // src/lib/rpc-limiter.ts
-
 export class RpcRateLimiter {
     private queue: (() => void)[] = [];
     private readonly maxPerSecond: number;
     private readonly tickMs: number;
-    private readonly perTickAllowance: number;
+    private tokens: number = 0;
 
     constructor(maxPerSecond = Number(process.env.RPC_LIMITER_PER_SEC || 15)) {
         this.maxPerSecond = maxPerSecond;
-        // 🟢 FIX: 100ms tick with proportional batch release
-        // Handles concurrent multi-wallet bursts without queuing lag
         this.tickMs = 100;
-        this.perTickAllowance = Math.max(1, Math.ceil((this.maxPerSecond * this.tickMs) / 1000));
+        this.tokens = maxPerSecond;
         setInterval(() => this.drain(), this.tickMs);
     }
 
     private drain() {
-        for (let i = 0; i < this.perTickAllowance && this.queue.length > 0; i++) {
+        this.tokens += (this.maxPerSecond * this.tickMs) / 1000;
+        if (this.tokens > this.maxPerSecond) {
+            this.tokens = this.maxPerSecond;
+        }
+
+        while (this.tokens >= 1 && this.queue.length > 0) {
+            this.tokens -= 1;
             const next = this.queue.shift();
             if (next) next();
         }

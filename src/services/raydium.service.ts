@@ -47,19 +47,20 @@ export async function buildDirectRaydiumSwap(
             return null;
         }
 
-        const { transaction } = await raydium.liquidity.swap({
-            poolInfo: poolInfo.poolInfo,
-            poolKeys: poolInfo.poolKeys,
-            amountIn: new BN(amountIn),
-            amountOut: new BN(0), // 🟢 Market order: MEV shielded by Jito bundles automatically
-            fixedSide: 'in',
-            inputMint: inputMint,
-            txVersion: TxVersion.V0,
-            computeBudgetConfig: {
-                microLamports: 1_000_000, 
-                units: 300_000
-            }
-        });
+       // Near line 45 in src/services/raydium.service.ts
+const { transaction } = await raydium.liquidity.swap({
+    poolInfo: poolInfo.poolInfo,
+    poolKeys: poolInfo.poolKeys,
+    amountIn: new BN(Math.floor(amountIn)), // Guard against non-integer floats
+    amountOut: new BN(0),
+    fixedSide: 'in',
+    inputMint: inputMint,
+    txVersion: TxVersion.V0,
+    computeBudgetConfig: {
+        microLamports: 1_000_000, 
+        units: 300_000
+    }
+});
 
         return Buffer.from(transaction.serialize());
 

@@ -2,6 +2,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { prisma } from '../lib/prisma.js';
 import { connection } from '../lib/connection.js';
+import { redis } from '../lib/redis.js';
 
 const activeListeners = new Map<string, { subId: number; lastBalance: number }>();
 
@@ -16,21 +17,21 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 export async function startDepositWatcher(bot: any) {
     console.log("👛 [DEPOSIT WATCHER] Batched Multi-Wallet monitor initialized (60s cycle).");
 
-    setInterval(async () => {
+    const runDepositCycle = async () => {
         try {
-          // Inside startDepositWatcher in src/services/deposit.service.ts:
-          const activeUsers = await prisma.user.findMany({
-            where: { vaultAddress: { not: null } },
-            select: { 
-                telegramId: true, 
-                vaultAddress: true, 
-                vault2: true, 
-                vault3: true, 
-                vault4: true, 
-                vault5: true, 
-                activeWallets: true 
-            } // 🟢 Highly optimized query
-        });
+            const activeUsers = await prisma.user.findMany({
+                where: { vaultAddress: { not: null } },
+                select: { 
+                    telegramId: true, 
+                    vaultAddress: true, 
+                    vault2: true, 
+                    vault3: true, 
+                    vault4: true, 
+                    vault5: true, 
+                    activeWallets: true 
+                }
+            });
+
             const addressToUserMap = new Map<string, { user: any; label: string }>();
 
             for (const u of activeUsers) {
@@ -77,34 +78,42 @@ export async function startDepositWatcher(bot: any) {
                 const newBalanceSol = balanceMap.get(address);
                 if (newBalanceSol === undefined) continue;
 
-                const cached = activeListeners.get(address);
+                const redisKey = `deposit:lastbal:${address}`;
+                const priorRaw = await redis.get(redisKey);
+                
+                // Prioritize persistent Redis storage over ephemeral memory
+                const oldBalanceSol = priorRaw !== null 
+                    ? parseFloat(priorRaw) 
+                    : (activeListeners.get(address)?.lastBalance ?? newBalanceSol);
 
-                if (cached) {
-                    const oldBalanceSol = cached.lastBalance;
-
-                    if (newBalanceSol > oldBalanceSol + 0.001) {
-                        const depositAmount = newBalanceSol - oldBalanceSol;
-                        console.log(`👛 [DEPOSIT DETECTED] +${depositAmount.toFixed(4)} SOL into ${address} (${meta.label})`);
-                    
-                        // 🟢 FIX: Non-blocking fire-and-forget notification
-                        bot.telegram.sendMessage(
-                            meta.user.telegramId,
-                            `👛 <b>DEPOSIT CONFIRMED!</b>\n\n` +
-                            `Received: <b>+${depositAmount.toFixed(4)} SOL</b> into <b>${meta.label}</b>.\n` +
-                            `Wallet Balance: <b>${newBalanceSol.toFixed(4)} SOL</b>.\n\n` +
-                            `<i>Ready to trade! Send a Token Address (CA) into this chat to buy, or open the dashboard with /start.</i>`,
-                            { parse_mode: 'HTML' }
-                        ).catch((tgErr: any) => console.error(`🔴 [DEPOSIT] Telegram Notification Failed for ${address}:`, tgErr.message));
-                    }
-                    activeListeners.set(address, { subId: cached.subId, lastBalance: newBalanceSol });
-                } else {
-                    activeListeners.set(address, { subId: 0, lastBalance: newBalanceSol });
+                if (priorRaw !== null && newBalanceSol > oldBalanceSol + 0.001) {
+                    const depositAmount = newBalanceSol - oldBalanceSol;
+                    console.log(`👛 [DEPOSIT DETECTED] +${depositAmount.toFixed(4)} SOL into ${address} (${meta.label})`);
+                
+                    bot.telegram.sendMessage(
+                        meta.user.telegramId,
+                        `👛 <b>DEPOSIT CONFIRMED!</b>\n\n` +
+                        `Received: <b>+${depositAmount.toFixed(4)} SOL</b> into <b>${meta.label}</b>.\n` +
+                        `Wallet Balance: <b>${newBalanceSol.toFixed(4)} SOL</b>.\n\n` +
+                        `<i>Ready to trade! Send a Token Address (CA) into this chat to buy, or open the dashboard with /start.</i>`,
+                        { parse_mode: 'HTML' }
+                    ).catch((tgErr: any) => console.error(`🔴 [DEPOSIT] Telegram Notification Failed for ${address}:`, tgErr.message));
                 }
+
+                await redis.set(redisKey, newBalanceSol.toString());
+                activeListeners.set(address, { subId: 0, lastBalance: newBalanceSol });
             }
         } catch (error: any) {
             console.error("🔴 [DEPOSIT] Watcher Sync Error:", error.message);
         }
-    }, 60000);
+    };
+
+    // Run immediately on boot to initialize baselines without waiting 60 seconds
+    runDepositCycle().catch(() => {});
+
+    if (global._sentryIntervals) {
+        global._sentryIntervals.push(setInterval(runDepositCycle, 60000));
+    }
 }
 
 export function getLiveWalletBalance(walletAddress: string): number | null {

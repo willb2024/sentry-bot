@@ -11,9 +11,12 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/**
- * Draws a rounded rectangle path on the canvas context.
- */
+export function sanitizeTokenDisplayText(raw: string, maxLen: number = 10): string {
+    if (!raw) return 'UNKNOWN';
+    const cleaned = raw.replace(/[\u0000-\u001F\u200B-\u200F\u202A-\u202E]/g, '').trim();
+    return cleaned.length > maxLen ? cleaned.substring(0, maxLen) + '…' : (cleaned || 'UNKNOWN');
+}
+
 function drawRoundRect(ctx: any, x: number, y: number, width: number, height: number, radius: number) {
     ctx.beginPath();
     ctx.moveTo(x + radius, y);
@@ -28,9 +31,6 @@ function drawRoundRect(ctx: any, x: number, y: number, width: number, height: nu
     ctx.closePath();
 }
 
-/**
- * Attempts to load the Sentry logo from local assets.
- */
 async function loadLogoImage() {
     try {
         const logoPath = path.join(__dirname, 'assets', 'logo.jpg');
@@ -41,9 +41,6 @@ async function loadLogoImage() {
     return null;
 }
 
-/**
- * Generates a high-quality green/red PnL Card for trade confirmations.
- */
 export async function generatePnlCard(
     tokenAddress: string,
     pnlPercent: number,
@@ -52,46 +49,39 @@ export async function generatePnlCard(
     const canvas = createCanvas(800, 400);
     const ctx = canvas.getContext('2d');
 
-    // Background Gradient
     const gradient = ctx.createLinearGradient(0, 0, 800, 400);
     gradient.addColorStop(0, '#0a0d14');
     gradient.addColorStop(1, '#121826');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, 800, 400);
 
-    // Border
     const isProfit = pnlPercent >= 0;
     ctx.strokeStyle = isProfit ? '#10b981' : '#ef4444';
     ctx.lineWidth = 4;
     ctx.strokeRect(20, 20, 760, 360);
 
-    // Header Logo
     ctx.fillStyle = '#10b981';
     ctx.font = 'bold 28px sans-serif';
     ctx.fillText('⚡ SENTRY TERMINAL', 40, 70);
 
-    // Optional Logo Drawing if present
     const logo = await loadLogoImage();
     if (logo) {
         ctx.drawImage(logo, 700, 40, 40, 40);
     }
 
-    // Token CA
+    const displayToken = sanitizeTokenDisplayText(tokenAddress, 8);
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 48px sans-serif';
-    ctx.fillText(`$${tokenAddress.substring(0, 8)}...`, 40, 180);
+    ctx.fillText(`$${displayToken}...`, 40, 180);
 
-    // PnL Value
     ctx.fillStyle = isProfit ? '#10b981' : '#ef4444';
     ctx.font = 'bold 64px sans-serif';
     ctx.fillText(`${isProfit ? '+' : ''}${pnlPercent.toFixed(1)}%`, 40, 270);
 
-    // MEV Badge
     ctx.fillStyle = '#334155';
     ctx.font = '16px sans-serif';
     ctx.fillText('🛡️ MEV Protected • Jito Bundle Executed', 40, 330);
 
-    // Referral Footer
     if (referralCode) {
         ctx.fillStyle = '#4b5563';
         ctx.font = '14px sans-serif';
@@ -102,9 +92,6 @@ export async function generatePnlCard(
     return Buffer.from(canvas.toBuffer('image/png'));
 }
 
-/**
- * Generates a token deployment receipt card with Jito Block-0 details.
- */
 export async function generateLaunchCard(
     name: string, symbol: string, tokenAddress: string, devBuySol: number, wallets: number
 ): Promise<Buffer> {
@@ -125,13 +112,16 @@ export async function generateLaunchCard(
     ctx.font = 'bold 28px sans-serif';
     ctx.fillText('🚀 DEPLOYED WITH SENTRY', 40, 70);
 
+    const safeName = sanitizeTokenDisplayText(name, 16);
+    const safeSymbol = sanitizeTokenDisplayText(symbol, 8);
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 48px sans-serif';
-    ctx.fillText(`${name} ($${symbol})`, 40, 180);
+    ctx.fillText(`${safeName} ($${safeSymbol})`, 40, 180);
 
+    const displayCA = sanitizeTokenDisplayText(tokenAddress, 12);
     ctx.fillStyle = '#94a3b8';
     ctx.font = '22px sans-serif';
-    ctx.fillText(`CA: ${tokenAddress.substring(0, 12)}...`, 40, 240);
+    ctx.fillText(`CA: ${displayCA}...`, 40, 240);
 
     ctx.fillStyle = '#4b5563';
     ctx.font = '18px sans-serif';
@@ -144,9 +134,6 @@ export async function generateLaunchCard(
     return Buffer.from(canvas.toBuffer('image/png'));
 }
 
-/**
- * Generates a dynamic line chart to render 1H historical candle trends using QuickChart.
- */
 export async function generatePriceAlertChart(
     symbol: string,
     candles: Array<{ time: number; open: number; high: number; low: number; close: number }>,
@@ -201,13 +188,3 @@ export async function generatePriceAlertChart(
     const res = await axios.get(url, { responseType: 'arraybuffer' });
     return Buffer.from(res.data);
 }
-
-// In src/services/image.service.ts:
-export function sanitizeTokenDisplayText(raw: string, maxLen: number = 10): string {
-    if (!raw) return 'UNKNOWN';
-    const cleaned = raw.replace(/[\u0000-\u001F\u200B-\u200F\u202A-\u202E]/g, '').trim();
-    return cleaned.length > maxLen ? cleaned.substring(0, maxLen) + '…' : (cleaned || 'UNKNOWN');
-}
-
-// In generatePnlCard / generateLaunchCard:
-// Use sanitizeTokenDisplayText(tokenAddress) or sanitizeTokenDisplayText(symbol) when drawing text to canvas.
