@@ -834,68 +834,197 @@ export async function startSimulationGuardResolver(bot: any) {
     }, 2000);
 }
 
+export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: string) {
+    await acquireSimSniperSlot();
+
+    if (!genId) {
+        genId = crypto.randomUUID();
+        await redis.set(`sim:autosnipe:gen:${telegramId}`, genId, 'EX', 86400);
+    }
+    const sessionId = await redis.get(`autosnipe:session_id:sim:${telegramId}`);
+    let loopCounter = 0;
+
+    const { 
+        generateSimToken, 
+        passesSimFilters, 
+        SIM_TICK_MS 
+    } = await import('./sim-token-generator.js');
+
+    try {
+        while (true) {
+            const [active, currentGen] = await Promise.all([
+                redis.get(`sim:autosnipe:${telegramId}`),
+                redis.get(`sim:autosnipe:gen:${telegramId}`)
+            ]);
+            if (active !== 'true' || currentGen !== genId) break;
+            if (!(await isSimulationActive(telegramId))) break;
+
+            loopCounter++;
+            if (loopCounter > 2000) {
+                await killSimAutoSnipe(telegramId);
+                break;
+            }
+
+            const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
+            const config = user?.autoSnipeConfig;
+            if (!config) {
+                await new Promise(r => setTimeout(r, 1000));
+                continue;
+            }
+
+            const lossStatus = await isSimLossLimitHit(telegramId, config);
+            if (lossStatus.hit) {
+                await killSimAutoSnipe(telegramId);
+                try {
+                    await bot.telegram.sendMessage(
+                        telegramId,
+                        `🛑 <b>MAX LOSS LIMIT REACHED (SIMULATION)</b>\n\n` +
+                        `Your simulated portfolio dropped <b>${lossStatus.lossPercent.toFixed(1)}%</b> from baseline.\n` +
+                        `Auto-Sniper paused to protect remaining capital.`,
+                        { parse_mode: 'HTML' }
+                    );
+                } catch (_) {}
+                break;
+            }
+
+            const currentSpend = await getSessionSpend(telegramId, 'sim');
+            const solPrice = cachedSolUsdPrice || 156.93;
+            const maxBudget = resolveBudgetSol(config, solPrice);
+            const remainingBudget = maxBudget - currentSpend;
+
+            if (remainingBudget <= 0) {
+                await killSimAutoSnipe(telegramId);
+                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
+                break;
+            }
+
+            // Generate synthetic token in 0.05ms without RPC / mainnet reads
+            const token = generateSimToken({
+                minScore: config.minScore ?? 45,
+                mode: config.sniperMode as any,
+                minMarketCap: config.minMarketCap ?? undefined,
+                maxMarketCap: config.maxMarketCap ?? undefined,
+                maxDevBuyPercent: config.maxDevBuyPercent ?? undefined,
+            });
+
+            // Exercise identical filter gating logic
+            const filterCheck = passesSimFilters(token, {
+                minScore: config.minScore ?? 45,
+                minMarketCap: config.minMarketCap ?? undefined,
+                maxMarketCap: config.maxMarketCap ?? undefined,
+                maxDevBuyPercent: config.maxDevBuyPercent ?? undefined,
+                targetMode: config.sniperMode,
+            });
+
+            if (!filterCheck.pass) {
+                await redis.set(`snipe_decision:${telegramId}:${token.mint}`, JSON.stringify({
+                    score: token.score,
+                    minScoreRequired: config.minScore,
+                    reasons: [filterCheck.reason],
+                    decision: 'SKIPPED',
+                    timestamp: Date.now()
+                }), 'EX', 3600);
+                await new Promise(r => setTimeout(r, 300));
+                continue;
+            }
+
+            // Consume simulated credits
+            if (config.minScore > 0) {
+                const simCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
+                if (simCredits <= 0) {
+                    await killSimAutoSnipe(telegramId);
+                    break;
+                } else {
+                    await redis.set(`sim:credits:${telegramId}`, Math.max(0, simCredits - 1).toString());
+                }
+            }
+
+            const currentBal = parseFloat(await getSimBalance(telegramId));
+            const calculatedSize = calculateDynamicSize(config, token.score, token.liquidityUsd, solPrice, currentBal);
+            const activeWallets = user?.activeWallets || 1;
+            const intendedTotalSpend = calculatedSize * activeWallets;
+            const clampedTotalSpend = Math.min(intendedTotalSpend, remainingBudget);
+
+            let actualSnipeAmountPerWallet = clampedTotalSpend / activeWallets;
+            if (remainingBudget - clampedTotalSpend < 0.0001) {
+                actualSnipeAmountPerWallet = remainingBudget / activeWallets;
+            }
+            if (actualSnipeAmountPerWallet < 0.005) {
+                await killSimAutoSnipe(telegramId);
+                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
+                break;
+            }
+
+            await addSessionSpend(telegramId, clampedTotalSpend, 'sim');
+
+            const result = await simExecuteSnipe(
+                telegramId, 
+                token.mint, 
+                actualSnipeAmountPerWallet, 
+                'Sniper Engine', 
+                token.score, 
+                config.autoTrailingDropPercent || 10, 
+                config.autoTakeProfitPercent || 40,
+                token.score
+            );
+
+            if (result.success) {
+                try {
+                    const tpPct = config.autoTakeProfitPercent || 40;
+                    const slPct = config.autoTrailingDropPercent || 10;
+                    const targetTpPrice = result.entryPriceUsd * (1 + tpPct / 100);
+                    const stopLossPrice = result.entryPriceUsd * (1 - slPct / 100);
+
+                    const auditMsg = 
+                        `🎯 <b>AUTO-SNIPE EXECUTED (SIM)</b>\n\n` +
+                        `Token: <code>${token.mint.substring(0, 8)}...</code> ($${token.symbol})\n` +
+                        `Score: <b>${token.score}/100</b> ⭐\n` +
+                        `💵 <b>Entry Price:</b> <code>$${result.entryPriceUsd.toFixed(6)}</code>\n` +
+                        `🎯 <b>Take Profit (+${tpPct}%):</b> <code>$${targetTpPrice.toFixed(6)}</code>\n` +
+                        `🛡️ <b>Trailing Stop (-${slPct}%):</b> <code>$${stopLossPrice.toFixed(6)}</code>\n` +
+                        `💰 <b>Invested:</b> <b>${result.volumeSpent.toFixed(4)} SOL</b>\n\n` +
+                        `Status: 🟢 Confirmed\n` +
+                        `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
+
+                    await bot.telegram.sendMessage(telegramId, auditMsg, { 
+                        parse_mode: 'HTML', 
+                        link_preview_options: { is_disabled: true } 
+                    });
+                } catch (_) {}
+            }
+
+            // Fixed 3-second simulation cadence
+            await new Promise(r => setTimeout(r, SIM_TICK_MS));
+        }
+    } catch (e: any) {
+        console.error(`🔴 [SIM AUTO-SNIPER] Loop error for ${telegramId}:`, e.message);
+    } finally {
+        await redis.set(`sim:autosnipe:${telegramId}`, 'false');
+        activeSimLoops.delete(telegramId);
+        await saveSimulationState(telegramId);
+        releaseSimSniperSlot();
+    }
+}
+
 export async function generateSimCallerAlert(
     telegramId: string,
     filters: any
 ): Promise<any> {
-    const { getMatchesWithLadder } = await import('./caller.service.js');
-    const raw = await redis.get('caller:hot_scored_tokens');
-    const tokens: any[] = raw ? JSON.parse(raw) : [];
-    
-    if (tokens.length > 0) {
-        const { matches } = getMatchesWithLadder(tokens, filters);
-        if (matches.length > 0) {
-            const sorted = [...matches].sort((a, b) => (b.totalScore ?? 0) - (a.totalScore ?? 0));
-            for (const t of sorted) {
-                if (!(await redis.get(`caller_alerted:${telegramId}:${t.mint}`))) {
-                    await redis.set(`caller_alerted:${telegramId}:${t.mint}`, '1', 'EX', 180);
-                    return t;
-                }
-            }
-            return sorted[0];
-        }
-    }
+    const { generateSimCallerToken } = await import('./sim-token-generator.js');
+    const token = generateSimCallerToken(filters.minScore ?? 45);
 
-    const realToken = await getRealTokenForSimDisplay();
-    for (let i = 0; i < 15; i++) {
-        const ageMins = Math.floor(Math.random() * Math.min(filters.maxAgeMins || 60, 45)) + 1;
-        const liquidity = Math.max(filters.minLiquidity || 2000, 10000 + Math.random() * 30000);
-        const volume24h = Math.max(filters.minVolume24h || 2000, liquidity * (Math.random() * 3 + 1.5));
-        const priceChangeM5 = Math.min(filters.maxPctChange || 500, Math.max(filters.minPctChange || 10, (Math.random() * 40) + 10));
-
-        const stats: TokenStats = {
-            ageMins,
-            volume24h,
-            liquidity,
-            priceChangeM5: parseFloat(priceChangeM5.toFixed(1)),
-            hasSocials: true,
-            isRug: false,
-            devRep: { launchCount: Math.floor(Math.random() * 5), avgRugScore: 0, isKnownRugger: false },
-            lpLock: { burned: true, locked: true, lockPct: 100 },
-            velocity: { growthRate: 35, uniqueBuyers5m: 18 },
-            sellability: { sellable: true, estimatedTaxPct: 0 }
-        };
-
-        const scoreRes = computeTokenScore(stats);
-        const simScore = Math.floor(Math.random() * (84 - 58 + 1)) + 58;
-
-        if (simScore >= (filters.minScore || 55)) {
-            return {
-                mint: realToken.mint,
-                symbol: realToken.symbol,
-                totalScore: simScore,
-                reasons: scoreRes.reasons,
-                ageMins: stats.ageMins,
-                priceChangeM5: stats.priceChangeM5,
-                liquidity: stats.liquidity,
-                volume: stats.volume24h,
-                mevRisk: 0,
-                isReshow: false
-            };
-        }
-    }
-
-    return null;
+    return {
+        mint: token.mint,
+        symbol: token.symbol,
+        totalScore: token.score,
+        reasons: token.reasons,
+        ageMins: Math.round(token.ageSeconds / 60),
+        priceChangeM5: 25.4,
+        liquidity: token.liquidityUsd,
+        volume: token.volume24hUsd,
+        mevRisk: 0,
+        isReshow: false
+    };
 }
 
 export async function processSimCopyTrades(bot: any): Promise<void> {
@@ -1009,241 +1138,7 @@ export async function recoverSimAutoSnipeLoops(bot: any) {
     } catch (_) {}
 }
 
-export async function runSimAutoSnipeLoop(telegramId: string, bot: any, genId?: string) {
-    await acquireSimSniperSlot();
 
-    if (!genId) {
-        genId = crypto.randomUUID();
-        await redis.set(`sim:autosnipe:gen:${telegramId}`, genId, 'EX', 86400);
-    }
-    const sessionId = await redis.get(`autosnipe:session_id:sim:${telegramId}`);
-    let loopCounter = 0;
-
-    try {
-        while (true) {
-            const [active, currentGen] = await Promise.all([
-                redis.get(`sim:autosnipe:${telegramId}`),
-                redis.get(`sim:autosnipe:gen:${telegramId}`)
-            ]);
-            if (active !== 'true' || currentGen !== genId) break;
-            if (!(await isSimulationActive(telegramId))) break;
-
-            loopCounter++;
-            if (loopCounter > 2000) {
-                await killSimAutoSnipe(telegramId);
-                break;
-            }
-
-            const user = await prisma.user.findUnique({ where: { telegramId }, include: { autoSnipeConfig: true } });
-            const config = user?.autoSnipeConfig;
-            if (!config) {
-                await new Promise(r => setTimeout(r, 1000));
-                continue;
-            }
-
-            const lossStatus = await isSimLossLimitHit(telegramId, config);
-            if (lossStatus.hit) {
-                await killSimAutoSnipe(telegramId);
-                try {
-                    await bot.telegram.sendMessage(
-                        telegramId,
-                        `🛑 <b>MAX LOSS LIMIT REACHED (SIMULATION)</b>\n\n` +
-                        `Your simulated portfolio dropped <b>${lossStatus.lossPercent.toFixed(1)}%</b> from baseline.\n` +
-                        `Auto-Sniper paused to protect remaining capital.`,
-                        { parse_mode: 'HTML' }
-                    );
-                } catch (_) {}
-                break;
-            }
-
-            const currentSpend = await getSessionSpend(telegramId, 'sim');
-            const maxBudget = config.maxBudgetSol || Infinity;
-            const remainingBudget = maxBudget - currentSpend;
-
-            if (remainingBudget <= 0) {
-                await killSimAutoSnipe(telegramId);
-                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
-                break;
-            }
-
-            // Read REAL scored tokens from mainnet
-            const hotRaw = await redis.get('caller:hot_scored_tokens');
-            const hot: any[] = hotRaw ? JSON.parse(hotRaw) : [];
-            let token: any = null;
-
-            if (hot.length > 0) {
-                const candidates = hot.filter((t: any) => {
-                    const s = t.totalScore ?? 0;
-                    if (config.minScore > 0 && s < config.minScore) return false;
-                    if (t.isRug === true) return false;
-                    return true;
-                });
-                if (candidates.length > 0) {
-                    token = candidates[Math.floor(Math.random() * candidates.length)];
-                }
-            }
-
-            if (!token) {
-                token = await getRealTokenForSimDisplay();
-            }
-
-            const score = Math.round(token.totalScore ?? Math.floor(Math.random() * (84 - 58 + 1)) + 58);
-            const liquidity = token.liquidity ?? 25000;
-
-            const lockKey = `lock:sim_autosnipe:${telegramId}:${token.mint}`;
-            if (!(await redis.set(lockKey, '1', 'EX', 3600, 'NX'))) {
-                await new Promise(r => setTimeout(r, 500));
-                continue;
-            }
-
-            // 🟢 Write decision record so /whyskip works in simulation mode
-            await redis.set(`snipe_decision:${telegramId}:${token.mint}`, JSON.stringify({
-                score, 
-                minScoreRequired: config.minScore, 
-                reasons: token.reasons || [],
-                decision: score < config.minScore ? 'SKIPPED_LOW_SCORE' : 'PASSED',
-                ageMins: Math.round(token.ageMins || 0), 
-                volume: Math.round(token.volume || 0),
-                liquidity: Math.round(liquidity), 
-                timestamp: Date.now()
-            }), 'EX', 86400);
-
-            if (config.minScore > 0) {
-                const simCredits = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);
-                if (simCredits <= 0) {
-                    const warnKey = `sim_sniper_credits_warn:${telegramId}`;
-                    if (!(await redis.get(warnKey))) {
-                        await redis.set(warnKey, '1', 'EX', 600);
-                        try {
-                            await bot.telegram.sendMessage(
-                                telegramId,
-                                `⚠️ <b>SIM AUTO-SNIPER PAUSED — OUT OF CREDITS</b>\n\n` +
-                                `Your Auto-Sniper requires AI Token Scoring (Min Score: <b>${config.minScore}+</b>), but your credit balance is <b>0</b>.\n\n` +
-                                `Use <code>/simcredits 500</code> or top up below to resume:`,
-                                {
-                                    parse_mode: 'HTML',
-                                    reply_markup: { inline_keyboard: [[{ text: '💳 Buy Credits', callback_data: 'menu_credits' }]] }
-                                }
-                            );
-                        } catch (_) {}
-                    }
-                    await killSimAutoSnipe(telegramId);
-                    break;
-                } else {
-                    await redis.set(`sim:credits:${telegramId}`, Math.max(0, simCredits - 1).toString());
-                    await saveSimulationState(telegramId);
-                }
-
-                if (score < config.minScore) {
-                    await new Promise(r => setTimeout(r, 200));
-                    continue;
-                }
-            }
-
-            const solPrice = cachedSolUsdPrice || 156.93;
-            const currentBal = parseFloat(await getSimBalance(telegramId));
-            const calculatedSize = calculateDynamicSize(config, score, liquidity, solPrice, currentBal);
-            const activeWallets = user?.activeWallets || 1;
-            const intendedTotalSpend = calculatedSize * activeWallets;
-
-            const clampedTotalSpend = Math.min(intendedTotalSpend, remainingBudget);
-            let actualSnipeAmountPerWallet = clampedTotalSpend / activeWallets;
-
-            if (remainingBudget - clampedTotalSpend < 0.0001) {
-                actualSnipeAmountPerWallet = remainingBudget / activeWallets;
-            }
-
-            if (actualSnipeAmountPerWallet < 0.005) {
-                await killSimAutoSnipe(telegramId);
-                await sendBudgetExhaustedSummary(bot, telegramId, 'sim', sessionId);
-                break;
-            }
-
-            // 🟢 CLEAN WITHLOCK IMPLEMENTATION (No leftover finally blocks)
-            try {
-                await withLock([`lock:budget:sim:${telegramId}`], 10000, async () => {
-                    await addSessionSpend(telegramId, clampedTotalSpend, 'sim');
-                    const updatedSpend = await getSessionSpend(telegramId, 'sim');
-                    checkAndSendBudgetWarning(bot, telegramId, 'sim', updatedSpend, config.maxBudgetSol).catch(() => {});
-                });
-            } catch (err) {
-                console.warn('⚠️ [SIM BUDGET] Lock failed, skipping cycle:', (err as any)?.message);
-                continue;
-            }
-
-            const result = await simExecuteSnipe(
-                telegramId, 
-                token.mint, 
-                actualSnipeAmountPerWallet, 
-                'Sniper Engine', 
-                score, 
-                config.autoTrailingDropPercent || 10, 
-                config.autoTakeProfitPercent || 40,
-                score
-            );
-
-            const [activeAfter, genAfter] = await Promise.all([
-                redis.get(`sim:autosnipe:${telegramId}`),
-                redis.get(`sim:autosnipe:gen:${telegramId}`)
-            ]);
-            const stillActive = activeAfter === 'true' && genAfter === genId;
-
-            if (result.success && stillActive) {
-                try {
-                    const tpPct = config.autoTakeProfitPercent || 40;
-                    const slPct = config.autoTrailingDropPercent || 10;
-                    const targetTpPrice = result.entryPriceUsd * (1 + tpPct / 100);
-                    const stopLossPrice = result.entryPriceUsd * (1 - slPct / 100);
-
-                    let auditMessage = `🎯 <b>AUTO-SNIPE EXECUTED (SIM)</b>\n\n`;
-                    auditMessage += `Token: <code>${token.mint.substring(0, 8)}...</code> ($${token.symbol})\n`;
-                    auditMessage += `Strategy: <b>Sniper Engine</b>\n`;
-                    auditMessage += `Score: <b>${score}/100</b> ⭐\n\n`;
-                    auditMessage += `<b>Audit Trail:</b>\n`;
-                    (result.auditReasons || []).forEach(r => auditMessage += `✅ ${r}\n`);
-                    auditMessage += `\n💵 <b>Entry Price:</b> <code>$${result.entryPriceUsd.toFixed(6)}</code>\n`;
-                    auditMessage += `🎯 <b>Take Profit (+${tpPct}%):</b> <code>$${targetTpPrice.toFixed(6)}</code>\n`;
-                    auditMessage += `🛡️ <b>Trailing Stop (-${slPct}%):</b> <code>$${stopLossPrice.toFixed(6)}</code>\n`;
-                    auditMessage += `💰 <b>Invested:</b> <b>${result.volumeSpent.toFixed(4)} SOL</b>\n\n`;
-                    auditMessage += `Status: 🟢 Confirmed\n`;
-                    auditMessage += `🔗 <a href="https://solscan.io/tx/${result.signature}">View on Solscan</a>`;
-
-                    await bot.telegram.sendMessage(telegramId, auditMessage, { 
-                        parse_mode: 'HTML', 
-                        link_preview_options: { is_disabled: true } 
-                    });
-                } catch (_) {}
-            }
-
-            const postLossStatus = await isSimLossLimitHit(telegramId, config);
-            if (postLossStatus.hit) {
-                await killSimAutoSnipe(telegramId);
-                try {
-                    await bot.telegram.sendMessage(
-                        telegramId,
-                        `🛑 <b>MAX LOSS LIMIT REACHED (SIMULATION)</b>\n\n` +
-                        `Your simulated portfolio dropped <b>${postLossStatus.lossPercent.toFixed(1)}%</b>.\n` +
-                        `Auto-Sniper paused to protect remaining capital.`,
-                        { parse_mode: 'HTML' }
-                    );
-                } catch (_) {}
-                break;
-            }
-
-            if (!stillActive) break;
-
-            const organicDelayMs = 150 + Math.random() * 250;
-            await new Promise(r => setTimeout(r, organicDelayMs));
-        }
-    } catch (e: any) {
-        console.error(`🔴 [SIM AUTO-SNIPER] Loop crashed for ${telegramId}:`, e.message);
-    } finally {
-        await redis.set(`sim:autosnipe:${telegramId}`, 'false');
-        activeSimLoops.delete(telegramId);
-        await saveSimulationState(telegramId);
-        releaseSimSniperSlot();
-    }
-}
 
 export async function consumeSimCredit(telegramId: string): Promise<boolean> {
     const current = parseInt(await redis.get(`sim:credits:${telegramId}`) || '0', 10);

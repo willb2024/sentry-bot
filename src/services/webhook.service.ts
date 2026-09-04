@@ -3,17 +3,14 @@ import { prisma } from '../lib/prisma.js';
 import dns from 'dns/promises';
 import net from 'net';
 import crypto from 'crypto';
-import http from 'http';
 import https from 'https';
 
-function pinnedAgent(ip: string, family: number, protocol: string) {
+function pinnedAgent(ip: string, family: number) {
     const lookup = (_host: string, _opts: any, cb: any) => cb(null, ip, family);
-    return protocol === 'https:'
-        ? new https.Agent({ lookup } as any)
-        : new http.Agent({ lookup } as any);
+    return new https.Agent({ lookup } as any);
 }
 
-async function resolveSafeWebhook(raw: string): Promise<{ ip: string; family: number; protocol: string } | null> {
+async function resolveSafeWebhook(raw: string): Promise<{ ip: string; family: number; hostname: string; port: number; path: string } | null> {
     let u: URL;
     try { 
         u = new URL(raw); 
@@ -21,7 +18,8 @@ async function resolveSafeWebhook(raw: string): Promise<{ ip: string; family: nu
         return null; 
     }
     if (u.protocol !== 'https:') return null;
-    if (u.port && !['443', ''].includes(u.port)) return null;
+    const port = u.port ? parseInt(u.port, 10) : 443;
+    if (port !== 443) return null;
 
     try {
         const results = await dns.lookup(u.hostname, { all: true });
@@ -41,10 +39,49 @@ async function resolveSafeWebhook(raw: string): Promise<{ ip: string; family: nu
         }
 
         const first = results[0];
-        return { ip: first.address, family: first.family, protocol: u.protocol };
+        return { 
+            ip: first.address, 
+            family: first.family, 
+            hostname: u.hostname, 
+            port, 
+            path: u.pathname + u.search 
+        };
     } catch { 
         return null; 
     }
+}
+
+function dispatchPinnedHttpsPost(
+    safe: { ip: string; family: number; hostname: string; port: number; path: string },
+    payloadStr: string,
+    headers: Record<string, string>
+): Promise<void> {
+    return new Promise((resolve) => {
+        const req = https.request({
+            hostname: safe.hostname,
+            port: safe.port,
+            path: safe.path,
+            method: 'POST',
+            headers: {
+                ...headers,
+                'Content-Length': Buffer.byteLength(payloadStr)
+            },
+            agent: pinnedAgent(safe.ip, safe.family),
+            timeout: 5000
+        }, (res) => {
+            res.resume();
+            res.on('end', () => resolve());
+        });
+
+        req.on('error', () => resolve());
+        req.on('timeout', () => { 
+            req.destroy(); 
+            resolve(); 
+        });
+        
+        req.write(payloadStr);
+        req.end();
+    });
 }
 
 export async function fireWebhook(telegramId: string, event: 'trade_buy' | 'trade_sell', data: any): Promise<void> {
@@ -85,21 +122,7 @@ export async function fireWebhook(telegramId: string, event: 'trade_buy' | 'trad
                 headers['X-Webhook-Signature'] = `sha256=${signature}`;
             }
 
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 5000);
-
-            try {
-                await fetch(cfg.url, {
-                    method: 'POST',
-                    headers,
-                    body: payloadStr,
-                    signal: controller.signal,
-                    redirect: 'error',
-                    agent: pinnedAgent(safe.ip, safe.family, safe.protocol)
-                } as any);
-            } finally {
-                clearTimeout(timeout);
-            }
+            await dispatchPinnedHttpsPost(safe, payloadStr, headers);
         }));
     } catch (_) {}
 }
