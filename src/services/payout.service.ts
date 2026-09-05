@@ -254,7 +254,7 @@ export async function processAffiliatePayout(userId: string): Promise<{ success:
                     where: { id: record.id },
                     data: { status: 'CONFIRMED' }
                 });
-                await recordPayout(amountToPay);
+                // 🟢 FIX: Do NOT call recordPayout(amountToPay) here — Step 2 already reserved and recorded it!
                 return { success: true, signature, message: "Instant Payout Successful." };
             }
 

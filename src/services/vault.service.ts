@@ -11,13 +11,13 @@ const ALGORITHM = 'aes-256-gcm';
 
 const rawSecret = process.env.ENCRYPTION_KEY;
 if (!rawSecret || Buffer.byteLength(rawSecret) < 32) {
-    console.error("🔴 [FATAL] ENCRYPTION_KEY must be >= 32 bytes of high-entropy material.");
+    console.error("🔴 [FATAL CONFIGURATION ERROR] ENCRYPTION_KEY is missing or < 32 bytes in .env!");
     process.exit(1);
 }
 
-// Legacy default 'sentry-salt-v1' preserves backwards compatibility with existing encrypted keys
+// 🟢 CRITICAL: Use default N=16384 to match existing database ciphertext
 const KEK_SALT = process.env.KEK_SALT || 'sentry-salt-v1';
-const ENCRYPTION_KEY = crypto.scryptSync(rawSecret, KEK_SALT, 32, { N: 2 ** 15, r: 8, p: 1 });
+const ENCRYPTION_KEY = crypto.scryptSync(rawSecret, KEK_SALT, 32);
 
 
 export function encryptKey(privateKeyBase58: string): string {

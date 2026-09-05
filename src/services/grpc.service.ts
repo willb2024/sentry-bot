@@ -146,12 +146,23 @@ export function pushGuardToCacheImmediately(guard: TrailingOrder) {
 }
 
 
+async function scanKeys(pattern: string, cap = 500): Promise<string[]> {
+    const found: string[] = [];
+    let cursor = '0';
+    do {
+        const [next, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+        cursor = next;
+        found.push(...batch);
+        if (found.length >= cap) break;
+    } while (cursor !== '0');
+    return found;
+}
 
-export async function releaseGuardSubscription(tokenAddress: string) {
+export async function releaseGuardSubscription(tokenAddress: string): Promise<void> {
     if (!tokenAddress.toLowerCase().endsWith("pump")) return;
     try {
         const curvePda = getBondingCurveAddress(tokenAddress); 
-        const remainingKeys = await redis.keys(`token_guards:*:${tokenAddress}`).catch(() => []);
+        const remainingKeys = await scanKeys(`token_guards:*:${tokenAddress}`).catch(() => [] as string[]);
         const stillActive = cachedLimitOrders.some(l => l.tokenAddress === tokenAddress) || remainingKeys.length > 0;
 
         if (!stillActive) {

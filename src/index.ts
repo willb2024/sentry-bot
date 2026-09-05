@@ -172,10 +172,14 @@ process.on('unhandledRejection', (reason: any) => {
     console.error(`🔴 [Unhandled Rejection]: ${msg}`);
 });
 
+// Replace uncaughtException handler in src/index.ts:
 process.on('uncaughtException', (error: any) => {
-    const msg = error?.message || (typeof error === 'string' ? error : 'Unknown exception');
-    console.error(`🔴 [Uncaught Exception]: ${msg}`);
+    const msg = error?.message || String(error);
+    console.error(`🔴 [Uncaught Exception] ${msg}`, error?.stack);
+    logger.error('uncaughtException — exiting for supervised restart', { error: msg, stack: error?.stack });
+    setTimeout(() => process.exit(1), 250).unref(); // Allow logs to flush, then let PM2 restart cleanly
 });
+
 
 export function safeLog(prefix: string, error: any) {
     const msg = error?.message || (typeof error === 'string' ? error : 'Unknown error');
@@ -6276,20 +6280,43 @@ bot.hears(/^\/(withdraw|witdraw|withdrawal)(?:\s+(.+))?$/i, async (ctx) => {
     }
 
     // 3. Daily Withdrawal Velocity Limiter (Max 25 SOL/day)
+    // 🟢 FIX F1: Accurately price ALL sweeps before evaluating the velocity cap
     const dailyWithdrawKey = `withdraw:daily:${telegramId}:${new Date().toISOString().slice(0, 10)}`;
     const todayWithdrawn = parseFloat(await redis.get(dailyWithdrawKey) || '0');
-    const MAX_DAILY_WITHDRAW_CAP_SOL = 25.0;
+    const MAX_DAILY_WITHDRAW_CAP_SOL = parseFloat(process.env.MAX_DAILY_WITHDRAW_SOL || '25');
 
-    if (todayWithdrawn + requestedAmount > MAX_DAILY_WITHDRAW_CAP_SOL) {
-        return ctx.replyWithHTML(
-            `🚨 <b>DAILY WITHDRAWAL VELOCITY LIMIT REACHED</b>\n\n` +
-            `• Today's Withdrawn Total: <b>${todayWithdrawn.toFixed(4)} SOL</b>\n` +
-            `• Requested Amount: <b>${requestedAmount.toFixed(4)} SOL</b>\n` +
-            `• Daily Security Limit: <b>${MAX_DAILY_WITHDRAW_CAP_SOL} SOL</b>\n\n` +
-            `<i>This limit protects your vault against unauthorized automated session drains.</i>`
-        );
+    let projectedAmount = requestedAmount;
+    if (isMax) {
+        const preUser = await prisma.user.findUnique({ where: { telegramId } });
+        if (!preUser?.vaultAddress) return ctx.reply("🔴 No vault found. Send /start first.");
+
+        const { getConnectionFor } = await import('./lib/devnet.js');
+        const conn = await getConnectionFor(telegramId);
+
+        const pubkeys = [new PublicKey(preUser.vaultAddress)];
+        if (preUser.activeWallets >= 2 && preUser.vault2) pubkeys.push(new PublicKey(preUser.vault2));
+        if (preUser.activeWallets >= 3 && preUser.vault3) pubkeys.push(new PublicKey(preUser.vault3));
+        if (preUser.activeWallets >= 4 && preUser.vault4) pubkeys.push(new PublicKey(preUser.vault4));
+        if (preUser.activeWallets >= 5 && preUser.vault5) pubkeys.push(new PublicKey(preUser.vault5));
+
+        const accts = await conn.getMultipleAccountsInfo(pubkeys).catch(() => []);
+        const GAS_BUFFER_LAMPORTS = 50_000;
+        const totalLamports = (accts || []).reduce(
+            (s: number, a: any) => s + Math.max(0, (a?.lamports || 0) - GAS_BUFFER_LAMPORTS), 0);
+        projectedAmount = totalLamports / LAMPORTS_PER_SOL;
     }
 
+    if (todayWithdrawn + projectedAmount > MAX_DAILY_WITHDRAW_CAP_SOL) {
+        const remaining = Math.max(0, MAX_DAILY_WITHDRAW_CAP_SOL - todayWithdrawn);
+        return ctx.replyWithHTML(
+            `🚨 <b>DAILY WITHDRAWAL VELOCITY LIMIT</b>\n\n` +
+            `• Withdrawn today: <b>${todayWithdrawn.toFixed(4)} SOL</b>\n` +
+            `• Requested sweep: <b>${projectedAmount.toFixed(4)} SOL</b>\n` +
+            `• Daily limit: <b>${MAX_DAILY_WITHDRAW_CAP_SOL} SOL</b>\n` +
+            `• Remaining allowance: <b>${remaining.toFixed(4)} SOL</b>\n\n` +
+            `<i>Withdraw a specific amount within your remaining allowance, or wait for the daily reset.</i>`
+        );
+    }
     // 4. Rate-limit Lock
     const withdrawLockKey = `lock:withdraw:${telegramId}`;
     const isLocked = await redis.set(withdrawLockKey, 'LOCKED', 'EX', 60, 'NX');
@@ -9858,6 +9885,42 @@ await recoverSimAutoSnipeLoops(bot);
                 processSimCopyTrades(bot).catch(() => {});
             }, 15000),
 
+            // 🟢 Non-blocking Watchlist Scanner via index set
+            setInterval(async () => {
+                try {
+                    const watchers = await redis.smembers('watchlist:index');
+                    for (const tgId of watchers) {
+                        const watchData = await redis.hgetall(`watchlist:${tgId}`);
+                        if (!watchData || Object.keys(watchData).length === 0) {
+                            await redis.srem('watchlist:index', tgId); // Self-healing cleanup
+                            continue;
+                        }
+
+                        for (const [ca, dataStr] of Object.entries(watchData)) {
+                            try {
+                                const data = JSON.parse(dataStr);
+                                const currentPrice = await getCachedTokenPrice(ca);
+                                if (currentPrice <= 0) continue;
+
+                                if (data.targetPrice && currentPrice >= data.targetPrice) {
+                                    const symbol = await getWatchlistSymbol(ca);
+                                    await bot.telegram.sendMessage(
+                                        tgId,
+                                        `🚨 <b>WATCHLIST ALERT!</b>\n\n` +
+                                        `Token: <code>${ca}</code> ($${symbol})\n` +
+                                        `Current Price: <b>$${currentPrice.toFixed(6)}</b>\n` +
+                                        `Target Price: <b>$${data.targetPrice}</b>\n\n` +
+                                        `Price has reached your target alert.`,
+                                        { parse_mode: 'HTML' }
+                                    ).catch(() => {});
+                                    await redis.hdel(`watchlist:${tgId}`, ca);
+                                }
+                            } catch (_) {}
+                        }
+                    }
+                } catch (_) {}
+            }, 30000),
+
             // Redis stuck lock audit with SCAN
             setInterval(async () => {
                 try {
@@ -10006,20 +10069,29 @@ await recoverSimAutoSnipeLoops(bot);
 declare global { var _sentryIntervals: NodeJS.Timeout[]; }
 if (!global._sentryIntervals) global._sentryIntervals = [];
 
+// Update gracefulShutdown in src/index.ts:
 const gracefulShutdown = async (signal: string) => {
     console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
     
-    // Close BullMQ queues safely
+    // Wait for in-flight trades to land on-chain and record
+    const { getInFlightTrades, flushKeypairCache } = await import('./services/engine.service.js');
+    const deadline = Date.now() + 20_000;
+    while (getInFlightTrades() > 0 && Date.now() < deadline) {
+        console.log(`⏳ Draining ${getInFlightTrades()} in-flight trade(s)...`);
+        await new Promise(r => setTimeout(r, 500));
+    }
+    flushKeypairCache(); // Zero out decrypted keys from RAM
+
+    // Close BullMQ queues
     await dcaQueue.close();
     await guardQueue.close();
     await limitQueue.close();
     
-    // Clear all recurring intervals
+    // Clear recurring intervals
     for (const timer of global._sentryIntervals || []) {
         clearInterval(timer);
     }
     
-    // Disconnect DB & Redis
     await prisma.$disconnect();
     await redis.quit();
     

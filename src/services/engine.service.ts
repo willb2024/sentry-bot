@@ -45,6 +45,12 @@ function safePublicKey(address: string | undefined | null): PublicKey | null {
     }
 }
 
+// 🟢 In-flight Trade Draining Tracking for Graceful Process Shutdown
+let inFlightTrades = 0;
+export function beginTrade(): void { inFlightTrades++; }
+export function endTrade(): void { inFlightTrades = Math.max(0, inFlightTrades - 1); }
+export function getInFlightTrades(): number { return inFlightTrades; }
+
 let cachedPriorityFee = 1_000_000;
 let lastPriorityFeeFetch = 0;
 
@@ -180,7 +186,7 @@ function cacheKeypair(walletAddress: string, keypair: Keypair): void {
     if (keypairCache.size >= KEYPAIR_MAX) {
         const oldestKey = keypairCache.keys().next().value;
         if (oldestKey) {
-            wipe(keypairCache.get(oldestKey));
+            // Delete reference without zeroing buffer to protect in-flight sign operations
             keypairCache.delete(oldestKey);
         }
     }
@@ -483,6 +489,14 @@ export async function verifyExecutionQuality(
     return fallbackReport;
 }
 
+const JITO_REGIONAL_ENDPOINTS = [
+    'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
+    'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
+];
+
 export async function runExecutionBenchmark(
     telegramId: string, 
     sampleCA: string = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
@@ -515,7 +529,7 @@ export async function runExecutionBenchmark(
     const tDns1 = process.hrtime.bigint();
     const dnsMs = parseFloat((Number(tDns1 - tDns0) / 1e6).toFixed(2)) || 0.15;
 
-    // 2. Redis Multi-Key Hot-Path
+    // 2. Redis Multi-Key Hot-Path Pipeline
     const t0 = process.hrtime.bigint();
     await preloadHotPathCache(telegramId, sampleCA).catch(() => {});
     const t1 = process.hrtime.bigint();
@@ -827,6 +841,8 @@ export async function executeSnipe(
         return { success: false, message: '⏳ A trade on this token is currently executing. Please wait.' };
     }
 
+    beginTrade();
+
     try {
         // 2. Simulation Intercept
         const { isSimulationActive, simExecuteSnipe } = await import('./simulation.service.js');
@@ -1051,7 +1067,7 @@ export async function executeSnipe(
             (async () => {
                 try {
                     const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true, w.publicKey);
-                    if (!tcaReport.confirmed) return; 
+                    if (!tcaReport.confirmed) return;
 
                     const { isSimulationActive: checkSimStatus } = await import('./simulation.service.js');
                     const isStillSim = await checkSimStatus(telegramId).catch(() => false);
@@ -1145,6 +1161,7 @@ export async function executeSnipe(
     } catch (error: any) { 
         return { success: false, message: `🔴 Execution Fault: ${error.message}` }; 
     } finally {
+        endTrade();
         await redis.del(execLockKey).catch(() => {});
     }
 }
@@ -1171,6 +1188,8 @@ export async function executeExit(
     
     const tokenMint = safePublicKey(targetCA);
     if (!tokenMint) return { success: false, message: "🔴 Invalid Token Address." };
+
+    beginTrade();
 
     try {
         const user = await prisma.user.findUnique({ where: { telegramId } });
@@ -1258,7 +1277,6 @@ export async function executeExit(
                 }
             } catch (_) {}
 
-            // Cap the upfront fee transfer to available balance to avoid trapping the exit
             const maxSafeSpendable = Math.max(0, (balances[index] - 1_500_000) / LAMPORTS_PER_SOL);
             const clampedFeeVolume = Math.min(volumeToRecord, maxSafeSpendable);
 
@@ -1285,10 +1303,9 @@ export async function executeExit(
             (async () => {
                 try {
                     const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, decimals, false, w.publicKey);
-                    if (!tcaReport.confirmed) return; // Abort if sell did not confirm on-chain
+                    if (!tcaReport.confirmed) return;
 
                     let actualSolReceived = tcaReport.executedAmount > 0 ? tcaReport.executedAmount : dynamicFeeBase;
-                    
                     let feeCharged = 0;
                     let affiliateCutSol = 0;
 
@@ -1380,6 +1397,8 @@ export async function executeExit(
         };
     } catch (error: any) { 
         return { success: false, message: `🔴 Error: ${error.message}` }; 
+    } finally {
+        endTrade();
     }
 }
 

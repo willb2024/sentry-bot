@@ -3,17 +3,31 @@ import { PublicKey } from '@solana/web3.js';
 import { connection } from '../lib/connection.js';
 import { redis } from '../lib/redis.js';
 import { getBondingCurveAddress, decodePumpCurvePrice } from './price.service.js';
+import { keepAliveHttpsAgent } from '../lib/http-agent.js';
 import axios from 'axios';
 
-const activeSubscriptions = new Map<string, { subId: number; lastPriceSol: number; subscribers: Set<string> }>();
-const fastPollTargets = new Map<string, { lastPriceSol: number; subscribers: Set<string> }>();
+interface FeedEntry {
+    subId: number;
+    lastPriceSol: number;
+    lastPriceAt: number;
+    subscribers: Set<string>;
+}
+
+interface FastPollEntry {
+    lastPriceSol: number;
+    lastPriceAt: number;
+    subscribers: Set<string>;
+}
+
+const activeSubscriptions = new Map<string, FeedEntry>();
+const fastPollTargets = new Map<string, FastPollEntry>();
 let fastPollLoopStarted = false;
 
 function startFastPollLoop() {
     if (fastPollLoopStarted) return;
     fastPollLoopStarted = true;
 
-    // 🟢 FIX: Optimized polling interval to 800ms (balanced for speed + bounded RPC load)
+    // 800ms interval balances low latency against Jupiter API rate limits
     setInterval(async () => {
         const mints = [...fastPollTargets.keys()];
         if (mints.length === 0) return;
@@ -22,12 +36,18 @@ function startFastPollLoop() {
 
         await Promise.all(chunks.map(async (chunk) => {
             try {
-                const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk.join(',')}`, { timeout: 1200 });
+                const res = await axios.get(`https://lite-api.jup.ag/price/v2?ids=${chunk.join(',')}`, { 
+                    timeout: 1200,
+                    httpsAgent: keepAliveHttpsAgent 
+                });
                 for (const mint of chunk) {
                     const price = res.data?.data?.[mint]?.price;
                     if (price && parseFloat(price) > 0) {
                         const entry = fastPollTargets.get(mint);
-                        if (entry) entry.lastPriceSol = parseFloat(price);
+                        if (entry) {
+                            entry.lastPriceSol = parseFloat(price);
+                            entry.lastPriceAt = Date.now(); // 🟢 Timestamp stamped
+                        }
                     }
                 }
             } catch (_) {}
@@ -36,6 +56,7 @@ function startFastPollLoop() {
 
     console.log("🟢 [GUARD FEED] Fast-poll loop active (800ms interval, parallel chunks).");
 }
+
 export async function subscribeToMintPrice(mint: string, guardId: string): Promise<void> {
     if (mint.toLowerCase().endsWith('pump')) {
         const existing = activeSubscriptions.get(mint);
@@ -46,7 +67,6 @@ export async function subscribeToMintPrice(mint: string, guardId: string): Promi
 
         try {
             const curvePda = new PublicKey(getBondingCurveAddress(mint));
-            // 🟢 'processed' commitment for lowest latency slot-level detection
             const subId = connection.onAccountChange(curvePda, (accInfo) => {
                 try {
                     const buf = Buffer.isBuffer(accInfo.data) ? accInfo.data : Buffer.from(accInfo.data);
@@ -58,7 +78,7 @@ export async function subscribeToMintPrice(mint: string, guardId: string): Promi
                             const subs = entry.subscribers;
                             connection.removeAccountChangeListener(entry.subId).catch(() => {});
                             activeSubscriptions.delete(mint);
-                            fastPollTargets.set(mint, { lastPriceSol: 0, subscribers: subs });
+                            fastPollTargets.set(mint, { lastPriceSol: 0, lastPriceAt: Date.now(), subscribers: subs });
                             startFastPollLoop();
                             console.log(`🔄 [GUARD FEED] ${mint.substring(0,8)}... graduated — migrated to fast-poll.`);
                         }
@@ -67,17 +87,20 @@ export async function subscribeToMintPrice(mint: string, guardId: string): Promi
 
                     const priceSol = decodePumpCurvePrice(buf.toString('base64'));
                     const entry = activeSubscriptions.get(mint);
-                    if (entry) entry.lastPriceSol = priceSol;
+                    if (entry) {
+                        entry.lastPriceSol = priceSol;
+                        entry.lastPriceAt = Date.now(); // 🟢 Timestamp stamped
+                    }
                     redis.set(`live_price:${mint}`, priceSol.toString(), 'EX', 30).catch(() => {});
                 } catch (_) {}
             }, 'processed');
 
-            activeSubscriptions.set(mint, { subId, lastPriceSol: 0, subscribers: new Set([guardId]) });
+            activeSubscriptions.set(mint, { subId, lastPriceSol: 0, lastPriceAt: Date.now(), subscribers: new Set([guardId]) });
             console.log(`🟢 [GUARD FEED] Subscribed to ${mint.substring(0, 8)}... (processed stream)`);
         } catch (e: any) {
             const existing2 = fastPollTargets.get(mint);
             if (existing2) existing2.subscribers.add(guardId);
-            else fastPollTargets.set(mint, { lastPriceSol: 0, subscribers: new Set([guardId]) });
+            else fastPollTargets.set(mint, { lastPriceSol: 0, lastPriceAt: Date.now(), subscribers: new Set([guardId]) });
             startFastPollLoop();
         }
         return;
@@ -88,12 +111,12 @@ export async function subscribeToMintPrice(mint: string, guardId: string): Promi
         existing.subscribers.add(guardId);
         return;
     }
-    fastPollTargets.set(mint, { lastPriceSol: 0, subscribers: new Set([guardId]) });
+    fastPollTargets.set(mint, { lastPriceSol: 0, lastPriceAt: Date.now(), subscribers: new Set([guardId]) });
     
     if (!fastPollLoopStarted) {
         startFastPollLoop();
     }
-    console.log(`🟢 [GUARD FEED] Fast-poll registered for ${mint.substring(0, 8)}... (250ms interval)`);
+    console.log(`🟢 [GUARD FEED] Fast-poll registered for ${mint.substring(0, 8)}... (800ms interval)`);
 }
 
 export async function unsubscribeFromMintPrice(mint: string, guardId: string): Promise<void> {
@@ -118,23 +141,22 @@ export async function unsubscribeFromMintPrice(mint: string, guardId: string): P
     }
 }
 
-// src/services/guard-price-feed.service.ts
-
 export function getLivePriceSol(mint: string): number | null {
     const entry = activeSubscriptions.get(mint);
     if (entry && entry.lastPriceSol > 0) {
-        // Fall back to REST quote if price update has been frozen for >10s
-        if (Date.now() - (entry as any).lastPriceAt < 10_000) {
+        if (Date.now() - (entry.lastPriceAt || 0) < 10_000) {
             return entry.lastPriceSol;
         }
     }
 
     const fastEntry = fastPollTargets.get(mint);
     if (fastEntry && fastEntry.lastPriceSol > 0) {
-        return fastEntry.lastPriceSol;
+        if (Date.now() - (fastEntry.lastPriceAt || 0) < 10_000) {
+            return fastEntry.lastPriceSol;
+        }
     }
 
-    return null;
+    return null; // Stale (>10s) -> triggers REST fallback in order evaluator
 }
 
 export function getActiveSubscriptionCount(): number {
