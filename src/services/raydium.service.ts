@@ -120,6 +120,8 @@ export async function buildDirectRaydiumSwap(
     }
 }
 
+// src/services/raydium.service.ts
+
 export async function extractPoolIdFromTx(signature: string): Promise<string | null> {
     try {
         const tx = await connection.getParsedTransaction(signature, {
@@ -127,15 +129,29 @@ export async function extractPoolIdFromTx(signature: string): Promise<string | n
             commitment: 'confirmed'
         });
 
-        if (!tx?.transaction?.message?.accountKeys) return null;
+        if (!tx?.transaction?.message) return null;
 
-        const keys = tx.transaction.message.accountKeys;
-        if (keys.length > 4) {
-            return keys[4].pubkey.toBase58();
+        const RAYDIUM_AMM = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
+        const msg: any = tx.transaction.message;
+        const instrs = [
+            ...(msg.instructions || []),
+            ...((tx.meta?.innerInstructions || []).flatMap((i: any) => i.instructions)),
+        ];
+
+        // Locate initialize2 on the AMM program
+        for (const ix of instrs) {
+            const prog = ix.programId?.toBase58?.() ?? ix.programId;
+            if (prog !== RAYDIUM_AMM) continue;
+
+            const accts: string[] = (ix.accounts || []).map((a: any) => a.toBase58?.() ?? a);
+            // Account index 4 within the instruction's own accounts is the AMM Pool ID
+            if (accts.length > 4) {
+                return accts[4];
+            }
         }
         return null;
     } catch (e: any) {
-        console.error('⚠️ [RAYDIUM DIRECT] Failed to extract pool ID from signature:', e.message);
+        console.error('⚠️ [RAYDIUM] extractPoolIdFromTx failed:', e.message);
         return null;
     }
 }

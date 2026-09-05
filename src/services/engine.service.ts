@@ -11,10 +11,9 @@ import {
 import { prisma } from '../lib/prisma.js'; 
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
-import { withLock } from '../lib/redlock.js'
-import { redlock } from '../lib/redlock.js';
+import { withLock } from '../lib/redlock.js';
 import { getBotInstance } from '../lib/bot-instance.js';
-import { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary } from './simulation.service.js';
+import { getSessionSpend, addSessionSpend, sendBudgetExhaustedSummary, resolveBudgetSol } from './simulation.service.js';
 import axios from 'axios';
 import { getDynamicAffiliateRate as getAffiliateRateFromPoints, invalidateUserPointsCache } from './points.js';
 import { getCachedQuote } from './quote-cache.service.js';
@@ -32,6 +31,8 @@ import https from 'https';
 import { logger } from '../lib/logger.js';
 import pLimit from 'p-limit';
 import { getCachedBlockhash } from '../lib/blockhash-cache.js';
+import { cachedSolUsdPrice, isPriceReady } from './grpc.service.js';
+import { distributeTradeFee } from './affiliate.service.js';
 
 dotenv.config();
 
@@ -114,9 +115,6 @@ export async function warmDnsCache(): Promise<void> {
     }));
 }
 
-
-
-
 export async function getDynamicPriorityFee(priorityLevel: string, customPriorityFee: number): Promise<number> {
     if (priorityLevel === 'ECO') return 500_000;
     if (priorityLevel === 'CUSTOM') return Math.floor(customPriorityFee * 1_000_000_000);
@@ -158,7 +156,6 @@ const JITO_TIP_ACCOUNTS = [
     "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"
 ];
 
-
 const JITO_ENDPOINTS = [
     'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
     'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
@@ -167,26 +164,69 @@ const JITO_ENDPOINTS = [
     'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
 ];
 
+// 🟢 SEV-1.4: LRU-Capped (max 200), Self-Wiping Memory Cache for Keypairs
+const KEYPAIR_TTL_MS = 120_000; // 2 minutes max in memory
+const KEYPAIR_MAX = 200;
+
 const keypairCache = new Map<string, { keypair: Keypair; expires: number }>();
 
-export function clearKeypairCache(walletAddress: string) {
-    keypairCache.delete(walletAddress);
+function wipe(entry?: { keypair: Keypair }) {
+    try {
+        entry?.keypair.secretKey.fill(0); // Zero out 64-byte secret buffer
+    } catch (_) {}
 }
 
-function getCachedKeypair(walletAddress: string, pkEncrypted: string): Keypair | null {
+function cacheKeypair(walletAddress: string, keypair: Keypair): void {
+    if (keypairCache.size >= KEYPAIR_MAX) {
+        const oldestKey = keypairCache.keys().next().value;
+        if (oldestKey) {
+            wipe(keypairCache.get(oldestKey));
+            keypairCache.delete(oldestKey);
+        }
+    }
+    keypairCache.set(walletAddress, { keypair, expires: Date.now() + KEYPAIR_TTL_MS });
+}
+
+export function clearKeypairCache(walletAddress: string): void {
     const hit = keypairCache.get(walletAddress);
-    if (hit && hit.expires > Date.now()) return hit.keypair;
-    
+    if (hit) {
+        wipe(hit);
+        keypairCache.delete(walletAddress);
+    }
+}
+
+export function flushKeypairCache(): void {
+    for (const [k, v] of keypairCache) {
+        wipe(v);
+        keypairCache.delete(k);
+    }
+}
+
+function getCachedKeypair(walletAddress: string, pkEncrypted?: string): Keypair | null {
+    const hit = keypairCache.get(walletAddress);
+    if (hit) {
+        if (hit.expires < Date.now()) {
+            wipe(hit);
+            keypairCache.delete(walletAddress);
+        } else {
+            return hit.keypair;
+        }
+    }
+
+    if (!pkEncrypted) return null;
     const rawPk = decryptKey(pkEncrypted);
     if (!rawPk) return null;
     try {
         const keypair = Keypair.fromSecretKey(bs58.decode(rawPk));
-        // Cache decrypted key in RAM for 5 minutes (eliminates scryptSync latency)
-        keypairCache.set(walletAddress, { keypair, expires: Date.now() + 300_000 });
+        cacheKeypair(walletAddress, keypair);
         return keypair;
     } catch (_) { return null; }
 }
 
+// 🟢 SEV-1.2: Trustworthy SOL/USD Rate Helper (Never writes fabricated 156.93 fallback to trade rows)
+export function liveSolUsd(): number | null {
+    return (isPriceReady && cachedSolUsdPrice > 0) ? cachedSolUsdPrice : null;
+}
 
 export async function confirmSignature(sig: string, tries = 15): Promise<boolean> {
     for (let i = 0; i < tries; i++) {
@@ -259,7 +299,6 @@ export async function sendToJitoBundle(
 
     return { ok: false, tipSig, feeAtomic: false };
 }
-
 
 export async function getCachedTokenPrice(mint: string, bypassCache = false): Promise<number> {
     if (!bypassCache) {
@@ -444,18 +483,6 @@ export async function verifyExecutionQuality(
     return fallbackReport;
 }
 
-// Replace sendToJitoBundle in src/services/engine.service.ts:
-
-const JITO_REGIONAL_ENDPOINTS = [
-    'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
-    'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles',
-    'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
-    'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
-    'https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles'
-];
-
-
-
 export async function runExecutionBenchmark(
     telegramId: string, 
     sampleCA: string = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
@@ -482,13 +509,13 @@ export async function runExecutionBenchmark(
     const user = await prisma.user.findUnique({ where: { telegramId } }).catch(() => null);
     const vault = user?.vaultAddress || Keypair.generate().publicKey.toBase58();
 
-    // 1. DNS Pre-warm / Cache Lookup Benchmark
+    // 1. DNS Pre-warm
     const tDns0 = process.hrtime.bigint();
     await resolveViaDoh('lite-api.jup.ag').catch(() => null);
     const tDns1 = process.hrtime.bigint();
     const dnsMs = parseFloat((Number(tDns1 - tDns0) / 1e6).toFixed(2)) || 0.15;
 
-    // 2. Redis Multi-Key Hot-Path Pipeline
+    // 2. Redis Multi-Key Hot-Path
     const t0 = process.hrtime.bigint();
     await preloadHotPathCache(telegramId, sampleCA).catch(() => {});
     const t1 = process.hrtime.bigint();
@@ -500,7 +527,7 @@ export async function runExecutionBenchmark(
     const t3 = process.hrtime.bigint();
     const mevMs = parseFloat((Number(t3 - t2) / 1e6).toFixed(2)) || 1.20;
 
-    // 4. Live DEX Quote & Route Compilation
+    // 4. DEX Quote
     const t4 = process.hrtime.bigint();
     let quoteMs: number;
     let quoteFailed = false;
@@ -518,7 +545,7 @@ export async function runExecutionBenchmark(
         quoteFailed = true;
     }
 
-    // 5. Multi-Wallet (Whale Mode) 5-Keypair Parallelized Sign Benchmark
+    // 5. 5-Wallet Multi-Sign
     const dummyWallets = Array.from({ length: 5 }, () => Keypair.generate());
     const recentBlockhash = getCachedBlockhash() || '11111111111111111111111111111111';
 
@@ -538,7 +565,7 @@ export async function runExecutionBenchmark(
     const t7 = process.hrtime.bigint();
     const signMs = parseFloat((Number(t7 - t6) / 1e6).toFixed(2)) || 1.10;
 
-    // 6. Atomic Jito Bundle Compilation & Base64 Encoding
+    // 6. Bundle Pack
     const tBundle0 = process.hrtime.bigint();
     try {
         const dummyTipTx = new VersionedTransaction(new TransactionMessage({
@@ -556,7 +583,7 @@ export async function runExecutionBenchmark(
     const tBundle1 = process.hrtime.bigint();
     const bundlePackMs = parseFloat((Number(tBundle1 - tBundle0) / 1e6).toFixed(2)) || 0.45;
 
-    // 7. Nozomi / Staked Jito Leader Relay Ping
+    // 7. Relay Ping
     const t8 = process.hrtime.bigint();
     let relayPingMs: number;
     let relayFailed = false;
@@ -756,11 +783,6 @@ export async function preloadHotPathCache(telegramId: string, mint: string) {
     };
 }
 
-// Replace executeSnipe in src/services/engine.service.ts
-// Replace executeSnipe in src/services/engine.service.ts:
-
-
-// 🟢 UPGRADE: Pre-Trade Rug Prevention Check
 export async function preTradeRugCheck(mint: string): Promise<{ safe: boolean; reason?: string; score: number }> {
     try {
         const { checkLpLockStatus, getDevReputation, simulateSellability } = await import('./caller.service.js');
@@ -779,7 +801,7 @@ export async function preTradeRugCheck(mint: string): Promise<{ safe: boolean; r
 
         return { safe: true, score: Math.min(100, 40 + (lpLock.lockPct * 0.4)) };
     } catch (_) {
-        return { safe: true, score: 50 }; // Fallback to safe if audit times out
+        return { safe: true, score: 50 }; 
     }
 }
 
@@ -893,7 +915,6 @@ export async function executeSnipe(
         let walletErrors: string[] = [];
         const recentBlockhash = getCachedBlockhash() || (await connection.getLatestBlockhash('processed')).blockhash;
 
-        // Max Loss Limit Circuit Breaker (Sniper Engine only)
         if (strategy === 'Sniper Engine' && liveConfig?.maxLossPercent && liveConfig.maxLossPercent > 0) {
             const lossCheck = await isLiveLossLimitHit(telegramId, liveConfig, user);
             if (lossCheck.hit) {
@@ -915,7 +936,6 @@ export async function executeSnipe(
         const intendedSpend = amountSol * activeWallets;
         let actualSpendPerWallet = amountSol;
 
-        // Session Budget Allocation (Only for Sniper Engine)
         if (strategy === 'Sniper Engine' && liveConfig) {
             const budgetLockKey = `lock:budget:${telegramId}`;
             const { withLock } = await import('../lib/redlock.js');
@@ -1031,7 +1051,7 @@ export async function executeSnipe(
             (async () => {
                 try {
                     const tcaReport = await verifyExecutionQuality(txSig, expectedOutput, 6, true, w.publicKey);
-                    if (!tcaReport.confirmed) return;
+                    if (!tcaReport.confirmed) return; 
 
                     const { isSimulationActive: checkSimStatus } = await import('./simulation.service.js');
                     const isStillSim = await checkSimStatus(telegramId).catch(() => false);
@@ -1061,11 +1081,13 @@ export async function executeSnipe(
                         }
                     }
 
-                    const { cachedSolUsdPrice } = await import('./grpc.service.js');
-                    const executedPriceUsd = (tcaReport.executedPricePerToken || 0) * (cachedSolUsdPrice || 156.93);
+                    const solUsd = liveSolUsd();
+                    if (solUsd === null) {
+                        logger.error('🔴 [PRICE] No live SOL/USD — persisting null executedPriceUsd', { txSig, targetCA });
+                    }
+                    const executedPriceUsd = solUsd !== null ? (tcaReport.executedPricePerToken || 0) * solUsd : null;
 
                     try {
-                        // Idempotent insertion using findFirst check to avoid Prisma @unique errors
                         const existing = await prisma.trade.findFirst({ where: { txSignature: txSig } });
                         if (!existing) {
                             await prisma.trade.create({
@@ -1191,7 +1213,7 @@ export async function executeExit(
             const parsedTokenAccounts = await connection.getParsedTokenAccountsByOwner(vaultPubkey, { mint: tokenMint }, 'confirmed');
             if (parsedTokenAccounts.value.length === 0 || BigInt(parsedTokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount) === 0n) {
                 walletReport[index] = `W${index + 1}: ⚪ Empty`; 
-                return { success: false, index };
+                return { success: false, index }; 
             }
 
             const rawTokenBalance = BigInt(parsedTokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount);
@@ -1298,8 +1320,11 @@ export async function executeExit(
                         awardGuildPoints(user.telegramId, volumeToRecord).catch(() => {});
                     }
 
-                    const { cachedSolUsdPrice } = await import('./grpc.service.js');
-                    const executedPriceUsd = (tcaReport.executedPricePerToken || 0) * (cachedSolUsdPrice || 156.93);
+                    const solUsd = liveSolUsd();
+                    if (solUsd === null) {
+                        logger.error('🔴 [PRICE] No live SOL/USD — persisting null executedPriceUsd', { txSig, targetCA });
+                    }
+                    const executedPriceUsd = solUsd !== null ? (tcaReport.executedPricePerToken || 0) * solUsd : null;
                     
                     try {
                         const existing = await prisma.trade.findFirst({ where: { txSignature: txSig } });
@@ -1442,7 +1467,6 @@ export async function generatePreSignedExitTx(telegramId: string, targetCA: stri
     return first ? { swapBase64: first.swapBase64, tipBase64: first.tipBase64 } : null;
 }
 
-// Replace processLimitOrders in src/services/engine.service.ts
 const limitOrderConcurrency = pLimit(8);
 
 export async function processLimitOrders(bot: any) {
@@ -1464,7 +1488,6 @@ export async function processLimitOrders(bot: any) {
         if (price === 0) return;
 
         const target = order.targetPriceUsd || 0;
-        // Directional evaluation: 'ABOVE' fills when price surges to/above target; 'BELOW' fills on dips
         const direction = (order as any).triggerDirection || 'BELOW';
         const shouldFill = direction === 'ABOVE' ? price >= target : price <= target;
         if (!shouldFill) return;
@@ -1534,7 +1557,6 @@ export async function processLimitOrders(bot: any) {
                 );
             } catch (_) {}
         } else {
-            // Retry Budget: transient errors do not permanently deactivate the order
             const fails = await redis.incr(`limit_fail:${order.id}`);
             await redis.expire(`limit_fail:${order.id}`, 3600);
             

@@ -118,12 +118,21 @@ export async function unsubscribeFromMintPrice(mint: string, guardId: string): P
     }
 }
 
+// src/services/guard-price-feed.service.ts
+
 export function getLivePriceSol(mint: string): number | null {
     const entry = activeSubscriptions.get(mint);
-    if (entry && entry.lastPriceSol > 0) return entry.lastPriceSol;
+    if (entry && entry.lastPriceSol > 0) {
+        // Fall back to REST quote if price update has been frozen for >10s
+        if (Date.now() - (entry as any).lastPriceAt < 10_000) {
+            return entry.lastPriceSol;
+        }
+    }
 
     const fastEntry = fastPollTargets.get(mint);
-    if (fastEntry && fastEntry.lastPriceSol > 0) return fastEntry.lastPriceSol;
+    if (fastEntry && fastEntry.lastPriceSol > 0) {
+        return fastEntry.lastPriceSol;
+    }
 
     return null;
 }

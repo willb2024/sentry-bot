@@ -131,11 +131,12 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-// 🟢 FIX 4: Add CORS Middleware
-app.use(cors({
-    origin: process.env.WEBAPP_URL || '*',
-    credentials: true
-}));
+const WEBAPP_ORIGIN = process.env.WEBAPP_URL;
+app.use(cors(
+    WEBAPP_ORIGIN
+        ? { origin: WEBAPP_ORIGIN, credentials: true }
+        : { origin: false } // Reject cross-origin requests entirely if unconfigured
+));
 
 
 
@@ -250,8 +251,6 @@ export async function safeSendMessage(tgId: string, text: string, options: any =
 // =========================================================
 
 
-
-
 function verifyTelegramAuth(initData: string): boolean {
     if (!initData) return false;
     try {
@@ -260,13 +259,15 @@ function verifyTelegramAuth(initData: string): boolean {
         if (authDateStr) {
             const authDate = parseInt(authDateStr, 10);
             const now = Math.floor(Date.now() / 1000);
-            if (now - authDate > 86400) return false; // Expire after 24h
+            if (now - authDate > 86400) return false;
         } else {
             return false;
         }
 
         const hash = params.get('hash');
+        if (!hash) return false;
         params.delete('hash');
+
         const dataCheckString = [...params.entries()]
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([k, v]) => `${k}=${v}`)
@@ -277,7 +278,9 @@ function verifyTelegramAuth(initData: string): boolean {
         const expectedHash = crypto.createHmac('sha256', secret)
             .update(dataCheckString).digest('hex');
 
-        return expectedHash === hash;
+        const a = Buffer.from(expectedHash, 'hex');
+        const b = Buffer.from(hash, 'hex');
+        return a.length === b.length && crypto.timingSafeEqual(a, b);
     } catch (_) {
         return false;
     }

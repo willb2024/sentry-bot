@@ -2,22 +2,23 @@
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
+import { prisma } from '../lib/prisma.js';
 
 dotenv.config();
 
-import { prisma } from '../lib/prisma.js';
 const ALGORITHM = 'aes-256-gcm';
 
 const rawSecret = process.env.ENCRYPTION_KEY;
-if (!rawSecret) {
-    console.error("🔴 [FATAL CONFIGURATION ERROR] ENCRYPTION_KEY is missing in your .env file!");
+if (!rawSecret || Buffer.byteLength(rawSecret) < 32) {
+    console.error("🔴 [FATAL] ENCRYPTION_KEY must be >= 32 bytes of high-entropy material.");
     process.exit(1);
 }
 
-// Derive secure 32-byte key via scrypt
-const ENCRYPTION_KEY = crypto.scryptSync(rawSecret, 'sentry-salt-v1', 32);
+// Legacy default 'sentry-salt-v1' preserves backwards compatibility with existing encrypted keys
+const KEK_SALT = process.env.KEK_SALT || 'sentry-salt-v1';
+const ENCRYPTION_KEY = crypto.scryptSync(rawSecret, KEK_SALT, 32, { N: 2 ** 15, r: 8, p: 1 });
+
 
 export function encryptKey(privateKeyBase58: string): string {
     const iv = crypto.randomBytes(16);

@@ -2,9 +2,13 @@
 import { connection } from './connection.js';
 
 let cachedBlockhash: string = '';
+let cachedAt: number = 0;
 let isFetching = false;
 
 export function getCachedBlockhash(): string {
+    if (Date.now() - cachedAt > 20_000) {
+        return ''; // Stale: forces callers to fetch a fresh blockhash
+    }
     return cachedBlockhash;
 }
 
@@ -15,16 +19,13 @@ async function refreshBlockhash() {
         const { blockhash } = await connection.getLatestBlockhash('processed');
         if (blockhash) {
             cachedBlockhash = blockhash;
+            cachedAt = Date.now();
         }
     } catch (_) {
-        // Silently back off on transient rate limits
     } finally {
         isFetching = false;
     }
 }
 
-// 🟢 Steady-state refresh every 1500ms
 setInterval(refreshBlockhash, 1500);
-
-// 🟢 FIX: Fire immediately on module load instead of waiting 2000ms
 refreshBlockhash();

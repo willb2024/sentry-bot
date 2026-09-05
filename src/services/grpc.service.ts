@@ -945,6 +945,21 @@ export async function igniteYellowstoneStream(bot: any) {
         const client = new (GrpcClient as any)(GRPC_URL, HELIUS_KEY, {});
         const stream = await client.subscribe();
 
+        let lastGrpcMsgAt = Date.now();
+        const grpcWatch = setInterval(() => {
+            if (Date.now() - lastGrpcMsgAt > 60_000) {
+                logger.warn('🟡 [gRPC] No incoming stream data for 60s — forcing reconnection.');
+                clearInterval(grpcWatch);
+                try { stream.destroy(); } catch (_) {}
+                setTimeout(() => igniteYellowstoneStream(bot), 2_000);
+            }
+        }, 15_000);
+        global._sentryIntervals.push(grpcWatch);
+
+        stream.on('data', () => { lastGrpcMsgAt = Date.now(); });
+        stream.on('end', () => clearInterval(grpcWatch));
+        stream.on('error', () => clearInterval(grpcWatch));
+
         stream.on("data", async (data: any) => {
             if (!data.transaction?.transaction) return;
             try {

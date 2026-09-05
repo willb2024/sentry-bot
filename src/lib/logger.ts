@@ -1,17 +1,23 @@
-// src/lib/logger.ts — Full File with Circular Reference & Socket Immunity
+// src/lib/logger.ts
 import winston from 'winston';
+
+const SENSITIVE_PATTERN = /(secret|privatekey|private_key|encryption_key|seckey|mnemonic|seed|turnkey|pk[0-9]|withdrawalpin)/i;
 
 function safeSerialize(value: any, seen = new WeakSet()): any {
   if (value === null || value === undefined) {
     return value;
   }
 
-  // Handle BigInt serialization
   if (typeof value === 'bigint') {
     return value.toString();
   }
 
-  // Handle Errors and extract only safe metadata
+  // Redact 64-byte secret key buffers (Solana Keypair secrets)
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    if (value.length === 64) return '[REDACTED:KEYPAIR_SECRET]';
+    return `[Buffer: ${value.length} bytes]`;
+  }
+
   if (value instanceof Error) {
     return {
       name: value.name,
@@ -22,14 +28,12 @@ function safeSerialize(value: any, seen = new WeakSet()): any {
     };
   }
 
-  // Handle Objects & Arrays
   if (typeof value === 'object') {
     if (seen.has(value)) {
       return '[Circular]';
     }
     seen.add(value);
 
-    // Filter out Node.js native streams, sockets, and HTTP parsers
     if (
       value.constructor?.name === 'TLSSocket' ||
       value.constructor?.name === 'Socket' ||
@@ -42,7 +46,11 @@ function safeSerialize(value: any, seen = new WeakSet()): any {
 
     const out: Record<string, any> = Array.isArray(value) ? [] : {};
     for (const key of Object.keys(value)) {
-      // Skip deep socket/request/response internal trees
+      if (SENSITIVE_PATTERN.test(key)) {
+        out[key] = '[REDACTED]';
+        continue;
+      }
+
       if (
         key === 'socket' || 
         key === 'parser' || 

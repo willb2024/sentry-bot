@@ -341,9 +341,7 @@
                     <span class="text-[11px] text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2 mb-3">
                         <i class="fa-solid fa-chess-knight text-gray-500"></i> Active Strategies
                     </span>
-                    <div id="best-strategy-container" class="space-y-2">
-                        <!-- Populated by JS -->
-                    </div>
+                    <div id="best-strategy-container" class="space-y-2"></div>
                 </div>
             </div>
 
@@ -493,9 +491,7 @@
                     <button id="aff-tab-recruits" onclick="setAffTab('recruits')" class="px-4 py-2 text-xs font-bold text-white bg-white/10 rounded-md transition-all">Recruits (0)</button>
                     <button id="aff-tab-copiers" onclick="setAffTab('copiers')" class="px-4 py-2 text-xs font-bold text-gray-500 hover:text-white transition-all">Copiers Mirroring You (0)</button>
                 </div>
-                <div id="aff-list-container" class="space-y-2">
-                    <!-- Dynamic List -->
-                </div>
+                <div id="aff-list-container" class="space-y-2"></div>
             </div>
 
         </section>
@@ -538,6 +534,13 @@
 <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
+
+    // 🟢 SEV-1.3: Client-side HTML Entity Escaper against Stored XSS in Token Metadata & Usernames
+    function esc(v) {
+        return String(v ?? '').replace(/[&<>"']/g, c => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+        ));
+    }
 
     let isSimModeActive = false;
     let pnlChart = null;
@@ -618,7 +621,7 @@
             Object.keys(tickerPrices).forEach(token => {
                 tickerPrices[token] += tickerPrices[token] * ((Math.random() - 0.5) * 0.005);
                 const isGreen = Math.random() > 0.4;
-                stripHTML += `<span class="flex items-center gap-1.5"><span class="font-bold text-gray-500">${token}</span> <span class="text-gray-200">$${tickerPrices[token].toFixed(token==='BONK'?8:2)}</span> <span class="${isGreen?'text-jupGreen':'text-neonRed'} font-semibold">${isGreen?'+':'-'}${(Math.random()*2).toFixed(2)}%</span></span>`;
+                stripHTML += `<span class="flex items-center gap-1.5"><span class="font-bold text-gray-500">${esc(token)}</span> <span class="text-gray-200">$${tickerPrices[token].toFixed(token==='BONK'?8:2)}</span> <span class="${isGreen?'text-jupGreen':'text-neonRed'} font-semibold">${isGreen?'+':'-'}${(Math.random()*2).toFixed(2)}%</span></span>`;
             });
             stripHTML += `</div>`;
         }
@@ -775,9 +778,9 @@
             tickerHtml += `
                 <div class="flex justify-between items-center py-1.5 border-b border-white/5 last:border-0 hover:bg-white/[0.03] px-2 rounded transition-colors cursor-default">
                     <span class="text-gray-500 w-14 text-[10px]">${new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                    <span class="text-white font-bold w-20 truncate font-mono">${displayAddr}</span>
+                    <span class="text-white font-bold w-20 truncate font-mono">${esc(displayAddr)}</span>
                     <span style="color:${color}" class="font-bold w-10 text-center font-mono">${type}</span>
-                    <span class="text-gray-300 w-16 text-right font-mono">${t.amountInSol ? t.amountInSol.toFixed(3) : '0.000'}</span>
+                    <span class="text-gray-300 w-16 text-right font-mono">${t.amountInSol ? Number(t.amountInSol).toFixed(3) : '0.000'}</span>
                     <span class="font-mono w-10 text-right text-[11px]">${scoreStr}</span>
                     <span class="font-bold w-14 text-right font-mono ${pnlColor}">${pnlStr}</span>
                 </div>
@@ -786,6 +789,7 @@
         tickerContainer.innerHTML = tickerHtml;
     }
 
+    // 🟢 SEV-1.3: Sanitized renderPositions with safe event listener binding
     function renderPositions(positions) {
         const container = document.getElementById('positions-container');
         const section = document.getElementById('verified-holdings-section');
@@ -818,45 +822,58 @@
                 const pnlClass = isGain ? 'text-jupGreen' : 'text-neonRed';
                 const pnlIcon = isGain ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down';
                 const pnlStr = pnlVal !== 0 ? `${isGain ? '+' : ''}${pnlVal.toFixed(2)}%` : 'ACTIVE';
+                const safeMint = esc(p.mint);
+                const safeSymbol = esc(p.symbol);
 
                 return `
                     <div class="card-flat overflow-hidden">
-                        <div onclick="toggleDrawer('${p.mint}')" class="p-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-colors">
+                        <div class="pos-card-header p-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-colors" data-mint="${safeMint}">
                             <div class="flex items-center gap-4">
                                 <div class="bg-[#1e293b] text-white font-bold rounded-lg h-10 w-10 flex items-center justify-center text-xs border border-white/5">
-                                    $${p.symbol.substring(0,4)}
+                                    $${safeSymbol.substring(0,4)}
                                 </div>
                                 <div>
-                                    <h4 class="font-bold text-[15px] text-white">${p.symbol}</h4>
+                                    <h4 class="font-bold text-[15px] text-white">${safeSymbol}</h4>
                                     <span class="text-[11px] text-gray-500 font-mono">${formatNumber(p.amount)} TKN</span>
                                 </div>
                             </div>
                             <div class="text-right">
-                                <span class="font-bold text-lg text-white">$${p.valueUsd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                                <span class="font-bold text-lg text-white">$${Number(p.valueUsd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
                                 <div class="text-[12px] font-semibold ${pnlClass} mt-0.5">
                                     <i class="fa-solid ${pnlIcon} mr-1"></i>${pnlStr}
                                 </div>
                             </div>
                         </div>
 
-                        <div id="drawer-${p.mint}" class="hidden px-4 pb-4 pt-1 bg-[#07090e] border-t border-white/5">
+                        <div id="drawer-${safeMint}" class="hidden px-4 pb-4 pt-1 bg-[#07090e] border-t border-white/5">
                             <div class="grid grid-cols-2 gap-2 text-gray-400 mt-3 mb-3">
-                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Price <div class="text-white font-mono mt-1 text-[12px]">$${p.priceUsd.toFixed(6)}</div></div>
-                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Entry <div class="text-white font-mono mt-1 text-[12px]">${entry > 0 ? '$' + entry.toFixed(6) : 'N/A'}</div></div>
-                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">MCap <div class="text-white font-mono mt-1 text-[12px]">${p.mcap ? '$'+p.mcap : 'Live'}</div></div>
-                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Vol <div class="text-white font-mono mt-1 text-[12px]">${p.volume24h ? '$'+p.volume24h : 'Live'}</div></div>
+                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Price <div class="text-white font-mono mt-1 text-[12px]">$${Number(p.priceUsd).toFixed(6)}</div></div>
+                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Entry <div class="text-white font-mono mt-1 text-[12px]">${entry > 0 ? '$' + Number(entry).toFixed(6) : 'N/A'}</div></div>
+                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">MCap <div class="text-white font-mono mt-1 text-[12px]">${p.mcap ? '$'+esc(p.mcap) : 'Live'}</div></div>
+                                <div class="bg-[#0e131f] p-2.5 rounded border border-white/5 text-[10px] uppercase">Vol <div class="text-white font-mono mt-1 text-[12px]">${p.volume24h ? '$'+esc(p.volume24h) : 'Live'}</div></div>
                             </div>
-                            <button onclick="copyCA('${p.mint}')" class="w-full bg-[#0e131f] p-2.5 rounded border border-white/5 hover:border-neonBlue text-left flex justify-between items-center transition-colors">
-                                <span class="text-[10px] text-gray-500 font-mono truncate w-4/5">CA: ${p.mint}</span>
+                            <button class="btn-copy-ca w-full bg-[#0e131f] p-2.5 rounded border border-white/5 hover:border-neonBlue text-left flex justify-between items-center transition-colors" data-ca="${safeMint}">
+                                <span class="text-[10px] text-gray-500 font-mono truncate w-4/5">CA: ${safeMint}</span>
                                 <i class="fa-regular fa-copy text-neonBlue"></i>
                             </button>
                         </div>
                     </div>
                 `;
             }).join('');
+
+            container.querySelectorAll('.pos-card-header').forEach(el => {
+                el.addEventListener('click', () => toggleDrawer(el.getAttribute('data-mint')));
+            });
+            container.querySelectorAll('.btn-copy-ca').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    copyCA(el.getAttribute('data-ca'));
+                });
+            });
         }
     }
 
+    // 🟢 SEV-1.3: Sanitized renderLeaderboard with safe event listener binding
     function renderLeaderboard() {
         const data = liveLeaderboardData;
         const container = document.getElementById('leaderboard-container');
@@ -888,25 +905,34 @@
         if (container) {
             container.innerHTML = data.members.map((row, i) => {
                 const medal = i === 0 ? '<span class="text-2xl">🥇</span>' : i === 1 ? '<span class="text-2xl">🥈</span>' : i === 2 ? '<span class="text-2xl">🥉</span>' : `<span class="text-gray-500 text-lg">#${i+1}</span>`;
-                const airdropTag = row.airdropsReceived > 0 ? `<div class="text-[10px] text-jupGreen bg-jupGreen/10 border border-jupGreen/20 px-2 py-0.5 rounded ml-2 inline-block"><i class="fa-solid fa-gift"></i> ${row.airdropsReceived.toFixed(2)} SOL</div>` : '';
-                
+                const airdropTag = row.airdropsReceived > 0 ? `<div class="text-[10px] text-jupGreen bg-jupGreen/10 border border-jupGreen/20 px-2 py-0.5 rounded ml-2 inline-block"><i class="fa-solid fa-gift"></i> ${Number(row.airdropsReceived).toFixed(2)} SOL</div>` : '';
+                const safeUsername = esc(row.username);
+                const safeWallet = esc(row.walletAddress);
+
                 return `
                 <div class="flex justify-between items-center bg-[#1a2235] p-4 rounded-xl border border-white/5 transition-transform hover:scale-[1.01]">
                     <div class="flex items-center gap-3 sm:gap-4">
                         <div class="w-8 text-center font-bold">${medal}</div>
                         <div>
-                            <div class="font-bold text-white text-sm sm:text-base">@${row.username} ${airdropTag}</div>
-                            <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue" onclick="copyCA('${row.walletAddress}')">
-                                ${row.walletAddress.substring(0,4)}...${row.walletAddress.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
+                            <div class="font-bold text-white text-sm sm:text-base">@${safeUsername} ${airdropTag}</div>
+                            <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5 cursor-pointer hover:text-neonBlue btn-copy-wallet" data-wallet="${safeWallet}">
+                                ${safeWallet.substring(0,4)}...${safeWallet.slice(-4)} <i class="fa-regular fa-copy ml-1"></i>
                             </div>
                         </div>
                     </div>
                     <div class="text-right">
-                        <div class="font-bold text-emerald-400 text-sm sm:text-base">${row.glp.toLocaleString()} GLP</div>
-                        <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${row.volumeSol.toFixed(2)} SOL Vol</div>
+                        <div class="font-bold text-emerald-400 text-sm sm:text-base">${Number(row.glp).toLocaleString()} GLP</div>
+                        <div class="text-[10px] sm:text-xs text-gray-500 mt-0.5">${Number(row.volumeSol).toFixed(2)} SOL Vol</div>
                     </div>
                 </div>`;
             }).join('');
+
+            container.querySelectorAll('.btn-copy-wallet').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    copyCA(el.getAttribute('data-wallet'));
+                });
+            });
         }
     }
 
@@ -917,6 +943,7 @@
         renderAffiliateList();
     }
 
+    // 🟢 SEV-1.3: Sanitized renderAffiliateList
     function renderAffiliateList() {
         const container = document.getElementById('aff-list-container');
         if (!container) return;
@@ -927,7 +954,7 @@
             container.innerHTML = `
                 <div class="text-center py-10 text-gray-500 flex flex-col items-center">
                     <i class="fa-solid fa-users-slash text-3xl mb-3 opacity-50"></i>
-                    <div class="text-sm font-semibold">No ${activeAffTab} yet</div>
+                    <div class="text-sm font-semibold">No ${esc(activeAffTab)} yet</div>
                     <span class="text-xs font-mono mt-1">Share your links to start earning.</span>
                 </div>`;
             return;
@@ -940,19 +967,19 @@
                         <i class="fa-solid fa-user"></i>
                     </div>
                     <div>
-                        <div class="font-bold text-white text-sm">@${item.username || 'Trader'}</div>
-                        <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5">${(item.volumeSol || 0).toFixed(2)} SOL Vol</div>
+                        <div class="font-bold text-white text-sm">@${esc(item.username || 'Trader')}</div>
+                        <div class="text-[10px] sm:text-xs text-gray-500 font-mono mt-0.5">${Number(item.volumeSol || 0).toFixed(2)} SOL Vol</div>
                     </div>
                 </div>
             </div>
         `).join('');
     }
 
+    // 🟢 SEV-1.3 / Audit 3.8: Fixed renderAffiliates with canonical 50/60/70% tiers and zero DOM null crashes
     function renderAffiliates() {
         const data = liveAffiliateData;
         if (!data) return;
 
-        // 1. Recruits and Copiers count resolution (additive and sim-aware)
         const uiRecruits = data.recruitCount !== undefined 
             ? data.recruitCount 
             : (data.recruitList ? data.recruitList.length : 0);
@@ -960,7 +987,6 @@
             ? data.copierCount 
             : (data.copierList ? data.copierList.length : 0);
 
-        // 2. Accumulated Sentry Points & Progress Bar
         const pts = data.totalPoints || 0;
         const nextPts = data.nextTierPoints || 5000000;
         const nextTierName = data.nextTier || 'Silver';
@@ -978,7 +1004,7 @@
             ptsBarEl.style.width = `${pct}%`;
         }
 
-        // 3. Tier & Rate Resolution (Canonical: Bronze 50%, Silver 60%, Gold 70%)
+        // Canonical tier rate display (Bronze 50%, Silver 60%, Gold 70%)
         let tier = data.currentTier || "Bronze";
         let tierRate = data.currentRate ? ((data.currentRate * 100).toFixed(0) + "%") : "50%";
         if (tier === 'Gold') tierRate = "70%";
@@ -997,33 +1023,28 @@
             tierEl.className = `text-2xl sm:text-3xl font-bold text-left sm:text-right ${tierColor}`;
         }
 
-        // 4. Financial Yield Grid Cards
         const pendingEl = document.getElementById('aff-val-pending');
         const tradeEl = document.getElementById('aff-val-trade');
         const creditEl = document.getElementById('aff-val-credit');
         const copyEl = document.getElementById('aff-val-copy');
 
-        if (pendingEl) pendingEl.innerText = (data.pendingYieldSol || 0).toFixed(4) + ' SOL';
-        if (tradeEl) tradeEl.innerText = '+' + (data.tradeFeeCut || 0).toFixed(4) + ' SOL';
-        if (creditEl) creditEl.innerText = '+' + (data.creditShare || 0).toFixed(4) + ' SOL';
-        if (copyEl) copyEl.innerText = '+' + (data.copierYield || 0).toFixed(4) + ' SOL';
+        if (pendingEl) pendingEl.innerText = Number(data.pendingYieldSol || 0).toFixed(4) + ' SOL';
+        if (tradeEl) tradeEl.innerText = '+' + Number(data.tradeFeeCut || 0).toFixed(4) + ' SOL';
+        if (creditEl) creditEl.innerText = '+' + Number(data.creditShare || 0).toFixed(4) + ' SOL';
+        if (copyEl) copyEl.innerText = '+' + Number(data.copierYield || 0).toFixed(4) + ' SOL';
 
-        // 5. Referral & Copier Link Inputs
         const refLinkEl = document.getElementById('aff-link-ref');
         const copyLinkEl = document.getElementById('aff-link-copy');
         if (refLinkEl) refLinkEl.value = data.referralLink || "Loading...";
         if (copyLinkEl) copyLinkEl.value = data.copierFeedLink || "Loading...";
 
-        // 6. Sub-Tab Buttons with Counters
         const tabRecruits = document.getElementById('aff-tab-recruits');
         const tabCopiers = document.getElementById('aff-tab-copiers');
         if (tabRecruits) tabRecruits.innerText = `Recruits (${uiRecruits})`;
         if (tabCopiers) tabCopiers.innerText = `Copiers Mirroring You (${uiCopiers})`;
 
-        // 7. Render Sub-List for the active tab
         renderAffiliateList();
 
-        // 8. 30-Day Revenue Line Chart (Updated in-place to prevent flicker)
         const affCanvas = document.getElementById('affiliateChart');
         if (affCanvas) {
             const affCtx = affCanvas.getContext('2d');
@@ -1038,7 +1059,7 @@
             if (affChart) {
                 affChart.data.labels = labels;
                 affChart.data.datasets[0].data = earningsData;
-                affChart.update('none');
+                affChart.update('none'); // Update in place without animation flicker
             } else {
                 const gradGreen = affCtx.createLinearGradient(0, 0, 0, 300);
                 gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.45)');
@@ -1086,7 +1107,6 @@
             }
         }
 
-        // 9. Annualized Run-Rate Projections
         const dailyData = data.dailyEarnings || Array(30).fill(0);
         const last7dEarnings = dailyData.slice(-7).reduce((a, b) => a + b, 0);
         const dailyAvg = last7dEarnings / 7;
@@ -1132,7 +1152,7 @@
     }
 
     function populateDashboard(stats, allocLabels, allocData, positions) {
-        document.getElementById('stat-networth').innerText = '$' + stats.networth.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        document.getElementById('stat-networth').innerText = '$' + Number(stats.networth).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
         document.getElementById('stat-networth-sub').innerText = stats.networthSol;
         
         const pnlNum = parseFloat(stats.pnlPercent) || 0;
@@ -1221,8 +1241,8 @@
             const d = await res.json();
             const cashEl = document.getElementById('stat-cash');
             const depEl = document.getElementById('stat-deployed');
-            if (cashEl) cashEl.innerText = '$' + (d.cashUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            if (depEl) depEl.innerText = '$' + (d.positionsValueUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            if (cashEl) cashEl.innerText = '$' + Number(d.cashUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            if (depEl) depEl.innerText = '$' + Number(d.positionsValueUsd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
         } catch (_) {}
     }
 
@@ -1364,7 +1384,7 @@
                                 <span class="text-xs text-white font-bold">${strat.name}</span>
                             </div>
                             <span class="text-xs ${strat.pnl >= 0 ? 'text-jupGreen' : 'text-neonRed'} font-mono font-bold">
-                                ${strat.pnl >= 0 ? '+' : ''}${strat.pnl.toFixed(4)} SOL
+                                ${strat.pnl >= 0 ? '+' : ''}${Number(strat.pnl).toFixed(4)} SOL
                             </span>
                         </div>
                         `;
@@ -1512,7 +1532,7 @@
                 pnlUsd: realizedPnlUsd, 
                 winrate: winRate, 
                 winLossText: `${wins} Wins / ${losses} Losses`, 
-                volume: `${totalVolumeSol.toFixed(2)} SOL`
+                volume: `${Number(totalVolumeSol).toFixed(2)} SOL`
             }, null, null, posArray);
         } catch (_) {
             resetDashboardToZero();
@@ -1621,13 +1641,13 @@
                 const simEl = document.getElementById('stats-sim');
 
                 if (data.manual && liveEl) {
-                    liveEl.innerText = `Manual: ${data.manual.count} trades (${data.manual.pnl >= 0 ? '+' : ''}${data.manual.pnl.toFixed(4)} SOL)`;
+                    liveEl.innerText = `Manual: ${data.manual.count} trades (${data.manual.pnl >= 0 ? '+' : ''}${Number(data.manual.pnl).toFixed(4)} SOL)`;
                 } else if (!data.manual && liveEl && data.tradeCount !== undefined) {
-                    liveEl.innerText = `Manual: ${data.tradeCount} trades (${data.totalPnl >= 0 ? '+' : ''}${data.totalPnl.toFixed(4)} SOL)`;
+                    liveEl.innerText = `Manual: ${data.tradeCount} trades (${data.totalPnl >= 0 ? '+' : ''}${Number(data.totalPnl).toFixed(4)} SOL)`;
                 }
 
                 if (data.auto && simEl) {
-                    simEl.innerText = `Auto: ${data.auto.count} trades (${data.auto.pnl >= 0 ? '+' : ''}${data.auto.pnl.toFixed(4)} SOL)`;
+                    simEl.innerText = `Auto: ${data.auto.count} trades (${data.auto.pnl >= 0 ? '+' : ''}${Number(data.auto.pnl).toFixed(4)} SOL)`;
                 }
             }
         } catch (_) {}
@@ -1644,7 +1664,7 @@
                 const data = await res.json();
                 if (data.inGuild) {
                     liveLeaderboardData = {
-                        guild: { name: data.guildName, reward: `Guild Rank #${data.myRank} (${data.myPoints.toLocaleString()} GLP)`, code: data.guildCode },
+                        guild: { name: data.guildName, reward: `Guild Rank #${data.myRank} (${Number(data.myPoints).toLocaleString()} GLP)`, code: data.guildCode },
                         members: data.leaderboard
                     };
                     if (!document.getElementById('view-leaderboard').classList.contains('hidden-view')) {
