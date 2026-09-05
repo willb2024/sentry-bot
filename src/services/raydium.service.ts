@@ -11,6 +11,7 @@ dotenv.config();
 
 const sdkCache = new Map<string, Raydium>();
 const poolCache = new Map<string, { data: any; exp: number }>();
+let raydiumComputeVerified = false;
 
 async function getRaydiumSdk(ownerKeypair: Keypair): Promise<Raydium> {
     const key = ownerKeypair.publicKey.toBase58();
@@ -39,6 +40,30 @@ async function getCachedPoolInfo(raydium: Raydium, poolId: string) {
     return data;
 }
 
+async function verifyComputeAmountOutShape(raydium: Raydium, poolId: string): Promise<void> {
+    if (raydiumComputeVerified) return;
+    try {
+        const poolInfo = await getCachedPoolInfo(raydium, poolId);
+        if (!poolInfo) return;
+        
+        const probe = await (raydium.liquidity as any).computeAmountOut({
+            poolInfo: poolInfo.poolInfo,
+            amountIn: new BN(1_000_000),
+            inputMint: poolInfo.poolInfo?.mintA?.address,
+            slippage: 0.2,
+        }).catch(() => null);
+
+        if (probe?.minAmountOut && typeof probe.minAmountOut.isZero === 'function') {
+            raydiumComputeVerified = true;
+            console.log('🟢 [RAYDIUM] computeAmountOut verified for installed SDK.');
+        } else {
+            console.error('🔴 [RAYDIUM] computeAmountOut returned an unexpected shape — swaps will FAIL CLOSED.');
+        }
+    } catch (e: any) {
+        console.error('🔴 [RAYDIUM] computeAmountOut probe error:', e.message);
+    }
+}
+
 export async function buildDirectRaydiumSwap(
     ownerKeypair: Keypair,
     poolId: string,
@@ -48,6 +73,7 @@ export async function buildDirectRaydiumSwap(
 ): Promise<Buffer | null> {
     try {
         const raydium = await getRaydiumSdk(ownerKeypair);
+        await verifyComputeAmountOutShape(raydium, poolId);
         const poolInfo = await getCachedPoolInfo(raydium, poolId);
 
         if (!poolInfo) {
@@ -58,7 +84,6 @@ export async function buildDirectRaydiumSwap(
         const amountInBn = new BN(Math.floor(amountIn));
         let minAmountOut = new BN(1);
 
-        // Derive minimum out using pool reserves and user slippage tolerance
         try {
             const computeRes = await (raydium.liquidity as any).computeAmountOut({
                 poolInfo: poolInfo.poolInfo,
@@ -70,7 +95,6 @@ export async function buildDirectRaydiumSwap(
                 minAmountOut = computeRes.minAmountOut;
             }
         } catch (_) {
-            // Fail closed if pool output calculation fails
             console.warn('[RAYDIUM DIRECT] Could not compute minAmountOut — failing closed to prevent sandwich attack.');
             return null;
         }
@@ -79,7 +103,7 @@ export async function buildDirectRaydiumSwap(
             poolInfo: poolInfo.poolInfo,
             poolKeys: poolInfo.poolKeys,
             amountIn: amountInBn,
-            amountOut: minAmountOut, // Real price floor
+            amountOut: minAmountOut, // Minimum output floor
             fixedSide: 'in',
             inputMint: inputMint,
             txVersion: TxVersion.V0,

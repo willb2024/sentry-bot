@@ -9873,6 +9873,17 @@ await recoverSimAutoSnipeLoops(bot);
                 } catch (_) {}
             }, 5 * 60 * 1000),
 
+
+            // 🟢 Automatic Payout Reconciliation (Checks unconfirmed claims every 60s)
+            setInterval(async () => {
+                try {
+                    const { reconcilePendingPayouts } = await import('./services/payout.service.js');
+                    await reconcilePendingPayouts();
+                } catch (e: any) {
+                    logger.error('🔴 [PAYOUT RECONCILE] Tick failed:', { error: e?.message });
+                }
+            }, 60_000),
+            
             // Guild rank updates
             setInterval(async () => {
                 try {
